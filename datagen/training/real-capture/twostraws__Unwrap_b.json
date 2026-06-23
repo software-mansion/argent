@@ -1,0 +1,1076 @@
+[
+ {
+  "meta": {
+   "id": "real-unwrap-12",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "On a fresh install, dismiss the 'Welcome to Unwrap' onboarding card by tapping Close.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Welcome to Unwrap\"  (0.113, 0.540, 0.774, 0.050)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXButton \"Start Tour\"  (0.050, 0.637, 0.900, 0.065)\n  AXStaticText \"Start Tour\"  (0.310, 0.644, 0.382, 0.050)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.74,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-13",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "On a fresh install, open the introductory tour by tapping 'Start Tour' on the welcome card.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Welcome to Unwrap\"  (0.113, 0.540, 0.774, 0.050)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXButton \"Start Tour\"  (0.050, 0.637, 0.900, 0.065)\n  AXStaticText \"Start Tour\"  (0.310, 0.644, 0.382, 0.050)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.669,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Learn Swift\"  (0.101, 0.505, 0.798, 0.040)\n  AXStaticText value=\"Unwrap teaches Swift using almost 100 short lessons. When you finish each chapter, you'll be given a short review so you can check you understood the new concepts.\"  (0.101, 0.544, 0.797, 0.129)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.815, 0.544, 0.076, 0.132)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.101, 0.638, 0.798, 0.035)\n  AXGroup value=\"page 1 of 6\"  (0.340, 0.676, 0.321, 0.036)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-14",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "swipe",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap",
+    "swipe"
+   ],
+   "verified": true
+  },
+  "task": "Open the introductory tour, then swipe the tour carousel left to advance from page 1 to page 2.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Welcome to Unwrap\"  (0.113, 0.540, 0.774, 0.050)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXButton \"Start Tour\"  (0.050, 0.637, 0.900, 0.065)\n  AXStaticText \"Start Tour\"  (0.310, 0.644, 0.382, 0.050)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.669,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Learn Swift\"  (0.101, 0.505, 0.798, 0.040)\n  AXStaticText value=\"Unwrap teaches Swift using almost 100 short lessons. When you finish each chapter, you'll be given a short review so you can check you understood the new concepts.\"  (0.101, 0.544, 0.797, 0.129)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.815, 0.544, 0.076, 0.132)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.101, 0.638, 0.798, 0.035)\n  AXGroup value=\"page 1 of 6\"  (0.340, 0.676, 0.321, 0.036)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-swipe",
+     "arguments": {
+      "fromX": 0.8,
+      "fromY": 0.58,
+      "toX": 0.15,
+      "toY": 0.58,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Practice Swift\"  (0.101, 0.505, 0.798, 0.040)\n  AXStaticText value=\"As you progress, you'll unlock practice activities that test your coding skills. You might need to write code by tapping blocks or re-arranging lines, you might need to predict the output of a program, and more.\"  (0.101, 0.544, 0.796, 0.155)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.815, 0.544, 0.076, 0.132)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.101, 0.638, 0.798, 0.035)\n  AXGroup value=\"page 2 of 6\"  (0.340, 0.676, 0.321, 0.036)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-15",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "swipe",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap",
+    "swipe"
+   ],
+   "verified": true
+  },
+  "task": "Open the tour and swipe through to the third page of the carousel.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Welcome to Unwrap\"  (0.113, 0.540, 0.774, 0.050)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXButton \"Start Tour\"  (0.050, 0.637, 0.900, 0.065)\n  AXStaticText \"Start Tour\"  (0.310, 0.644, 0.382, 0.050)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.669,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Learn Swift\"  (0.101, 0.505, 0.798, 0.040)\n  AXStaticText value=\"Unwrap teaches Swift using almost 100 short lessons. When you finish each chapter, you'll be given a short review so you can check you understood the new concepts.\"  (0.101, 0.544, 0.797, 0.129)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.815, 0.544, 0.076, 0.132)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.101, 0.638, 0.798, 0.035)\n  AXGroup value=\"page 1 of 6\"  (0.340, 0.676, 0.321, 0.036)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-swipe",
+     "arguments": {
+      "fromX": 0.8,
+      "fromY": 0.58,
+      "toX": 0.15,
+      "toY": 0.58,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Practice Swift\"  (0.101, 0.505, 0.798, 0.040)\n  AXStaticText value=\"As you progress, you'll unlock practice activities that test your coding skills. You might need to write code by tapping blocks or re-arranging lines, you might need to predict the output of a program, and more.\"  (0.101, 0.544, 0.796, 0.155)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.815, 0.544, 0.076, 0.132)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.101, 0.638, 0.798, 0.035)\n  AXGroup value=\"page 2 of 6\"  (0.340, 0.676, 0.321, 0.036)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-swipe",
+     "arguments": {
+      "fromX": 0.8,
+      "fromY": 0.58,
+      "toX": 0.15,
+      "toY": 0.58,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"Challenge yourself\"  (0.101, 0.505, 0.798, 0.040)\n  AXStaticText value=\"Once a day you can try Unwrap's Daily Challenge, which gives you ten practice activities to see how you're doing overall. You can skip up to three questions if you need to.\"  (0.101, 0.544, 0.805, 0.129)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.815, 0.544, 0.076, 0.132)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.101, 0.638, 0.798, 0.035)\n  AXGroup value=\"page 3 of 6\"  (0.340, 0.676, 0.321, 0.036)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXButton \"Close\"  (0.050, 0.714, 0.900, 0.052)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Close\"  (0.417, 0.721, 0.165, 0.038)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-16",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "search",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap",
+    "keyboard"
+   ],
+   "verified": true
+  },
+  "task": "From the Learn tab, open the Glossary and search for the term 'Tuple'.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.3,
+      "y": 0.932,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Glossary\"  (0.790, 0.063, 0.190, 0.052)\n  AXGroup \"Learn\"  (0.443, 0.077, 0.115, 0.024)\n  AXButton \"chevron\"  (0.000, 0.115, 0.026, 0.016)\n  AXStaticText \"Enumerations. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum associated values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum raw values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Complex types: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Arithmetic operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operator overloading. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Compound assignment operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Comparison operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Combining conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"The ternary operator. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Switch statements. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Range operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operators and conditions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"For loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"While loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Repeat loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting multiple loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Skipping items. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Infinite loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Looping: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Omitting parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Default parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Variadic functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Running throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"inout parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Functions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating basic closures. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters in a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values from a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures as parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Trailing closure syntax. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Using closures as parameters when they accept parameters. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Using closures as parameters when they return values. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Shorthand parameter names. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures with multiple parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning closures from functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Capturing values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own structs. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Computed properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Property observers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Mutating methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of strings. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of arrays. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Initializers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Referring to the current instance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Lazy properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Static properties and methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Access control. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Structs: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own classes. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Class inheritance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n\n  ... [139 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.885,
+      "y": 0.089,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Learn\"  (0.000, 0.063, 0.187, 0.052)\n  AXGroup \"Glossary\"  (0.411, 0.077, 0.178, 0.024)\n  AXGroup \"Search\"  (0.041, 0.116, 0.919, 0.042)\n  AXTextField \"Search\"  (0.056, 0.126, 0.052, 0.022)\n  AXStaticText \"@objc\"  (0.000, 0.176, 0.126, 0.024)\n  AXStaticText \"An attribute used to mark methods and properties that must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.176, 0.882, 0.143)\n  AXStaticText \"@objcMembers\"  (0.000, 0.176, 0.316, 0.024)\n  AXStaticText \"An attribute used to mark classes where all properties and methods must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.176, 0.882, 0.143)\n  AXStaticText \"@unknown\"  (0.000, 0.176, 0.223, 0.024)\n  AXStaticText \"An attribute attached to the default case of switch blocks that allows code to handle enum cases that may be added at some point in the future, without breaking source compatibility.\"  (0.000, 0.176, 0.891, 0.119)\n  AXStaticText \"Access control\"  (0.000, 0.176, 0.299, 0.024)\n  AXStaticText \"A set of keywords that control how properties may be accessed by other code. open means the property can be accessed and overridden from anywhere, public means the property may be accessed from anywhere but overridden only within the module it came from, internal means the property may be accessed from anywhere inside the same module, fileprivate means the property may be accessed from anywhere inside the same file, and private means the property may be accessed from anywhere inside the same type.\"  (0.000, 0.176, 0.891, 0.310)\n  AXStaticText \"ABI\"  (0.000, 0.176, 0.070, 0.024)\n  AXStaticText \"The description of how the Swift compiler produces binaries: how data structures are laid out in memory and accessed, how functions are called, and so on.\"  (0.000, 0.176, 0.838, 0.095)\n  AXStaticText \"API\"  (0.000, 0.176, 0.070, 0.024)\n  AXStaticText \"The collection of classes, structs, methods, and properties exposed by a library to solve a particular problem. Short for Application Programming Interface.\"  (0.000, 0.176, 0.889, 0.095)\n  AXStaticText \"Argument\"  (0.000, 0.176, 0.202, 0.024)\n  AXStaticText \"The name for a value that is being passed into a function, to be used inside the function. For example, in sayHello(to: \"Paul\") the to part is an argument. Many people just say \"parameter\" rather than \"argument\", but argument is technically correct.\"  (0.000, 0.176, 0.891, 0.143)\n  AXStaticText \"Array\"  (0.000, 0.176, 0.111, 0.024)\n  AXStaticText \"A sequential collection of values of any type, such as an array of names in a band.\"  (0.000, 0.176, 0.871, 0.048)\n  AXStaticText \"Associated type\"  (0.000, 0.176, 0.326, 0.024)\n  AXStaticText \"A missing type in a protocol that must be specified by whatever type is conforming to the protocol. Associated types allow us to have flexibility when adding conformances: we can say that to conform to our protocol you must have an array of items, but we don't care what the data type of those items is. Associated types are written as one word in Swift: associatedtype.\"  (0.000, 0.176, 0.891, 0.214)\n  AXStaticText \"Associated value\"  (0.000, 0.176, 0.343, 0.024)\n  AXStaticText \"A value that has been added to an enum case to provide some extra meaning. For example, you might have an enum case saying the weather is windy, then add an associated value saying how windy.\"  (0.000, 0.176, 0.891, 0.119)\n  AXStaticText \"Block\"  (0.000, 0.176, 0.113, 0.024)\n  AXStaticText \"Can mean any chunk of code that starts with { and ends with } (\"a code block\"), but \"block\" is also the Objective-C name for closures.\"  (0.000, 0.176, 0.874, 0.095)\n  AXStaticText \"Boolean\"  (0.000, 0.176, 0.164, 0.024)\n  AXStaticText \"A data type that stores either true or false.\"  (0.000, 0.176, 0.817, 0.024)\n  AXStaticText \"Brace\"  (0.000, 0.176, 0.117, 0.024)\n  AXStaticText \"The name for opening and closing curly brackets, { and }.\"  (0.000, 0.176, 0.774, 0.048)\n  AXStaticText \"Bracket\"  (0.000, 0.176, 0.156, 0.024)\n  AXStaticText \"The name for opening and closing square brackets, [ and ]\"  (0.000, 0.176, 0.812, 0.048)\n  AXStaticText \"Break\"  (0.000, 0.176, 0.117, 0.024)\n  AXStaticText \"A keyword that exit the current loop. If used with a labeled statement, e.g. break myLoop, it will break out of the specified block.\"  (0.000, 0.176, 0.889, 0.072)\n  AXStaticText \"Capturing values\"  (0.000, 0.176, 0.342, 0.024)\n  AXStaticText \"The name for the process of closures keeping a reference to values that are used inside the closure but were created outside. This is different from copying: the closure refers to the original values, not its own copies, so if the original values change then the closure's values change too.\"  (0.000, 0.176, 0.891, 0.167)\n  AXStaticText \"CaseIterable\"  (0.000, 0.176, 0.256, 0.024)\n  AXStaticText \"A Swift protocol that can be applied to enums. If the enum has cases with no associated values, the compiler will generate an allCases array that lets you loop over the cases in the enum.\"  (0.000, 0.176, 0.875, 0.119)\n  AXStaticText \"Catch\"  (0.000, 0.176, 0.120, 0.024)\n  AXStaticText \"A keyword that starts a block of code to handle errors. You can specify what kind of errors should be caught, and use a generic \"catch all\" block to catch everything else. Paired with do.\"  (0.000, 0.176, 0.843, 0.119)\n  AXStaticText \"CGFloat\"  (0.000, 0.176, 0.163, 0.024)\n\n  ... [303 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.137,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Search\"  (0.041, 0.072, 0.756, 0.042)\n  AXButton \"Cancel\"  (0.824, 0.075, 0.135, 0.035)\n  AXStaticText \"Cancel\"  (0.824, 0.080, 0.135, 0.025)\n  AXTextField \"Search\"  (0.056, 0.082, 0.052, 0.022)\n  AXStaticText \"@objc\"  (0.000, 0.124, 0.126, 0.024)\n  AXStaticText \"An attribute used to mark methods and properties that must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.124, 0.882, 0.143)\n  AXStaticText \"@objcMembers\"  (0.000, 0.124, 0.316, 0.024)\n  AXStaticText \"An attribute used to mark classes where all properties and methods must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.124, 0.882, 0.143)\n  AXStaticText \"@unknown\"  (0.000, 0.124, 0.223, 0.024)\n  AXStaticText \"An attribute attached to the default case of switch blocks that allows code to handle enum cases that may be added at some point in the future, without breaking source compatibility.\"  (0.000, 0.124, 0.891, 0.119)\n  AXStaticText \"Access control\"  (0.000, 0.124, 0.299, 0.024)\n  AXStaticText \"A set of keywords that control how properties may be accessed by other code. open means the property can be accessed and overridden from anywhere, public means the property may be accessed from anywhere but overridden only within the module it came from, internal means the property may be accessed from anywhere inside the same module, fileprivate means the property may be accessed from anywhere inside the same file, and private means the property may be accessed from anywhere inside the same type.\"  (0.000, 0.124, 0.891, 0.310)\n  AXStaticText \"ABI\"  (0.000, 0.124, 0.070, 0.024)\n  AXStaticText \"The description of how the Swift compiler produces binaries: how data structures are laid out in memory and accessed, how functions are called, and so on.\"  (0.000, 0.124, 0.838, 0.095)\n  AXStaticText \"API\"  (0.000, 0.124, 0.070, 0.024)\n  AXStaticText \"The collection of classes, structs, methods, and properties exposed by a library to solve a particular problem. Short for Application Programming Interface.\"  (0.000, 0.124, 0.889, 0.095)\n  AXStaticText \"Argument\"  (0.000, 0.124, 0.202, 0.024)\n  AXStaticText \"The name for a value that is being passed into a function, to be used inside the function. For example, in sayHello(to: \"Paul\") the to part is an argument. Many people just say \"parameter\" rather than \"argument\", but argument is technically correct.\"  (0.000, 0.124, 0.891, 0.143)\n  AXStaticText \"Array\"  (0.000, 0.124, 0.111, 0.024)\n  AXStaticText \"A sequential collection of values of any type, such as an array of names in a band.\"  (0.000, 0.124, 0.871, 0.048)\n  AXStaticText \"Associated type\"  (0.000, 0.124, 0.326, 0.024)\n  AXStaticText \"A missing type in a protocol that must be specified by whatever type is conforming to the protocol. Associated types allow us to have flexibility when adding conformances: we can say that to conform to our protocol you must have an array of items, but we don't care what the data type of those items is. Associated types are written as one word in Swift: associatedtype.\"  (0.000, 0.124, 0.891, 0.214)\n  AXStaticText \"Associated value\"  (0.000, 0.124, 0.343, 0.024)\n  AXStaticText \"A value that has been added to an enum case to provide some extra meaning. For example, you might have an enum case saying the weather is windy, then add an associated value saying how windy.\"  (0.000, 0.124, 0.891, 0.119)\n  AXStaticText \"Block\"  (0.000, 0.124, 0.113, 0.024)\n  AXStaticText \"Can mean any chunk of code that starts with { and ends with } (\"a code block\"), but \"block\" is also the Objective-C name for closures.\"  (0.000, 0.124, 0.874, 0.095)\n  AXStaticText \"Boolean\"  (0.000, 0.124, 0.164, 0.024)\n  AXStaticText \"A data type that stores either true or false.\"  (0.000, 0.124, 0.817, 0.024)\n  AXStaticText \"Brace\"  (0.000, 0.124, 0.117, 0.024)\n  AXStaticText \"The name for opening and closing curly brackets, { and }.\"  (0.000, 0.124, 0.774, 0.048)\n  AXStaticText \"Bracket\"  (0.000, 0.124, 0.156, 0.024)\n  AXStaticText \"The name for opening and closing square brackets, [ and ]\"  (0.000, 0.124, 0.812, 0.048)\n  AXStaticText \"Break\"  (0.000, 0.124, 0.117, 0.024)\n  AXStaticText \"A keyword that exit the current loop. If used with a labeled statement, e.g. break myLoop, it will break out of the specified block.\"  (0.000, 0.124, 0.889, 0.072)\n  AXStaticText \"Capturing values\"  (0.000, 0.124, 0.342, 0.024)\n  AXStaticText \"The name for the process of closures keeping a reference to values that are used inside the closure but were created outside. This is different from copying: the closure refers to the original values, not its own copies, so if the original values change then the closure's values change too.\"  (0.000, 0.124, 0.891, 0.167)\n  AXStaticText \"CaseIterable\"  (0.000, 0.124, 0.256, 0.024)\n  AXStaticText \"A Swift protocol that can be applied to enums. If the enum has cases with no associated values, the compiler will generate an allCases array that lets you loop over the cases in the enum.\"  (0.000, 0.124, 0.875, 0.119)\n  AXStaticText \"Catch\"  (0.000, 0.124, 0.120, 0.024)\n  AXStaticText \"A keyword that starts a block of code to handle errors. You can specify what kind of errors should be caught, and use a generic \"catch all\" block to catch everything else. Paired with do.\"  (0.000, 0.124, 0.843, 0.119)\n  AXStaticText \"CGFloat\"  (0.000, 0.124, 0.163, 0.024)\n\n  ... [304 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "keyboard",
+     "arguments": {
+      "text": "Tuple",
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Search\" value=\"Tuple\"  (0.041, 0.072, 0.756, 0.042)\n  AXButton \"Cancel\"  (0.824, 0.075, 0.135, 0.035)\n  AXStaticText \"Cancel\"  (0.824, 0.080, 0.135, 0.025)\n  AXTextField \"Search\"  (0.056, 0.082, 0.052, 0.022)\n  AXButton \"Clear text\"  (0.732, 0.083, 0.050, 0.022)\n  AXGroup \"Section index\"  (0.962, 0.124, 0.038, 0.779)\n  AXStaticText \"T\"  (0.000, 0.150, 1.000, 0.033)\n  AXStaticText \"Tuple, A fixed-size collection of values of any type, like an anonymous struct. Pronounced as \"tyoo-pull\" or \"too-pull\", or sometimes even \"tupple\".\"  (0.000, 0.183, 1.000, 0.144)\n  AXStaticText \"Tuple\"  (0.051, 0.192, 0.120, 0.024)\n  AXStaticText \"A fixed-size collection of values of any type, like an anonymous struct. Pronounced as \"tyoo-pull\" or \"too-pull\", or sometimes even \"tupple\".\"  (0.051, 0.219, 0.862, 0.095)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-17",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "search",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap",
+    "keyboard"
+   ],
+   "verified": true
+  },
+  "task": "Open the Glossary from the Learn tab and search for 'Closure'.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.3,
+      "y": 0.932,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Glossary\"  (0.790, 0.063, 0.190, 0.052)\n  AXGroup \"Learn\"  (0.443, 0.077, 0.115, 0.024)\n  AXButton \"chevron\"  (0.000, 0.115, 0.026, 0.016)\n  AXStaticText \"Enumerations. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum associated values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum raw values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Complex types: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Arithmetic operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operator overloading. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Compound assignment operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Comparison operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Combining conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"The ternary operator. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Switch statements. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Range operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operators and conditions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"For loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"While loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Repeat loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting multiple loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Skipping items. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Infinite loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Looping: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Omitting parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Default parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Variadic functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Running throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"inout parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Functions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating basic closures. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters in a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values from a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures as parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Trailing closure syntax. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Using closures as parameters when they accept parameters. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Using closures as parameters when they return values. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Shorthand parameter names. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures with multiple parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning closures from functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Capturing values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own structs. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Computed properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Property observers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Mutating methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of strings. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of arrays. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Initializers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Referring to the current instance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Lazy properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Static properties and methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Access control. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Structs: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own classes. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Class inheritance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n\n  ... [139 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.885,
+      "y": 0.089,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Learn\"  (0.000, 0.063, 0.187, 0.052)\n  AXGroup \"Glossary\"  (0.411, 0.077, 0.178, 0.024)\n  AXGroup \"Search\"  (0.041, 0.116, 0.919, 0.042)\n  AXTextField \"Search\"  (0.056, 0.126, 0.052, 0.022)\n  AXStaticText \"@objc\"  (0.000, 0.176, 0.126, 0.024)\n  AXStaticText \"An attribute used to mark methods and properties that must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.176, 0.882, 0.143)\n  AXStaticText \"@objcMembers\"  (0.000, 0.176, 0.316, 0.024)\n  AXStaticText \"An attribute used to mark classes where all properties and methods must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.176, 0.882, 0.143)\n  AXStaticText \"@unknown\"  (0.000, 0.176, 0.223, 0.024)\n  AXStaticText \"An attribute attached to the default case of switch blocks that allows code to handle enum cases that may be added at some point in the future, without breaking source compatibility.\"  (0.000, 0.176, 0.891, 0.119)\n  AXStaticText \"Access control\"  (0.000, 0.176, 0.299, 0.024)\n  AXStaticText \"A set of keywords that control how properties may be accessed by other code. open means the property can be accessed and overridden from anywhere, public means the property may be accessed from anywhere but overridden only within the module it came from, internal means the property may be accessed from anywhere inside the same module, fileprivate means the property may be accessed from anywhere inside the same file, and private means the property may be accessed from anywhere inside the same type.\"  (0.000, 0.176, 0.891, 0.310)\n  AXStaticText \"ABI\"  (0.000, 0.176, 0.070, 0.024)\n  AXStaticText \"The description of how the Swift compiler produces binaries: how data structures are laid out in memory and accessed, how functions are called, and so on.\"  (0.000, 0.176, 0.838, 0.095)\n  AXStaticText \"API\"  (0.000, 0.176, 0.070, 0.024)\n  AXStaticText \"The collection of classes, structs, methods, and properties exposed by a library to solve a particular problem. Short for Application Programming Interface.\"  (0.000, 0.176, 0.889, 0.095)\n  AXStaticText \"Argument\"  (0.000, 0.176, 0.202, 0.024)\n  AXStaticText \"The name for a value that is being passed into a function, to be used inside the function. For example, in sayHello(to: \"Paul\") the to part is an argument. Many people just say \"parameter\" rather than \"argument\", but argument is technically correct.\"  (0.000, 0.176, 0.891, 0.143)\n  AXStaticText \"Array\"  (0.000, 0.176, 0.111, 0.024)\n  AXStaticText \"A sequential collection of values of any type, such as an array of names in a band.\"  (0.000, 0.176, 0.871, 0.048)\n  AXStaticText \"Associated type\"  (0.000, 0.176, 0.326, 0.024)\n  AXStaticText \"A missing type in a protocol that must be specified by whatever type is conforming to the protocol. Associated types allow us to have flexibility when adding conformances: we can say that to conform to our protocol you must have an array of items, but we don't care what the data type of those items is. Associated types are written as one word in Swift: associatedtype.\"  (0.000, 0.176, 0.891, 0.214)\n  AXStaticText \"Associated value\"  (0.000, 0.176, 0.343, 0.024)\n  AXStaticText \"A value that has been added to an enum case to provide some extra meaning. For example, you might have an enum case saying the weather is windy, then add an associated value saying how windy.\"  (0.000, 0.176, 0.891, 0.119)\n  AXStaticText \"Block\"  (0.000, 0.176, 0.113, 0.024)\n  AXStaticText \"Can mean any chunk of code that starts with { and ends with } (\"a code block\"), but \"block\" is also the Objective-C name for closures.\"  (0.000, 0.176, 0.874, 0.095)\n  AXStaticText \"Boolean\"  (0.000, 0.176, 0.164, 0.024)\n  AXStaticText \"A data type that stores either true or false.\"  (0.000, 0.176, 0.817, 0.024)\n  AXStaticText \"Brace\"  (0.000, 0.176, 0.117, 0.024)\n  AXStaticText \"The name for opening and closing curly brackets, { and }.\"  (0.000, 0.176, 0.774, 0.048)\n  AXStaticText \"Bracket\"  (0.000, 0.176, 0.156, 0.024)\n  AXStaticText \"The name for opening and closing square brackets, [ and ]\"  (0.000, 0.176, 0.812, 0.048)\n  AXStaticText \"Break\"  (0.000, 0.176, 0.117, 0.024)\n  AXStaticText \"A keyword that exit the current loop. If used with a labeled statement, e.g. break myLoop, it will break out of the specified block.\"  (0.000, 0.176, 0.889, 0.072)\n  AXStaticText \"Capturing values\"  (0.000, 0.176, 0.342, 0.024)\n  AXStaticText \"The name for the process of closures keeping a reference to values that are used inside the closure but were created outside. This is different from copying: the closure refers to the original values, not its own copies, so if the original values change then the closure's values change too.\"  (0.000, 0.176, 0.891, 0.167)\n  AXStaticText \"CaseIterable\"  (0.000, 0.176, 0.256, 0.024)\n  AXStaticText \"A Swift protocol that can be applied to enums. If the enum has cases with no associated values, the compiler will generate an allCases array that lets you loop over the cases in the enum.\"  (0.000, 0.176, 0.875, 0.119)\n  AXStaticText \"Catch\"  (0.000, 0.176, 0.120, 0.024)\n  AXStaticText \"A keyword that starts a block of code to handle errors. You can specify what kind of errors should be caught, and use a generic \"catch all\" block to catch everything else. Paired with do.\"  (0.000, 0.176, 0.843, 0.119)\n  AXStaticText \"CGFloat\"  (0.000, 0.176, 0.163, 0.024)\n\n  ... [303 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.137,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Search\"  (0.041, 0.072, 0.756, 0.042)\n  AXButton \"Cancel\"  (0.824, 0.075, 0.135, 0.035)\n  AXStaticText \"Cancel\"  (0.824, 0.080, 0.135, 0.025)\n  AXTextField \"Search\"  (0.056, 0.082, 0.052, 0.022)\n  AXStaticText \"@objc\"  (0.000, 0.124, 0.126, 0.024)\n  AXStaticText \"An attribute used to mark methods and properties that must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.124, 0.882, 0.143)\n  AXStaticText \"@objcMembers\"  (0.000, 0.124, 0.316, 0.024)\n  AXStaticText \"An attribute used to mark classes where all properties and methods must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.124, 0.882, 0.143)\n  AXStaticText \"@unknown\"  (0.000, 0.124, 0.223, 0.024)\n  AXStaticText \"An attribute attached to the default case of switch blocks that allows code to handle enum cases that may be added at some point in the future, without breaking source compatibility.\"  (0.000, 0.124, 0.891, 0.119)\n  AXStaticText \"Access control\"  (0.000, 0.124, 0.299, 0.024)\n  AXStaticText \"A set of keywords that control how properties may be accessed by other code. open means the property can be accessed and overridden from anywhere, public means the property may be accessed from anywhere but overridden only within the module it came from, internal means the property may be accessed from anywhere inside the same module, fileprivate means the property may be accessed from anywhere inside the same file, and private means the property may be accessed from anywhere inside the same type.\"  (0.000, 0.124, 0.891, 0.310)\n  AXStaticText \"ABI\"  (0.000, 0.124, 0.070, 0.024)\n  AXStaticText \"The description of how the Swift compiler produces binaries: how data structures are laid out in memory and accessed, how functions are called, and so on.\"  (0.000, 0.124, 0.838, 0.095)\n  AXStaticText \"API\"  (0.000, 0.124, 0.070, 0.024)\n  AXStaticText \"The collection of classes, structs, methods, and properties exposed by a library to solve a particular problem. Short for Application Programming Interface.\"  (0.000, 0.124, 0.889, 0.095)\n  AXStaticText \"Argument\"  (0.000, 0.124, 0.202, 0.024)\n  AXStaticText \"The name for a value that is being passed into a function, to be used inside the function. For example, in sayHello(to: \"Paul\") the to part is an argument. Many people just say \"parameter\" rather than \"argument\", but argument is technically correct.\"  (0.000, 0.124, 0.891, 0.143)\n  AXStaticText \"Array\"  (0.000, 0.124, 0.111, 0.024)\n  AXStaticText \"A sequential collection of values of any type, such as an array of names in a band.\"  (0.000, 0.124, 0.871, 0.048)\n  AXStaticText \"Associated type\"  (0.000, 0.124, 0.326, 0.024)\n  AXStaticText \"A missing type in a protocol that must be specified by whatever type is conforming to the protocol. Associated types allow us to have flexibility when adding conformances: we can say that to conform to our protocol you must have an array of items, but we don't care what the data type of those items is. Associated types are written as one word in Swift: associatedtype.\"  (0.000, 0.124, 0.891, 0.214)\n  AXStaticText \"Associated value\"  (0.000, 0.124, 0.343, 0.024)\n  AXStaticText \"A value that has been added to an enum case to provide some extra meaning. For example, you might have an enum case saying the weather is windy, then add an associated value saying how windy.\"  (0.000, 0.124, 0.891, 0.119)\n  AXStaticText \"Block\"  (0.000, 0.124, 0.113, 0.024)\n  AXStaticText \"Can mean any chunk of code that starts with { and ends with } (\"a code block\"), but \"block\" is also the Objective-C name for closures.\"  (0.000, 0.124, 0.874, 0.095)\n  AXStaticText \"Boolean\"  (0.000, 0.124, 0.164, 0.024)\n  AXStaticText \"A data type that stores either true or false.\"  (0.000, 0.124, 0.817, 0.024)\n  AXStaticText \"Brace\"  (0.000, 0.124, 0.117, 0.024)\n  AXStaticText \"The name for opening and closing curly brackets, { and }.\"  (0.000, 0.124, 0.774, 0.048)\n  AXStaticText \"Bracket\"  (0.000, 0.124, 0.156, 0.024)\n  AXStaticText \"The name for opening and closing square brackets, [ and ]\"  (0.000, 0.124, 0.812, 0.048)\n  AXStaticText \"Break\"  (0.000, 0.124, 0.117, 0.024)\n  AXStaticText \"A keyword that exit the current loop. If used with a labeled statement, e.g. break myLoop, it will break out of the specified block.\"  (0.000, 0.124, 0.889, 0.072)\n  AXStaticText \"Capturing values\"  (0.000, 0.124, 0.342, 0.024)\n  AXStaticText \"The name for the process of closures keeping a reference to values that are used inside the closure but were created outside. This is different from copying: the closure refers to the original values, not its own copies, so if the original values change then the closure's values change too.\"  (0.000, 0.124, 0.891, 0.167)\n  AXStaticText \"CaseIterable\"  (0.000, 0.124, 0.256, 0.024)\n  AXStaticText \"A Swift protocol that can be applied to enums. If the enum has cases with no associated values, the compiler will generate an allCases array that lets you loop over the cases in the enum.\"  (0.000, 0.124, 0.875, 0.119)\n  AXStaticText \"Catch\"  (0.000, 0.124, 0.120, 0.024)\n  AXStaticText \"A keyword that starts a block of code to handle errors. You can specify what kind of errors should be caught, and use a generic \"catch all\" block to catch everything else. Paired with do.\"  (0.000, 0.124, 0.843, 0.119)\n  AXStaticText \"CGFloat\"  (0.000, 0.124, 0.163, 0.024)\n\n  ... [304 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "keyboard",
+     "arguments": {
+      "text": "Closure",
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Search\" value=\"Closure\"  (0.041, 0.072, 0.756, 0.042)\n  AXButton \"Cancel\"  (0.824, 0.075, 0.135, 0.035)\n  AXStaticText \"Cancel\"  (0.824, 0.080, 0.135, 0.025)\n  AXTextField \"Search\"  (0.056, 0.082, 0.052, 0.022)\n  AXButton \"Clear text\"  (0.732, 0.083, 0.050, 0.022)\n  AXGroup \"Section index\"  (0.962, 0.124, 0.038, 0.779)\n  AXStaticText \"@\"  (0.000, 0.150, 1.000, 0.033)\n  AXStaticText \"@autoclosure, An attribute attached to function parameters that are closures, which asks Swift to silently wrap any code using it in a closure rather than requiring users to do it by hand. This is used rarely, but it's important in the assert() function.\"  (0.000, 0.183, 1.000, 0.191)\n  AXStaticText \"@autoclosure\"  (0.051, 0.192, 0.289, 0.024)\n  AXStaticText \"An attribute attached to function parameters that are closures, which asks Swift to silently wrap any code using it in a closure rather than requiring users to do it by hand. This is used rarely, but it's important in the assert() function.\"  (0.051, 0.219, 0.891, 0.143)\n  AXStaticText \"C\"  (0.000, 0.400, 1.000, 0.033)\n  AXStaticText \"Closure, An anonymous function that automatically keeps a reference to any values it uses that were declared outside the function.\"  (0.000, 0.433, 1.000, 0.120)\n  AXStaticText \"Closure\"  (0.051, 0.442, 0.166, 0.024)\n  AXStaticText \"An anonymous function that automatically keeps a reference to any values it uses that were declared outside the function.\"  (0.051, 0.469, 0.845, 0.072)\n  AXStaticText \"T\"  (0.000, 0.578, 1.000, 0.033)\n  AXGroup \"T\"  (0.000, 0.578, 1.000, 0.033)\n  AXStaticText \"Trailing closure syntax, The ability for functions that accept a closure as their final parameter to have that closure specified after the function's parentheses, which usually helps make the function call easier to read.\"  (0.000, 0.611, 1.000, 0.168)\n  AXStaticText \"Trailing closure syntax\"  (0.051, 0.621, 0.464, 0.024)\n  AXStaticText \"The ability for functions that accept a closure as their final parameter to have that closure specified after the function's parentheses, which usually helps make the function call easier to read.\"  (0.051, 0.648, 0.885, 0.119)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-18",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "back",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From the Learn tab, open the first study chapter (Variables), then go back to the Learn list.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.3,
+      "y": 0.932,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Glossary\"  (0.790, 0.063, 0.190, 0.052)\n  AXGroup \"Learn\"  (0.443, 0.077, 0.115, 0.024)\n  AXButton \"chevron\"  (0.000, 0.115, 0.026, 0.016)\n  AXStaticText \"Enumerations. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum associated values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum raw values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Complex types: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Arithmetic operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operator overloading. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Compound assignment operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Comparison operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Combining conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"The ternary operator. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Switch statements. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Range operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operators and conditions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"For loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"While loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Repeat loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting multiple loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Skipping items. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Infinite loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Looping: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Omitting parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Default parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Variadic functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Running throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"inout parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Functions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating basic closures. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters in a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values from a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures as parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Trailing closure syntax. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Using closures as parameters when they accept parameters. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Using closures as parameters when they return values. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Shorthand parameter names. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures with multiple parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning closures from functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Capturing values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own structs. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Computed properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Property observers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Mutating methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of strings. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of arrays. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Initializers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Referring to the current instance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Lazy properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Static properties and methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Access control. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Structs: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own classes. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Class inheritance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n\n  ... [139 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.4,
+      "y": 0.174,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Learn\"  (0.000, 0.063, 0.187, 0.052)\n  AXButton \"Next\"  (0.869, 0.063, 0.111, 0.052)\n  AXGroup \"Variables\"  (0.406, 0.077, 0.187, 0.024)\n  AXStaticText value=\"\ufffcPlay Video\"  (0.000, 0.115, 1.000, 0.261)\n  AXLink \"\ufffcPlay Video\"  (0.000, 0.115, 1.000, 0.261)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.916, 0.115, 0.076, 0.788)\n  AXStaticText value=\"When you launch Xcode it will ask you what you want to do, and I\u2019d like you to choose \u201cGet Started with a Playground\u201d \u2013\u00a0this is a sandbox where you can type Swift code and see immediate results.\"  (0.025, 0.387, 0.960, 0.091)\n  AXStaticText value=\"The default is a blank playground for iOS, which is fine, so click Next then Create to save it on your desktop.\"  (0.025, 0.498, 0.960, 0.068)\n  AXStaticText value=\"In this video I want to introduce you to variables, which are places where you can store program data. They are called variables because they can vary \u2013\u00a0you can change their values freely.\"  (0.025, 0.586, 0.941, 0.091)\n  AXStaticText value=\"Playgrounds start with a line of code that creates a variable for us:\"  (0.025, 0.696, 0.934, 0.045)\n  AXStaticText value=\"var str = \"Hello, playground\"\"  (0.025, 0.784, 0.746, 0.023)\n  AXStaticText value=\"That creates a new variable called str, giving it the value \u201cHello, playground\u201d. On the right of the playground you can see \u201cHello, playground\u201d in the output area \u2013\u00a0that\u2019s Xcode showing us the value was set.\"  (0.025, 0.853, 0.955, 0.113)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText value=\"Because str is a variable we can change it:\"  (0.025, 0.986, 0.817, 0.014)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.09,
+      "y": 0.089,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Glossary\"  (0.790, 0.063, 0.190, 0.052)\n  AXGroup \"Learn\"  (0.443, 0.077, 0.115, 0.024)\n  AXButton \"chevron\"  (0.000, 0.115, 0.026, 0.016)\n  AXStaticText \"Enumerations. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum associated values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum raw values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Complex types: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Arithmetic operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operator overloading. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Compound assignment operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Comparison operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Combining conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"The ternary operator. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Switch statements. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Range operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operators and conditions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"For loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"While loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Repeat loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting multiple loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Skipping items. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Infinite loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Looping: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Omitting parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Default parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Variadic functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Running throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"inout parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Functions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating basic closures. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters in a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values from a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures as parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Trailing closure syntax. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Using closures as parameters when they accept parameters. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Using closures as parameters when they return values. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Shorthand parameter names. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures with multiple parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning closures from functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Capturing values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own structs. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Computed properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Property observers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Mutating methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of strings. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of arrays. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Initializers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Referring to the current instance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Lazy properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Static properties and methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Access control. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Structs: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own classes. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Class inheritance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n\n  ... [139 total elements; truncated]"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-19",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "back",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From the Home tab, go to the Practice tab, then return to the Home tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.932,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Practice\"  (0.416, 0.077, 0.167, 0.024)\n  AXStaticText \"Free Coding, Complete \"Typecasting\" to unlock.\"  (0.000, 0.115, 1.000, 0.104)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXStaticText \"Free Coding\"  (0.145, 0.136, 0.374, 0.040)\n  AXStaticText \"Complete \"Typecasting\" to unlock.\"  (0.145, 0.175, 0.674, 0.024)\n  AXStaticText \"Predict the Output, Complete \"Functions: Summary\" to unlock.\"  (0.000, 0.219, 1.000, 0.128)\n  AXStaticText \"Predict the Output\"  (0.145, 0.234, 0.562, 0.040)\n  AXStaticText \"Complete \"Functions: Summary\" to unlock.\"  (0.145, 0.280, 0.646, 0.048)\n  AXStaticText \"Rearrange the Lines, Complete \"Mutability\" to unlock.\"  (0.000, 0.347, 1.000, 0.104)\n  AXStaticText \"Rearrange the Lines\"  (0.145, 0.368, 0.611, 0.040)\n  AXStaticText \"Complete \"Mutability\" to unlock.\"  (0.145, 0.408, 0.628, 0.024)\n  AXStaticText \"Review, Complete \"Variables\" to unlock.\"  (0.000, 0.451, 1.000, 0.104)\n  AXStaticText \"Review\"  (0.145, 0.473, 0.221, 0.040)\n  AXStaticText \"Complete \"Variables\" to unlock.\"  (0.145, 0.512, 0.616, 0.024)\n  AXStaticText \"Spot the Error, Complete \"Default parameters\" to unlock.\"  (0.000, 0.556, 1.000, 0.128)\n  AXStaticText \"Spot the Error\"  (0.145, 0.571, 0.422, 0.040)\n  AXStaticText \"Complete \"Default parameters\" to unlock.\"  (0.145, 0.617, 0.620, 0.048)\n  AXStaticText \"Tap to Code, Complete \"Infinite Loops\" to unlock.\"  (0.000, 0.684, 1.000, 0.104)\n  AXStaticText \"Tap to Code\"  (0.145, 0.705, 0.368, 0.040)\n  AXStaticText \"Complete \"Infinite Loops\" to unlock.\"  (0.145, 0.745, 0.699, 0.024)\n  AXStaticText \"Type Checker, Complete \"Type annotations\" to unlock.\"  (0.000, 0.788, 1.000, 0.104)\n  AXStaticText \"Type Checker\"  (0.145, 0.809, 0.421, 0.040)\n  AXStaticText \"Complete \"Type annotations\" to unlock.\"  (0.145, 0.849, 0.772, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.1,
+      "y": 0.932,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-20",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Navigate from Learn to News to Challenges using the bottom tab bar.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.3,
+      "y": 0.932,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Glossary\"  (0.790, 0.063, 0.190, 0.052)\n  AXGroup \"Learn\"  (0.443, 0.077, 0.115, 0.024)\n  AXButton \"chevron\"  (0.000, 0.115, 0.026, 0.016)\n  AXStaticText \"Enumerations. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum associated values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum raw values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Complex types: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Arithmetic operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operator overloading. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Compound assignment operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Comparison operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Combining conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"The ternary operator. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Switch statements. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Range operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operators and conditions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"For loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"While loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Repeat loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting multiple loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Skipping items. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Infinite loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Looping: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Omitting parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Default parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Variadic functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Running throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"inout parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Functions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating basic closures. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters in a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values from a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures as parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Trailing closure syntax. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Using closures as parameters when they accept parameters. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Using closures as parameters when they return values. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Shorthand parameter names. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures with multiple parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning closures from functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Capturing values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own structs. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Computed properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Property observers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Mutating methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of strings. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of arrays. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Initializers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Referring to the current instance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Lazy properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Static properties and methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Access control. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Structs: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own classes. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Class inheritance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n\n  ... [139 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.9,
+      "y": 0.932,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Buy Swift Books\"  (0.646, 0.063, 0.333, 0.052)\n  AXGroup \"News\"  (0.444, 0.077, 0.113, 0.024)\n  AXButton \"\u2022, Introducing Kickstart: the app that helps indie developers ship, Get the all-in-one workspace for shipping successful apps.\"  (0.000, 0.115, 1.000, 0.130)\n  AXStaticText \"What's new in Swift 6.1?\"  (0.000, 0.115, 0.489, 0.024)\n  AXButton \"chevron\"  (0.000, 0.115, 0.026, 0.016)\n  AXStaticText \"\u2022\"  (0.000, 0.115, 0.041, 0.050)\n  AXStaticText \"Trailing commas in lists, metatype key paths, diagnostic groups, and more.\"  (0.000, 0.115, 0.556, 0.036)\n  AXStaticText \"Apple starts accepting GitHub sponsorships for Swift\"  (0.000, 0.115, 0.621, 0.048)\n  AXStaticText \"Send money, get rewards.\"  (0.000, 0.115, 0.373, 0.017)\n  AXStaticText \"Take on Apple Intelligence at Unwrap Live 2025\"  (0.000, 0.115, 0.589, 0.048)\n  AXStaticText \"Bring your apps into the age of AI with AppIntents, image playgrounds, and more!\"  (0.000, 0.115, 0.610, 0.036)\n  AXStaticText \"Save 50% on all books and bundles this Black Friday\"  (0.000, 0.115, 0.551, 0.048)\n  AXStaticText \"All books and bundles are half price!\"  (0.000, 0.115, 0.523, 0.017)\n  AXStaticText \"Go further, faster with the Swift Career Accelerator\"  (0.000, 0.115, 0.532, 0.048)\n  AXStaticText \"Your complete Swift journey: from first job to leadership, all in one powerful program\"  (0.000, 0.115, 0.616, 0.036)\n  AXStaticText \"Making mistakes while learning Swift\"  (0.000, 0.115, 0.466, 0.048)\n  AXStaticText \"Tired of making mistakes while learning to code? You're not alone.\"  (0.000, 0.115, 0.614, 0.036)\n  AXStaticText \"What\u2019s new in SwiftUI for iOS 18\"  (0.000, 0.115, 0.518, 0.048)\n  AXStaticText \"We got new API for colors and gradients, more scrollview improvements, tab improvements, and more.\"  (0.000, 0.115, 0.595, 0.054)\n  AXStaticText \"What's new in Swift 6.0?\"  (0.000, 0.115, 0.497, 0.024)\n  AXStaticText \"When fully enabled, Swift 6 is likely to require changes in pretty much every project.\"  (0.000, 0.115, 0.554, 0.054)\n  AXStaticText \"Save 50% on all books and bundles for WWDC24\"  (0.000, 0.115, 0.551, 0.048)\n  AXStaticText \"Shop the Hacking with Swift sale and upgrade your skills today!\"  (0.000, 0.115, 0.543, 0.036)\n  AXStaticText \"What's new in Swift 5.10?\"  (0.000, 0.115, 0.517, 0.024)\n  AXStaticText \"Important concurrency clean ups ahead of Swift 6.\"  (0.000, 0.115, 0.618, 0.036)\n  AXStaticText \"Build your next website in Swift\"  (0.000, 0.115, 0.480, 0.048)\n  AXStaticText \"How Swift's result builders can help us write smarter, safer HTML.\"  (0.000, 0.115, 0.566, 0.036)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXStaticText \"Introducing Kickstart: the app that helps indie developers ship\"  (0.300, 0.124, 0.612, 0.072)\n  AXStaticText \"\u2022\"  (0.013, 0.152, 0.041, 0.050)\n  AXButton \"chevron\"  (0.923, 0.171, 0.026, 0.016)\n  AXStaticText \"Get the all-in-one workspace for shipping successful apps.\"  (0.300, 0.200, 0.607, 0.036)\n  AXButton \"\u2022, Teach your AI to write Swift the Hacking with Swift way, A hands-on AGENTS.md for Claude, Codex, and other AI tools that need firmer opinions about SwiftUI, Core Data, and particles.\"  (0.000, 0.245, 1.000, 0.144)\n  AXStaticText \"Teach your AI to write Swift the Hacking with Swift way\"  (0.300, 0.254, 0.563, 0.048)\n  AXStaticText \"\u2022\"  (0.013, 0.289, 0.041, 0.050)\n  AXStaticText \"A hands-on AGENTS.md for Claude, Codex, and other AI tools that need firmer opinions about SwiftUI, Core Data, and particles.\"  (0.300, 0.306, 0.613, 0.073)\n  AXButton \"chevron\"  (0.923, 0.308, 0.026, 0.016)\n  AXButton \"\u2022, Agent skills in Xcode: How to install and use them today, Get agent skills for Swift, SwiftUI, Swift Testing, and more\"  (0.000, 0.388, 1.000, 0.106)\n  AXStaticText \"Agent skills in Xcode: How to install and use them today\"  (0.300, 0.398, 0.595, 0.048)\n  AXStaticText \"\u2022\"  (0.013, 0.414, 0.041, 0.050)\n  AXButton \"chevron\"  (0.923, 0.433, 0.026, 0.016)\n  AXStaticText \"Get agent skills for Swift, SwiftUI, Swift Testing, and more\"  (0.300, 0.449, 0.573, 0.036)\n  AXButton \"\u2022, SwiftUI Agent Skill - Write better code with Claude, Codex, and other AI tools, Improve the AI-written code in all your SwiftUI projects with my free agent skill\"  (0.000, 0.494, 1.000, 0.130)\n  AXStaticText \"SwiftUI Agent Skill - Write better code with Claude, Codex, and other AI tools\"  (0.300, 0.504, 0.533, 0.072)\n  AXStaticText \"\u2022\"  (0.013, 0.532, 0.041, 0.050)\n  AXButton \"chevron\"  (0.923, 0.551, 0.026, 0.016)\n  AXStaticText \"Improve the AI-written code in all your SwiftUI projects with my free agent skill\"  (0.300, 0.579, 0.570, 0.036)\n  AXButton \"\u2022, What to fix in AI-generated Swift code, As AI-assisted coding increases in popularity, here are a handful of things I would suggest you look out for \u2013 and what to replace them with instead.\"  (0.000, 0.624, 1.000, 0.144)\n  AXStaticText \"What to fix in AI-generated Swift code\"  (0.300, 0.634, 0.555, 0.048)\n  AXStaticText \"\u2022\"  (0.013, 0.668, 0.041, 0.050)\n  AXStaticText \"As AI-assisted coding increases in popularity, here are a handful of things I would suggest you look out for \u2013 and what to replace them with instead.\"  (0.300, 0.685, 0.618, 0.073)\n  AXButton \"chevron\"  (0.923, 0.687, 0.026, 0.016)\n  AXButton \"\u2022, One Swift mistake everyone should stop making today, TL;DR: You should use replacing(_:with:) rather than replacingOccurrences(of:with:)\"  (0.000, 0.768, 1.000, 0.106)\n  AXStaticText \"One Swift mistake everyone should stop making today\"  (0.300, 0.777, 0.573, 0.048)\n  AXStaticText \"\u2022\"  (0.013, 0.793, 0.041, 0.050)\n  AXButton \"chevron\"  (0.923, 0.812, 0.026, 0.016)\n\n  ... [72 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.7,
+      "y": 0.932,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Challenges\"  (0.388, 0.077, 0.226, 0.024)\n  AXStaticText \"Today's challenge\"  (0.000, 0.115, 1.000, 0.045)\n  AXGroup \"TODAY'S CHALLENGE\"  (0.000, 0.115, 1.000, 0.045)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXButton \"June 23, 2026, Each daily challenge may be attempted only once.\"  (0.000, 0.159, 1.000, 0.128)\n  AXStaticText \"June 23, 2026\"  (0.051, 0.174, 0.450, 0.040)\n  AXButton \"chevron\"  (0.923, 0.215, 0.026, 0.016)\n  AXStaticText \"Each daily challenge may be attempted only once.\"  (0.051, 0.220, 0.768, 0.048)\n  AXStaticText \"Previous challenges\"  (0.000, 0.308, 1.000, 0.045)\n  AXGroup \"PREVIOUS CHALLENGES\"  (0.000, 0.308, 1.000, 0.045)\n  AXStaticText \"No completed challenges yet\"  (0.000, 0.352, 1.000, 0.052)\n  AXStaticText \"No completed challenges yet\"  (0.051, 0.366, 0.563, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-21",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "search",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap",
+    "keyboard"
+   ],
+   "verified": true
+  },
+  "task": "Open the Glossary from the Learn tab, search for 'Array', then tap Cancel to clear the search.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.3,
+      "y": 0.932,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Glossary\"  (0.790, 0.063, 0.190, 0.052)\n  AXGroup \"Learn\"  (0.443, 0.077, 0.115, 0.024)\n  AXButton \"chevron\"  (0.000, 0.115, 0.026, 0.016)\n  AXStaticText \"Enumerations. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum associated values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Enum raw values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Complex types: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Arithmetic operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operator overloading. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Compound assignment operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Comparison operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Combining conditions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"The ternary operator. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Switch statements. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Range operators. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Operators and conditions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"For loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"While loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Repeat loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Exiting multiple loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Skipping items. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Infinite loops. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Looping: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Omitting parameter labels. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Default parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Variadic functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Writing throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Running throwing functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"inout parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Functions: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating basic closures. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Accepting parameters in a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning values from a closure. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures as parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Trailing closure syntax. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Using closures as parameters when they accept parameters. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Using closures as parameters when they return values. Section not started\"  (0.000, 0.115, 0.750, 0.076)\n  AXStaticText \"Shorthand parameter names. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures with multiple parameters. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Returning closures from functions. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Capturing values. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Closures: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own structs. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Computed properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Property observers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Mutating methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of strings. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Properties and methods of arrays. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Initializers. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Referring to the current instance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Lazy properties. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Static properties and methods. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Access control. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Structs: Summary. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Creating your own classes. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n  AXStaticText \"Class inheritance. Section not started\"  (0.000, 0.115, 0.750, 0.056)\n\n  ... [139 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.885,
+      "y": 0.089,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Learn\"  (0.000, 0.063, 0.187, 0.052)\n  AXGroup \"Glossary\"  (0.411, 0.077, 0.178, 0.024)\n  AXGroup \"Search\"  (0.041, 0.116, 0.919, 0.042)\n  AXTextField \"Search\"  (0.056, 0.126, 0.052, 0.022)\n  AXStaticText \"@objc\"  (0.000, 0.176, 0.126, 0.024)\n  AXStaticText \"An attribute used to mark methods and properties that must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.176, 0.882, 0.143)\n  AXStaticText \"@objcMembers\"  (0.000, 0.176, 0.316, 0.024)\n  AXStaticText \"An attribute used to mark classes where all properties and methods must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.176, 0.882, 0.143)\n  AXStaticText \"@unknown\"  (0.000, 0.176, 0.223, 0.024)\n  AXStaticText \"An attribute attached to the default case of switch blocks that allows code to handle enum cases that may be added at some point in the future, without breaking source compatibility.\"  (0.000, 0.176, 0.891, 0.119)\n  AXStaticText \"Access control\"  (0.000, 0.176, 0.299, 0.024)\n  AXStaticText \"A set of keywords that control how properties may be accessed by other code. open means the property can be accessed and overridden from anywhere, public means the property may be accessed from anywhere but overridden only within the module it came from, internal means the property may be accessed from anywhere inside the same module, fileprivate means the property may be accessed from anywhere inside the same file, and private means the property may be accessed from anywhere inside the same type.\"  (0.000, 0.176, 0.891, 0.310)\n  AXStaticText \"ABI\"  (0.000, 0.176, 0.070, 0.024)\n  AXStaticText \"The description of how the Swift compiler produces binaries: how data structures are laid out in memory and accessed, how functions are called, and so on.\"  (0.000, 0.176, 0.838, 0.095)\n  AXStaticText \"API\"  (0.000, 0.176, 0.070, 0.024)\n  AXStaticText \"The collection of classes, structs, methods, and properties exposed by a library to solve a particular problem. Short for Application Programming Interface.\"  (0.000, 0.176, 0.889, 0.095)\n  AXStaticText \"Argument\"  (0.000, 0.176, 0.202, 0.024)\n  AXStaticText \"The name for a value that is being passed into a function, to be used inside the function. For example, in sayHello(to: \"Paul\") the to part is an argument. Many people just say \"parameter\" rather than \"argument\", but argument is technically correct.\"  (0.000, 0.176, 0.891, 0.143)\n  AXStaticText \"Array\"  (0.000, 0.176, 0.111, 0.024)\n  AXStaticText \"A sequential collection of values of any type, such as an array of names in a band.\"  (0.000, 0.176, 0.871, 0.048)\n  AXStaticText \"Associated type\"  (0.000, 0.176, 0.326, 0.024)\n  AXStaticText \"A missing type in a protocol that must be specified by whatever type is conforming to the protocol. Associated types allow us to have flexibility when adding conformances: we can say that to conform to our protocol you must have an array of items, but we don't care what the data type of those items is. Associated types are written as one word in Swift: associatedtype.\"  (0.000, 0.176, 0.891, 0.214)\n  AXStaticText \"Associated value\"  (0.000, 0.176, 0.343, 0.024)\n  AXStaticText \"A value that has been added to an enum case to provide some extra meaning. For example, you might have an enum case saying the weather is windy, then add an associated value saying how windy.\"  (0.000, 0.176, 0.891, 0.119)\n  AXStaticText \"Block\"  (0.000, 0.176, 0.113, 0.024)\n  AXStaticText \"Can mean any chunk of code that starts with { and ends with } (\"a code block\"), but \"block\" is also the Objective-C name for closures.\"  (0.000, 0.176, 0.874, 0.095)\n  AXStaticText \"Boolean\"  (0.000, 0.176, 0.164, 0.024)\n  AXStaticText \"A data type that stores either true or false.\"  (0.000, 0.176, 0.817, 0.024)\n  AXStaticText \"Brace\"  (0.000, 0.176, 0.117, 0.024)\n  AXStaticText \"The name for opening and closing curly brackets, { and }.\"  (0.000, 0.176, 0.774, 0.048)\n  AXStaticText \"Bracket\"  (0.000, 0.176, 0.156, 0.024)\n  AXStaticText \"The name for opening and closing square brackets, [ and ]\"  (0.000, 0.176, 0.812, 0.048)\n  AXStaticText \"Break\"  (0.000, 0.176, 0.117, 0.024)\n  AXStaticText \"A keyword that exit the current loop. If used with a labeled statement, e.g. break myLoop, it will break out of the specified block.\"  (0.000, 0.176, 0.889, 0.072)\n  AXStaticText \"Capturing values\"  (0.000, 0.176, 0.342, 0.024)\n  AXStaticText \"The name for the process of closures keeping a reference to values that are used inside the closure but were created outside. This is different from copying: the closure refers to the original values, not its own copies, so if the original values change then the closure's values change too.\"  (0.000, 0.176, 0.891, 0.167)\n  AXStaticText \"CaseIterable\"  (0.000, 0.176, 0.256, 0.024)\n  AXStaticText \"A Swift protocol that can be applied to enums. If the enum has cases with no associated values, the compiler will generate an allCases array that lets you loop over the cases in the enum.\"  (0.000, 0.176, 0.875, 0.119)\n  AXStaticText \"Catch\"  (0.000, 0.176, 0.120, 0.024)\n  AXStaticText \"A keyword that starts a block of code to handle errors. You can specify what kind of errors should be caught, and use a generic \"catch all\" block to catch everything else. Paired with do.\"  (0.000, 0.176, 0.843, 0.119)\n  AXStaticText \"CGFloat\"  (0.000, 0.176, 0.163, 0.024)\n\n  ... [303 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.137,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Search\"  (0.041, 0.072, 0.756, 0.042)\n  AXButton \"Cancel\"  (0.824, 0.075, 0.135, 0.035)\n  AXStaticText \"Cancel\"  (0.824, 0.080, 0.135, 0.025)\n  AXTextField \"Search\"  (0.056, 0.082, 0.052, 0.022)\n  AXStaticText \"@objc\"  (0.000, 0.124, 0.126, 0.024)\n  AXStaticText \"An attribute used to mark methods and properties that must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.124, 0.882, 0.143)\n  AXStaticText \"@objcMembers\"  (0.000, 0.124, 0.316, 0.024)\n  AXStaticText \"An attribute used to mark classes where all properties and methods must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.124, 0.882, 0.143)\n  AXStaticText \"@unknown\"  (0.000, 0.124, 0.223, 0.024)\n  AXStaticText \"An attribute attached to the default case of switch blocks that allows code to handle enum cases that may be added at some point in the future, without breaking source compatibility.\"  (0.000, 0.124, 0.891, 0.119)\n  AXStaticText \"Access control\"  (0.000, 0.124, 0.299, 0.024)\n  AXStaticText \"A set of keywords that control how properties may be accessed by other code. open means the property can be accessed and overridden from anywhere, public means the property may be accessed from anywhere but overridden only within the module it came from, internal means the property may be accessed from anywhere inside the same module, fileprivate means the property may be accessed from anywhere inside the same file, and private means the property may be accessed from anywhere inside the same type.\"  (0.000, 0.124, 0.891, 0.310)\n  AXStaticText \"ABI\"  (0.000, 0.124, 0.070, 0.024)\n  AXStaticText \"The description of how the Swift compiler produces binaries: how data structures are laid out in memory and accessed, how functions are called, and so on.\"  (0.000, 0.124, 0.838, 0.095)\n  AXStaticText \"API\"  (0.000, 0.124, 0.070, 0.024)\n  AXStaticText \"The collection of classes, structs, methods, and properties exposed by a library to solve a particular problem. Short for Application Programming Interface.\"  (0.000, 0.124, 0.889, 0.095)\n  AXStaticText \"Argument\"  (0.000, 0.124, 0.202, 0.024)\n  AXStaticText \"The name for a value that is being passed into a function, to be used inside the function. For example, in sayHello(to: \"Paul\") the to part is an argument. Many people just say \"parameter\" rather than \"argument\", but argument is technically correct.\"  (0.000, 0.124, 0.891, 0.143)\n  AXStaticText \"Array\"  (0.000, 0.124, 0.111, 0.024)\n  AXStaticText \"A sequential collection of values of any type, such as an array of names in a band.\"  (0.000, 0.124, 0.871, 0.048)\n  AXStaticText \"Associated type\"  (0.000, 0.124, 0.326, 0.024)\n  AXStaticText \"A missing type in a protocol that must be specified by whatever type is conforming to the protocol. Associated types allow us to have flexibility when adding conformances: we can say that to conform to our protocol you must have an array of items, but we don't care what the data type of those items is. Associated types are written as one word in Swift: associatedtype.\"  (0.000, 0.124, 0.891, 0.214)\n  AXStaticText \"Associated value\"  (0.000, 0.124, 0.343, 0.024)\n  AXStaticText \"A value that has been added to an enum case to provide some extra meaning. For example, you might have an enum case saying the weather is windy, then add an associated value saying how windy.\"  (0.000, 0.124, 0.891, 0.119)\n  AXStaticText \"Block\"  (0.000, 0.124, 0.113, 0.024)\n  AXStaticText \"Can mean any chunk of code that starts with { and ends with } (\"a code block\"), but \"block\" is also the Objective-C name for closures.\"  (0.000, 0.124, 0.874, 0.095)\n  AXStaticText \"Boolean\"  (0.000, 0.124, 0.164, 0.024)\n  AXStaticText \"A data type that stores either true or false.\"  (0.000, 0.124, 0.817, 0.024)\n  AXStaticText \"Brace\"  (0.000, 0.124, 0.117, 0.024)\n  AXStaticText \"The name for opening and closing curly brackets, { and }.\"  (0.000, 0.124, 0.774, 0.048)\n  AXStaticText \"Bracket\"  (0.000, 0.124, 0.156, 0.024)\n  AXStaticText \"The name for opening and closing square brackets, [ and ]\"  (0.000, 0.124, 0.812, 0.048)\n  AXStaticText \"Break\"  (0.000, 0.124, 0.117, 0.024)\n  AXStaticText \"A keyword that exit the current loop. If used with a labeled statement, e.g. break myLoop, it will break out of the specified block.\"  (0.000, 0.124, 0.889, 0.072)\n  AXStaticText \"Capturing values\"  (0.000, 0.124, 0.342, 0.024)\n  AXStaticText \"The name for the process of closures keeping a reference to values that are used inside the closure but were created outside. This is different from copying: the closure refers to the original values, not its own copies, so if the original values change then the closure's values change too.\"  (0.000, 0.124, 0.891, 0.167)\n  AXStaticText \"CaseIterable\"  (0.000, 0.124, 0.256, 0.024)\n  AXStaticText \"A Swift protocol that can be applied to enums. If the enum has cases with no associated values, the compiler will generate an allCases array that lets you loop over the cases in the enum.\"  (0.000, 0.124, 0.875, 0.119)\n  AXStaticText \"Catch\"  (0.000, 0.124, 0.120, 0.024)\n  AXStaticText \"A keyword that starts a block of code to handle errors. You can specify what kind of errors should be caught, and use a generic \"catch all\" block to catch everything else. Paired with do.\"  (0.000, 0.124, 0.843, 0.119)\n  AXStaticText \"CGFloat\"  (0.000, 0.124, 0.163, 0.024)\n\n  ... [304 total elements; truncated]"
+    }
+   },
+   {
+    "call": {
+     "name": "keyboard",
+     "arguments": {
+      "text": "Array",
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Search\" value=\"Array\"  (0.041, 0.072, 0.756, 0.042)\n  AXButton \"Cancel\"  (0.824, 0.075, 0.135, 0.035)\n  AXStaticText \"Cancel\"  (0.824, 0.080, 0.135, 0.025)\n  AXTextField \"Search\"  (0.056, 0.082, 0.052, 0.022)\n  AXButton \"Clear text\"  (0.732, 0.083, 0.050, 0.022)\n  AXGroup \"Section index\"  (0.962, 0.124, 0.038, 0.779)\n  AXStaticText \"A\"  (0.000, 0.150, 1.000, 0.033)\n  AXStaticText \"Array, A sequential collection of values of any type, such as an array of names in a band.\"  (0.000, 0.183, 1.000, 0.096)\n  AXStaticText \"Array\"  (0.051, 0.192, 0.120, 0.024)\n  AXStaticText \"A sequential collection of values of any type, such as an array of names in a band.\"  (0.051, 0.219, 0.871, 0.048)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.89,
+      "y": 0.092,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Learn\"  (0.000, 0.063, 0.187, 0.052)\n  AXGroup \"Glossary\"  (0.411, 0.077, 0.178, 0.024)\n  AXGroup \"Search\"  (0.041, 0.116, 0.919, 0.042)\n  AXTextField \"Search\"  (0.056, 0.126, 0.052, 0.022)\n  AXStaticText \"@objc\"  (0.000, 0.176, 0.126, 0.024)\n  AXStaticText \"An attribute used to mark methods and properties that must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.176, 0.882, 0.143)\n  AXStaticText \"@objcMembers\"  (0.000, 0.176, 0.316, 0.024)\n  AXStaticText \"An attribute used to mark classes where all properties and methods must be accessible to Objective-C code. Swift does not make its code accessible to Objective-C by default to avoid making the code larger than it needs to be.\"  (0.000, 0.176, 0.882, 0.143)\n  AXStaticText \"@unknown\"  (0.000, 0.176, 0.223, 0.024)\n  AXStaticText \"An attribute attached to the default case of switch blocks that allows code to handle enum cases that may be added at some point in the future, without breaking source compatibility.\"  (0.000, 0.176, 0.891, 0.119)\n  AXStaticText \"Access control\"  (0.000, 0.176, 0.299, 0.024)\n  AXStaticText \"A set of keywords that control how properties may be accessed by other code. open means the property can be accessed and overridden from anywhere, public means the property may be accessed from anywhere but overridden only within the module it came from, internal means the property may be accessed from anywhere inside the same module, fileprivate means the property may be accessed from anywhere inside the same file, and private means the property may be accessed from anywhere inside the same type.\"  (0.000, 0.176, 0.891, 0.310)\n  AXStaticText \"ABI\"  (0.000, 0.176, 0.070, 0.024)\n  AXStaticText \"The description of how the Swift compiler produces binaries: how data structures are laid out in memory and accessed, how functions are called, and so on.\"  (0.000, 0.176, 0.838, 0.095)\n  AXStaticText \"API\"  (0.000, 0.176, 0.070, 0.024)\n  AXStaticText \"The collection of classes, structs, methods, and properties exposed by a library to solve a particular problem. Short for Application Programming Interface.\"  (0.000, 0.176, 0.889, 0.095)\n  AXStaticText \"Argument\"  (0.000, 0.176, 0.202, 0.024)\n  AXStaticText \"The name for a value that is being passed into a function, to be used inside the function. For example, in sayHello(to: \"Paul\") the to part is an argument. Many people just say \"parameter\" rather than \"argument\", but argument is technically correct.\"  (0.000, 0.176, 0.891, 0.143)\n  AXStaticText \"Array\"  (0.000, 0.176, 0.111, 0.024)\n  AXStaticText \"A sequential collection of values of any type, such as an array of names in a band.\"  (0.000, 0.176, 0.871, 0.048)\n  AXStaticText \"Associated type\"  (0.000, 0.176, 0.326, 0.024)\n  AXStaticText \"A missing type in a protocol that must be specified by whatever type is conforming to the protocol. Associated types allow us to have flexibility when adding conformances: we can say that to conform to our protocol you must have an array of items, but we don't care what the data type of those items is. Associated types are written as one word in Swift: associatedtype.\"  (0.000, 0.176, 0.891, 0.214)\n  AXStaticText \"Associated value\"  (0.000, 0.176, 0.343, 0.024)\n  AXStaticText \"A value that has been added to an enum case to provide some extra meaning. For example, you might have an enum case saying the weather is windy, then add an associated value saying how windy.\"  (0.000, 0.176, 0.891, 0.119)\n  AXStaticText \"Block\"  (0.000, 0.176, 0.113, 0.024)\n  AXStaticText \"Can mean any chunk of code that starts with { and ends with } (\"a code block\"), but \"block\" is also the Objective-C name for closures.\"  (0.000, 0.176, 0.874, 0.095)\n  AXStaticText \"Boolean\"  (0.000, 0.176, 0.164, 0.024)\n  AXStaticText \"A data type that stores either true or false.\"  (0.000, 0.176, 0.817, 0.024)\n  AXStaticText \"Brace\"  (0.000, 0.176, 0.117, 0.024)\n  AXStaticText \"The name for opening and closing curly brackets, { and }.\"  (0.000, 0.176, 0.774, 0.048)\n  AXStaticText \"Bracket\"  (0.000, 0.176, 0.156, 0.024)\n  AXStaticText \"The name for opening and closing square brackets, [ and ]\"  (0.000, 0.176, 0.812, 0.048)\n  AXStaticText \"Break\"  (0.000, 0.176, 0.117, 0.024)\n  AXStaticText \"A keyword that exit the current loop. If used with a labeled statement, e.g. break myLoop, it will break out of the specified block.\"  (0.000, 0.176, 0.889, 0.072)\n  AXStaticText \"Capturing values\"  (0.000, 0.176, 0.342, 0.024)\n  AXStaticText \"The name for the process of closures keeping a reference to values that are used inside the closure but were created outside. This is different from copying: the closure refers to the original values, not its own copies, so if the original values change then the closure's values change too.\"  (0.000, 0.176, 0.891, 0.167)\n  AXStaticText \"CaseIterable\"  (0.000, 0.176, 0.256, 0.024)\n  AXStaticText \"A Swift protocol that can be applied to enums. If the enum has cases with no associated values, the compiler will generate an allCases array that lets you loop over the cases in the enum.\"  (0.000, 0.176, 0.875, 0.119)\n  AXStaticText \"Catch\"  (0.000, 0.176, 0.120, 0.024)\n  AXStaticText \"A keyword that starts a block of code to handle errors. You can specify what kind of errors should be caught, and use a generic \"catch all\" block to catch everything else. Paired with do.\"  (0.000, 0.176, 0.843, 0.119)\n  AXStaticText \"CGFloat\"  (0.000, 0.176, 0.163, 0.024)\n\n  ... [303 total elements; truncated]"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-unwrap-22",
+   "app": "twostraws__Unwrap",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.hackingwithswift.unwrapswift",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From the Home tab, open the Help screen using the Help button in the top-right.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Help\"  (0.869, 0.063, 0.110, 0.052)\n  AXGroup \"Home\"  (0.041, 0.119, 0.240, 0.048)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.121, 0.076, 0.782)\n  AXGroup \"Ring progress\" value=\"0%\"  (0.038, 0.193, 0.924, 0.334)\n  AXStaticText \"POINTS 0\"  (0.000, 0.545, 1.000, 0.106)\n  AXGroup \"0 points\"  (0.000, 0.545, 1.000, 0.106)\n  AXStaticText \"POINTS\"  (0.046, 0.687, 0.934, 0.020)\n  AXGroup \"0 points from learning\"  (0.000, 0.716, 1.000, 0.052)\n  AXStaticText \"Learning Points\"  (0.041, 0.730, 0.299, 0.024)\n  AXStaticText \"0\"  (0.933, 0.730, 0.026, 0.024)\n  AXGroup \"0 points from reviews\"  (0.000, 0.768, 1.000, 0.052)\n  AXStaticText \"Review Points\"  (0.041, 0.782, 0.269, 0.024)\n  AXStaticText \"0\"  (0.933, 0.782, 0.026, 0.024)\n  AXGroup \"0 points from practicing\"  (0.000, 0.819, 1.000, 0.052)\n  AXStaticText \"Practice Points\"  (0.041, 0.833, 0.290, 0.024)\n  AXStaticText \"0\"  (0.933, 0.833, 0.026, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"0 points from challenges\"  (0.000, 0.871, 1.000, 0.052)\n  AXStaticText \"Challenge Points\"  (0.041, 0.885, 0.325, 0.024)\n  AXStaticText \"0\"  (0.933, 0.885, 0.026, 0.024)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText \"Share Score\"  (0.041, 0.937, 0.236, 0.024)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.924,
+      "y": 0.089,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Home\"  (0.000, 0.063, 0.193, 0.052)\n  AXButton \"Credits\"  (0.820, 0.063, 0.159, 0.052)\n  AXGroup \"Help\"  (0.453, 0.077, 0.094, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.814, 0.115, 0.076, 0.156)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.814, 0.115, 0.076, 0.065)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.814, 0.115, 0.076, 0.289)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.916, 0.115, 0.076, 0.788)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.144, 0.898, 0.033)\n  AXStaticText \"Where to start\"  (0.051, 0.145, 0.898, 0.024)\n  AXStaticText value=\"The main part of this app is split into three sections: Learn, Practice, and Challenges. To begin with you should work your way through the Learn section from top to bottom so that you learn Swift smoothly.\"  (0.051, 0.187, 0.874, 0.113)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.865, 0.187, 0.076, 0.510)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.232, 0.898, 0.035)\n  AXStaticText value=\"Each time you read a chapter in the Learn section, you'll get an orange checkmark next to that section so you know it's complete. If you also answer the test for that chapter, you'll get a green checkmark and some bonus points.\"  (0.051, 0.320, 0.902, 0.113)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.365, 0.898, 0.035)\n  AXStaticText value=\"As you progress you'll unlock parts of the Practice section so that you can hone skills you already learned. When you're ready, the Challenges section gives you questions from across all the Practice types.\"  (0.051, 0.453, 0.908, 0.113)\n  AXStaticText value=\"You can take a challenge only once per day, so make sure you set aside some time to read the questions carefully!\"  (0.051, 0.586, 0.886, 0.068)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.051, 0.658, 0.898, 0.035)\n  AXStaticText \"What are the points for?\"  (0.051, 0.740, 0.898, 0.024)\n  AXStaticText value=\"The points and levels help you keep track of your progress.\"  (0.051, 0.781, 0.846, 0.045)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.865, 0.781, 0.076, 0.219)\n  AXStaticText value=\"You earn points for each chapter you read, each test you take, and each practice and challenge you complete. You can share your score with your friends by tapping Share Score on the home page.\"  (0.051, 0.846, 0.898, 0.113)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.864, 0.749, 0.035)\n  AXGroup \"Tab Bar\"  (0.000, 0.903, 1.000, 0.097)\n  AXButton \"Home\"  (0.005, 0.904, 0.191, 0.056)\n  AXButton \"Learn\"  (0.206, 0.904, 0.188, 0.056)\n  AXButton \"Practice\"  (0.405, 0.904, 0.191, 0.056)\n  AXButton \"Challenges\"  (0.606, 0.904, 0.188, 0.056)\n  AXButton \"News\"  (0.804, 0.904, 0.191, 0.056)\n  AXStaticText value=\"Unless you're taking a challenge, you get the same number of points regardless of how many mistakes you make \u2013 you earn points for trying your best, not for answering everything perfectly. If you want to go back and take a test again to improve your score, go for it!\"  (0.051, 0.979, 0.905, 0.021)"
+    }
+   }
+  ]
+ }
+]

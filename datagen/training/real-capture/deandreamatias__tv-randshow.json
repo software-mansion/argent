@@ -1,0 +1,1378 @@
+[
+ {
+  "meta": {
+   "id": "real-tvrandshow-1",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Settings tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "The Settings screen is open, showing the Dark theme toggle and options like Export favs, Review, Feedback, Version changelog and Privacy policy."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-2",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Go to the Search tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Write a TV show name\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "The Search tab is open with a 'Write a TV show name' search field."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-3",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From the Search tab, switch to the Settings tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Write a TV show name\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "The Settings screen is now showing."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-4",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open Settings, then return to the Favorites tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.16,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "Back on the Favorites tab with the empty 'Your favorite TV shows to get a random episode' state."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-5",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "toggle",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Turn on the Dark theme in Settings.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.208
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"1\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "The Dark theme toggle is now switched on (value changed from 0 to 1)."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-6",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Version changelog from Settings.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.785
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXStaticText \"Changelog (2.5.1)\"  (0.211, 0.126, 0.577, 0.037)\n  AXStaticText \"2.5.0 - 2025/11/25\"  (0.231, 0.199, 0.537, 0.032)\n  AXStaticText \"•\\nAllow export favs on web\\n•\\nAvoid errors to start app\\n•\\nAllow open mailto urls\\n•\\nAvoid setState on init\\n•\\nReplace copy\\n•\\nUpdate to build for 36 sdk android api\\n•\\nBuild with Flutter 3.38 and Dart 3.10\\n•\\nUpdate dependencies and fix breaking changes\\n•\\nAdd app to IzzyDroid repository\"  (0.231, 0.240, 0.537, 0.371)\n  AXStaticText \"2.4.0 - 2025/04/18\"  (0.231, 0.620, 0.537, 0.032)\n  AXStaticText \"•\\nUpdate dependencies\\n•\\nBuild with Flutter 3.29\\n•\\nAdd support to Linux\\n•\\nUpdate Android setup and add support to edge-to-edge\\n•\\nRemove migration screen for user\"  (0.231, 0.661, 0.537, 0.172)\n  AXButton \"CLOSE\"  (0.558, 0.851, 0.230, 0.055)"
+    }
+   }
+  ],
+  "finalAnswer": "The Changelog dialog is open, listing version 2.5.x release notes with a CLOSE button."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-7",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "back",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Version changelog and then close it.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.785
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXStaticText \"Changelog (2.5.1)\"  (0.211, 0.126, 0.577, 0.037)\n  AXStaticText \"2.5.0 - 2025/11/25\"  (0.231, 0.199, 0.537, 0.032)\n  AXStaticText \"•\\nAllow export favs on web\\n•\\nAvoid errors to start app\\n•\\nAllow open mailto urls\\n•\\nAvoid setState on init\\n•\\nReplace copy\\n•\\nUpdate to build for 36 sdk android api\\n•\\nBuild with Flutter 3.38 and Dart 3.10\\n•\\nUpdate dependencies and fix breaking changes\\n•\\nAdd app to IzzyDroid repository\"  (0.231, 0.240, 0.537, 0.371)\n  AXStaticText \"2.4.0 - 2025/04/18\"  (0.231, 0.620, 0.537, 0.032)\n  AXStaticText \"•\\nUpdate dependencies\\n•\\nBuild with Flutter 3.29\\n•\\nAdd support to Linux\\n•\\nUpdate Android setup and add support to edge-to-edge\\n•\\nRemove migration screen for user\"  (0.231, 0.661, 0.537, 0.172)\n  AXButton \"CLOSE\"  (0.558, 0.851, 0.230, 0.055)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.67,
+      "y": 0.878
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "The changelog dialog was closed, returning to the Settings screen."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-8",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "search",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "On the Search tab, search for the TV show 'Friends'.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Write a TV show name\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.116
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "keyboard",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "text": "Friends"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup value=\"Friends\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "Typed 'Friends' into the search field; the field now shows the value 'Friends'."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-9",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "search",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Search for 'Breaking Bad' in the Search tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Write a TV show name\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.116
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "keyboard",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "text": "Breaking Bad"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup value=\"Breaking Bad\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "The search field now contains 'Breaking Bad'."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-10",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "In Settings, tap 'Export favs tv shows'.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.29
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\\nError to export file\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "With no favorites saved, the Export option shows an inline 'Error to export file' message."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-11",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "On the Favorites screen, open the add (+) speed-dial menu.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.82
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.274, 0.743, 0.119, 0.055)\n  AXButton  (0.626, 0.743, 0.119, 0.055)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "The add button expanded into a speed-dial showing extra action buttons."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-12",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From Favorites, go to Search and then to Settings.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Write a TV show name\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "Ended on the Settings screen after passing through Search."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-13",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "search",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Type 'Dark' into the search field, then open the Settings tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Write a TV show name\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.116
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "keyboard",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "text": "Dark"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup value=\"Dark\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "After searching 'Dark', switched to the Settings screen."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-14",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From Settings, switch to the Search tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Write a TV show name\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "The Search tab with the 'Write a TV show name' field is now showing."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-15",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "toggle",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the changelog, close it, then turn on Dark theme.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.785
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXStaticText \"Changelog (2.5.1)\"  (0.211, 0.126, 0.577, 0.037)\n  AXStaticText \"2.5.0 - 2025/11/25\"  (0.231, 0.199, 0.537, 0.032)\n  AXStaticText \"•\\nAllow export favs on web\\n•\\nAvoid errors to start app\\n•\\nAllow open mailto urls\\n•\\nAvoid setState on init\\n•\\nReplace copy\\n•\\nUpdate to build for 36 sdk android api\\n•\\nBuild with Flutter 3.38 and Dart 3.10\\n•\\nUpdate dependencies and fix breaking changes\\n•\\nAdd app to IzzyDroid repository\"  (0.231, 0.240, 0.537, 0.371)\n  AXStaticText \"2.4.0 - 2025/04/18\"  (0.231, 0.620, 0.537, 0.032)\n  AXStaticText \"•\\nUpdate dependencies\\n•\\nBuild with Flutter 3.29\\n•\\nAdd support to Linux\\n•\\nUpdate Android setup and add support to edge-to-edge\\n•\\nRemove migration screen for user\"  (0.231, 0.661, 0.537, 0.172)\n  AXButton \"CLOSE\"  (0.558, 0.851, 0.230, 0.055)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.67,
+      "y": 0.878
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"0\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.208
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"More about TV Randshow\"  (0.179, 0.089, 0.641, 0.032)\n  AXStaticText \"Settings\"  (0.000, 0.140, 1.000, 0.027)\n  AXButton \"Dark theme\\nChoice between light and dark theme\" value=\"1\"  (0.000, 0.167, 1.000, 0.082)\n  AXButton \"Export favs tv shows\\nExport in json file to Downloads\"  (0.000, 0.249, 1.000, 0.082)\n  AXStaticText \"Support\"  (0.000, 0.341, 1.000, 0.027)\n  AXButton \"Review\\nMake your review about this app in Google Play\"  (0.000, 0.368, 1.000, 0.082)\n  AXButton \"Feedback\\nSend a email with feedback or problem report about this app\"  (0.000, 0.451, 1.000, 0.092)\n  AXButton \"Donation\\nHelp this free app to keep alive\"  (0.000, 0.542, 1.000, 0.082)\n  AXStaticText \"About\"  (0.000, 0.634, 1.000, 0.027)\n  AXButton \"Web app\\nUse the TV Randshow in the web\"  (0.000, 0.661, 1.000, 0.082)\n  AXButton \"Version changelog\\nSee details of this and older versions\"  (0.000, 0.744, 1.000, 0.082)\n  AXButton \"Privacy policy\\nSee page with privacy policy details\"  (0.000, 0.826, 1.000, 0.030)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "Closed the changelog and switched the Dark theme toggle on (value 1)."
+ },
+ {
+  "meta": {
+   "id": "real-tvrandshow-16",
+   "app": "deandreamatias__tv-randshow",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "deandrea.matias.tvrandshow.tvRandshow",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Go to Search, then back to the Favorites tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Write a TV show name\"  (0.040, 0.089, 0.920, 0.055)\n  AXStaticText \"Search a TV show in top bar\"  (0.244, 0.181, 0.513, 0.027)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.16,
+      "y": 0.928
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Your favorite TV shows to get a random episode\"  (0.040, 0.089, 0.920, 0.064)\n  AXStaticText \"Search TV show to add in your favorites TV shows\"  (0.042, 0.500, 0.916, 0.027)\n  AXButton  (0.430, 0.815, 0.139, 0.064)\n  AXButton  (0.440, 0.824, 0.119, 0.055)\n  AXButton \"Favorites\\nTab 1 of 3\"  (0.000, 0.895, 0.333, 0.066)\n  AXButton \"Search\\nTab 2 of 3\"  (0.333, 0.895, 0.333, 0.066)\n  AXButton \"Settings\\nTab 3 of 3\"  (0.667, 0.895, 0.333, 0.066)"
+    }
+   }
+  ],
+  "finalAnswer": "Back on the Favorites tab."
+ }
+]

@@ -1,1 +1,1953 @@
-[]
+[
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-1",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From the Home screen, open the Shop tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The Shop tab is open, showing the Categories screen with a 'VIEW ALL ITEMS' link."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-2",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Bag tab from the bottom navigation bar.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The Bag tab is now open."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-3",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Go to the Profile tab to reach the account sign-in screen.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.9,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXStaticText \"Sign in\"  (0.000, 0.135, 1.000, 0.056)\n  AXGroup \"Email\"  (0.040, 0.241, 0.920, 0.073)\n  AXGroup \"Password\"  (0.040, 0.314, 0.920, 0.073)\n  AXStaticText \"Forgot your password\"  (0.040, 0.388, 0.920, 0.027)\n  AXStaticText \"LOGIN\"  (0.040, 0.424, 0.920, 0.055)\n  AXStaticText \"Or sign up with social account\"  (0.312, 0.588, 0.376, 0.013)\n  AXTextField  (0.277, 0.610, 0.179, 0.082)\n  AXTextField  (0.544, 0.610, 0.179, 0.082)"
+    }
+   }
+  ],
+  "finalAnswer": "The Profile tab opened the Sign in screen with Email and Password fields and a LOGIN button."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-4",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Find the login form in the app.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.9,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXStaticText \"Sign in\"  (0.000, 0.135, 1.000, 0.056)\n  AXGroup \"Email\"  (0.040, 0.241, 0.920, 0.073)\n  AXGroup \"Password\"  (0.040, 0.314, 0.920, 0.073)\n  AXStaticText \"Forgot your password\"  (0.040, 0.388, 0.920, 0.027)\n  AXStaticText \"LOGIN\"  (0.040, 0.424, 0.920, 0.055)\n  AXStaticText \"Or sign up with social account\"  (0.312, 0.588, 0.376, 0.013)\n  AXTextField  (0.277, 0.610, 0.179, 0.082)\n  AXTextField  (0.544, 0.610, 0.179, 0.082)"
+    }
+   }
+  ],
+  "finalAnswer": "The login form is on the Profile tab: it shows Email, Password, a 'Forgot your password' link, a LOGIN button, and social sign-up options."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-5",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From Home, go to the Shop tab and open the full product catalog by tapping 'VIEW ALL ITEMS'.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The product catalog is open, showing the Women/Men/Kids category tabs and the SUMMER SALES banner."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-6",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the product catalog and switch to the Men category tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXGroup \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The Men category tab is now selected in the catalog."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-7",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "In the product catalog, view the Kids category.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXGroup \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The Kids category tab is now selected."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-8",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "In the catalog, after looking at the Kids category, switch back to the Women category.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXGroup \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.16,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The Women category tab is selected again."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-9",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "back",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the product catalog, then use the back button to leave it.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.07,
+      "y": 0.103
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "Tapped Back; returned to the Home screen with the Fashion sale promo."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-10",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "After opening the Shop tab, return to the Home tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.1,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "Back on the Home screen showing the Fashion sale promo."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-11",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Bag tab, then move to the Profile tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.9,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXStaticText \"Sign in\"  (0.000, 0.135, 1.000, 0.056)\n  AXGroup \"Email\"  (0.040, 0.241, 0.920, 0.073)\n  AXGroup \"Password\"  (0.040, 0.314, 0.920, 0.073)\n  AXStaticText \"Forgot your password\"  (0.040, 0.388, 0.920, 0.027)\n  AXStaticText \"LOGIN\"  (0.040, 0.424, 0.920, 0.055)\n  AXStaticText \"Or sign up with social account\"  (0.312, 0.588, 0.376, 0.013)\n  AXTextField  (0.277, 0.610, 0.179, 0.082)\n  AXTextField  (0.544, 0.610, 0.179, 0.082)"
+    }
+   }
+  ],
+  "finalAnswer": "The Profile tab is open, showing the Sign in screen."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-12",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From Home, open the catalog via Shop and VIEW ALL ITEMS, look at Men, then switch to Kids.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXGroup \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXGroup \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The Kids category tab is selected in the catalog."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-13",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "swipe",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap",
+    "swipe"
+   ],
+   "verified": true
+  },
+  "task": "In the product catalog, swipe left on the page to move from the Women tab to the next category.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-swipe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "fromX": 0.5,
+      "fromY": 0.25,
+      "toX": 0.1,
+      "toY": 0.25
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXGroup \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "Swiping left advanced the catalog from the Women category to the Men category."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-14",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Show the Categories screen.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The Categories screen is shown with the VIEW ALL ITEMS link."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-15",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "In the catalog, cycle through every category tab (Women, Men, Kids) and finish back on Women.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXGroup \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXGroup \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.16,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "Cycled through Men and Kids and returned to the Women category tab."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-16",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From the Bag tab, switch to the Shop tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The Shop (Categories) screen is now showing."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-17",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "swipe",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap",
+    "swipe"
+   ],
+   "verified": true
+  },
+  "task": "Open the catalog and swipe left twice to reach the Kids category.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-swipe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "fromX": 0.5,
+      "fromY": 0.25,
+      "toX": 0.1,
+      "toY": 0.25
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXGroup \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-swipe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "fromX": 0.5,
+      "fromY": 0.25,
+      "toX": 0.1,
+      "toY": 0.25
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXGroup \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "Two left swipes moved the catalog from Women through Men to the Kids category."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-18",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "back",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap",
+    "swipe"
+   ],
+   "verified": true
+  },
+  "task": "In the catalog, swipe to the Men category, then leave the catalog with the back button.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-swipe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "fromX": 0.5,
+      "fromY": 0.25,
+      "toX": 0.1,
+      "toY": 0.25
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXGroup \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.07,
+      "y": 0.103
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "After viewing Men, the back button returned to the Home screen."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-19",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "In the catalog, open the Kids tab and then switch to the Men tab.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.3,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"VIEW ALL ITEMS\"  (0.000, 0.207, 0.851, 0.057)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.42,
+      "y": 0.235
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXGroup \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.83,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXStaticText \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXGroup \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.162
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Categories\"  (0.338, 0.089, 0.323, 0.027)\n  AXStaticText \"Women\\nTab 1 of 3\"  (0.000, 0.135, 0.333, 0.055)\n  AXGroup \"Men\\nTab 2 of 3\"  (0.333, 0.135, 0.333, 0.055)\n  AXStaticText \"Kids\\nTab 3 of 3\"  (0.667, 0.135, 0.333, 0.055)\n  AXStaticText \"SUMMER SALES\"  (0.351, 0.241, 0.299, 0.018)\n  AXStaticText \"Up to 50% off\"  (0.371, 0.260, 0.259, 0.018)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "The Men category tab is now selected in the catalog."
+ },
+ {
+  "meta": {
+   "id": "real-openflutterecommerce-20",
+   "app": "4seer__openflutterecommerceapp",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "com.openflutter.openflutterecommerce",
+   "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Bag tab and then return to Home.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.5,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "x": 0.1,
+      "y": 0.929
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXStaticText \"Fashion\\nsale\"  (0.037, 0.651, 0.463, 0.108)\n  AXStaticText \"Check\"  (0.037, 0.776, 0.361, 0.055)\n  AXStaticText \"New\\nView All\\nYou’ve never seen it before!\"  (0.000, 0.848, 1.000, 0.049)\n  AXTextField \"Home\\nTab 1 of 5\"  (0.000, 0.899, 0.200, 0.059)\n  AXTextField \"Shop\\nTab 2 of 5\"  (0.200, 0.899, 0.200, 0.059)\n  AXTextField \"Bag\\nTab 3 of 5\"  (0.400, 0.899, 0.200, 0.059)\n  AXTextField \"Favorites\\nTab 4 of 5\"  (0.600, 0.899, 0.200, 0.059)\n  AXTextField \"Profile\\nTab 5 of 5\"  (0.800, 0.899, 0.200, 0.059)"
+    }
+   }
+  ],
+  "finalAnswer": "Back on the Home screen with the Fashion sale promo."
+ }
+]

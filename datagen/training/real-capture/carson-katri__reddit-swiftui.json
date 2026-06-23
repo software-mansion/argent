@@ -1,0 +1,576 @@
+[
+  {
+    "meta": {
+      "id": "real-reddit-01-open-sort",
+      "app": "carson-katri__reddit-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.carsonkatri.Reddit",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the sort options for the current subreddit feed.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.8695,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Sort By:\"  (0.020, 0.572, 0.959, 0.388)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.572, 0.076, 0.052)\n  AXStaticText \"Sort By:\"  (0.061, 0.589, 0.878, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.594, 0.959, 0.026)\n  AXButton \"Hot\"  (0.020, 0.624, 0.959, 0.067)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.624, 0.076, 0.336)\n  AXButton \"Top\"  (0.020, 0.691, 0.959, 0.067)\n  AXButton \"New\"  (0.020, 0.759, 0.959, 0.067)\n  AXButton \"Controversial\"  (0.020, 0.826, 0.959, 0.067)\n  AXButton \"Rising\"  (0.020, 0.893, 0.959, 0.067)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.921, 0.959, 0.035)"
+        }
+      }
+    ],
+    "finalAnswer": "The 'Sort By:' sheet is open, showing Hot, Top, New, Controversial and Rising."
+  },
+  {
+    "meta": {
+      "id": "real-reddit-02-sort-new",
+      "app": "carson-katri__reddit-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.carsonkatri.Reddit",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Change the feed sorting to 'New'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.8695,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Sort By:\"  (0.020, 0.572, 0.959, 0.388)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.572, 0.076, 0.052)\n  AXStaticText \"Sort By:\"  (0.061, 0.589, 0.878, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.594, 0.959, 0.026)\n  AXButton \"Hot\"  (0.020, 0.624, 0.959, 0.067)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.624, 0.076, 0.336)\n  AXButton \"Top\"  (0.020, 0.691, 0.959, 0.067)\n  AXButton \"New\"  (0.020, 0.759, 0.959, 0.067)\n  AXButton \"Controversial\"  (0.020, 0.826, 0.959, 0.067)\n  AXButton \"Rising\"  (0.020, 0.893, 0.959, 0.067)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.921, 0.959, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.4995,
+            "y": 0.7925
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"new\"  (0.762, 0.070, 0.198, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXStaticText \"new\"  (0.879, 0.077, 0.081, 0.024)\n  AXTextField \"Sort\"  (0.789, 0.077, 0.063, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      }
+    ],
+    "finalAnswer": "The feed is now sorted by New."
+  },
+  {
+    "meta": {
+      "id": "real-reddit-03-sort-top",
+      "app": "carson-katri__reddit-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.carsonkatri.Reddit",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Sort the posts by 'Top'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.8695,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Sort By:\"  (0.020, 0.572, 0.959, 0.388)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.572, 0.076, 0.052)\n  AXStaticText \"Sort By:\"  (0.061, 0.589, 0.878, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.594, 0.959, 0.026)\n  AXButton \"Hot\"  (0.020, 0.624, 0.959, 0.067)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.624, 0.076, 0.336)\n  AXButton \"Top\"  (0.020, 0.691, 0.959, 0.067)\n  AXButton \"New\"  (0.020, 0.759, 0.959, 0.067)\n  AXButton \"Controversial\"  (0.020, 0.826, 0.959, 0.067)\n  AXButton \"Rising\"  (0.020, 0.893, 0.959, 0.067)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.921, 0.959, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.4995,
+            "y": 0.7245
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"top\"  (0.778, 0.070, 0.182, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXStaticText \"top\"  (0.895, 0.077, 0.064, 0.024)\n  AXTextField \"Sort\"  (0.805, 0.077, 0.063, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      }
+    ],
+    "finalAnswer": "The feed is now sorted by Top."
+  },
+  {
+    "meta": {
+      "id": "real-reddit-04-sort-controversial",
+      "app": "carson-katri__reddit-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.carsonkatri.Reddit",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Sort the posts by 'Controversial'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.8695,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Sort By:\"  (0.020, 0.572, 0.959, 0.388)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.572, 0.076, 0.052)\n  AXStaticText \"Sort By:\"  (0.061, 0.589, 0.878, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.594, 0.959, 0.026)\n  AXButton \"Hot\"  (0.020, 0.624, 0.959, 0.067)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.624, 0.076, 0.336)\n  AXButton \"Top\"  (0.020, 0.691, 0.959, 0.067)\n  AXButton \"New\"  (0.020, 0.759, 0.959, 0.067)\n  AXButton \"Controversial\"  (0.020, 0.826, 0.959, 0.067)\n  AXButton \"Rising\"  (0.020, 0.893, 0.959, 0.067)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.921, 0.959, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.4995,
+            "y": 0.8595
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"controversial\"  (0.594, 0.070, 0.366, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXStaticText \"controversial\"  (0.711, 0.077, 0.249, 0.024)\n  AXTextField \"Sort\"  (0.621, 0.077, 0.063, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      }
+    ],
+    "finalAnswer": "The feed is now sorted by Controversial."
+  },
+  {
+    "meta": {
+      "id": "real-reddit-05-sort-rising",
+      "app": "carson-katri__reddit-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.carsonkatri.Reddit",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Sort the posts by 'Rising'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.8695,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Sort By:\"  (0.020, 0.572, 0.959, 0.388)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.572, 0.076, 0.052)\n  AXStaticText \"Sort By:\"  (0.061, 0.589, 0.878, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.594, 0.959, 0.026)\n  AXButton \"Hot\"  (0.020, 0.624, 0.959, 0.067)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.624, 0.076, 0.336)\n  AXButton \"Top\"  (0.020, 0.691, 0.959, 0.067)\n  AXButton \"New\"  (0.020, 0.759, 0.959, 0.067)\n  AXButton \"Controversial\"  (0.020, 0.826, 0.959, 0.067)\n  AXButton \"Rising\"  (0.020, 0.893, 0.959, 0.067)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.921, 0.959, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.4995,
+            "y": 0.9265
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"rising\"  (0.736, 0.070, 0.223, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXStaticText \"rising\"  (0.853, 0.077, 0.106, 0.024)\n  AXTextField \"Sort\"  (0.763, 0.077, 0.063, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      }
+    ],
+    "finalAnswer": "The feed is now sorted by Rising."
+  },
+  {
+    "meta": {
+      "id": "real-reddit-06-sort-new-then-hot",
+      "app": "carson-katri__reddit-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "com.carsonkatri.Reddit",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Change the sort to New, then change it back to Hot.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.8695,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Sort By:\"  (0.020, 0.572, 0.959, 0.388)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.572, 0.076, 0.052)\n  AXStaticText \"Sort By:\"  (0.061, 0.589, 0.878, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.594, 0.959, 0.026)\n  AXButton \"Hot\"  (0.020, 0.624, 0.959, 0.067)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.624, 0.076, 0.336)\n  AXButton \"Top\"  (0.020, 0.691, 0.959, 0.067)\n  AXButton \"New\"  (0.020, 0.759, 0.959, 0.067)\n  AXButton \"Controversial\"  (0.020, 0.826, 0.959, 0.067)\n  AXButton \"Rising\"  (0.020, 0.893, 0.959, 0.067)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.921, 0.959, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.4995,
+            "y": 0.7925
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"new\"  (0.762, 0.070, 0.198, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXStaticText \"new\"  (0.879, 0.077, 0.081, 0.024)\n  AXTextField \"Sort\"  (0.789, 0.077, 0.063, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.8695,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"new\"  (0.762, 0.070, 0.198, 0.038)\n  AXGroup \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXStaticText \"new\"  (0.879, 0.077, 0.081, 0.024)\n  AXTextField \"Sort\"  (0.789, 0.077, 0.063, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Sort By:\"  (0.020, 0.572, 0.959, 0.388)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.572, 0.076, 0.052)\n  AXStaticText \"Sort By:\"  (0.061, 0.589, 0.878, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.594, 0.959, 0.026)\n  AXButton \"Hot\"  (0.020, 0.624, 0.959, 0.067)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.896, 0.624, 0.076, 0.336)\n  AXButton \"Top\"  (0.020, 0.691, 0.959, 0.067)\n  AXButton \"New\"  (0.020, 0.759, 0.959, 0.067)\n  AXButton \"Controversial\"  (0.020, 0.826, 0.959, 0.067)\n  AXButton \"Rising\"  (0.020, 0.893, 0.959, 0.067)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.020, 0.921, 0.959, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.4995,
+            "y": 0.6575
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      }
+    ],
+    "finalAnswer": "The feed sort was switched to New and then back to Hot."
+  },
+  {
+    "meta": {
+      "id": "real-reddit-07-open-subreddit-switcher",
+      "app": "carson-katri__reddit-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.carsonkatri.Reddit",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the control for switching to a different subreddit.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXGroup \"hot\"  (0.779, 0.070, 0.181, 0.038)\n  AXButton \"r/swift\"  (0.041, 0.072, 0.139, 0.033)\n  AXTextField \"Sort\"  (0.806, 0.077, 0.063, 0.024)\n  AXStaticText \"hot\"  (0.896, 0.077, 0.064, 0.024)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.1105,
+            "y": 0.0885
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Sidebar\"  (0.041, 0.069, 0.919, 0.919)\n  AXGroup \"hot\"  (0.756, 0.134, 0.166, 0.035)\n  AXButton \"hot\"  (0.756, 0.134, 0.166, 0.035)\n  AXGroup \"r/swift\"  (0.078, 0.136, 0.128, 0.031)\n  AXButton \"r/swift\"  (0.078, 0.136, 0.128, 0.031)\n  AXTextField \"Sort\"  (0.781, 0.140, 0.058, 0.022)\n  AXStaticText \"hot\"  (0.863, 0.140, 0.058, 0.022)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.882, 0.175, 0.070, 0.777)\n  AXGroup value=\"swift\"  (0.272, 0.508, 0.483, 0.026)\n  AXStaticText \"r/\"  (0.246, 0.509, 0.026, 0.024)"
+        }
+      }
+    ],
+    "finalAnswer": "The subreddit switcher is open with an 'r/' input prefilled with 'swift'."
+  }
+]
