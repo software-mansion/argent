@@ -19,6 +19,8 @@ interface RenderInput {
   payload: ProfilerPayload;
   traceFile: string | null;
   exportErrors?: Record<string, string>;
+  /** Optional markdown warning shown in the header when the trace is stale. */
+  freshnessNote?: string;
 }
 
 interface InlineCap {
@@ -34,7 +36,7 @@ interface InlineCap {
 export async function renderNativeProfilerReport(
   input: RenderInput
 ): Promise<NativeProfilerAnalyzeResult> {
-  const { payload, traceFile } = input;
+  const { payload, traceFile, freshnessNote } = input;
   const exportErrors = input.exportErrors ?? {};
   const bottlenecksTotal = payload.bottlenecks.length;
   const status: "ok" | "analysis_failed" =
@@ -45,22 +47,32 @@ export async function renderNativeProfilerReport(
 
   const fullReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors)
-      : renderFullReport(payload, exportErrors, {
-          hotspotLimit: Infinity,
-          hangLimit: Infinity,
-        });
+      ? renderAllClear(payload, exportErrors, freshnessNote)
+      : renderFullReport(
+          payload,
+          exportErrors,
+          {
+            hotspotLimit: Infinity,
+            hangLimit: Infinity,
+          },
+          freshnessNote
+        );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
   const wroteFile = reportFile ? await writeReport(reportFile, fullReport) : false;
 
   const inlineReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors)
-      : renderFullReport(payload, exportErrors, {
-          hotspotLimit: MAX_INLINE_HOTSPOTS,
-          hangLimit: MAX_INLINE_HANGS,
-        });
+      ? renderAllClear(payload, exportErrors, freshnessNote)
+      : renderFullReport(
+          payload,
+          exportErrors,
+          {
+            hotspotLimit: MAX_INLINE_HOTSPOTS,
+            hangLimit: MAX_INLINE_HANGS,
+          },
+          freshnessNote
+        );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
   const shownHangs = Math.min(MAX_INLINE_HANGS, uiHangsCount);
@@ -135,7 +147,11 @@ function reportTitle(payload: ProfilerPayload): string {
     : "iOS Instruments Analysis";
 }
 
-function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, string>): string {
+function renderAllClear(
+  payload: ProfilerPayload,
+  exportErrors?: Record<string, string>,
+  freshnessNote?: string
+): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
     : "unknown";
@@ -145,6 +161,8 @@ function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, 
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
   ];
+
+  if (freshnessNote) lines.push(freshnessNote, ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -176,7 +194,8 @@ function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, 
 function renderFullReport(
   payload: ProfilerPayload,
   exportErrors?: Record<string, string>,
-  cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity }
+  cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity },
+  freshnessNote?: string
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -195,6 +214,8 @@ function renderFullReport(
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
   ];
+
+  if (freshnessNote) lines.push(freshnessNote, ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
