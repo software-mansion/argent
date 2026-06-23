@@ -148,6 +148,79 @@ export function trajectoryToRaw(traj: Trajectory): RawTrajectory {
   };
 }
 
+// Real `describe` of a long list/calendar can be tens of thousands of chars (hundreds of AX
+// elements), blowing past the memory-bound SEQ. Cap each describe to a char budget — but ALWAYS
+// keep the element that grounds the NEXT tap, so the trajectory stays valid (the model can still
+// locate what it taps). Structural lines (Source/Mode/ROOT/blank) are always kept.
+const FRAME_RE = /\(([0-9.]+),\s*([0-9.]+),\s*([0-9.]+),\s*([0-9.]+)\)\s*$/;
+
+function capDescribe(
+  text: string,
+  nextTap: { x: number; y: number } | null,
+  maxChars: number
+): string {
+  if (text.length <= maxChars) return text;
+  const lines = text.split("\n");
+  const isElem = lines.map((l) => /^\s+/.test(l) && FRAME_RE.test(l) && !l.includes("ROOT"));
+  const elemIdx = lines.map((_, i) => i).filter((i) => isElem[i]);
+  if (!elemIdx.length) return text.slice(0, maxChars) + "\n…(truncated)";
+  const structuralChars = lines
+    .filter((_, i) => !isElem[i])
+    .reduce((a, l) => a + l.length + 1, 0);
+  let budget = maxChars - structuralChars;
+  // grounding element: its frame contains the next tap point
+  let groundIdx = -1;
+  if (nextTap) {
+    for (const i of elemIdx) {
+      const m = lines[i]!.match(FRAME_RE);
+      if (!m) continue;
+      const [fx, fy, fw, fh] = m.slice(1).map(Number) as [number, number, number, number];
+      if (nextTap.x >= fx && nextTap.x <= fx + fw && nextTap.y >= fy && nextTap.y <= fy + fh) {
+        groundIdx = i;
+        break;
+      }
+    }
+  }
+  const kept = new Set<number>();
+  for (const i of elemIdx) {
+    const cost = lines[i]!.length + 1;
+    if (budget - cost < 0 && kept.size) break;
+    kept.add(i);
+    budget -= cost;
+  }
+  if (groundIdx >= 0) kept.add(groundIdx);
+  const omitted = elemIdx.length - kept.size;
+  const out = lines.filter((_, i) => !isElem[i] || kept.has(i));
+  if (omitted > 0) out.push(`  … (${omitted} more elements)`);
+  return out.join("\n");
+}
+
+/** Cap long describe observations in place (grounding-aware). Returns the trajectory. */
+export function capObservations(raw: RawTrajectory, maxChars = 1500): RawTrajectory {
+  const steps = raw.steps;
+  for (let i = 0; i < steps.length; i++) {
+    const obs = steps[i]!.observation;
+    if (!obs.text || obs.text.length <= maxChars) continue;
+    const nx = steps[i + 1]?.call.arguments as Record<string, number> | undefined;
+    const nextTap =
+      nx && typeof nx.x === "number" && typeof nx.y === "number"
+        ? { x: nx.x, y: nx.y }
+        : nx && typeof nx.fromX === "number" && typeof nx.fromY === "number"
+          ? { x: nx.fromX, y: nx.fromY }
+          : null;
+    obs.text = capDescribe(obs.text, nextTap, maxChars);
+  }
+  return raw;
+}
+
+/** Rough char length of a raw trajectory (cheap SEQ proxy, ~3.6 chars/token). */
+export function rawCharLen(raw: RawTrajectory): number {
+  let n = raw.policy.length + raw.task.length + (raw.finalAnswer?.length ?? 0);
+  for (const t of raw.tools) n += t.name.length + 80; // compact desc + schema, rough
+  for (const s of raw.steps) n += (s.observation.text?.length ?? 0) + JSON.stringify(s.call).length;
+  return n;
+}
+
 /** Light structural validation of a RawTrajectory (used for real-capture imports). */
 export function validateRaw(raw: RawTrajectory, catalogNames: Set<string>): string[] {
   const errs: string[] = [];

@@ -18,7 +18,7 @@ import { pickPersona, userTaskPhrase } from "../src/narrate.ts";
 import { assemble } from "../src/emit.ts";
 import { Validator } from "../src/validate.ts";
 import { ARGENT_SYSTEM_PROMPT } from "../src/system-prompt.ts";
-import { trajectoryToRaw, validateRaw } from "../src/raw.ts";
+import { trajectoryToRaw, validateRaw, capObservations, rawCharLen } from "../src/raw.ts";
 import type { RawTrajectory } from "../src/raw.ts";
 import { render, HARNESSES } from "../harness/renderers.ts";
 import type { HarnessName, NativeRecord } from "../harness/renderers.ts";
@@ -30,13 +30,13 @@ const byName = new Map(catalog.map((t) => [t.name, t]));
 const catalogNames = new Set(catalog.map((t) => t.name));
 const validator = new Validator(catalog);
 
-// The nav/gesture tool surface offered every example (covers tap, swipe, scroll, pinch, rotate,
-// drag, keyboard, button + RN debugger-tree + screenshot fallback). Superset of the old 8-tool
-// set so the model can learn ALL gestures the user wants exercised. Must match the eval agent.
+// Lean fixed CORE offered every example; offeredFor() adds any tool the trajectory actually uses
+// (open-url, restart-app, gesture-pinch, debugger-component-tree, screenshot, …). Per-trajectory
+// lean (~8-11 tools) instead of a fixed 15 halves the tool token overhead (15 tools ≈ 2073 tok =
+// 45% of SEQ) so multi-describe trajectories fit SEQ 4608.
 const NAV_SURFACE = [
-  "list-devices", "launch-app", "open-url", "restart-app", "describe",
-  "gesture-tap", "gesture-swipe", "gesture-scroll", "gesture-pinch", "gesture-rotate",
-  "gesture-drag", "keyboard", "button", "screenshot", "debugger-component-tree",
+  "list-devices", "launch-app", "describe",
+  "gesture-tap", "gesture-swipe", "gesture-scroll", "keyboard", "button",
 ];
 const NAV_SURFACE_SPECS: ToolSpec[] = NAV_SURFACE.map((n) => byName.get(n)!).filter(Boolean);
 
@@ -146,8 +146,20 @@ function main() {
   const realValid = realShuffled.slice(0, realValidCount);
   const realTrain = realShuffled.slice(realValidCount);
 
-  const fan = (raws: RawTrajectory[]): NativeRecord[] =>
-    raws.flatMap((r) => harnessList.map((h) => render(r, h, { narration })));
+  // Cap long describe observations (grounding-aware), then drop the rare trajectory still over
+  // the SEQ budget so nothing trains truncated. ~9000 chars ≈ p99 ~4250 tokens after rendering.
+  const MAX_RAW_CHARS = 9000;
+  let dropped = 0;
+  const fan = (raws: RawTrajectory[]): NativeRecord[] => {
+    const fit = raws
+      .map((r) => capObservations(r, 1000))
+      .filter((r) => {
+        if (rawCharLen(r) <= MAX_RAW_CHARS) return true;
+        dropped++;
+        return false;
+      });
+    return fit.flatMap((r) => harnessList.map((h) => render(r, h, { narration })));
+  };
 
   const trainRecs = new RNG(7).shuffle([...fan(gymTrain), ...fan(realTrain)]);
   const validRecs = new RNG(8).shuffle([...fan(gymValid), ...fan(realValid)]);
@@ -170,6 +182,7 @@ function main() {
     harnesses: harnessList,
     sources: { gym_train: gymTrain.length, gym_valid: gymValid.length, real_train: realTrain.length, real_valid: realValid.length },
     rows: { train: trainRecs.length, valid: validRecs.length },
+    dropped_over_seq: dropped,
     per_harness_rows: byH,
   };
   writeFileSync(join(out, "stats.json"), JSON.stringify(stats, null, 2));

@@ -11,11 +11,23 @@ DG="$HOME/dev/argent-finetune-data/datagen"
 log() { echo "[$(date '+%F %T')] dispatch: $*"; }
 cd "$DG" || { echo "cannot cd $DG"; exit 1; }
 
-GYM="${GYM:-2500}"; VALID="${VALID:-160}"
+VALID="${VALID:-160}"
 RUNS="training/runs"
 if [ -f "$RUNS/multinight.progress" ] || [ -d "$RUNS/multinight.lock.d" ] || [ -f "$RUNS/multinight.done" ]; then
   log "run already in progress/done — skipping dataset regen, resuming night-run"
 else
+  if [ -z "${GYM:-}" ]; then   # adaptive: gym ~= real trajectory count -> ~50/50 after x4 harnesses
+    GYM=$(python3 - <<'PYEOF'
+import json, glob
+n = 0
+for f in glob.glob('training/real-capture/*.json'):
+    try:
+        a = json.load(open(f)); n += len(a) if isinstance(a, list) else 1
+    except Exception: pass
+print(max(150, min(500, n)))
+PYEOF
+)
+  fi
   log "regenerating data-multi (gym=$GYM + all real-capture)"
   node training/prepare-multi.ts --gym "$GYM" --real --valid "$VALID" --out data-multi 2>&1 | tail -8
   n=$(wc -l < training/data-multi/train.jsonl 2>/dev/null || echo 0)
