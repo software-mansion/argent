@@ -92,4 +92,63 @@ describe("selectTarget", () => {
     const result = selectTarget([dev1, dev2], 8081, { deviceId: "bbb" });
     expect(result.target.id).toBe("dev2");
   });
+
+  it("routes distinct deviceIds to distinct devices (no collapse)", () => {
+    const dev1 = makeTarget({
+      id: "dev1",
+      reactNative: { logicalDeviceId: "aaa", capabilities: { prefersFuseboxFrontend: true } },
+    });
+    const dev2 = makeTarget({
+      id: "dev2",
+      reactNative: { logicalDeviceId: "bbb", capabilities: { prefersFuseboxFrontend: true } },
+    });
+
+    expect(selectTarget([dev1, dev2], 8081, { deviceId: "aaa" }).target.id).toBe("dev1");
+    expect(selectTarget([dev1, dev2], 8081, { deviceId: "bbb" }).target.id).toBe("dev2");
+  });
+
+  it("throws instead of silently collapsing when an unmatched deviceId is ambiguous", () => {
+    const dev1 = makeTarget({ id: "dev1", reactNative: { logicalDeviceId: "aaa" } });
+    const dev2 = makeTarget({ id: "dev2", reactNative: { logicalDeviceId: "bbb" } });
+
+    // An id that matches neither device must NOT resolve to the first target —
+    // that is the "all debuggers resolve to the same device" bug.
+    expect(() => selectTarget([dev1, dev2], 8081, { deviceId: "unmatched" })).toThrow(
+      /No debugger target matches device_id "unmatched"/
+    );
+    // The error must surface the valid ids so the caller can re-target.
+    expect(() => selectTarget([dev1, dev2], 8081, { deviceId: "unmatched" })).toThrow(/aaa.*bbb/);
+  });
+
+  it("still falls back to the only device when a single device is connected", () => {
+    // Single-device convenience: callers may pass an id Metro never echoes (e.g.
+    // an iOS simulator UDID, which is not the logicalDeviceId). With one device
+    // there is no ambiguity, so selection must succeed via fallback.
+    const fusebox = makeTarget({
+      id: "only",
+      reactNative: {
+        logicalDeviceId: "real-logical-id",
+        capabilities: { prefersFuseboxFrontend: true },
+      },
+    });
+    const uiPage = makeTarget({
+      id: "only-ui",
+      reactNative: { logicalDeviceId: "real-logical-id" },
+    });
+
+    const result = selectTarget([fusebox, uiPage], 8081, { deviceId: "some-ios-udid" });
+    expect(result.target.id).toBe("only");
+  });
+
+  it("falls back when no target exposes a logicalDeviceId at all", () => {
+    // Old-arch / pre-Fusebox targets omit reactNative.logicalDeviceId entirely.
+    const t1 = makeTarget({ id: "first" });
+    const t2 = makeTarget({
+      id: "second",
+      reactNative: { capabilities: { prefersFuseboxFrontend: true } },
+    });
+
+    const result = selectTarget([t1, t2], 8081, { deviceId: "anything" });
+    expect(result.target.id).toBe("second");
+  });
 });

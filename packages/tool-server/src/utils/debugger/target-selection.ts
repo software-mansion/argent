@@ -24,8 +24,35 @@ export function selectTarget(
   let candidates = targets;
 
   if (options?.deviceId) {
-    const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === options.deviceId);
-    if (filtered.length) candidates = filtered;
+    const deviceId = options.deviceId;
+    const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === deviceId);
+    if (filtered.length) {
+      candidates = filtered;
+    } else {
+      // No target matches the requested device. Silently falling back to the
+      // first/priority target here would route EVERY unmatched device_id to the
+      // same device — so two debugger sessions opened with different device_ids
+      // would both land on whichever device Metro happens to list first. Only
+      // fall back when there is a single device to fall back to; with multiple
+      // distinct devices connected, refuse to guess and report the valid ids so
+      // the caller can re-target (the logicalDeviceId is what debugger-connect
+      // returns and what subsequent debugger-* calls must pass).
+      const distinctDeviceIds = [
+        ...new Set(
+          targets
+            .map((t) => t.reactNative?.logicalDeviceId)
+            .filter((id): id is string => id !== undefined && id !== "")
+        ),
+      ];
+      if (distinctDeviceIds.length > 1) {
+        throw new Error(
+          `No debugger target matches device_id "${String(deviceId)}". ` +
+            `${distinctDeviceIds.length} devices are connected to Metro on port ${port}: ` +
+            `${distinctDeviceIds.join(", ")}. Pass one of these as device_id ` +
+            `(the logicalDeviceId returned by debugger-connect).`
+        );
+      }
+    }
   }
   if (options?.deviceName) {
     const filtered = candidates.filter((t) => t.deviceName === options.deviceName);
