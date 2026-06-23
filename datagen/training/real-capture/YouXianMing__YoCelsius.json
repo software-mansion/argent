@@ -1,0 +1,116 @@
+[
+  {
+    "meta": {
+      "id": "real-yocelsius-01-allow-location",
+      "app": "YouXianMing__YoCelsius",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.YouXianMing.YoCelsius",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Grant the location permission so the weather screen loads, by tapping 'Allow While Using App'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"YoCelsius\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"Allow \u201cYoCelsius\u201d to use your location?\"  (0.157, 0.386, 0.687, 0.257)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.760, 0.386, 0.076, 0.101)\n  AXStaticText \"Allow \u201cYoCelsius\u201d to use your location?\"  (0.198, 0.409, 0.606, 0.050)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.157, 0.448, 0.687, 0.035)\n  AXButton \"Allow Once\"  (0.157, 0.487, 0.687, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.760, 0.487, 0.076, 0.156)\n  AXButton \"Allow While Using App\"  (0.157, 0.540, 0.687, 0.052)\n  AXButton \"Don\u2019t Allow\"  (0.157, 0.592, 0.687, 0.052)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.157, 0.604, 0.687, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.566
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"stations, Yicheng, 2020.06.20, 11:07 update, moderate rain, S, Weather, Temperature, 17\u00b0, Humidity, Sunrise/Sunset, 84%, 13 : 39, 23 : 26, Min/Max Temp, Wind Speed, Min 16\u00b0, Max 20\u00b0, 1.91 mps\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"stations, Yicheng, 2020.06.20, 11:07 update, moderate rain, S, Weather, Temperature, 17\u00b0, Humidity, Sunrise/Sunset, 84%, 13 : 39, 23 : 26, Min/Max Temp, Wind Speed, Min 16\u00b0, Max 20\u00b0, 1.92 mps\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.058, 0.076, 0.885)\n  AXStaticText \"stations\"  (0.000, 0.104, 0.980, 0.014)\n  AXStaticText \"Yicheng\"  (0.031, 0.117, 0.969, 0.037)\n  AXStaticText \"2020.06.20\"  (0.000, 0.134, 0.898, 0.014)\n  AXStaticText \"11:07 update\"  (0.000, 0.151, 0.980, 0.016)\n  AXStaticText \"moderate rain\"  (0.038, 0.157, 0.962, 0.020)\n  AXStaticText \"S\"  (0.000, 0.222, 0.500, 0.231)\n  AXStaticText \"Weather\"  (0.051, 0.233, 0.138, 0.020)\n  AXStaticText \"Temperature\"  (0.551, 0.233, 0.202, 0.020)\n  AXStaticText \"18\u00b0\"  (0.546, 0.255, 0.407, 0.164)\n  AXStaticText \"Humidity\"  (0.051, 0.464, 0.148, 0.020)\n  AXStaticText \"Sunrise/Sunset\"  (0.551, 0.464, 0.241, 0.020)\n  AXStaticText \"85%\"  (0.099, 0.511, 0.293, 0.135)\n  AXStaticText \"13 : 39\"  (0.780, 0.552, 0.127, 0.029)\n  AXStaticText \"23 : 26\"  (0.627, 0.575, 0.127, 0.029)\n  AXStaticText \"Min/Max Temp\"  (0.051, 0.695, 0.243, 0.020)\n  AXStaticText \"Wind Speed\"  (0.551, 0.695, 0.193, 0.020)\n  AXStaticText \"Max 20\u00b0\"  (0.305, 0.752, 0.153, 0.035)\n  AXStaticText \"Min 17\u00b0\"  (0.153, 0.757, 0.153, 0.035)\n  AXStaticText \"1.94 mps\"  (0.615, 0.865, 0.237, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      }
+    ],
+    "finalAnswer": "Granted location access; the weather screen now shows Temperature, Humidity, Sunrise/Sunset, Min/Max Temp and Wind Speed for the station."
+  },
+  {
+    "meta": {
+      "id": "real-yocelsius-02-deny-location",
+      "app": "YouXianMing__YoCelsius",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.YouXianMing.YoCelsius",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Decline the location permission by tapping 'Don't Allow' and reach the empty weather screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"YoCelsius\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"Allow \u201cYoCelsius\u201d to use your location?\"  (0.157, 0.386, 0.687, 0.257)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.760, 0.386, 0.076, 0.101)\n  AXStaticText \"Allow \u201cYoCelsius\u201d to use your location?\"  (0.198, 0.409, 0.606, 0.050)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.157, 0.448, 0.687, 0.035)\n  AXButton \"Allow Once\"  (0.157, 0.487, 0.687, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.760, 0.487, 0.076, 0.156)\n  AXButton \"Allow While Using App\"  (0.157, 0.540, 0.687, 0.052)\n  AXButton \"Don\u2019t Allow\"  (0.157, 0.592, 0.687, 0.052)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.157, 0.604, 0.687, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.618
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Empty list\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.058, 0.076, 0.885)\n  AXStaticText \"Long Press To Update\"  (0.038, 0.890, 0.924, 0.056)\n  AXButton  (0.038, 0.890, 0.924, 0.056)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      }
+    ],
+    "finalAnswer": "Declined location access; the app shows an empty weather list with a 'Long Press To Update' button."
+  }
+]

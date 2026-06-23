@@ -1,0 +1,59 @@
+[
+  {
+    "meta": {
+      "id": "real-swift2048-01-start-game",
+      "app": "austinzheng__swift-2048",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "f3nghuang.swift-2048",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Start a new 2048 game from the menu.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Start Game\"  (0.401, 0.482, 0.198, 0.035)\n  AXStaticText \"Start Game\"  (0.401, 0.489, 0.198, 0.021)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.4995
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 0\"  (0.322, 0.417, 0.356, 0.047)\n  AXStaticText \"2\"  (0.365, 0.482, 0.127, 0.059)\n  AXButton \"Start Game\"  (0.409, 0.512, 0.182, 0.032)\n  AXStaticText \"Start Game\"  (0.409, 0.519, 0.182, 0.019)\n  AXStaticText \"2\"  (0.365, 0.614, 0.127, 0.059)"
+        }
+      }
+    ],
+    "finalAnswer": "Started a new game; the board is showing with SCORE: 0."
+  }
+]

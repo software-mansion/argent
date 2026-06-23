@@ -1,0 +1,791 @@
+[
+  {
+    "meta": {
+      "id": "real-designcode-1",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Courses home screen, open the navigation list menu and tap Settings to open the Settings screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.077,
+            "y": 0.123
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXTextField \"Account\"  (0.087, 0.125, 0.054, 0.025)\n  AXStaticText \"My Account\"  (0.174, 0.126, 0.235, 0.023)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Settings\"  (0.075, 0.168, 0.682, 0.037)\n  AXTextField \"Settings\"  (0.085, 0.173, 0.058, 0.026)\n  AXStaticText \"Settings\"  (0.174, 0.174, 0.166, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Billing\"  (0.174, 0.223, 0.121, 0.023)\n  AXTextField \"Card\"  (0.084, 0.224, 0.062, 0.021)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"person.2\"  (0.078, 0.272, 0.077, 0.024)\n  AXStaticText \"Team\"  (0.174, 0.272, 0.108, 0.023)\n  AXTextField \"arrow.uturn.down\"  (0.090, 0.321, 0.050, 0.023)\n  AXStaticText \"Sign out\"  (0.174, 0.321, 0.163, 0.023)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.416,
+            "y": 0.187
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.146, 0.075, 0.789)\n  AXGroup \"Settings\"  (0.040, 0.151, 0.331, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXTextField \"Account\"  (0.120, 0.186, 0.050, 0.023)\n  AXStaticText \"My Account\"  (0.200, 0.187, 0.216, 0.021)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"Recieve Notifications\" value=\"0\"  (0.050, 0.206, 0.900, 0.050)\n  AXStaticText \"Recieve Notifications\"  (0.100, 0.219, 0.397, 0.023)\n  AXButton \"Settings\"  (0.108, 0.225, 0.627, 0.034)\n  AXTextField \"Settings\"  (0.118, 0.230, 0.053, 0.024)\n  AXStaticText \"Settings\"  (0.200, 0.232, 0.153, 0.021)\n  AXGroup \"1 Notification per week\" value=\"1\"  (0.050, 0.256, 0.900, 0.050)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXButton \"1 Notification per week, Decrement\" value=\"1\"  (0.667, 0.263, 0.116, 0.037)\n  AXButton \"1 Notification per week, Increment\" value=\"1\"  (0.785, 0.263, 0.116, 0.037)\n  AXStaticText \"1 Notification per week\"  (0.100, 0.270, 0.430, 0.023)\n  AXStaticText \"Billing\"  (0.200, 0.276, 0.111, 0.021)\n  AXTextField \"Card\"  (0.117, 0.277, 0.057, 0.019)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXButton \"Favourite course, SwiftUI\"  (0.050, 0.307, 0.900, 0.050)\n  AXStaticText \"SwiftUI\"  (0.724, 0.320, 0.136, 0.023)\n  AXStaticText \"Favourite course\"  (0.100, 0.320, 0.313, 0.023)\n  AXTextField \"person.2\"  (0.112, 0.321, 0.071, 0.022)\n  AXStaticText \"Team\"  (0.200, 0.321, 0.099, 0.021)\n  AXButton \"23 Jun 2026\"  (0.415, 0.362, 0.301, 0.041)\n  AXButton \"Date and Time Picker\" value=\"13:20, 23 Jun 2026\"  (0.415, 0.362, 0.485, 0.041)\n  AXButton \"13:20\"  (0.726, 0.362, 0.174, 0.041)\n  AXTextField \"arrow.uturn.down\"  (0.122, 0.366, 0.046, 0.021)\n  AXStaticText \"Sign out\"  (0.200, 0.366, 0.150, 0.021)\n  AXStaticText \"Date\"  (0.100, 0.371, 0.090, 0.023)\n  AXStaticText \"EMAIL\"  (0.050, 0.428, 0.900, 0.044)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXGroup value=\"Your email: \"  (0.050, 0.472, 0.900, 0.050)\n  AXButton \"Submit\"  (0.050, 0.563, 0.900, 0.050)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)"
+        }
+      }
+    ],
+    "finalAnswer": "The Settings screen is open, showing the 'Recieve Notifications' toggle and the notification frequency stepper."
+  },
+  {
+    "meta": {
+      "id": "real-designcode-2",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings from the list menu and turn ON the 'Recieve Notifications' toggle.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.077,
+            "y": 0.123
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXTextField \"Account\"  (0.087, 0.125, 0.054, 0.025)\n  AXStaticText \"My Account\"  (0.174, 0.126, 0.235, 0.023)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Settings\"  (0.075, 0.168, 0.682, 0.037)\n  AXTextField \"Settings\"  (0.085, 0.173, 0.058, 0.026)\n  AXStaticText \"Settings\"  (0.174, 0.174, 0.166, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Billing\"  (0.174, 0.223, 0.121, 0.023)\n  AXTextField \"Card\"  (0.084, 0.224, 0.062, 0.021)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"person.2\"  (0.078, 0.272, 0.077, 0.024)\n  AXStaticText \"Team\"  (0.174, 0.272, 0.108, 0.023)\n  AXTextField \"arrow.uturn.down\"  (0.090, 0.321, 0.050, 0.023)\n  AXStaticText \"Sign out\"  (0.174, 0.321, 0.163, 0.023)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.416,
+            "y": 0.187
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.146, 0.075, 0.789)\n  AXGroup \"Settings\"  (0.040, 0.151, 0.331, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXTextField \"Account\"  (0.120, 0.186, 0.050, 0.023)\n  AXStaticText \"My Account\"  (0.200, 0.187, 0.216, 0.021)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"Recieve Notifications\" value=\"0\"  (0.050, 0.206, 0.900, 0.050)\n  AXStaticText \"Recieve Notifications\"  (0.100, 0.219, 0.397, 0.023)\n  AXButton \"Settings\"  (0.108, 0.225, 0.627, 0.034)\n  AXTextField \"Settings\"  (0.118, 0.230, 0.053, 0.024)\n  AXStaticText \"Settings\"  (0.200, 0.232, 0.153, 0.021)\n  AXGroup \"1 Notification per week\" value=\"1\"  (0.050, 0.256, 0.900, 0.050)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXButton \"1 Notification per week, Decrement\" value=\"1\"  (0.667, 0.263, 0.116, 0.037)\n  AXButton \"1 Notification per week, Increment\" value=\"1\"  (0.785, 0.263, 0.116, 0.037)\n  AXStaticText \"1 Notification per week\"  (0.100, 0.270, 0.430, 0.023)\n  AXStaticText \"Billing\"  (0.200, 0.276, 0.111, 0.021)\n  AXTextField \"Card\"  (0.117, 0.277, 0.057, 0.019)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXButton \"Favourite course, SwiftUI\"  (0.050, 0.307, 0.900, 0.050)\n  AXStaticText \"SwiftUI\"  (0.724, 0.320, 0.136, 0.023)\n  AXStaticText \"Favourite course\"  (0.100, 0.320, 0.313, 0.023)\n  AXTextField \"person.2\"  (0.112, 0.321, 0.071, 0.022)\n  AXStaticText \"Team\"  (0.200, 0.321, 0.099, 0.021)\n  AXButton \"23 Jun 2026\"  (0.415, 0.362, 0.301, 0.041)\n  AXButton \"Date and Time Picker\" value=\"13:22, 23 Jun 2026\"  (0.415, 0.362, 0.485, 0.041)\n  AXButton \"13:22\"  (0.726, 0.362, 0.174, 0.041)\n  AXTextField \"arrow.uturn.down\"  (0.122, 0.366, 0.046, 0.021)\n  AXStaticText \"Sign out\"  (0.200, 0.366, 0.150, 0.021)\n  AXStaticText \"Date\"  (0.100, 0.371, 0.090, 0.023)\n  AXStaticText \"EMAIL\"  (0.050, 0.428, 0.900, 0.044)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXGroup value=\"Your email: \"  (0.050, 0.472, 0.900, 0.050)\n  AXButton \"Submit\"  (0.050, 0.563, 0.900, 0.050)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.85,
+            "y": 0.231
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.146, 0.075, 0.789)\n  AXGroup \"Settings\"  (0.040, 0.151, 0.331, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXTextField \"Account\"  (0.120, 0.186, 0.050, 0.023)\n  AXStaticText \"My Account\"  (0.200, 0.187, 0.216, 0.021)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"Recieve Notifications\" value=\"1\"  (0.050, 0.206, 0.900, 0.050)\n  AXStaticText \"Recieve Notifications\"  (0.100, 0.219, 0.397, 0.023)\n  AXButton \"Settings\"  (0.108, 0.225, 0.627, 0.034)\n  AXTextField \"Settings\"  (0.118, 0.230, 0.053, 0.024)\n  AXStaticText \"Settings\"  (0.200, 0.232, 0.153, 0.021)\n  AXGroup \"1 Notification per week\" value=\"1\"  (0.050, 0.256, 0.900, 0.050)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXButton \"1 Notification per week, Decrement\" value=\"1\"  (0.667, 0.263, 0.116, 0.037)\n  AXButton \"1 Notification per week, Increment\" value=\"1\"  (0.785, 0.263, 0.116, 0.037)\n  AXStaticText \"1 Notification per week\"  (0.100, 0.270, 0.430, 0.023)\n  AXStaticText \"Billing\"  (0.200, 0.276, 0.111, 0.021)\n  AXTextField \"Card\"  (0.117, 0.277, 0.057, 0.019)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXButton \"Favourite course, SwiftUI\"  (0.050, 0.307, 0.900, 0.050)\n  AXStaticText \"SwiftUI\"  (0.724, 0.320, 0.136, 0.023)\n  AXStaticText \"Favourite course\"  (0.100, 0.320, 0.313, 0.023)\n  AXTextField \"person.2\"  (0.112, 0.321, 0.071, 0.022)\n  AXStaticText \"Team\"  (0.200, 0.321, 0.099, 0.021)\n  AXButton \"23 Jun 2026\"  (0.415, 0.362, 0.301, 0.041)\n  AXButton \"Date and Time Picker\" value=\"13:22, 23 Jun 2026\"  (0.415, 0.362, 0.485, 0.041)\n  AXButton \"13:22\"  (0.726, 0.362, 0.174, 0.041)\n  AXTextField \"arrow.uturn.down\"  (0.122, 0.366, 0.046, 0.021)\n  AXStaticText \"Sign out\"  (0.200, 0.366, 0.150, 0.021)\n  AXStaticText \"Date\"  (0.100, 0.371, 0.090, 0.023)\n  AXStaticText \"EMAIL\"  (0.050, 0.428, 0.900, 0.044)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXGroup value=\"Your email: \"  (0.050, 0.472, 0.900, 0.050)\n  AXButton \"Submit\"  (0.050, 0.563, 0.900, 0.050)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)"
+        }
+      }
+    ],
+    "finalAnswer": "The 'Recieve Notifications' toggle is now ON (value=1)."
+  },
+  {
+    "meta": {
+      "id": "real-designcode-3",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Courses home screen, open the Notifications (Updates) feed using the bell button in the top-right.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.905,
+            "y": 0.126
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXButton \"Add Update\"  (0.040, 0.098, 0.246, 0.032)\n  AXButton \"Edit\"  (0.867, 0.098, 0.093, 0.032)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.918, 0.146, 0.075, 0.789)\n  AXGroup \"Updates\"  (0.040, 0.151, 0.333, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"SwiftUI, Learn how to build custom views and controls in SwiftUI with advanced composition, layout, graphics, and animation. See a demo of a high performance, animatable control and watch it made step by step in code. Gain a deeper understanding of the layout system of SwiftUI., JUN 26\"  (0.050, 0.206, 0.900, 0.158)\n  AXStaticText \"SwiftUI\"  (0.328, 0.228, 0.145, 0.023)\n  AXTextField \"Illustration1\"  (0.100, 0.259, 0.199, 0.052)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXStaticText \"Learn how to build custom views and controls in SwiftUI with advanced composition, layout, graphics, and animation. See a demo of a high performance, animatable control and watch it made step by step in code. Gain a deeper understanding of the layout system of SwiftUI.\"  (0.328, 0.269, 0.519, 0.046)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXStaticText \"JUN 26\"  (0.328, 0.326, 0.111, 0.016)\n  AXButton \"Framer X, Learn how to build custom views and controls in SwiftUI with advanced composition, layout, graphics, and animation. See a demo of a high performance, animatable control and watch it made step by step in code. Gain a deeper understanding of the layout system of SwiftUI., JUN 11\"  (0.050, 0.364, 0.900, 0.158)\n  AXStaticText \"Framer X\"  (0.328, 0.386, 0.181, 0.023)\n  AXTextField \"Illustration2\"  (0.107, 0.397, 0.184, 0.092)\n  AXStaticText \"Learn how to build custom views and controls in SwiftUI with advanced composition, layout, graphics, and animation. See a demo of a high performance, animatable control and watch it made step by step in code. Gain a deeper understanding of the layout system of SwiftUI.\"  (0.328, 0.427, 0.519, 0.046)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXStaticText \"JUN 11\"  (0.328, 0.484, 0.102, 0.016)\n  AXButton \"CSS Layout, Learn how to combine CSS Grid, Flexbox, animations and responsive design to create a beautiful prototype in CodePen., MAY 26\"  (0.050, 0.522, 0.900, 0.158)\n  AXStaticText \"CSS Layout\"  (0.328, 0.544, 0.228, 0.023)\n  AXTextField \"Illustration3\"  (0.100, 0.567, 0.199, 0.068)\n  AXStaticText \"Learn how to combine CSS Grid, Flexbox, animations and responsive design to create a beautiful prototype in CodePen.\"  (0.328, 0.585, 0.509, 0.046)\n  AXStaticText \"MAY 26\"  (0.328, 0.641, 0.115, 0.016)\n  AXButton \"React Native Part 2, Learn how to implement gestures, Lottie animations and Firebase login., MAY 15\"  (0.050, 0.680, 0.900, 0.158)\n  AXStaticText \"React Native Part 2\"  (0.328, 0.701, 0.378, 0.023)\n  AXTextField \"Illustration4\"  (0.100, 0.719, 0.199, 0.079)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXStaticText \"Learn how to implement gestures, Lottie animations and Firebase login.\"  (0.328, 0.743, 0.520, 0.046)\n  AXStaticText \"MAY 15\"  (0.328, 0.799, 0.111, 0.016)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXButton \"Unity, Unity course teaching basics, C#, assets, level design and gameplay, MAR 19\"  (0.050, 0.838, 0.900, 0.158)\n  AXStaticText \"Unity\"  (0.328, 0.859, 0.105, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)\n  AXTextField \"Certificate1\"  (0.100, 0.897, 0.199, 0.039)\n  AXStaticText \"Unity course teaching basics, C#, assets, level design and gameplay\"  (0.328, 0.901, 0.513, 0.046)\n  AXStaticText \"MAR 19\"  (0.328, 0.957, 0.114, 0.016)\n  AXButton \"React Native for Designers, Build your own iOS and Android app with custom animations, Redux and API data., FEB 14\"  (0.050, 0.995, 0.900, 0.005)"
+        }
+      }
+    ],
+    "finalAnswer": "The Updates feed is open, showing the 'Add Update' button and the list of course update notifications."
+  },
+  {
+    "meta": {
+      "id": "real-designcode-4",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Courses home screen, open the Certificates detail view using the Account button in the top bar.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.776,
+            "y": 0.126
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.025, 0.071, 0.950)\n  AXButton \"List\"  (0.000, 0.062, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.071, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.071, 0.109, 0.050)\n  AXStaticText \"Courses\"  (0.167, 0.110, 0.326, 0.044)\n  AXStaticText \"Certificates\"  (0.040, 0.126, 0.488, 0.047)\n  AXStaticText \"22 Courses\"  (0.167, 0.156, 0.206, 0.022)\n  AXTextField \"Illustration5\"  (0.286, 0.196, 0.428, 0.174)\n  AXButton \"Build an app with SwiftUI\"  (0.096, 0.223, 0.581, 0.391)\n  AXButton \"Design and animate your UI\"  (0.748, 0.223, 0.252, 0.391)\n  AXStaticText \"Design and animate your UI\"  (0.827, 0.251, 0.173, 0.117)\n  AXStaticText \"Build an app with SwiftUI\"  (0.167, 0.255, 0.392, 0.074)\n  AXTextField \"Illustration2\"  (0.880, 0.418, 0.120, 0.167)\n  AXTextField \"Illustration1\"  (0.096, 0.424, 0.581, 0.151)\n  AXTextField \"Logo\"  (0.793, 0.504, 0.071, 0.033)\n  AXTextField \"Logo\"  (0.793, 0.504, 0.071, 0.033)\n  AXStaticText \"UI Design\"  (0.136, 0.505, 0.184, 0.022)\n  AXStaticText \"UI Design\"  (0.136, 0.505, 0.184, 0.022)\n  AXStaticText \"Certificate\"  (0.136, 0.530, 0.187, 0.022)\n  AXStaticText \"Certificate\"  (0.136, 0.530, 0.187, 0.022)\n  AXStaticText \"Card Back\"  (0.417, 0.559, 0.166, 0.020)\n  AXStaticText \"Card Back\"  (0.412, 0.576, 0.176, 0.021)\n  AXTextField \"Certificate1\"  (0.096, 0.620, 0.808, 0.157)\n  AXTextField \"Certificate1\"  (0.096, 0.620, 0.808, 0.157)\n  AXStaticText \"Certificates\"  (0.096, 0.707, 0.274, 0.026)\n  AXTextField \"Logo\"  (0.531, 0.784, 0.071, 0.033)\n  AXStaticText \"UI Design\"  (0.134, 0.786, 0.184, 0.022)\n  AXStaticText \"SwiftUI\"  (0.725, 0.786, 0.143, 0.022)\n  AXTextField \"Certificate2\"  (0.672, 0.804, 0.328, 0.196)\n  AXStaticText \"Certificate\"  (0.134, 0.810, 0.187, 0.022)\n  AXStaticText \"Certificate\"  (0.725, 0.810, 0.187, 0.022)\n  AXTextField \"Certificate1\"  (0.000, 0.862, 0.772, 0.138)\n  AXStaticText \"This certificate is proof that Mithun has achieved UI Design course with approval from a Design+Code instructor.\"  (0.112, 0.910, 0.777, 0.074)"
+        }
+      }
+    ],
+    "finalAnswer": "The Certificates detail view is open, showing the certificate card and its description."
+  },
+  {
+    "meta": {
+      "id": "real-designcode-5",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "swipe",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "On the Courses home screen, swipe the course carousel to reveal the 'Swift UI Advanced' and 'Framer Playground' courses.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "fromX": 0.8,
+            "fromY": 0.41,
+            "toX": 0.2,
+            "toY": 0.41
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Swift UI Advanced\"  (0.000, 0.208, 0.610, 0.412)\n  AXButton \"Swift UI Advanced\"  (0.003, 0.208, 0.612, 0.412)\n  AXButton \"Framer Playground\"  (0.685, 0.208, 0.315, 0.412)\n  AXButton \"Framer Playground\"  (0.690, 0.208, 0.310, 0.412)\n  AXStaticText \"Framer Playground\"  (0.767, 0.239, 0.233, 0.083)\n  AXStaticText \"Swift UI Advanced\"  (0.072, 0.242, 0.329, 0.078)\n  AXTextField \"Illustration3\"  (0.051, 0.414, 0.504, 0.172)\n  AXTextField \"Illustration4\"  (0.780, 0.414, 0.220, 0.176)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      }
+    ],
+    "finalAnswer": "The course carousel scrolled to show 'Swift UI Advanced' and 'Framer Playground'."
+  },
+  {
+    "meta": {
+      "id": "real-designcode-6",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Courses home screen, tap the 'Build an app with SwiftUI' course card to open its certificate detail.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.381,
+            "y": 0.414
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXStaticText \"Certificates\"  (0.040, 0.101, 0.488, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXTextField \"Illustration5\"  (0.286, 0.171, 0.428, 0.174)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXTextField \"Logo\"  (0.793, 0.418, 0.071, 0.033)\n  AXStaticText \"UI Design\"  (0.136, 0.420, 0.184, 0.022)\n  AXStaticText \"Certificate\"  (0.136, 0.444, 0.187, 0.022)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXStaticText \"Card Back\"  (0.417, 0.473, 0.166, 0.020)\n  AXStaticText \"Card Back\"  (0.412, 0.491, 0.176, 0.021)\n  AXTextField \"Certificate1\"  (0.096, 0.534, 0.808, 0.157)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)\n  AXStaticText \"This certificate is proof that Mithun has achieved UI Design course with approval from a Design+Code instructor.\"  (0.112, 0.884, 0.777, 0.074)"
+        }
+      }
+    ],
+    "finalAnswer": "The 'Build an app with SwiftUI' card opened to its certificate detail view."
+  },
+  {
+    "meta": {
+      "id": "real-designcode-7",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the list menu, go to Settings, then increment the weekly notification count using the stepper's plus button.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.077,
+            "y": 0.123
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXTextField \"Account\"  (0.087, 0.125, 0.054, 0.025)\n  AXStaticText \"My Account\"  (0.174, 0.126, 0.235, 0.023)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Settings\"  (0.075, 0.168, 0.682, 0.037)\n  AXTextField \"Settings\"  (0.085, 0.173, 0.058, 0.026)\n  AXStaticText \"Settings\"  (0.174, 0.174, 0.166, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Billing\"  (0.174, 0.223, 0.121, 0.023)\n  AXTextField \"Card\"  (0.084, 0.224, 0.062, 0.021)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"person.2\"  (0.078, 0.272, 0.077, 0.024)\n  AXStaticText \"Team\"  (0.174, 0.272, 0.108, 0.023)\n  AXTextField \"arrow.uturn.down\"  (0.090, 0.321, 0.050, 0.023)\n  AXStaticText \"Sign out\"  (0.174, 0.321, 0.163, 0.023)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.416,
+            "y": 0.187
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.146, 0.075, 0.789)\n  AXGroup \"Settings\"  (0.040, 0.151, 0.331, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXTextField \"Account\"  (0.120, 0.186, 0.050, 0.023)\n  AXStaticText \"My Account\"  (0.200, 0.187, 0.216, 0.021)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"Recieve Notifications\" value=\"0\"  (0.050, 0.206, 0.900, 0.050)\n  AXStaticText \"Recieve Notifications\"  (0.100, 0.219, 0.397, 0.023)\n  AXButton \"Settings\"  (0.108, 0.225, 0.627, 0.034)\n  AXTextField \"Settings\"  (0.118, 0.230, 0.053, 0.024)\n  AXStaticText \"Settings\"  (0.200, 0.232, 0.153, 0.021)\n  AXGroup \"1 Notification per week\" value=\"1\"  (0.050, 0.256, 0.900, 0.050)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXButton \"1 Notification per week, Decrement\" value=\"1\"  (0.667, 0.263, 0.116, 0.037)\n  AXButton \"1 Notification per week, Increment\" value=\"1\"  (0.785, 0.263, 0.116, 0.037)\n  AXStaticText \"1 Notification per week\"  (0.100, 0.270, 0.430, 0.023)\n  AXStaticText \"Billing\"  (0.200, 0.276, 0.111, 0.021)\n  AXTextField \"Card\"  (0.117, 0.277, 0.057, 0.019)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXButton \"Favourite course, SwiftUI\"  (0.050, 0.307, 0.900, 0.050)\n  AXStaticText \"SwiftUI\"  (0.724, 0.320, 0.136, 0.023)\n  AXStaticText \"Favourite course\"  (0.100, 0.320, 0.313, 0.023)\n  AXTextField \"person.2\"  (0.112, 0.321, 0.071, 0.022)\n  AXStaticText \"Team\"  (0.200, 0.321, 0.099, 0.021)\n  AXButton \"23 Jun 2026\"  (0.415, 0.362, 0.301, 0.041)\n  AXButton \"Date and Time Picker\" value=\"13:22, 23 Jun 2026\"  (0.415, 0.362, 0.485, 0.041)\n  AXButton \"13:22\"  (0.726, 0.362, 0.174, 0.041)\n  AXTextField \"arrow.uturn.down\"  (0.122, 0.366, 0.046, 0.021)\n  AXStaticText \"Sign out\"  (0.200, 0.366, 0.150, 0.021)\n  AXStaticText \"Date\"  (0.100, 0.371, 0.090, 0.023)\n  AXStaticText \"EMAIL\"  (0.050, 0.428, 0.900, 0.044)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXGroup value=\"Your email: \"  (0.050, 0.472, 0.900, 0.050)\n  AXButton \"Submit\"  (0.050, 0.563, 0.900, 0.050)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.843,
+            "y": 0.281
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.146, 0.075, 0.789)\n  AXGroup \"Settings\"  (0.040, 0.151, 0.331, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXTextField \"Account\"  (0.120, 0.186, 0.050, 0.023)\n  AXStaticText \"My Account\"  (0.200, 0.187, 0.216, 0.021)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"Recieve Notifications\" value=\"0\"  (0.050, 0.206, 0.900, 0.050)\n  AXStaticText \"Recieve Notifications\"  (0.100, 0.219, 0.397, 0.023)\n  AXButton \"Settings\"  (0.108, 0.225, 0.627, 0.034)\n  AXTextField \"Settings\"  (0.118, 0.230, 0.053, 0.024)\n  AXStaticText \"Settings\"  (0.200, 0.232, 0.153, 0.021)\n  AXGroup \"2 Notifications per week\" value=\"2\"  (0.050, 0.256, 0.900, 0.050)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXButton \"2 Notifications per week, Decrement\" value=\"2\"  (0.667, 0.263, 0.116, 0.037)\n  AXButton \"2 Notifications per week, Increment\" value=\"2\"  (0.785, 0.263, 0.116, 0.037)\n  AXStaticText \"2 Notifications per week\"  (0.100, 0.270, 0.458, 0.023)\n  AXStaticText \"Billing\"  (0.200, 0.276, 0.111, 0.021)\n  AXTextField \"Card\"  (0.117, 0.277, 0.057, 0.019)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXButton \"Favourite course, SwiftUI\"  (0.050, 0.307, 0.900, 0.050)\n  AXStaticText \"SwiftUI\"  (0.724, 0.320, 0.136, 0.023)\n  AXStaticText \"Favourite course\"  (0.100, 0.320, 0.313, 0.023)\n  AXTextField \"person.2\"  (0.112, 0.321, 0.071, 0.022)\n  AXStaticText \"Team\"  (0.200, 0.321, 0.099, 0.021)\n  AXButton \"23 Jun 2026\"  (0.415, 0.362, 0.301, 0.041)\n  AXButton \"Date and Time Picker\" value=\"13:22, 23 Jun 2026\"  (0.415, 0.362, 0.485, 0.041)\n  AXButton \"13:22\"  (0.726, 0.362, 0.174, 0.041)\n  AXTextField \"arrow.uturn.down\"  (0.122, 0.366, 0.046, 0.021)\n  AXStaticText \"Sign out\"  (0.200, 0.366, 0.150, 0.021)\n  AXStaticText \"Date\"  (0.100, 0.371, 0.090, 0.023)\n  AXStaticText \"EMAIL\"  (0.050, 0.428, 0.900, 0.044)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXGroup value=\"Your email: \"  (0.050, 0.472, 0.900, 0.050)\n  AXButton \"Submit\"  (0.050, 0.563, 0.900, 0.050)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)"
+        }
+      }
+    ],
+    "finalAnswer": "The notification frequency was incremented to 2 notifications per week."
+  },
+  {
+    "meta": {
+      "id": "real-designcode-8",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the list menu, open the Billing detail (tap the List button, then the Billing item).",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.077,
+            "y": 0.123
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXTextField \"Account\"  (0.087, 0.125, 0.054, 0.025)\n  AXStaticText \"My Account\"  (0.174, 0.126, 0.235, 0.023)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Settings\"  (0.075, 0.168, 0.682, 0.037)\n  AXTextField \"Settings\"  (0.085, 0.173, 0.058, 0.026)\n  AXStaticText \"Settings\"  (0.174, 0.174, 0.166, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Billing\"  (0.174, 0.223, 0.121, 0.023)\n  AXTextField \"Card\"  (0.084, 0.224, 0.062, 0.021)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"person.2\"  (0.078, 0.272, 0.077, 0.024)\n  AXStaticText \"Team\"  (0.174, 0.272, 0.108, 0.023)\n  AXTextField \"arrow.uturn.down\"  (0.090, 0.321, 0.050, 0.023)\n  AXStaticText \"Sign out\"  (0.174, 0.321, 0.163, 0.023)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      }
+    ],
+    "finalAnswer": "The Billing item was tapped from the list menu."
+  },
+  {
+    "meta": {
+      "id": "real-designcode-9",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap",
+        "type"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings from the list menu, tap the email field, and type the email address 'hi@dc.com'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.077,
+            "y": 0.123
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXTextField \"Account\"  (0.087, 0.125, 0.054, 0.025)\n  AXStaticText \"My Account\"  (0.174, 0.126, 0.235, 0.023)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Settings\"  (0.075, 0.168, 0.682, 0.037)\n  AXTextField \"Settings\"  (0.085, 0.173, 0.058, 0.026)\n  AXStaticText \"Settings\"  (0.174, 0.174, 0.166, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Billing\"  (0.174, 0.223, 0.121, 0.023)\n  AXTextField \"Card\"  (0.084, 0.224, 0.062, 0.021)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"person.2\"  (0.078, 0.272, 0.077, 0.024)\n  AXStaticText \"Team\"  (0.174, 0.272, 0.108, 0.023)\n  AXTextField \"arrow.uturn.down\"  (0.090, 0.321, 0.050, 0.023)\n  AXStaticText \"Sign out\"  (0.174, 0.321, 0.163, 0.023)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.416,
+            "y": 0.187
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.146, 0.075, 0.789)\n  AXGroup \"Settings\"  (0.040, 0.151, 0.331, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXTextField \"Account\"  (0.120, 0.186, 0.050, 0.023)\n  AXStaticText \"My Account\"  (0.200, 0.187, 0.216, 0.021)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"Recieve Notifications\" value=\"0\"  (0.050, 0.206, 0.900, 0.050)\n  AXStaticText \"Recieve Notifications\"  (0.100, 0.219, 0.397, 0.023)\n  AXButton \"Settings\"  (0.108, 0.225, 0.627, 0.034)\n  AXTextField \"Settings\"  (0.118, 0.230, 0.053, 0.024)\n  AXStaticText \"Settings\"  (0.200, 0.232, 0.153, 0.021)\n  AXGroup \"1 Notification per week\" value=\"1\"  (0.050, 0.256, 0.900, 0.050)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXButton \"1 Notification per week, Decrement\" value=\"1\"  (0.667, 0.263, 0.116, 0.037)\n  AXButton \"1 Notification per week, Increment\" value=\"1\"  (0.785, 0.263, 0.116, 0.037)\n  AXStaticText \"1 Notification per week\"  (0.100, 0.270, 0.430, 0.023)\n  AXStaticText \"Billing\"  (0.200, 0.276, 0.111, 0.021)\n  AXTextField \"Card\"  (0.117, 0.277, 0.057, 0.019)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXButton \"Favourite course, SwiftUI\"  (0.050, 0.307, 0.900, 0.050)\n  AXStaticText \"SwiftUI\"  (0.724, 0.320, 0.136, 0.023)\n  AXStaticText \"Favourite course\"  (0.100, 0.320, 0.313, 0.023)\n  AXTextField \"person.2\"  (0.112, 0.321, 0.071, 0.022)\n  AXStaticText \"Team\"  (0.200, 0.321, 0.099, 0.021)\n  AXButton \"23 Jun 2026\"  (0.415, 0.362, 0.301, 0.041)\n  AXButton \"Date and Time Picker\" value=\"13:23, 23 Jun 2026\"  (0.415, 0.362, 0.485, 0.041)\n  AXButton \"13:23\"  (0.726, 0.362, 0.174, 0.041)\n  AXTextField \"arrow.uturn.down\"  (0.122, 0.366, 0.046, 0.021)\n  AXStaticText \"Sign out\"  (0.200, 0.366, 0.150, 0.021)\n  AXStaticText \"Date\"  (0.100, 0.371, 0.090, 0.023)\n  AXStaticText \"EMAIL\"  (0.050, 0.428, 0.900, 0.044)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXGroup value=\"Your email: \"  (0.050, 0.472, 0.900, 0.050)\n  AXButton \"Submit\"  (0.050, 0.563, 0.900, 0.050)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.5,
+            "y": 0.497
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "text": "hi@dc.com"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.146, 0.075, 0.789)\n  AXGroup \"Settings\"  (0.040, 0.151, 0.331, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXTextField \"Account\"  (0.120, 0.186, 0.050, 0.023)\n  AXStaticText \"My Account\"  (0.200, 0.187, 0.216, 0.021)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"Recieve Notifications\" value=\"0\"  (0.050, 0.206, 0.900, 0.050)\n  AXStaticText \"Recieve Notifications\"  (0.100, 0.219, 0.397, 0.023)\n  AXButton \"Settings\"  (0.108, 0.225, 0.627, 0.034)\n  AXTextField \"Settings\"  (0.118, 0.230, 0.053, 0.024)\n  AXStaticText \"Settings\"  (0.200, 0.232, 0.153, 0.021)\n  AXGroup \"1 Notification per week\" value=\"1\"  (0.050, 0.256, 0.900, 0.050)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXButton \"1 Notification per week, Decrement\" value=\"1\"  (0.667, 0.263, 0.116, 0.037)\n  AXButton \"1 Notification per week, Increment\" value=\"1\"  (0.785, 0.263, 0.116, 0.037)\n  AXStaticText \"1 Notification per week\"  (0.100, 0.270, 0.430, 0.023)\n  AXStaticText \"Billing\"  (0.200, 0.276, 0.111, 0.021)\n  AXTextField \"Card\"  (0.117, 0.277, 0.057, 0.019)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXButton \"Favourite course, SwiftUI\"  (0.050, 0.307, 0.900, 0.050)\n  AXStaticText \"SwiftUI\"  (0.724, 0.320, 0.136, 0.023)\n  AXStaticText \"Favourite course\"  (0.100, 0.320, 0.313, 0.023)\n  AXTextField \"person.2\"  (0.112, 0.321, 0.071, 0.022)\n  AXStaticText \"Team\"  (0.200, 0.321, 0.099, 0.021)\n  AXButton \"23 Jun 2026\"  (0.415, 0.362, 0.301, 0.041)\n  AXButton \"Date and Time Picker\" value=\"13:23, 23 Jun 2026\"  (0.415, 0.362, 0.485, 0.041)\n  AXButton \"13:23\"  (0.726, 0.362, 0.174, 0.041)\n  AXTextField \"arrow.uturn.down\"  (0.122, 0.366, 0.046, 0.021)\n  AXStaticText \"Sign out\"  (0.200, 0.366, 0.150, 0.021)\n  AXStaticText \"Date\"  (0.100, 0.371, 0.090, 0.023)\n  AXStaticText \"EMAIL\"  (0.050, 0.428, 0.900, 0.044)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXGroup value=\"Hi@dc.com\"  (0.050, 0.472, 0.900, 0.050)\n  AXButton \"Submit\"  (0.050, 0.563, 0.900, 0.050)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)"
+        }
+      }
+    ],
+    "finalAnswer": "The email 'hi@dc.com' was entered into the Settings email field."
+  },
+  {
+    "meta": {
+      "id": "real-designcode-10",
+      "app": "mythxn__designcode-swiftui",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "mythxn.DesignCode",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap",
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "Open the Notifications (Updates) feed, then swipe down to dismiss it and return to the Courses home screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.905,
+            "y": 0.126
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.885, 0.071, 0.069, 0.920)\n  AXButton \"Add Update\"  (0.040, 0.098, 0.246, 0.032)\n  AXButton \"Edit\"  (0.867, 0.098, 0.093, 0.032)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.918, 0.146, 0.075, 0.789)\n  AXGroup \"Updates\"  (0.040, 0.151, 0.333, 0.047)\n  AXStaticText \"Courses\"  (0.177, 0.153, 0.316, 0.043)\n  AXButton \"List\"  (0.000, 0.155, 0.154, 0.063)\n  AXButton \"Account\"  (0.704, 0.164, 0.101, 0.046)\n  AXButton \"Notifications\"  (0.823, 0.164, 0.101, 0.046)\n  AXStaticText \"22 Courses\"  (0.177, 0.198, 0.199, 0.021)\n  AXButton \"SwiftUI, Learn how to build custom views and controls in SwiftUI with advanced composition, layout, graphics, and animation. See a demo of a high performance, animatable control and watch it made step by step in code. Gain a deeper understanding of the layout system of SwiftUI., JUN 26\"  (0.050, 0.206, 0.900, 0.158)\n  AXStaticText \"SwiftUI\"  (0.328, 0.228, 0.145, 0.023)\n  AXTextField \"Illustration1\"  (0.100, 0.259, 0.199, 0.052)\n  AXButton \"Build an app with SwiftUI\"  (0.108, 0.262, 0.563, 0.379)\n  AXButton \"Design and animate your UI\"  (0.740, 0.262, 0.260, 0.379)\n  AXStaticText \"Learn how to build custom views and controls in SwiftUI with advanced composition, layout, graphics, and animation. See a demo of a high performance, animatable control and watch it made step by step in code. Gain a deeper understanding of the layout system of SwiftUI.\"  (0.328, 0.269, 0.519, 0.046)\n  AXStaticText \"Design and animate your UI\"  (0.817, 0.289, 0.183, 0.113)\n  AXStaticText \"Build an app with SwiftUI\"  (0.178, 0.294, 0.380, 0.072)\n  AXStaticText \"JUN 26\"  (0.328, 0.326, 0.111, 0.016)\n  AXButton \"Framer X, Learn how to build custom views and controls in SwiftUI with advanced composition, layout, graphics, and animation. See a demo of a high performance, animatable control and watch it made step by step in code. Gain a deeper understanding of the layout system of SwiftUI., JUN 11\"  (0.050, 0.364, 0.900, 0.158)\n  AXStaticText \"Framer X\"  (0.328, 0.386, 0.181, 0.023)\n  AXTextField \"Illustration2\"  (0.107, 0.397, 0.184, 0.092)\n  AXStaticText \"Learn how to build custom views and controls in SwiftUI with advanced composition, layout, graphics, and animation. See a demo of a high performance, animatable control and watch it made step by step in code. Gain a deeper understanding of the layout system of SwiftUI.\"  (0.328, 0.427, 0.519, 0.046)\n  AXTextField \"Illustration2\"  (0.869, 0.452, 0.131, 0.162)\n  AXTextField \"Illustration1\"  (0.109, 0.458, 0.563, 0.146)\n  AXStaticText \"JUN 11\"  (0.328, 0.484, 0.102, 0.016)\n  AXButton \"CSS Layout, Learn how to combine CSS Grid, Flexbox, animations and responsive design to create a beautiful prototype in CodePen., MAY 26\"  (0.050, 0.522, 0.900, 0.158)\n  AXStaticText \"CSS Layout\"  (0.328, 0.544, 0.228, 0.023)\n  AXTextField \"Illustration3\"  (0.100, 0.567, 0.199, 0.068)\n  AXStaticText \"Learn how to combine CSS Grid, Flexbox, animations and responsive design to create a beautiful prototype in CodePen.\"  (0.328, 0.585, 0.509, 0.046)\n  AXStaticText \"MAY 26\"  (0.328, 0.641, 0.115, 0.016)\n  AXButton \"React Native Part 2, Learn how to implement gestures, Lottie animations and Firebase login., MAY 15\"  (0.050, 0.680, 0.900, 0.158)\n  AXStaticText \"React Native Part 2\"  (0.328, 0.701, 0.378, 0.023)\n  AXTextField \"Illustration4\"  (0.100, 0.719, 0.199, 0.079)\n  AXStaticText \"Certificates\"  (0.108, 0.731, 0.266, 0.025)\n  AXStaticText \"Learn how to implement gestures, Lottie animations and Firebase login.\"  (0.328, 0.743, 0.520, 0.046)\n  AXStaticText \"MAY 15\"  (0.328, 0.799, 0.111, 0.016)\n  AXTextField \"Logo\"  (0.530, 0.806, 0.069, 0.032)\n  AXStaticText \"UI Design\"  (0.145, 0.808, 0.179, 0.021)\n  AXStaticText \"SwiftUI\"  (0.718, 0.808, 0.138, 0.021)\n  AXTextField \"Certificate2\"  (0.666, 0.826, 0.334, 0.174)\n  AXStaticText \"Certificate\"  (0.145, 0.831, 0.182, 0.021)\n  AXStaticText \"Certificate\"  (0.718, 0.831, 0.182, 0.021)\n  AXButton \"Unity, Unity course teaching basics, C#, assets, level design and gameplay, MAR 19\"  (0.050, 0.838, 0.900, 0.158)\n  AXStaticText \"Unity\"  (0.328, 0.859, 0.105, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.882, 0.763, 0.118)\n  AXTextField \"Certificate1\"  (0.100, 0.897, 0.199, 0.039)\n  AXStaticText \"Unity course teaching basics, C#, assets, level design and gameplay\"  (0.328, 0.901, 0.513, 0.046)\n  AXStaticText \"MAR 19\"  (0.328, 0.957, 0.114, 0.016)\n  AXButton \"React Native for Designers, Build your own iOS and Android app with custom animations, Redux and API data., FEB 14\"  (0.050, 0.995, 0.900, 0.005)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "fromX": 0.5,
+            "fromY": 0.16,
+            "toX": 0.5,
+            "toY": 0.95
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.918, 0.000, 0.075, 1.000)\n  AXStaticText \"Courses\"  (0.149, 0.089, 0.343, 0.047)\n  AXButton \"List\"  (0.000, 0.092, 0.124, 0.069)\n  AXButton \"Account\"  (0.721, 0.101, 0.109, 0.050)\n  AXButton \"Notifications\"  (0.851, 0.101, 0.109, 0.050)\n  AXStaticText \"22 Courses\"  (0.149, 0.138, 0.216, 0.023)\n  AXButton \"Build an app with SwiftUI\"  (0.075, 0.208, 0.612, 0.412)\n  AXButton \"Design and animate your UI\"  (0.761, 0.208, 0.239, 0.412)\n  AXStaticText \"Design and animate your UI\"  (0.844, 0.237, 0.156, 0.123)\n  AXStaticText \"Build an app with SwiftUI\"  (0.149, 0.242, 0.413, 0.077)\n  AXTextField \"Illustration2\"  (0.901, 0.414, 0.099, 0.176)\n  AXTextField \"Illustration1\"  (0.075, 0.420, 0.612, 0.159)\n  AXStaticText \"Certificates\"  (0.075, 0.718, 0.289, 0.027)\n  AXTextField \"Logo\"  (0.532, 0.799, 0.075, 0.034)\n  AXStaticText \"UI Design\"  (0.114, 0.801, 0.194, 0.023)\n  AXStaticText \"SwiftUI\"  (0.736, 0.801, 0.150, 0.023)\n  AXTextField \"Certificate2\"  (0.681, 0.820, 0.319, 0.180)\n  AXStaticText \"Certificate\"  (0.114, 0.826, 0.197, 0.023)\n  AXStaticText \"Certificate\"  (0.736, 0.826, 0.197, 0.023)\n  AXTextField \"Certificate1\"  (0.000, 0.881, 0.786, 0.119)"
+        }
+      }
+    ],
+    "finalAnswer": "Dismissed the Updates feed and returned to the Courses home screen."
+  }
+]

@@ -1,0 +1,699 @@
+[
+  {
+    "meta": {
+      "id": "real-cleanstore-01-open-order",
+      "app": "Clean-Swift__CleanStore",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.clean-swift.CleanStore",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the first order in the list and show its details.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.141
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Edit\"  (0.885, 0.063, 0.095, 0.052)\n  AXGroup \"Show Order\"  (0.381, 0.077, 0.239, 0.024)\n  AXStaticText \"Order ID:\"  (0.169, 0.394, 0.176, 0.024)\n  AXStaticText \"abc123\"  (0.395, 0.394, 0.142, 0.024)\n  AXStaticText \"Order Date:\"  (0.119, 0.441, 0.226, 0.024)\n  AXStaticText \"23/06/2026\"  (0.395, 0.441, 0.231, 0.024)\n  AXStaticText \"Email Address:\"  (0.059, 0.488, 0.285, 0.024)\n  AXStaticText \"amy.apple@clean-swift.com\"  (0.395, 0.488, 0.545, 0.024)\n  AXStaticText \"Your Name:\"  (0.120, 0.536, 0.225, 0.024)\n  AXStaticText \"Amy Apple\"  (0.395, 0.536, 0.209, 0.024)\n  AXStaticText \"Order Total:\"  (0.116, 0.583, 0.228, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.395, 0.583, 0.172, 0.024)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the first order. It shows Order ID abc123, customer Amy Apple, total 1,23 PLN."
+  },
+  {
+    "meta": {
+      "id": "real-cleanstore-02-edit-order",
+      "app": "Clean-Swift__CleanStore",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.clean-swift.CleanStore",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the first order and tap Edit to open its editable form.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.141
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Edit\"  (0.885, 0.063, 0.095, 0.052)\n  AXGroup \"Show Order\"  (0.381, 0.077, 0.239, 0.024)\n  AXStaticText \"Order ID:\"  (0.169, 0.394, 0.176, 0.024)\n  AXStaticText \"abc123\"  (0.395, 0.394, 0.142, 0.024)\n  AXStaticText \"Order Date:\"  (0.119, 0.441, 0.226, 0.024)\n  AXStaticText \"23/06/2026\"  (0.395, 0.441, 0.231, 0.024)\n  AXStaticText \"Email Address:\"  (0.059, 0.488, 0.285, 0.024)\n  AXStaticText \"amy.apple@clean-swift.com\"  (0.395, 0.488, 0.545, 0.024)\n  AXStaticText \"Your Name:\"  (0.120, 0.536, 0.225, 0.024)\n  AXStaticText \"Amy Apple\"  (0.395, 0.536, 0.209, 0.024)\n  AXStaticText \"Order Total:\"  (0.116, 0.583, 0.228, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.395, 0.583, 0.172, 0.024)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.9325,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show Order\"  (0.000, 0.063, 0.307, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXButton value=\"1\"  (0.000, 0.115, 0.130, 0.037)\n  AXStaticText \"Expiration Date\"  (0.000, 0.115, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.115, 0.087, 0.040)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.115, 0.753, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.115, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.115, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.115, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.115, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.115, 0.064, 0.040)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Customer Contact Info\"  (0.000, 0.140, 1.000, 0.033)\n  AXStaticText \"First Name\"  (0.000, 0.173, 1.000, 0.066)\n  AXStaticText \"First Name\"  (0.051, 0.186, 0.209, 0.040)\n  AXGroup value=\"Amy\"  (0.281, 0.186, 0.668, 0.040)\n  AXStaticText \"Last Name\"  (0.000, 0.239, 1.000, 0.066)\n  AXStaticText \"Last Name\"  (0.051, 0.252, 0.208, 0.040)\n  AXGroup value=\"Apple\"  (0.279, 0.252, 0.670, 0.040)\n  AXStaticText \"Phone\"  (0.000, 0.306, 1.000, 0.066)\n  AXStaticText \"Phone\"  (0.051, 0.318, 0.123, 0.040)\n  AXGroup value=\"111-111-1111\"  (0.194, 0.318, 0.755, 0.040)\n  AXStaticText \"Email\"  (0.000, 0.372, 1.000, 0.066)\n  AXStaticText \"Email\"  (0.051, 0.385, 0.103, 0.040)\n  AXGroup value=\"amy.apple@clean-swift.com\"  (0.175, 0.385, 0.774, 0.040)\n  AXGroup \"Shipment Address\"  (0.000, 0.464, 1.000, 0.033)\n  AXStaticText \"Street 1\"  (0.000, 0.496, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.509, 0.148, 0.040)\n  AXGroup value=\"One Microsoft Way\"  (0.220, 0.509, 0.729, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.563, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.576, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.642, 0.077, 0.040)\n  AXGroup value=\"Redmond\"  (0.148, 0.642, 0.801, 0.040)\n  AXStaticText \"State\"  (0.000, 0.695, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.708, 0.102, 0.040)\n  AXGroup value=\"WA\"  (0.173, 0.708, 0.776, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.761, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.774, 0.064, 0.040)\n  AXGroup value=\"98052-7329\"  (0.136, 0.774, 0.813, 0.040)\n  AXGroup \"Shipment Method\"  (0.000, 0.853, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.886, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.899, 0.306, 0.040)\n  AXGroup value=\"One-Day Shipping\"  (0.377, 0.899, 0.572, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)\n  AXGroup \"Payment Information\"  (0.000, 0.978, 1.000, 0.022)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the order's edit form with the customer contact, shipment address, and payment fields."
+  },
+  {
+    "meta": {
+      "id": "real-cleanstore-03-add-order",
+      "app": "Clean-Swift__CleanStore",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.clean-swift.CleanStore",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Tap the Add button to open the new order creation form.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.9265,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXButton value=\"1\"  (0.000, 0.115, 0.130, 0.037)\n  AXStaticText \"Expiration Date\"  (0.000, 0.115, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.115, 0.087, 0.040)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.115, 0.753, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.115, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.115, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.115, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.115, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.115, 0.064, 0.040)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Customer Contact Info\"  (0.000, 0.140, 1.000, 0.033)\n  AXStaticText \"First Name\"  (0.000, 0.173, 1.000, 0.066)\n  AXStaticText \"First Name\"  (0.051, 0.186, 0.209, 0.040)\n  AXStaticText \"Last Name\"  (0.000, 0.239, 1.000, 0.066)\n  AXStaticText \"Last Name\"  (0.051, 0.252, 0.208, 0.040)\n  AXStaticText \"Phone\"  (0.000, 0.306, 1.000, 0.066)\n  AXStaticText \"Phone\"  (0.051, 0.318, 0.123, 0.040)\n  AXStaticText \"Email\"  (0.000, 0.372, 1.000, 0.066)\n  AXStaticText \"Email\"  (0.051, 0.385, 0.103, 0.040)\n  AXGroup \"Shipment Address\"  (0.000, 0.464, 1.000, 0.033)\n  AXStaticText \"Street 1\"  (0.000, 0.496, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.509, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.563, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.576, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.642, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.695, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.708, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.761, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.774, 0.064, 0.040)\n  AXGroup \"Shipment Method\"  (0.000, 0.853, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.886, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.899, 0.306, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)\n  AXGroup \"Payment Information\"  (0.000, 0.978, 1.000, 0.022)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the Create Order form to add a new order."
+  },
+  {
+    "meta": {
+      "id": "real-cleanstore-04-scroll-payment",
+      "app": "Clean-Swift__CleanStore",
+      "platform": "ios",
+      "task_kind": "scroll-find",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.clean-swift.CleanStore",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "Open the new order form and scroll down to reveal the Payment Information section.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.9265,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXButton value=\"1\"  (0.000, 0.115, 0.130, 0.037)\n  AXStaticText \"Expiration Date\"  (0.000, 0.115, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.115, 0.087, 0.040)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.115, 0.753, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.115, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.115, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.115, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.115, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.115, 0.064, 0.040)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Customer Contact Info\"  (0.000, 0.140, 1.000, 0.033)\n  AXStaticText \"First Name\"  (0.000, 0.173, 1.000, 0.066)\n  AXStaticText \"First Name\"  (0.051, 0.186, 0.209, 0.040)\n  AXStaticText \"Last Name\"  (0.000, 0.239, 1.000, 0.066)\n  AXStaticText \"Last Name\"  (0.051, 0.252, 0.208, 0.040)\n  AXStaticText \"Phone\"  (0.000, 0.306, 1.000, 0.066)\n  AXStaticText \"Phone\"  (0.051, 0.318, 0.123, 0.040)\n  AXStaticText \"Email\"  (0.000, 0.372, 1.000, 0.066)\n  AXStaticText \"Email\"  (0.051, 0.385, 0.103, 0.040)\n  AXGroup \"Shipment Address\"  (0.000, 0.464, 1.000, 0.033)\n  AXStaticText \"Street 1\"  (0.000, 0.496, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.509, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.563, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.576, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.642, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.695, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.708, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.761, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.774, 0.064, 0.040)\n  AXGroup \"Shipment Method\"  (0.000, 0.853, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.886, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.899, 0.306, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)\n  AXGroup \"Payment Information\"  (0.000, 0.978, 1.000, 0.022)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "fromX": 0.5,
+            "fromY": 0.75,
+            "toX": 0.5,
+            "toY": 0.25
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"State\"  (0.000, 0.000, 1.000, 0.060)\n  AXStaticText \"State\"  (0.051, 0.007, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.060, 1.000, 0.066)\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXStaticText \"ZIP\"  (0.051, 0.073, 0.064, 0.040)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXGroup \"Shipment Address\"  (0.000, 0.115, 1.000, 0.033)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"100%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Shipment Method\"  (0.000, 0.152, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.185, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.198, 0.306, 0.040)\n  AXGroup \"Payment Information\"  (0.000, 0.277, 1.000, 0.033)\n  AXStaticText \"Credit Card Number\"  (0.051, 0.323, 0.389, 0.040)\n  AXStaticText \"Expiration Date\"  (0.000, 0.376, 1.000, 0.066)\n  AXStaticText \"Expiration Date\"  (0.051, 0.389, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.442, 1.000, 0.066)\n  AXStaticText \"CVV\"  (0.051, 0.455, 0.087, 0.040)\n  AXStaticText \"Billing Address\"  (0.000, 0.534, 1.000, 0.033)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.567, 1.000, 0.063)\n  AXStaticText \"Same as shipping address\"  (0.051, 0.580, 0.753, 0.037)\n  AXButton \"Same as shipping address\" value=\"1\"  (0.824, 0.580, 0.130, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.642, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.696, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.709, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.762, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.775, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.828, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.841, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.894, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.907, 0.064, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      }
+    ],
+    "finalAnswer": "Scrolled down to the Payment Information section (Credit Card Number, Expiration Date, CVV, Billing Address)."
+  },
+  {
+    "meta": {
+      "id": "real-cleanstore-05-toggle-billing",
+      "app": "Clean-Swift__CleanStore",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "com.clean-swift.CleanStore",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "In the new order form, scroll to Payment Information and toggle the 'Same as shipping address' switch.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.9265,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXButton value=\"1\"  (0.000, 0.115, 0.130, 0.037)\n  AXStaticText \"Expiration Date\"  (0.000, 0.115, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.115, 0.087, 0.040)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.115, 0.753, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.115, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.115, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.115, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.115, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.115, 0.064, 0.040)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Customer Contact Info\"  (0.000, 0.140, 1.000, 0.033)\n  AXStaticText \"First Name\"  (0.000, 0.173, 1.000, 0.066)\n  AXStaticText \"First Name\"  (0.051, 0.186, 0.209, 0.040)\n  AXStaticText \"Last Name\"  (0.000, 0.239, 1.000, 0.066)\n  AXStaticText \"Last Name\"  (0.051, 0.252, 0.208, 0.040)\n  AXStaticText \"Phone\"  (0.000, 0.306, 1.000, 0.066)\n  AXStaticText \"Phone\"  (0.051, 0.318, 0.123, 0.040)\n  AXStaticText \"Email\"  (0.000, 0.372, 1.000, 0.066)\n  AXStaticText \"Email\"  (0.051, 0.385, 0.103, 0.040)\n  AXGroup \"Shipment Address\"  (0.000, 0.464, 1.000, 0.033)\n  AXStaticText \"Street 1\"  (0.000, 0.496, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.509, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.563, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.576, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.642, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.695, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.708, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.761, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.774, 0.064, 0.040)\n  AXGroup \"Shipment Method\"  (0.000, 0.853, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.886, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.899, 0.306, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)\n  AXGroup \"Payment Information\"  (0.000, 0.978, 1.000, 0.022)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "fromX": 0.5,
+            "fromY": 0.75,
+            "toX": 0.5,
+            "toY": 0.25
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"State\"  (0.000, 0.000, 1.000, 0.060)\n  AXStaticText \"State\"  (0.051, 0.007, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.060, 1.000, 0.066)\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXStaticText \"ZIP\"  (0.051, 0.073, 0.064, 0.040)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXGroup \"Shipment Address\"  (0.000, 0.115, 1.000, 0.033)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"100%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Shipment Method\"  (0.000, 0.152, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.185, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.198, 0.306, 0.040)\n  AXGroup \"Payment Information\"  (0.000, 0.277, 1.000, 0.033)\n  AXStaticText \"Credit Card Number\"  (0.051, 0.323, 0.389, 0.040)\n  AXStaticText \"Expiration Date\"  (0.000, 0.376, 1.000, 0.066)\n  AXStaticText \"Expiration Date\"  (0.051, 0.389, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.442, 1.000, 0.066)\n  AXStaticText \"CVV\"  (0.051, 0.455, 0.087, 0.040)\n  AXStaticText \"Billing Address\"  (0.000, 0.534, 1.000, 0.033)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.567, 1.000, 0.063)\n  AXStaticText \"Same as shipping address\"  (0.051, 0.580, 0.753, 0.037)\n  AXButton \"Same as shipping address\" value=\"1\"  (0.824, 0.580, 0.130, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.642, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.696, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.709, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.762, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.775, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.828, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.841, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.894, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.907, 0.064, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.889,
+            "y": 0.5985
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"State\"  (0.000, 0.000, 1.000, 0.060)\n  AXStaticText \"State\"  (0.051, 0.007, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.060, 1.000, 0.066)\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXStaticText \"ZIP\"  (0.051, 0.073, 0.064, 0.040)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXGroup \"Shipment Address\"  (0.000, 0.115, 1.000, 0.033)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"100%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Shipment Method\"  (0.000, 0.152, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.185, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.198, 0.306, 0.040)\n  AXGroup \"Payment Information\"  (0.000, 0.277, 1.000, 0.033)\n  AXStaticText \"Credit Card Number\"  (0.051, 0.323, 0.389, 0.040)\n  AXStaticText \"Expiration Date\"  (0.000, 0.376, 1.000, 0.066)\n  AXStaticText \"Expiration Date\"  (0.051, 0.389, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.442, 1.000, 0.066)\n  AXStaticText \"CVV\"  (0.051, 0.455, 0.087, 0.040)\n  AXStaticText \"Billing Address\"  (0.000, 0.534, 1.000, 0.033)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.567, 1.000, 0.063)\n  AXStaticText \"Same as shipping address\"  (0.051, 0.580, 0.753, 0.037)\n  AXButton \"Same as shipping address\" value=\"0\"  (0.824, 0.580, 0.130, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.642, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.696, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.709, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.762, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.775, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.828, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.841, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.894, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.907, 0.064, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      }
+    ],
+    "finalAnswer": "Toggled the 'Same as shipping address' billing switch in the Payment Information section."
+  },
+  {
+    "meta": {
+      "id": "real-cleanstore-06-back-to-list",
+      "app": "Clean-Swift__CleanStore",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.clean-swift.CleanStore",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the first order, then navigate back to the orders list.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.141
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Edit\"  (0.885, 0.063, 0.095, 0.052)\n  AXGroup \"Show Order\"  (0.381, 0.077, 0.239, 0.024)\n  AXStaticText \"Order ID:\"  (0.169, 0.394, 0.176, 0.024)\n  AXStaticText \"abc123\"  (0.395, 0.394, 0.142, 0.024)\n  AXStaticText \"Order Date:\"  (0.119, 0.441, 0.226, 0.024)\n  AXStaticText \"23/06/2026\"  (0.395, 0.441, 0.231, 0.024)\n  AXStaticText \"Email Address:\"  (0.059, 0.488, 0.285, 0.024)\n  AXStaticText \"amy.apple@clean-swift.com\"  (0.395, 0.488, 0.545, 0.024)\n  AXStaticText \"Your Name:\"  (0.120, 0.536, 0.225, 0.024)\n  AXStaticText \"Amy Apple\"  (0.395, 0.536, 0.209, 0.024)\n  AXStaticText \"Order Total:\"  (0.116, 0.583, 0.228, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.395, 0.583, 0.172, 0.024)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.145,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      }
+    ],
+    "finalAnswer": "Returned to the List Orders screen showing the orders and the Add button."
+  },
+  {
+    "meta": {
+      "id": "real-cleanstore-07-open-second-order",
+      "app": "Clean-Swift__CleanStore",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.clean-swift.CleanStore",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the second order in the list (the 4,56 PLN one) and show its details.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.192
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Edit\"  (0.885, 0.063, 0.095, 0.052)\n  AXGroup \"Show Order\"  (0.381, 0.077, 0.239, 0.024)\n  AXStaticText \"Order ID:\"  (0.155, 0.394, 0.176, 0.024)\n  AXStaticText \"def456\"  (0.382, 0.394, 0.140, 0.024)\n  AXStaticText \"Order Date:\"  (0.105, 0.441, 0.226, 0.024)\n  AXStaticText \"23/06/2026\"  (0.382, 0.441, 0.231, 0.024)\n  AXStaticText \"Email Address:\"  (0.046, 0.488, 0.285, 0.024)\n  AXStaticText \"bob.battery@clean-swift.com\"  (0.382, 0.488, 0.573, 0.024)\n  AXStaticText \"Your Name:\"  (0.106, 0.536, 0.225, 0.024)\n  AXStaticText \"Bob Battery\"  (0.382, 0.536, 0.229, 0.024)\n  AXStaticText \"Order Total:\"  (0.103, 0.583, 0.228, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.382, 0.583, 0.180, 0.024)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the second order: Order ID def456, customer Bob Battery, total 4,56 PLN."
+  },
+  {
+    "meta": {
+      "id": "real-cleanstore-08-scroll-shipment-method",
+      "app": "Clean-Swift__CleanStore",
+      "platform": "ios",
+      "task_kind": "scroll-find",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.clean-swift.CleanStore",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "Open the new order form and scroll down to find the Shipment Method (Shipping Speed) section.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.9265,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXButton value=\"1\"  (0.000, 0.115, 0.130, 0.037)\n  AXStaticText \"Expiration Date\"  (0.000, 0.115, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.115, 0.087, 0.040)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.115, 0.753, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.115, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.115, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.115, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.115, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.115, 0.064, 0.040)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Customer Contact Info\"  (0.000, 0.140, 1.000, 0.033)\n  AXStaticText \"First Name\"  (0.000, 0.173, 1.000, 0.066)\n  AXStaticText \"First Name\"  (0.051, 0.186, 0.209, 0.040)\n  AXStaticText \"Last Name\"  (0.000, 0.239, 1.000, 0.066)\n  AXStaticText \"Last Name\"  (0.051, 0.252, 0.208, 0.040)\n  AXStaticText \"Phone\"  (0.000, 0.306, 1.000, 0.066)\n  AXStaticText \"Phone\"  (0.051, 0.318, 0.123, 0.040)\n  AXStaticText \"Email\"  (0.000, 0.372, 1.000, 0.066)\n  AXStaticText \"Email\"  (0.051, 0.385, 0.103, 0.040)\n  AXGroup \"Shipment Address\"  (0.000, 0.464, 1.000, 0.033)\n  AXStaticText \"Street 1\"  (0.000, 0.496, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.509, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.563, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.576, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.642, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.695, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.708, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.761, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.774, 0.064, 0.040)\n  AXGroup \"Shipment Method\"  (0.000, 0.853, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.886, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.899, 0.306, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)\n  AXGroup \"Payment Information\"  (0.000, 0.978, 1.000, 0.022)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "fromX": 0.5,
+            "fromY": 0.7,
+            "toX": 0.5,
+            "toY": 0.25
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"State\"  (0.000, 0.000, 1.000, 0.060)\n  AXStaticText \"State\"  (0.051, 0.007, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.060, 1.000, 0.066)\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXStaticText \"ZIP\"  (0.051, 0.073, 0.064, 0.040)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXGroup \"Shipment Address\"  (0.000, 0.115, 1.000, 0.033)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"100%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Shipment Method\"  (0.000, 0.152, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.185, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.198, 0.306, 0.040)\n  AXGroup \"Payment Information\"  (0.000, 0.277, 1.000, 0.033)\n  AXStaticText \"Credit Card Number\"  (0.051, 0.323, 0.389, 0.040)\n  AXStaticText \"Expiration Date\"  (0.000, 0.376, 1.000, 0.066)\n  AXStaticText \"Expiration Date\"  (0.051, 0.389, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.442, 1.000, 0.066)\n  AXStaticText \"CVV\"  (0.051, 0.455, 0.087, 0.040)\n  AXStaticText \"Billing Address\"  (0.000, 0.534, 1.000, 0.033)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.567, 1.000, 0.063)\n  AXStaticText \"Same as shipping address\"  (0.051, 0.580, 0.753, 0.037)\n  AXButton \"Same as shipping address\" value=\"1\"  (0.824, 0.580, 0.130, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.642, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.696, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.709, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.762, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.775, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.828, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.841, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.894, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.907, 0.064, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      }
+    ],
+    "finalAnswer": "Scrolled to the Shipment Method section showing the Shipping Speed field."
+  },
+  {
+    "meta": {
+      "id": "real-cleanstore-09-cancel-add-back",
+      "app": "Clean-Swift__CleanStore",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.clean-swift.CleanStore",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the new order form, then go back to the orders list without saving.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.9265,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"List Orders\"  (0.000, 0.063, 0.290, 0.052)\n  AXButton \"Save\"  (0.865, 0.063, 0.115, 0.052)\n  AXGroup \"Create Order\"  (0.369, 0.077, 0.263, 0.024)\n  AXButton value=\"1\"  (0.000, 0.115, 0.130, 0.037)\n  AXStaticText \"Expiration Date\"  (0.000, 0.115, 0.294, 0.040)\n  AXStaticText \"CVV\"  (0.000, 0.115, 0.087, 0.040)\n  AXStaticText \"Same as shipping address\"  (0.000, 0.115, 0.753, 0.037)\n  AXStaticText \"Street 1\"  (0.000, 0.115, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.115, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.115, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.115, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.115, 0.064, 0.040)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXGroup \"Customer Contact Info\"  (0.000, 0.140, 1.000, 0.033)\n  AXStaticText \"First Name\"  (0.000, 0.173, 1.000, 0.066)\n  AXStaticText \"First Name\"  (0.051, 0.186, 0.209, 0.040)\n  AXStaticText \"Last Name\"  (0.000, 0.239, 1.000, 0.066)\n  AXStaticText \"Last Name\"  (0.051, 0.252, 0.208, 0.040)\n  AXStaticText \"Phone\"  (0.000, 0.306, 1.000, 0.066)\n  AXStaticText \"Phone\"  (0.051, 0.318, 0.123, 0.040)\n  AXStaticText \"Email\"  (0.000, 0.372, 1.000, 0.066)\n  AXStaticText \"Email\"  (0.051, 0.385, 0.103, 0.040)\n  AXGroup \"Shipment Address\"  (0.000, 0.464, 1.000, 0.033)\n  AXStaticText \"Street 1\"  (0.000, 0.496, 1.000, 0.066)\n  AXStaticText \"Street 1\"  (0.051, 0.509, 0.148, 0.040)\n  AXStaticText \"Street 2\"  (0.000, 0.563, 1.000, 0.066)\n  AXStaticText \"Street 2\"  (0.051, 0.576, 0.154, 0.040)\n  AXStaticText \"City\"  (0.000, 0.629, 1.000, 0.066)\n  AXStaticText \"City\"  (0.051, 0.642, 0.077, 0.040)\n  AXStaticText \"State\"  (0.000, 0.695, 1.000, 0.066)\n  AXStaticText \"State\"  (0.051, 0.708, 0.102, 0.040)\n  AXStaticText \"ZIP\"  (0.000, 0.761, 1.000, 0.066)\n  AXStaticText \"ZIP\"  (0.051, 0.774, 0.064, 0.040)\n  AXGroup \"Shipment Method\"  (0.000, 0.853, 1.000, 0.033)\n  AXStaticText \"Shipping Speed\"  (0.000, 0.886, 1.000, 0.066)\n  AXStaticText \"Shipping Speed\"  (0.051, 0.899, 0.306, 0.040)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)\n  AXGroup \"Payment Information\"  (0.000, 0.978, 1.000, 0.022)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.145,
+            "y": 0.089
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Add\"  (0.873, 0.063, 0.107, 0.052)\n  AXGroup \"List Orders\"  (0.388, 0.077, 0.223, 0.024)\n  AXStaticText \"23/06/2026, 1,23\u00a0PLN\"  (0.000, 0.115, 1.000, 0.052)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.916, 0.115, 0.076, 0.827)\n  AXStaticText \"23/06/2026\"  (0.051, 0.129, 0.231, 0.024)\n  AXStaticText \"1,23\u00a0PLN\"  (0.777, 0.129, 0.172, 0.024)\n  AXStaticText \"23/06/2026, 4,56\u00a0PLN\"  (0.000, 0.166, 1.000, 0.052)\n  AXStaticText \"23/06/2026\"  (0.051, 0.180, 0.231, 0.024)\n  AXStaticText \"4,56\u00a0PLN\"  (0.769, 0.180, 0.180, 0.024)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.126, 0.961, 0.749, 0.035)"
+        }
+      }
+    ],
+    "finalAnswer": "Cancelled the new order and returned to the orders list with the Add button."
+  }
+]

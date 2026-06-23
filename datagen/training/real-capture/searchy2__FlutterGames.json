@@ -1,0 +1,198 @@
+[
+  {
+    "meta": {
+      "id": "real-fluttergames-01-coming-soon-tab",
+      "app": "searchy2__FlutterGames",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.fluttergames.flutterGames",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the 'Coming Soon' tab from the bottom tab bar.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Games\"  (0.415, 0.086, 0.169, 0.033)\n  AXStaticText \"Unable to load asset: \"assets/witcher3.jpg\".\\nException: Asset not found\\nThe Witcher 3: Wild Hunt\"  (0.000, 0.135, 1.000, 0.127)\n  AXStaticText \"Unable to load asset: \"assets/rdr2.jpg\".\\nException: Asset not found\\nRed Dead Redemption 2\"  (0.000, 0.262, 1.000, 0.127)\n  AXButton \"Games\\nTab 1 of 3\"  (0.000, 0.892, 0.333, 0.068)\n  AXButton \"Coming Soon\\nTab 2 of 3\"  (0.333, 0.892, 0.333, 0.068)\n  AXButton \"Movies\\nTab 3 of 3\"  (0.667, 0.892, 0.333, 0.068)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.926
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Coming Soon\"  (0.394, 0.434, 0.213, 0.023)\n  AXButton \"Games\\nTab 1 of 3\"  (0.000, 0.892, 0.333, 0.068)\n  AXButton \"Coming Soon\\nTab 2 of 3\"  (0.333, 0.892, 0.333, 0.068)\n  AXButton \"Movies\\nTab 3 of 3\"  (0.667, 0.892, 0.333, 0.068)"
+        }
+      }
+    ],
+    "finalAnswer": "Switched to the Coming Soon tab, which shows the 'Coming Soon' placeholder."
+  },
+  {
+    "meta": {
+      "id": "real-fluttergames-02-movies-tab",
+      "app": "searchy2__FlutterGames",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.fluttergames.flutterGames",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the 'Movies' tab from the bottom tab bar.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Games\"  (0.415, 0.086, 0.169, 0.033)\n  AXStaticText \"Unable to load asset: \"assets/witcher3.jpg\".\\nException: Asset not found\\nThe Witcher 3: Wild Hunt\"  (0.000, 0.135, 1.000, 0.127)\n  AXStaticText \"Unable to load asset: \"assets/rdr2.jpg\".\\nException: Asset not found\\nRed Dead Redemption 2\"  (0.000, 0.262, 1.000, 0.127)\n  AXButton \"Games\\nTab 1 of 3\"  (0.000, 0.892, 0.333, 0.068)\n  AXButton \"Coming Soon\\nTab 2 of 3\"  (0.333, 0.892, 0.333, 0.068)\n  AXButton \"Movies\\nTab 3 of 3\"  (0.667, 0.892, 0.333, 0.068)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.833,
+            "y": 0.926
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Movies\"  (0.441, 0.434, 0.117, 0.023)\n  AXButton \"Games\\nTab 1 of 3\"  (0.000, 0.892, 0.333, 0.068)\n  AXButton \"Coming Soon\\nTab 2 of 3\"  (0.333, 0.892, 0.333, 0.068)\n  AXButton \"Movies\\nTab 3 of 3\"  (0.667, 0.892, 0.333, 0.068)"
+        }
+      }
+    ],
+    "finalAnswer": "Switched to the Movies tab, which shows the 'Movies' placeholder."
+  },
+  {
+    "meta": {
+      "id": "real-fluttergames-03-back-to-games",
+      "app": "searchy2__FlutterGames",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.fluttergames.flutterGames",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Movies tab, switch back to the Games tab.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Games\"  (0.415, 0.086, 0.169, 0.033)\n  AXStaticText \"Unable to load asset: \"assets/witcher3.jpg\".\\nException: Asset not found\\nThe Witcher 3: Wild Hunt\"  (0.000, 0.135, 1.000, 0.127)\n  AXStaticText \"Unable to load asset: \"assets/rdr2.jpg\".\\nException: Asset not found\\nRed Dead Redemption 2\"  (0.000, 0.262, 1.000, 0.127)\n  AXButton \"Games\\nTab 1 of 3\"  (0.000, 0.892, 0.333, 0.068)\n  AXButton \"Coming Soon\\nTab 2 of 3\"  (0.333, 0.892, 0.333, 0.068)\n  AXButton \"Movies\\nTab 3 of 3\"  (0.667, 0.892, 0.333, 0.068)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.833,
+            "y": 0.926
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Movies\"  (0.441, 0.434, 0.117, 0.023)\n  AXButton \"Games\\nTab 1 of 3\"  (0.000, 0.892, 0.333, 0.068)\n  AXButton \"Coming Soon\\nTab 2 of 3\"  (0.333, 0.892, 0.333, 0.068)\n  AXButton \"Movies\\nTab 3 of 3\"  (0.667, 0.892, 0.333, 0.068)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.166,
+            "y": 0.926
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Games\"  (0.415, 0.086, 0.169, 0.033)\n  AXStaticText \"Unable to load asset: \"assets/witcher3.jpg\".\\nException: Asset not found\\nThe Witcher 3: Wild Hunt\"  (0.000, 0.135, 1.000, 0.127)\n  AXStaticText \"Unable to load asset: \"assets/rdr2.jpg\".\\nException: Asset not found\\nRed Dead Redemption 2\"  (0.000, 0.262, 1.000, 0.127)\n  AXButton \"Games\\nTab 1 of 3\"  (0.000, 0.892, 0.333, 0.068)\n  AXButton \"Coming Soon\\nTab 2 of 3\"  (0.333, 0.892, 0.333, 0.068)\n  AXButton \"Movies\\nTab 3 of 3\"  (0.667, 0.892, 0.333, 0.068)"
+        }
+      }
+    ],
+    "finalAnswer": "Returned to the Games tab, which lists The Witcher 3 and Red Dead Redemption 2."
+  }
+]

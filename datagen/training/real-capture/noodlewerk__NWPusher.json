@@ -1,0 +1,243 @@
+[
+  {
+    "meta": {
+      "id": "real-nwpusher-01-toggle-sandbox",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Turn on the 'Use sandbox' switch.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.119, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.119, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.119, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.135, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.243, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.259, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.315, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.6425,
+            "y": 0.1415
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.119, 0.438, 0.058)\n  AXButton value=\"1\"  (0.563, 0.119, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.119, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.135, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.243, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.259, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.315, 0.875, 0.086)"
+        }
+      }
+    ],
+    "finalAnswer": "The 'Use sandbox' switch is now on (value 1)."
+  },
+  {
+    "meta": {
+      "id": "real-nwpusher-02-push",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Tap the Push button to attempt sending the notification.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.119, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.119, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.119, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.135, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.243, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.259, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.315, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.272
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.119, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.119, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.119, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.135, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.243, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.259, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.315, 0.875, 0.086)"
+        }
+      }
+    ],
+    "finalAnswer": "Tapped Push; the app reports it cannot read the p12 certificate file."
+  },
+  {
+    "meta": {
+      "id": "real-nwpusher-03-type-payload",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Tap the payload text field and type 'HelloWorld' into it.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.119, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.119, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.119, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.135, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.243, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.259, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.315, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.2105
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "HelloWorld"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.119, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.119, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.119, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.135, 0.184, 0.026)\n  AXGroup value=\"Testing..HelloWorld\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.243, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.259, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.315, 0.875, 0.086)\n  AXGroup \"Typing Predictions\"  (0.000, 0.909, 1.000, 0.055)\n  AXTabBar \"\u201eHelloWorld\u201d\"  (0.000, 0.909, 0.333, 0.055)\n  AXImage \"q\"  (0.000, 0.980, 0.100, 0.020)\n  AXImage \"w\"  (0.100, 0.980, 0.100, 0.020)\n  AXImage \"e\"  (0.200, 0.980, 0.100, 0.020)\n  AXImage \"r\"  (0.300, 0.980, 0.100, 0.020)\n  AXImage \"t\"  (0.400, 0.980, 0.100, 0.020)\n  AXImage \"y\"  (0.500, 0.980, 0.100, 0.020)\n  AXImage \"u\"  (0.600, 0.980, 0.100, 0.020)\n  AXImage \"i\"  (0.700, 0.980, 0.100, 0.020)\n  AXImage \"o\"  (0.800, 0.980, 0.100, 0.020)\n  AXImage \"p\"  (0.900, 0.980, 0.100, 0.020)"
+        }
+      }
+    ],
+    "finalAnswer": "The payload field now contains 'Testing..HelloWorld'."
+  },
+  {
+    "meta": {
+      "id": "real-nwpusher-04-connect",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Tap the Connect button to attempt connecting to the push service.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.119, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.119, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.119, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.135, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.243, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.259, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.315, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.282,
+            "y": 0.148
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.119, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.119, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.119, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.135, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.243, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.259, 0.109, 0.026)\n  AXStaticText \"Unable to connect: (null)\"  (0.063, 0.315, 0.875, 0.086)"
+        }
+      }
+    ],
+    "finalAnswer": "Tapped Connect; the app reports it is unable to connect."
+  }
+]

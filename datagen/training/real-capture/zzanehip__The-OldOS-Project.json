@@ -1,0 +1,746 @@
+[
+  {
+    "meta": {
+      "id": "real-oldos-1",
+      "app": "zzanehip__The-OldOS-Project",
+      "platform": "ios",
+      "task_kind": "swipe",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.zrc.BudgetingBuddy",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "From the OldOS lock screen, slide to unlock and reach the home screen with the app icons.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXTextField \"Lock\"  (0.488, 0.086, 0.025, 0.016)\n  AXStaticText \"1:37\"  (0.354, 0.117, 0.291, 0.081)\n  AXStaticText \"1:37\"  (0.354, 0.119, 0.291, 0.081)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.199, 0.347, 0.024)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.201, 0.347, 0.024)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.389, 0.657, 0.148)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.537, 0.657, 0.148)\n  AXStaticText \"\u2b95\"  (0.153, 0.756, 0.097, 0.052)\n  AXStaticText \"\u2b95\"  (0.155, 0.758, 0.097, 0.052)\n  AXStaticText \"slide to unlock\"  (0.391, 0.766, 0.404, 0.034)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "fromX": 0.18,
+            "fromY": 0.782,
+            "toX": 0.85,
+            "toY": 0.782
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXStaticText \"1:37 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXButton \"Messages\"  (0.092, 0.142, 0.154, 0.095)\n  AXTextField \"Messages\"  (0.092, 0.142, 0.154, 0.072)\n  AXButton \"Tuesday, 23, Calendar\"  (0.281, 0.142, 0.218, 0.095)\n  AXTextField \"Calendar\"  (0.313, 0.142, 0.154, 0.072)\n  AXButton \"Photos\"  (0.533, 0.142, 0.154, 0.095)\n  AXTextField \"Photos\"  (0.533, 0.142, 0.154, 0.072)\n  AXButton \"Camera\"  (0.754, 0.142, 0.154, 0.095)\n  AXTextField \"Camera\"  (0.754, 0.142, 0.154, 0.072)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.878, 0.142, 0.075, 0.598)\n  AXStaticText \"Tuesday\"  (0.342, 0.144, 0.096, 0.014)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.149, 0.206, 0.095)\n  AXStaticText \"23\"  (0.341, 0.160, 0.097, 0.048)\n  AXStaticText \"Messages\"  (0.093, 0.214, 0.153, 0.018)\n  AXStaticText \"Calendar\"  (0.322, 0.214, 0.135, 0.018)\n  AXStaticText \"Photos\"  (0.557, 0.214, 0.106, 0.018)\n  AXStaticText \"Camera\"  (0.772, 0.214, 0.117, 0.018)\n  AXButton \"YouTube\"  (0.092, 0.284, 0.154, 0.095)\n  AXTextField \"YouTube\"  (0.092, 0.284, 0.154, 0.072)\n  AXButton \"Stocks\"  (0.313, 0.284, 0.154, 0.095)\n  AXTextField \"Stocks\"  (0.313, 0.284, 0.154, 0.072)\n  AXButton \"Maps\"  (0.533, 0.284, 0.154, 0.095)\n  AXTextField \"Maps\"  (0.533, 0.284, 0.154, 0.072)\n  AXButton \"Weather\"  (0.754, 0.284, 0.154, 0.095)\n  AXTextField \"Weather Fahrenheit\"  (0.754, 0.284, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.291, 0.206, 0.095)\n  AXStaticText \"YouTube\"  (0.105, 0.357, 0.129, 0.018)\n  AXStaticText \"Stocks\"  (0.338, 0.357, 0.104, 0.018)\n  AXStaticText \"Maps\"  (0.568, 0.357, 0.084, 0.018)\n  AXStaticText \"Weather\"  (0.768, 0.357, 0.125, 0.018)\n  AXButton \"Utilities\"  (0.313, 0.427, 0.154, 0.097)\n  AXTextField \"Folder\"  (0.313, 0.427, 0.154, 0.074)\n  AXButton \"Notes\"  (0.092, 0.428, 0.154, 0.095)\n  AXTextField \"Notes\"  (0.092, 0.428, 0.154, 0.072)\n  AXButton \"iTunes\"  (0.533, 0.428, 0.154, 0.095)\n  AXTextField \"iTunes\"  (0.533, 0.428, 0.154, 0.072)\n  AXButton \"App Store\"  (0.754, 0.428, 0.154, 0.095)\n  AXTextField \"App Store\"  (0.754, 0.428, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.284, 0.434, 0.212, 0.097)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.435, 0.206, 0.095)\n  AXTextField \"Clock-Small\"  (0.333, 0.436, 0.033, 0.016)\n  AXTextField \"Calculator-Small\"  (0.373, 0.436, 0.033, 0.016)\n  AXTextField \"Compass-Small\"  (0.414, 0.436, 0.034, 0.016)\n  AXTextField \"Voice Memos-Small\"  (0.333, 0.454, 0.033, 0.016)\n  AXStaticText \"Notes\"  (0.125, 0.500, 0.089, 0.018)\n  AXStaticText \"iTunes\"  (0.562, 0.500, 0.096, 0.018)\n  AXStaticText \"App Store\"  (0.756, 0.500, 0.150, 0.018)\n  AXStaticText \"Utilities\"  (0.334, 0.502, 0.111, 0.018)\n  AXButton \"Game Center\"  (0.070, 0.572, 0.198, 0.095)\n  AXTextField \"Game Center\"  (0.092, 0.572, 0.154, 0.072)\n  AXButton \"Settings\"  (0.313, 0.572, 0.154, 0.095)\n  AXTextField \"Settings\"  (0.313, 0.572, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.579, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.579, 0.206, 0.095)\n  AXStaticText \"Game Center\"  (0.070, 0.644, 0.198, 0.018)\n  AXStaticText \"Settings\"  (0.328, 0.644, 0.124, 0.018)\n  AXButton  (0.047, 0.711, 0.383, 0.009)\n  AXButton \"Search\"  (0.450, 0.711, 0.020, 0.009)\n  AXButton  (0.490, 0.711, 0.020, 0.009)\n  AXButton  (0.530, 0.711, 0.020, 0.009)\n  AXButton  (0.570, 0.711, 0.383, 0.009)\n  AXButton \"Phone\"  (0.092, 0.749, 0.154, 0.095)\n  AXTextField \"Phone\"  (0.092, 0.749, 0.154, 0.072)\n  AXButton \"Mail\"  (0.313, 0.749, 0.154, 0.095)\n  AXTextField \"Mail\"  (0.313, 0.749, 0.154, 0.072)\n  AXButton \"Safari\"  (0.533, 0.749, 0.154, 0.095)\n  AXTextField \"Safari\"  (0.533, 0.749, 0.154, 0.072)\n  AXButton \"iPod\"  (0.754, 0.749, 0.154, 0.095)\n  AXTextField \"iPod\"  (0.754, 0.749, 0.154, 0.072)\n  AXTextField \"SBDockBG 2\"  (0.040, 0.786, 0.920, 0.059)\n  AXTextField \"Phone\"  (0.092, 0.819, 0.154, 0.072)\n  AXTextField \"Mail\"  (0.313, 0.819, 0.154, 0.072)\n  AXTextField \"Safari\"  (0.533, 0.819, 0.154, 0.072)\n  AXTextField \"iPod\"  (0.754, 0.819, 0.154, 0.072)\n  AXStaticText \"Phone\"  (0.121, 0.822, 0.096, 0.018)\n  AXStaticText \"Mail\"  (0.358, 0.822, 0.063, 0.018)\n  AXStaticText \"Safari\"  (0.567, 0.822, 0.087, 0.018)\n  AXStaticText \"iPod\"  (0.796, 0.822, 0.069, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "Unlocked OldOS; the home screen with app icons (Messages, Settings, etc.) is now visible."
+  },
+  {
+    "meta": {
+      "id": "real-oldos-2",
+      "app": "zzanehip__The-OldOS-Project",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.zrc.BudgetingBuddy",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "swipe",
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Unlock OldOS and open the Settings app.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXTextField \"Lock\"  (0.488, 0.086, 0.025, 0.016)\n  AXStaticText \"1:37\"  (0.354, 0.117, 0.291, 0.081)\n  AXStaticText \"1:37\"  (0.354, 0.119, 0.291, 0.081)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.199, 0.347, 0.024)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.201, 0.347, 0.024)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.389, 0.657, 0.148)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.537, 0.657, 0.148)\n  AXStaticText \"\u2b95\"  (0.153, 0.756, 0.097, 0.052)\n  AXStaticText \"\u2b95\"  (0.155, 0.758, 0.097, 0.052)\n  AXStaticText \"slide to unlock\"  (0.391, 0.766, 0.404, 0.034)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "fromX": 0.18,
+            "fromY": 0.782,
+            "toX": 0.85,
+            "toY": 0.782
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXStaticText \"1:37 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXButton \"Messages\"  (0.092, 0.142, 0.154, 0.095)\n  AXTextField \"Messages\"  (0.092, 0.142, 0.154, 0.072)\n  AXButton \"Tuesday, 23, Calendar\"  (0.281, 0.142, 0.218, 0.095)\n  AXTextField \"Calendar\"  (0.313, 0.142, 0.154, 0.072)\n  AXButton \"Photos\"  (0.533, 0.142, 0.154, 0.095)\n  AXTextField \"Photos\"  (0.533, 0.142, 0.154, 0.072)\n  AXButton \"Camera\"  (0.754, 0.142, 0.154, 0.095)\n  AXTextField \"Camera\"  (0.754, 0.142, 0.154, 0.072)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.878, 0.142, 0.075, 0.598)\n  AXStaticText \"Tuesday\"  (0.342, 0.144, 0.096, 0.014)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.149, 0.206, 0.095)\n  AXStaticText \"23\"  (0.341, 0.160, 0.097, 0.048)\n  AXStaticText \"Messages\"  (0.093, 0.214, 0.153, 0.018)\n  AXStaticText \"Calendar\"  (0.322, 0.214, 0.135, 0.018)\n  AXStaticText \"Photos\"  (0.557, 0.214, 0.106, 0.018)\n  AXStaticText \"Camera\"  (0.772, 0.214, 0.117, 0.018)\n  AXButton \"YouTube\"  (0.092, 0.284, 0.154, 0.095)\n  AXTextField \"YouTube\"  (0.092, 0.284, 0.154, 0.072)\n  AXButton \"Stocks\"  (0.313, 0.284, 0.154, 0.095)\n  AXTextField \"Stocks\"  (0.313, 0.284, 0.154, 0.072)\n  AXButton \"Maps\"  (0.533, 0.284, 0.154, 0.095)\n  AXTextField \"Maps\"  (0.533, 0.284, 0.154, 0.072)\n  AXButton \"Weather\"  (0.754, 0.284, 0.154, 0.095)\n  AXTextField \"Weather Fahrenheit\"  (0.754, 0.284, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.291, 0.206, 0.095)\n  AXStaticText \"YouTube\"  (0.105, 0.357, 0.129, 0.018)\n  AXStaticText \"Stocks\"  (0.338, 0.357, 0.104, 0.018)\n  AXStaticText \"Maps\"  (0.568, 0.357, 0.084, 0.018)\n  AXStaticText \"Weather\"  (0.768, 0.357, 0.125, 0.018)\n  AXButton \"Utilities\"  (0.313, 0.427, 0.154, 0.097)\n  AXTextField \"Folder\"  (0.313, 0.427, 0.154, 0.074)\n  AXButton \"Notes\"  (0.092, 0.428, 0.154, 0.095)\n  AXTextField \"Notes\"  (0.092, 0.428, 0.154, 0.072)\n  AXButton \"iTunes\"  (0.533, 0.428, 0.154, 0.095)\n  AXTextField \"iTunes\"  (0.533, 0.428, 0.154, 0.072)\n  AXButton \"App Store\"  (0.754, 0.428, 0.154, 0.095)\n  AXTextField \"App Store\"  (0.754, 0.428, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.284, 0.434, 0.212, 0.097)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.435, 0.206, 0.095)\n  AXTextField \"Clock-Small\"  (0.333, 0.436, 0.033, 0.016)\n  AXTextField \"Calculator-Small\"  (0.373, 0.436, 0.033, 0.016)\n  AXTextField \"Compass-Small\"  (0.414, 0.436, 0.034, 0.016)\n  AXTextField \"Voice Memos-Small\"  (0.333, 0.454, 0.033, 0.016)\n  AXStaticText \"Notes\"  (0.125, 0.500, 0.089, 0.018)\n  AXStaticText \"iTunes\"  (0.562, 0.500, 0.096, 0.018)\n  AXStaticText \"App Store\"  (0.756, 0.500, 0.150, 0.018)\n  AXStaticText \"Utilities\"  (0.334, 0.502, 0.111, 0.018)\n  AXButton \"Game Center\"  (0.070, 0.572, 0.198, 0.095)\n  AXTextField \"Game Center\"  (0.092, 0.572, 0.154, 0.072)\n  AXButton \"Settings\"  (0.313, 0.572, 0.154, 0.095)\n  AXTextField \"Settings\"  (0.313, 0.572, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.579, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.579, 0.206, 0.095)\n  AXStaticText \"Game Center\"  (0.070, 0.644, 0.198, 0.018)\n  AXStaticText \"Settings\"  (0.328, 0.644, 0.124, 0.018)\n  AXButton  (0.047, 0.711, 0.383, 0.009)\n  AXButton \"Search\"  (0.450, 0.711, 0.020, 0.009)\n  AXButton  (0.490, 0.711, 0.020, 0.009)\n  AXButton  (0.530, 0.711, 0.020, 0.009)\n  AXButton  (0.570, 0.711, 0.383, 0.009)\n  AXButton \"Phone\"  (0.092, 0.749, 0.154, 0.095)\n  AXTextField \"Phone\"  (0.092, 0.749, 0.154, 0.072)\n  AXButton \"Mail\"  (0.313, 0.749, 0.154, 0.095)\n  AXTextField \"Mail\"  (0.313, 0.749, 0.154, 0.072)\n  AXButton \"Safari\"  (0.533, 0.749, 0.154, 0.095)\n  AXTextField \"Safari\"  (0.533, 0.749, 0.154, 0.072)\n  AXButton \"iPod\"  (0.754, 0.749, 0.154, 0.095)\n  AXTextField \"iPod\"  (0.754, 0.749, 0.154, 0.072)\n  AXTextField \"SBDockBG 2\"  (0.040, 0.786, 0.920, 0.059)\n  AXTextField \"Phone\"  (0.092, 0.819, 0.154, 0.072)\n  AXTextField \"Mail\"  (0.313, 0.819, 0.154, 0.072)\n  AXTextField \"Safari\"  (0.533, 0.819, 0.154, 0.072)\n  AXTextField \"iPod\"  (0.754, 0.819, 0.154, 0.072)\n  AXStaticText \"Phone\"  (0.121, 0.822, 0.096, 0.018)\n  AXStaticText \"Mail\"  (0.358, 0.822, 0.063, 0.018)\n  AXStaticText \"Safari\"  (0.567, 0.822, 0.087, 0.018)\n  AXStaticText \"iPod\"  (0.796, 0.822, 0.069, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.39,
+            "y": 0.62
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:37 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXStaticText \"Settings\"  (0.392, 0.127, 0.216, 0.030)\n  AXStaticText \"Settings\"  (0.392, 0.128, 0.216, 0.030)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXTextField \"Settings-Airplane Mode\"  (0.100, 0.205, 0.075, 0.034)\n  AXStaticText \"Airplane Mode\"  (0.194, 0.210, 0.310, 0.025)\n  AXStaticText \"ON\"  (0.543, 0.210, 0.069, 0.025)\n  AXStaticText \"OFF\"  (0.782, 0.210, 0.089, 0.025)\n  AXButton \"Wi-Fi, Not Connected\"  (0.070, 0.251, 0.861, 0.057)\n  AXTextField \"Settings-Wifi\"  (0.100, 0.262, 0.075, 0.034)\n  AXStaticText \"Wi-Fi\"  (0.194, 0.267, 0.110, 0.025)\n  AXStaticText \"Not Connected\"  (0.556, 0.267, 0.299, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.272, 0.025, 0.015)\n  AXButton \"Notifications, On\"  (0.070, 0.308, 0.861, 0.057)\n  AXTextField \"Settings-Notifications\"  (0.100, 0.319, 0.075, 0.034)\n  AXStaticText \"Notifications\"  (0.194, 0.324, 0.272, 0.025)\n  AXStaticText \"On\"  (0.795, 0.324, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.329, 0.025, 0.015)\n  AXButton \"Location Services, On\"  (0.070, 0.365, 0.861, 0.057)\n  AXTextField \"Settings-Location\"  (0.100, 0.376, 0.075, 0.034)\n  AXStaticText \"Location Services\"  (0.194, 0.381, 0.382, 0.025)\n  AXStaticText \"On\"  (0.795, 0.382, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.386, 0.025, 0.015)\n  AXButton \"Carrier\"  (0.070, 0.422, 0.861, 0.057)\n  AXTextField \"Settings-Carrier\"  (0.100, 0.434, 0.075, 0.034)\n  AXStaticText \"Carrier\"  (0.194, 0.438, 0.148, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.444, 0.025, 0.015)\n  AXButton \"Sounds\"  (0.070, 0.508, 0.861, 0.057)\n  AXTextField \"Settings-Sound\"  (0.100, 0.519, 0.075, 0.034)\n  AXStaticText \"Sounds\"  (0.194, 0.524, 0.162, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.529, 0.025, 0.015)\n  AXButton \"Brightness\"  (0.070, 0.565, 0.861, 0.057)\n  AXTextField \"Settings-Brightness\"  (0.100, 0.577, 0.075, 0.034)\n  AXStaticText \"Brightness\"  (0.194, 0.581, 0.231, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.587, 0.025, 0.015)\n  AXButton \"Wallpaper\"  (0.070, 0.622, 0.861, 0.057)\n  AXTextField \"Settings-Wallpaper\"  (0.100, 0.634, 0.075, 0.034)\n  AXStaticText \"Wallpaper\"  (0.194, 0.639, 0.213, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.644, 0.025, 0.015)\n  AXButton \"General\"  (0.070, 0.708, 0.861, 0.057)\n  AXTextField \"Settings-General\"  (0.100, 0.720, 0.075, 0.034)\n  AXStaticText \"General\"  (0.194, 0.724, 0.167, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.730, 0.025, 0.015)\n  AXButton \"Mail, Contacts, Calendars\"  (0.070, 0.765, 0.861, 0.057)\n  AXTextField \"Settings-MCC\"  (0.100, 0.777, 0.075, 0.034)\n  AXStaticText \"Mail, Contacts, Calendars\"  (0.194, 0.782, 0.551, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.787, 0.025, 0.015)\n  AXButton \"Phone\"  (0.070, 0.823, 0.861, 0.057)\n  AXTextField \"Settings-Phone\"  (0.100, 0.834, 0.075, 0.034)\n  AXStaticText \"Phone\"  (0.194, 0.839, 0.137, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.844, 0.025, 0.015)\n  AXButton \"Safari\"  (0.070, 0.880, 0.861, 0.057)\n  AXTextField \"Settings-Safari\"  (0.100, 0.891, 0.075, 0.034)\n  AXStaticText \"Safari\"  (0.194, 0.896, 0.124, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.901, 0.025, 0.015)\n  AXButton \"Messages\"  (0.070, 0.937, 0.861, 0.057)\n  AXTextField \"Settings-Messages\"  (0.100, 0.949, 0.075, 0.034)\n  AXStaticText \"Messages\"  (0.194, 0.953, 0.217, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.958, 0.025, 0.015)\n  AXButton \"iPod\"  (0.070, 0.994, 0.861, 0.006)"
+        }
+      }
+    ],
+    "finalAnswer": "The Settings app is open, showing Airplane Mode, Wi-Fi, Notifications and Location Services."
+  },
+  {
+    "meta": {
+      "id": "real-oldos-3",
+      "app": "zzanehip__The-OldOS-Project",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.zrc.BudgetingBuddy",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "swipe",
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Unlock OldOS, open Settings, and open the General section.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXTextField \"Lock\"  (0.488, 0.086, 0.025, 0.016)\n  AXStaticText \"1:37\"  (0.354, 0.117, 0.291, 0.081)\n  AXStaticText \"1:37\"  (0.354, 0.119, 0.291, 0.081)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.199, 0.347, 0.024)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.201, 0.347, 0.024)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.389, 0.657, 0.148)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.537, 0.657, 0.148)\n  AXStaticText \"\u2b95\"  (0.153, 0.756, 0.097, 0.052)\n  AXStaticText \"\u2b95\"  (0.155, 0.758, 0.097, 0.052)\n  AXStaticText \"slide to unlock\"  (0.391, 0.766, 0.404, 0.034)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "fromX": 0.18,
+            "fromY": 0.782,
+            "toX": 0.85,
+            "toY": 0.782
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXStaticText \"1:37 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXButton \"Messages\"  (0.092, 0.142, 0.154, 0.095)\n  AXTextField \"Messages\"  (0.092, 0.142, 0.154, 0.072)\n  AXButton \"Tuesday, 23, Calendar\"  (0.281, 0.142, 0.218, 0.095)\n  AXTextField \"Calendar\"  (0.313, 0.142, 0.154, 0.072)\n  AXButton \"Photos\"  (0.533, 0.142, 0.154, 0.095)\n  AXTextField \"Photos\"  (0.533, 0.142, 0.154, 0.072)\n  AXButton \"Camera\"  (0.754, 0.142, 0.154, 0.095)\n  AXTextField \"Camera\"  (0.754, 0.142, 0.154, 0.072)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.878, 0.142, 0.075, 0.598)\n  AXStaticText \"Tuesday\"  (0.342, 0.144, 0.096, 0.014)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.149, 0.206, 0.095)\n  AXStaticText \"23\"  (0.341, 0.160, 0.097, 0.048)\n  AXStaticText \"Messages\"  (0.093, 0.214, 0.153, 0.018)\n  AXStaticText \"Calendar\"  (0.322, 0.214, 0.135, 0.018)\n  AXStaticText \"Photos\"  (0.557, 0.214, 0.106, 0.018)\n  AXStaticText \"Camera\"  (0.772, 0.214, 0.117, 0.018)\n  AXButton \"YouTube\"  (0.092, 0.284, 0.154, 0.095)\n  AXTextField \"YouTube\"  (0.092, 0.284, 0.154, 0.072)\n  AXButton \"Stocks\"  (0.313, 0.284, 0.154, 0.095)\n  AXTextField \"Stocks\"  (0.313, 0.284, 0.154, 0.072)\n  AXButton \"Maps\"  (0.533, 0.284, 0.154, 0.095)\n  AXTextField \"Maps\"  (0.533, 0.284, 0.154, 0.072)\n  AXButton \"Weather\"  (0.754, 0.284, 0.154, 0.095)\n  AXTextField \"Weather Fahrenheit\"  (0.754, 0.284, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.291, 0.206, 0.095)\n  AXStaticText \"YouTube\"  (0.105, 0.357, 0.129, 0.018)\n  AXStaticText \"Stocks\"  (0.338, 0.357, 0.104, 0.018)\n  AXStaticText \"Maps\"  (0.568, 0.357, 0.084, 0.018)\n  AXStaticText \"Weather\"  (0.768, 0.357, 0.125, 0.018)\n  AXButton \"Utilities\"  (0.313, 0.427, 0.154, 0.097)\n  AXTextField \"Folder\"  (0.313, 0.427, 0.154, 0.074)\n  AXButton \"Notes\"  (0.092, 0.428, 0.154, 0.095)\n  AXTextField \"Notes\"  (0.092, 0.428, 0.154, 0.072)\n  AXButton \"iTunes\"  (0.533, 0.428, 0.154, 0.095)\n  AXTextField \"iTunes\"  (0.533, 0.428, 0.154, 0.072)\n  AXButton \"App Store\"  (0.754, 0.428, 0.154, 0.095)\n  AXTextField \"App Store\"  (0.754, 0.428, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.284, 0.434, 0.212, 0.097)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.435, 0.206, 0.095)\n  AXTextField \"Clock-Small\"  (0.333, 0.436, 0.033, 0.016)\n  AXTextField \"Calculator-Small\"  (0.373, 0.436, 0.033, 0.016)\n  AXTextField \"Compass-Small\"  (0.414, 0.436, 0.034, 0.016)\n  AXTextField \"Voice Memos-Small\"  (0.333, 0.454, 0.033, 0.016)\n  AXStaticText \"Notes\"  (0.125, 0.500, 0.089, 0.018)\n  AXStaticText \"iTunes\"  (0.562, 0.500, 0.096, 0.018)\n  AXStaticText \"App Store\"  (0.756, 0.500, 0.150, 0.018)\n  AXStaticText \"Utilities\"  (0.334, 0.502, 0.111, 0.018)\n  AXButton \"Game Center\"  (0.070, 0.572, 0.198, 0.095)\n  AXTextField \"Game Center\"  (0.092, 0.572, 0.154, 0.072)\n  AXButton \"Settings\"  (0.313, 0.572, 0.154, 0.095)\n  AXTextField \"Settings\"  (0.313, 0.572, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.579, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.579, 0.206, 0.095)\n  AXStaticText \"Game Center\"  (0.070, 0.644, 0.198, 0.018)\n  AXStaticText \"Settings\"  (0.328, 0.644, 0.124, 0.018)\n  AXButton  (0.047, 0.711, 0.383, 0.009)\n  AXButton \"Search\"  (0.450, 0.711, 0.020, 0.009)\n  AXButton  (0.490, 0.711, 0.020, 0.009)\n  AXButton  (0.530, 0.711, 0.020, 0.009)\n  AXButton  (0.570, 0.711, 0.383, 0.009)\n  AXButton \"Phone\"  (0.092, 0.749, 0.154, 0.095)\n  AXTextField \"Phone\"  (0.092, 0.749, 0.154, 0.072)\n  AXButton \"Mail\"  (0.313, 0.749, 0.154, 0.095)\n  AXTextField \"Mail\"  (0.313, 0.749, 0.154, 0.072)\n  AXButton \"Safari\"  (0.533, 0.749, 0.154, 0.095)\n  AXTextField \"Safari\"  (0.533, 0.749, 0.154, 0.072)\n  AXButton \"iPod\"  (0.754, 0.749, 0.154, 0.095)\n  AXTextField \"iPod\"  (0.754, 0.749, 0.154, 0.072)\n  AXTextField \"SBDockBG 2\"  (0.040, 0.786, 0.920, 0.059)\n  AXTextField \"Phone\"  (0.092, 0.819, 0.154, 0.072)\n  AXTextField \"Mail\"  (0.313, 0.819, 0.154, 0.072)\n  AXTextField \"Safari\"  (0.533, 0.819, 0.154, 0.072)\n  AXTextField \"iPod\"  (0.754, 0.819, 0.154, 0.072)\n  AXStaticText \"Phone\"  (0.121, 0.822, 0.096, 0.018)\n  AXStaticText \"Mail\"  (0.358, 0.822, 0.063, 0.018)\n  AXStaticText \"Safari\"  (0.567, 0.822, 0.087, 0.018)\n  AXStaticText \"iPod\"  (0.796, 0.822, 0.069, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.39,
+            "y": 0.62
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:37 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXStaticText \"Settings\"  (0.392, 0.127, 0.216, 0.030)\n  AXStaticText \"Settings\"  (0.392, 0.128, 0.216, 0.030)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXTextField \"Settings-Airplane Mode\"  (0.100, 0.205, 0.075, 0.034)\n  AXStaticText \"Airplane Mode\"  (0.194, 0.210, 0.310, 0.025)\n  AXStaticText \"ON\"  (0.543, 0.210, 0.069, 0.025)\n  AXStaticText \"OFF\"  (0.782, 0.210, 0.089, 0.025)\n  AXButton \"Wi-Fi, Not Connected\"  (0.070, 0.251, 0.861, 0.057)\n  AXTextField \"Settings-Wifi\"  (0.100, 0.262, 0.075, 0.034)\n  AXStaticText \"Wi-Fi\"  (0.194, 0.267, 0.110, 0.025)\n  AXStaticText \"Not Connected\"  (0.556, 0.267, 0.299, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.272, 0.025, 0.015)\n  AXButton \"Notifications, On\"  (0.070, 0.308, 0.861, 0.057)\n  AXTextField \"Settings-Notifications\"  (0.100, 0.319, 0.075, 0.034)\n  AXStaticText \"Notifications\"  (0.194, 0.324, 0.272, 0.025)\n  AXStaticText \"On\"  (0.795, 0.324, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.329, 0.025, 0.015)\n  AXButton \"Location Services, On\"  (0.070, 0.365, 0.861, 0.057)\n  AXTextField \"Settings-Location\"  (0.100, 0.376, 0.075, 0.034)\n  AXStaticText \"Location Services\"  (0.194, 0.381, 0.382, 0.025)\n  AXStaticText \"On\"  (0.795, 0.382, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.386, 0.025, 0.015)\n  AXButton \"Carrier\"  (0.070, 0.422, 0.861, 0.057)\n  AXTextField \"Settings-Carrier\"  (0.100, 0.434, 0.075, 0.034)\n  AXStaticText \"Carrier\"  (0.194, 0.438, 0.148, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.444, 0.025, 0.015)\n  AXButton \"Sounds\"  (0.070, 0.508, 0.861, 0.057)\n  AXTextField \"Settings-Sound\"  (0.100, 0.519, 0.075, 0.034)\n  AXStaticText \"Sounds\"  (0.194, 0.524, 0.162, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.529, 0.025, 0.015)\n  AXButton \"Brightness\"  (0.070, 0.565, 0.861, 0.057)\n  AXTextField \"Settings-Brightness\"  (0.100, 0.577, 0.075, 0.034)\n  AXStaticText \"Brightness\"  (0.194, 0.581, 0.231, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.587, 0.025, 0.015)\n  AXButton \"Wallpaper\"  (0.070, 0.622, 0.861, 0.057)\n  AXTextField \"Settings-Wallpaper\"  (0.100, 0.634, 0.075, 0.034)\n  AXStaticText \"Wallpaper\"  (0.194, 0.639, 0.213, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.644, 0.025, 0.015)\n  AXButton \"General\"  (0.070, 0.708, 0.861, 0.057)\n  AXTextField \"Settings-General\"  (0.100, 0.720, 0.075, 0.034)\n  AXStaticText \"General\"  (0.194, 0.724, 0.167, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.730, 0.025, 0.015)\n  AXButton \"Mail, Contacts, Calendars\"  (0.070, 0.765, 0.861, 0.057)\n  AXTextField \"Settings-MCC\"  (0.100, 0.777, 0.075, 0.034)\n  AXStaticText \"Mail, Contacts, Calendars\"  (0.194, 0.782, 0.551, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.787, 0.025, 0.015)\n  AXButton \"Phone\"  (0.070, 0.823, 0.861, 0.057)\n  AXTextField \"Settings-Phone\"  (0.100, 0.834, 0.075, 0.034)\n  AXStaticText \"Phone\"  (0.194, 0.839, 0.137, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.844, 0.025, 0.015)\n  AXButton \"Safari\"  (0.070, 0.880, 0.861, 0.057)\n  AXTextField \"Settings-Safari\"  (0.100, 0.891, 0.075, 0.034)\n  AXStaticText \"Safari\"  (0.194, 0.896, 0.124, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.901, 0.025, 0.015)\n  AXButton \"Messages\"  (0.070, 0.937, 0.861, 0.057)\n  AXTextField \"Settings-Messages\"  (0.100, 0.949, 0.075, 0.034)\n  AXStaticText \"Messages\"  (0.194, 0.953, 0.217, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.958, 0.025, 0.015)\n  AXButton \"iPod\"  (0.070, 0.994, 0.861, 0.006)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.5,
+            "y": 0.737
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:37 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXButton \"Settings\"  (0.040, 0.122, 0.206, 0.040)\n  AXTextField \"Button2\"  (0.055, 0.122, 0.192, 0.040)\n  AXStaticText \"General\"  (0.398, 0.127, 0.204, 0.030)\n  AXStaticText \"General\"  (0.398, 0.128, 0.204, 0.030)\n  AXStaticText \"Settings\"  (0.093, 0.132, 0.128, 0.018)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXButton \"About\"  (0.070, 0.193, 0.861, 0.057)\n  AXStaticText \"About\"  (0.100, 0.210, 0.129, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.215, 0.025, 0.015)\n  AXButton \"Usage\"  (0.070, 0.251, 0.861, 0.057)\n  AXStaticText \"Usage\"  (0.100, 0.267, 0.136, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.272, 0.025, 0.015)\n  AXButton \"Network\"  (0.070, 0.336, 0.861, 0.057)\n  AXStaticText \"Network\"  (0.100, 0.353, 0.182, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.358, 0.025, 0.015)\n  AXButton \"Bluetooth\"  (0.070, 0.394, 0.861, 0.057)\n  AXStaticText \"Bluetooth\"  (0.100, 0.410, 0.208, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.415, 0.025, 0.015)\n  AXStaticText \"Spotlight Search\"  (0.100, 0.496, 0.355, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.501, 0.025, 0.015)\n  AXButton \"Auto-Lock\"  (0.070, 0.565, 0.861, 0.057)\n  AXStaticText \"Auto-Lock\"  (0.100, 0.581, 0.224, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.587, 0.025, 0.015)\n  AXButton \"Date & Time\"  (0.070, 0.651, 0.861, 0.057)\n  AXStaticText \"Date & Time\"  (0.100, 0.667, 0.261, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.672, 0.025, 0.015)\n  AXButton \"Keyboard\"  (0.070, 0.708, 0.861, 0.057)\n  AXStaticText \"Keyboard\"  (0.100, 0.724, 0.206, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.730, 0.025, 0.015)\n  AXButton \"International\"  (0.070, 0.765, 0.861, 0.057)\n  AXStaticText \"International\"  (0.100, 0.782, 0.270, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.787, 0.025, 0.015)\n  AXButton \"Accessibility\"  (0.070, 0.823, 0.861, 0.057)\n  AXStaticText \"Accessibility\"  (0.100, 0.839, 0.269, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.844, 0.025, 0.015)"
+        }
+      }
+    ],
+    "finalAnswer": "The General settings screen is open, showing About, Usage, Network, Bluetooth and Keyboard."
+  },
+  {
+    "meta": {
+      "id": "real-oldos-4",
+      "app": "zzanehip__The-OldOS-Project",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "com.zrc.BudgetingBuddy",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "swipe",
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Unlock OldOS, open Settings, go to General, then open the About screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXTextField \"Lock\"  (0.488, 0.086, 0.025, 0.016)\n  AXStaticText \"1:39\"  (0.354, 0.117, 0.291, 0.081)\n  AXStaticText \"1:39\"  (0.354, 0.119, 0.291, 0.081)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.199, 0.347, 0.024)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.201, 0.347, 0.024)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.389, 0.657, 0.148)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.537, 0.657, 0.148)\n  AXStaticText \"\u2b95\"  (0.153, 0.756, 0.097, 0.052)\n  AXStaticText \"\u2b95\"  (0.155, 0.758, 0.097, 0.052)\n  AXStaticText \"slide to unlock\"  (0.391, 0.766, 0.404, 0.034)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "fromX": 0.18,
+            "fromY": 0.782,
+            "toX": 0.85,
+            "toY": 0.782
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXStaticText \"1:39 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXButton \"Messages\"  (0.092, 0.142, 0.154, 0.095)\n  AXTextField \"Messages\"  (0.092, 0.142, 0.154, 0.072)\n  AXButton \"Tuesday, 23, Calendar\"  (0.281, 0.142, 0.218, 0.095)\n  AXTextField \"Calendar\"  (0.313, 0.142, 0.154, 0.072)\n  AXButton \"Photos\"  (0.533, 0.142, 0.154, 0.095)\n  AXTextField \"Photos\"  (0.533, 0.142, 0.154, 0.072)\n  AXButton \"Camera\"  (0.754, 0.142, 0.154, 0.095)\n  AXTextField \"Camera\"  (0.754, 0.142, 0.154, 0.072)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.878, 0.142, 0.075, 0.598)\n  AXStaticText \"Tuesday\"  (0.342, 0.144, 0.096, 0.014)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.149, 0.206, 0.095)\n  AXStaticText \"23\"  (0.341, 0.160, 0.097, 0.048)\n  AXStaticText \"Messages\"  (0.093, 0.214, 0.153, 0.018)\n  AXStaticText \"Calendar\"  (0.322, 0.214, 0.135, 0.018)\n  AXStaticText \"Photos\"  (0.557, 0.214, 0.106, 0.018)\n  AXStaticText \"Camera\"  (0.772, 0.214, 0.117, 0.018)\n  AXButton \"YouTube\"  (0.092, 0.284, 0.154, 0.095)\n  AXTextField \"YouTube\"  (0.092, 0.284, 0.154, 0.072)\n  AXButton \"Stocks\"  (0.313, 0.284, 0.154, 0.095)\n  AXTextField \"Stocks\"  (0.313, 0.284, 0.154, 0.072)\n  AXButton \"Maps\"  (0.533, 0.284, 0.154, 0.095)\n  AXTextField \"Maps\"  (0.533, 0.284, 0.154, 0.072)\n  AXButton \"Weather\"  (0.754, 0.284, 0.154, 0.095)\n  AXTextField \"Weather Fahrenheit\"  (0.754, 0.284, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.291, 0.206, 0.095)\n  AXStaticText \"YouTube\"  (0.105, 0.357, 0.129, 0.018)\n  AXStaticText \"Stocks\"  (0.338, 0.357, 0.104, 0.018)\n  AXStaticText \"Maps\"  (0.568, 0.357, 0.084, 0.018)\n  AXStaticText \"Weather\"  (0.768, 0.357, 0.125, 0.018)\n  AXButton \"Utilities\"  (0.313, 0.427, 0.154, 0.097)\n  AXTextField \"Folder\"  (0.313, 0.427, 0.154, 0.074)\n  AXButton \"Notes\"  (0.092, 0.428, 0.154, 0.095)\n  AXTextField \"Notes\"  (0.092, 0.428, 0.154, 0.072)\n  AXButton \"iTunes\"  (0.533, 0.428, 0.154, 0.095)\n  AXTextField \"iTunes\"  (0.533, 0.428, 0.154, 0.072)\n  AXButton \"App Store\"  (0.754, 0.428, 0.154, 0.095)\n  AXTextField \"App Store\"  (0.754, 0.428, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.284, 0.434, 0.212, 0.097)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.435, 0.206, 0.095)\n  AXTextField \"Clock-Small\"  (0.333, 0.436, 0.033, 0.016)\n  AXTextField \"Calculator-Small\"  (0.373, 0.436, 0.033, 0.016)\n  AXTextField \"Compass-Small\"  (0.414, 0.436, 0.034, 0.016)\n  AXTextField \"Voice Memos-Small\"  (0.333, 0.454, 0.033, 0.016)\n  AXStaticText \"Notes\"  (0.125, 0.500, 0.089, 0.018)\n  AXStaticText \"iTunes\"  (0.562, 0.500, 0.096, 0.018)\n  AXStaticText \"App Store\"  (0.756, 0.500, 0.150, 0.018)\n  AXStaticText \"Utilities\"  (0.334, 0.502, 0.111, 0.018)\n  AXButton \"Game Center\"  (0.070, 0.572, 0.198, 0.095)\n  AXTextField \"Game Center\"  (0.092, 0.572, 0.154, 0.072)\n  AXButton \"Settings\"  (0.313, 0.572, 0.154, 0.095)\n  AXTextField \"Settings\"  (0.313, 0.572, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.579, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.579, 0.206, 0.095)\n  AXStaticText \"Game Center\"  (0.070, 0.644, 0.198, 0.018)\n  AXStaticText \"Settings\"  (0.328, 0.644, 0.124, 0.018)\n  AXButton  (0.047, 0.711, 0.383, 0.009)\n  AXButton \"Search\"  (0.450, 0.711, 0.020, 0.009)\n  AXButton  (0.490, 0.711, 0.020, 0.009)\n  AXButton  (0.530, 0.711, 0.020, 0.009)\n  AXButton  (0.570, 0.711, 0.383, 0.009)\n  AXButton \"Phone\"  (0.092, 0.749, 0.154, 0.095)\n  AXTextField \"Phone\"  (0.092, 0.749, 0.154, 0.072)\n  AXButton \"Mail\"  (0.313, 0.749, 0.154, 0.095)\n  AXTextField \"Mail\"  (0.313, 0.749, 0.154, 0.072)\n  AXButton \"Safari\"  (0.533, 0.749, 0.154, 0.095)\n  AXTextField \"Safari\"  (0.533, 0.749, 0.154, 0.072)\n  AXButton \"iPod\"  (0.754, 0.749, 0.154, 0.095)\n  AXTextField \"iPod\"  (0.754, 0.749, 0.154, 0.072)\n  AXTextField \"SBDockBG 2\"  (0.040, 0.786, 0.920, 0.059)\n  AXTextField \"Phone\"  (0.092, 0.819, 0.154, 0.072)\n  AXTextField \"Mail\"  (0.313, 0.819, 0.154, 0.072)\n  AXTextField \"Safari\"  (0.533, 0.819, 0.154, 0.072)\n  AXTextField \"iPod\"  (0.754, 0.819, 0.154, 0.072)\n  AXStaticText \"Phone\"  (0.121, 0.822, 0.096, 0.018)\n  AXStaticText \"Mail\"  (0.358, 0.822, 0.063, 0.018)\n  AXStaticText \"Safari\"  (0.567, 0.822, 0.087, 0.018)\n  AXStaticText \"iPod\"  (0.796, 0.822, 0.069, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.39,
+            "y": 0.62
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:39 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXStaticText \"Settings\"  (0.392, 0.127, 0.216, 0.030)\n  AXStaticText \"Settings\"  (0.392, 0.128, 0.216, 0.030)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXTextField \"Settings-Airplane Mode\"  (0.100, 0.205, 0.075, 0.034)\n  AXStaticText \"Airplane Mode\"  (0.194, 0.210, 0.310, 0.025)\n  AXStaticText \"ON\"  (0.543, 0.210, 0.069, 0.025)\n  AXStaticText \"OFF\"  (0.782, 0.210, 0.089, 0.025)\n  AXButton \"Wi-Fi, Not Connected\"  (0.070, 0.251, 0.861, 0.057)\n  AXTextField \"Settings-Wifi\"  (0.100, 0.262, 0.075, 0.034)\n  AXStaticText \"Wi-Fi\"  (0.194, 0.267, 0.110, 0.025)\n  AXStaticText \"Not Connected\"  (0.556, 0.267, 0.299, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.272, 0.025, 0.015)\n  AXButton \"Notifications, On\"  (0.070, 0.308, 0.861, 0.057)\n  AXTextField \"Settings-Notifications\"  (0.100, 0.319, 0.075, 0.034)\n  AXStaticText \"Notifications\"  (0.194, 0.324, 0.272, 0.025)\n  AXStaticText \"On\"  (0.795, 0.324, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.329, 0.025, 0.015)\n  AXButton \"Location Services, On\"  (0.070, 0.365, 0.861, 0.057)\n  AXTextField \"Settings-Location\"  (0.100, 0.376, 0.075, 0.034)\n  AXStaticText \"Location Services\"  (0.194, 0.381, 0.382, 0.025)\n  AXStaticText \"On\"  (0.795, 0.382, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.386, 0.025, 0.015)\n  AXButton \"Carrier\"  (0.070, 0.422, 0.861, 0.057)\n  AXTextField \"Settings-Carrier\"  (0.100, 0.434, 0.075, 0.034)\n  AXStaticText \"Carrier\"  (0.194, 0.438, 0.148, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.444, 0.025, 0.015)\n  AXButton \"Sounds\"  (0.070, 0.508, 0.861, 0.057)\n  AXTextField \"Settings-Sound\"  (0.100, 0.519, 0.075, 0.034)\n  AXStaticText \"Sounds\"  (0.194, 0.524, 0.162, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.529, 0.025, 0.015)\n  AXButton \"Brightness\"  (0.070, 0.565, 0.861, 0.057)\n  AXTextField \"Settings-Brightness\"  (0.100, 0.577, 0.075, 0.034)\n  AXStaticText \"Brightness\"  (0.194, 0.581, 0.231, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.587, 0.025, 0.015)\n  AXButton \"Wallpaper\"  (0.070, 0.622, 0.861, 0.057)\n  AXTextField \"Settings-Wallpaper\"  (0.100, 0.634, 0.075, 0.034)\n  AXStaticText \"Wallpaper\"  (0.194, 0.639, 0.213, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.644, 0.025, 0.015)\n  AXButton \"General\"  (0.070, 0.708, 0.861, 0.057)\n  AXTextField \"Settings-General\"  (0.100, 0.720, 0.075, 0.034)\n  AXStaticText \"General\"  (0.194, 0.724, 0.167, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.730, 0.025, 0.015)\n  AXButton \"Mail, Contacts, Calendars\"  (0.070, 0.765, 0.861, 0.057)\n  AXTextField \"Settings-MCC\"  (0.100, 0.777, 0.075, 0.034)\n  AXStaticText \"Mail, Contacts, Calendars\"  (0.194, 0.782, 0.551, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.787, 0.025, 0.015)\n  AXButton \"Phone\"  (0.070, 0.823, 0.861, 0.057)\n  AXTextField \"Settings-Phone\"  (0.100, 0.834, 0.075, 0.034)\n  AXStaticText \"Phone\"  (0.194, 0.839, 0.137, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.844, 0.025, 0.015)\n  AXButton \"Safari\"  (0.070, 0.880, 0.861, 0.057)\n  AXTextField \"Settings-Safari\"  (0.100, 0.891, 0.075, 0.034)\n  AXStaticText \"Safari\"  (0.194, 0.896, 0.124, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.901, 0.025, 0.015)\n  AXButton \"Messages\"  (0.070, 0.937, 0.861, 0.057)\n  AXTextField \"Settings-Messages\"  (0.100, 0.949, 0.075, 0.034)\n  AXStaticText \"Messages\"  (0.194, 0.953, 0.217, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.958, 0.025, 0.015)\n  AXButton \"iPod\"  (0.070, 0.994, 0.861, 0.006)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.5,
+            "y": 0.737
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:39 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXButton \"Settings\"  (0.040, 0.122, 0.206, 0.040)\n  AXTextField \"Button2\"  (0.055, 0.122, 0.192, 0.040)\n  AXStaticText \"General\"  (0.398, 0.127, 0.204, 0.030)\n  AXStaticText \"General\"  (0.398, 0.128, 0.204, 0.030)\n  AXStaticText \"Settings\"  (0.093, 0.132, 0.128, 0.018)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXButton \"About\"  (0.070, 0.193, 0.861, 0.057)\n  AXStaticText \"About\"  (0.100, 0.210, 0.129, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.215, 0.025, 0.015)\n  AXButton \"Usage\"  (0.070, 0.251, 0.861, 0.057)\n  AXStaticText \"Usage\"  (0.100, 0.267, 0.136, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.272, 0.025, 0.015)\n  AXButton \"Network\"  (0.070, 0.336, 0.861, 0.057)\n  AXStaticText \"Network\"  (0.100, 0.353, 0.182, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.358, 0.025, 0.015)\n  AXButton \"Bluetooth\"  (0.070, 0.394, 0.861, 0.057)\n  AXStaticText \"Bluetooth\"  (0.100, 0.410, 0.208, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.415, 0.025, 0.015)\n  AXStaticText \"Spotlight Search\"  (0.100, 0.496, 0.355, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.501, 0.025, 0.015)\n  AXButton \"Auto-Lock\"  (0.070, 0.565, 0.861, 0.057)\n  AXStaticText \"Auto-Lock\"  (0.100, 0.581, 0.224, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.587, 0.025, 0.015)\n  AXButton \"Date & Time\"  (0.070, 0.651, 0.861, 0.057)\n  AXStaticText \"Date & Time\"  (0.100, 0.667, 0.261, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.672, 0.025, 0.015)\n  AXButton \"Keyboard\"  (0.070, 0.708, 0.861, 0.057)\n  AXStaticText \"Keyboard\"  (0.100, 0.724, 0.206, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.730, 0.025, 0.015)\n  AXButton \"International\"  (0.070, 0.765, 0.861, 0.057)\n  AXStaticText \"International\"  (0.100, 0.782, 0.270, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.787, 0.025, 0.015)\n  AXButton \"Accessibility\"  (0.070, 0.823, 0.861, 0.057)\n  AXStaticText \"Accessibility\"  (0.100, 0.839, 0.269, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.844, 0.025, 0.015)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.5,
+            "y": 0.221
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:39 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXButton \"General\"  (0.040, 0.122, 0.206, 0.040)\n  AXTextField \"Button2\"  (0.055, 0.122, 0.192, 0.040)\n  AXStaticText \"About\"  (0.422, 0.127, 0.157, 0.030)\n  AXStaticText \"About\"  (0.422, 0.128, 0.157, 0.030)\n  AXStaticText \"General\"  (0.096, 0.132, 0.121, 0.018)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXStaticText \"iPhone 16 Pro\"  (0.100, 0.193, 0.280, 0.023)\n  AXStaticText \"Network\"  (0.100, 0.245, 0.182, 0.025)\n  AXStaticText \"Not Available\"  (0.639, 0.245, 0.261, 0.024)\n  AXStaticText \"Songs\"  (0.100, 0.302, 0.135, 0.025)\n  AXStaticText \"0\"  (0.875, 0.302, 0.026, 0.024)\n  AXStaticText \"Videos\"  (0.100, 0.359, 0.143, 0.025)\n  AXStaticText \"0\"  (0.875, 0.360, 0.026, 0.024)\n  AXStaticText \"Photos\"  (0.100, 0.416, 0.152, 0.025)\n  AXStaticText \"0\"  (0.875, 0.417, 0.026, 0.024)\n  AXStaticText \"Applications\"  (0.100, 0.474, 0.265, 0.025)\n  AXStaticText \"19\"  (0.850, 0.474, 0.051, 0.024)\n  AXStaticText \"Capacity\"  (0.100, 0.531, 0.188, 0.025)\n  AXStaticText \"994,66 GB\"  (0.686, 0.531, 0.215, 0.024)\n  AXStaticText \"Available\"  (0.100, 0.588, 0.192, 0.025)\n  AXStaticText \"165,34 GB\"  (0.686, 0.588, 0.215, 0.024)\n  AXStaticText \"Version\"  (0.100, 0.645, 0.158, 0.025)\n  AXStaticText \"4.3 (8F190)\"  (0.668, 0.646, 0.232, 0.024)\n  AXStaticText \"Carrier\"  (0.100, 0.702, 0.148, 0.025)\n  AXStaticText \"Carrier 10.0\"  (0.663, 0.703, 0.237, 0.024)\n  AXStaticText \"Model\"  (0.100, 0.760, 0.133, 0.025)\n  AXStaticText \"iPhone\"  (0.760, 0.760, 0.140, 0.024)\n  AXStaticText \"Serial Number\"  (0.100, 0.817, 0.304, 0.025)\n  AXStaticText \"N7KQFJQOJFB\"  (0.579, 0.817, 0.322, 0.024)\n  AXStaticText \"Wi-Fi Address\"  (0.100, 0.874, 0.299, 0.025)\n  AXStaticText \"46:WJ:94:49:A4:KB\"  (0.509, 0.874, 0.391, 0.024)\n  AXStaticText \"Bluetooth\"  (0.100, 0.931, 0.208, 0.025)\n  AXStaticText \"8Q:CG:46:I0:2R:GN\"  (0.499, 0.932, 0.401, 0.024)\n  AXStaticText \"IMEI\"  (0.100, 0.989, 0.096, 0.011)\n  AXStaticText \"31 028655 393837 5\"  (0.489, 0.989, 0.411, 0.011)"
+        }
+      }
+    ],
+    "finalAnswer": "The About screen is open, showing Network, Songs, Videos and Photos counts."
+  },
+  {
+    "meta": {
+      "id": "real-oldos-5",
+      "app": "zzanehip__The-OldOS-Project",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "com.zrc.BudgetingBuddy",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "swipe",
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Unlock OldOS, open Settings, go to General, open About, then use the back button to return to General.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXTextField \"Lock\"  (0.488, 0.086, 0.025, 0.016)\n  AXStaticText \"1:38\"  (0.354, 0.117, 0.291, 0.081)\n  AXStaticText \"1:38\"  (0.354, 0.119, 0.291, 0.081)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.199, 0.347, 0.024)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.201, 0.347, 0.024)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.389, 0.657, 0.148)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.537, 0.657, 0.148)\n  AXStaticText \"\u2b95\"  (0.153, 0.756, 0.097, 0.052)\n  AXStaticText \"\u2b95\"  (0.155, 0.758, 0.097, 0.052)\n  AXStaticText \"slide to unlock\"  (0.391, 0.766, 0.404, 0.034)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "fromX": 0.18,
+            "fromY": 0.782,
+            "toX": 0.85,
+            "toY": 0.782
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXButton \"Messages\"  (0.092, 0.142, 0.154, 0.095)\n  AXTextField \"Messages\"  (0.092, 0.142, 0.154, 0.072)\n  AXButton \"Tuesday, 23, Calendar\"  (0.281, 0.142, 0.218, 0.095)\n  AXTextField \"Calendar\"  (0.313, 0.142, 0.154, 0.072)\n  AXButton \"Photos\"  (0.533, 0.142, 0.154, 0.095)\n  AXTextField \"Photos\"  (0.533, 0.142, 0.154, 0.072)\n  AXButton \"Camera\"  (0.754, 0.142, 0.154, 0.095)\n  AXTextField \"Camera\"  (0.754, 0.142, 0.154, 0.072)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.878, 0.142, 0.075, 0.598)\n  AXStaticText \"Tuesday\"  (0.342, 0.144, 0.096, 0.014)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.149, 0.206, 0.095)\n  AXStaticText \"23\"  (0.341, 0.160, 0.097, 0.048)\n  AXStaticText \"Messages\"  (0.093, 0.214, 0.153, 0.018)\n  AXStaticText \"Calendar\"  (0.322, 0.214, 0.135, 0.018)\n  AXStaticText \"Photos\"  (0.557, 0.214, 0.106, 0.018)\n  AXStaticText \"Camera\"  (0.772, 0.214, 0.117, 0.018)\n  AXButton \"YouTube\"  (0.092, 0.284, 0.154, 0.095)\n  AXTextField \"YouTube\"  (0.092, 0.284, 0.154, 0.072)\n  AXButton \"Stocks\"  (0.313, 0.284, 0.154, 0.095)\n  AXTextField \"Stocks\"  (0.313, 0.284, 0.154, 0.072)\n  AXButton \"Maps\"  (0.533, 0.284, 0.154, 0.095)\n  AXTextField \"Maps\"  (0.533, 0.284, 0.154, 0.072)\n  AXButton \"Weather\"  (0.754, 0.284, 0.154, 0.095)\n  AXTextField \"Weather Fahrenheit\"  (0.754, 0.284, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.291, 0.206, 0.095)\n  AXStaticText \"YouTube\"  (0.105, 0.357, 0.129, 0.018)\n  AXStaticText \"Stocks\"  (0.338, 0.357, 0.104, 0.018)\n  AXStaticText \"Maps\"  (0.568, 0.357, 0.084, 0.018)\n  AXStaticText \"Weather\"  (0.768, 0.357, 0.125, 0.018)\n  AXButton \"Utilities\"  (0.313, 0.427, 0.154, 0.097)\n  AXTextField \"Folder\"  (0.313, 0.427, 0.154, 0.074)\n  AXButton \"Notes\"  (0.092, 0.428, 0.154, 0.095)\n  AXTextField \"Notes\"  (0.092, 0.428, 0.154, 0.072)\n  AXButton \"iTunes\"  (0.533, 0.428, 0.154, 0.095)\n  AXTextField \"iTunes\"  (0.533, 0.428, 0.154, 0.072)\n  AXButton \"App Store\"  (0.754, 0.428, 0.154, 0.095)\n  AXTextField \"App Store\"  (0.754, 0.428, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.284, 0.434, 0.212, 0.097)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.435, 0.206, 0.095)\n  AXTextField \"Clock-Small\"  (0.333, 0.436, 0.033, 0.016)\n  AXTextField \"Calculator-Small\"  (0.373, 0.436, 0.033, 0.016)\n  AXTextField \"Compass-Small\"  (0.414, 0.436, 0.034, 0.016)\n  AXTextField \"Voice Memos-Small\"  (0.333, 0.454, 0.033, 0.016)\n  AXStaticText \"Notes\"  (0.125, 0.500, 0.089, 0.018)\n  AXStaticText \"iTunes\"  (0.562, 0.500, 0.096, 0.018)\n  AXStaticText \"App Store\"  (0.756, 0.500, 0.150, 0.018)\n  AXStaticText \"Utilities\"  (0.334, 0.502, 0.111, 0.018)\n  AXButton \"Game Center\"  (0.070, 0.572, 0.198, 0.095)\n  AXTextField \"Game Center\"  (0.092, 0.572, 0.154, 0.072)\n  AXButton \"Settings\"  (0.313, 0.572, 0.154, 0.095)\n  AXTextField \"Settings\"  (0.313, 0.572, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.579, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.579, 0.206, 0.095)\n  AXStaticText \"Game Center\"  (0.070, 0.644, 0.198, 0.018)\n  AXStaticText \"Settings\"  (0.328, 0.644, 0.124, 0.018)\n  AXButton  (0.047, 0.711, 0.383, 0.009)\n  AXButton \"Search\"  (0.450, 0.711, 0.020, 0.009)\n  AXButton  (0.490, 0.711, 0.020, 0.009)\n  AXButton  (0.530, 0.711, 0.020, 0.009)\n  AXButton  (0.570, 0.711, 0.383, 0.009)\n  AXButton \"Phone\"  (0.092, 0.749, 0.154, 0.095)\n  AXTextField \"Phone\"  (0.092, 0.749, 0.154, 0.072)\n  AXButton \"Mail\"  (0.313, 0.749, 0.154, 0.095)\n  AXTextField \"Mail\"  (0.313, 0.749, 0.154, 0.072)\n  AXButton \"Safari\"  (0.533, 0.749, 0.154, 0.095)\n  AXTextField \"Safari\"  (0.533, 0.749, 0.154, 0.072)\n  AXButton \"iPod\"  (0.754, 0.749, 0.154, 0.095)\n  AXTextField \"iPod\"  (0.754, 0.749, 0.154, 0.072)\n  AXTextField \"SBDockBG 2\"  (0.040, 0.786, 0.920, 0.059)\n  AXTextField \"Phone\"  (0.092, 0.819, 0.154, 0.072)\n  AXTextField \"Mail\"  (0.313, 0.819, 0.154, 0.072)\n  AXTextField \"Safari\"  (0.533, 0.819, 0.154, 0.072)\n  AXTextField \"iPod\"  (0.754, 0.819, 0.154, 0.072)\n  AXStaticText \"Phone\"  (0.121, 0.822, 0.096, 0.018)\n  AXStaticText \"Mail\"  (0.358, 0.822, 0.063, 0.018)\n  AXStaticText \"Safari\"  (0.567, 0.822, 0.087, 0.018)\n  AXStaticText \"iPod\"  (0.796, 0.822, 0.069, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.39,
+            "y": 0.62
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXStaticText \"Settings\"  (0.392, 0.127, 0.216, 0.030)\n  AXStaticText \"Settings\"  (0.392, 0.128, 0.216, 0.030)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXTextField \"Settings-Airplane Mode\"  (0.100, 0.205, 0.075, 0.034)\n  AXStaticText \"Airplane Mode\"  (0.194, 0.210, 0.310, 0.025)\n  AXStaticText \"ON\"  (0.543, 0.210, 0.069, 0.025)\n  AXStaticText \"OFF\"  (0.782, 0.210, 0.089, 0.025)\n  AXButton \"Wi-Fi, Not Connected\"  (0.070, 0.251, 0.861, 0.057)\n  AXTextField \"Settings-Wifi\"  (0.100, 0.262, 0.075, 0.034)\n  AXStaticText \"Wi-Fi\"  (0.194, 0.267, 0.110, 0.025)\n  AXStaticText \"Not Connected\"  (0.556, 0.267, 0.299, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.272, 0.025, 0.015)\n  AXButton \"Notifications, On\"  (0.070, 0.308, 0.861, 0.057)\n  AXTextField \"Settings-Notifications\"  (0.100, 0.319, 0.075, 0.034)\n  AXStaticText \"Notifications\"  (0.194, 0.324, 0.272, 0.025)\n  AXStaticText \"On\"  (0.795, 0.324, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.329, 0.025, 0.015)\n  AXButton \"Location Services, On\"  (0.070, 0.365, 0.861, 0.057)\n  AXTextField \"Settings-Location\"  (0.100, 0.376, 0.075, 0.034)\n  AXStaticText \"Location Services\"  (0.194, 0.381, 0.382, 0.025)\n  AXStaticText \"On\"  (0.795, 0.382, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.386, 0.025, 0.015)\n  AXButton \"Carrier\"  (0.070, 0.422, 0.861, 0.057)\n  AXTextField \"Settings-Carrier\"  (0.100, 0.434, 0.075, 0.034)\n  AXStaticText \"Carrier\"  (0.194, 0.438, 0.148, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.444, 0.025, 0.015)\n  AXButton \"Sounds\"  (0.070, 0.508, 0.861, 0.057)\n  AXTextField \"Settings-Sound\"  (0.100, 0.519, 0.075, 0.034)\n  AXStaticText \"Sounds\"  (0.194, 0.524, 0.162, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.529, 0.025, 0.015)\n  AXButton \"Brightness\"  (0.070, 0.565, 0.861, 0.057)\n  AXTextField \"Settings-Brightness\"  (0.100, 0.577, 0.075, 0.034)\n  AXStaticText \"Brightness\"  (0.194, 0.581, 0.231, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.587, 0.025, 0.015)\n  AXButton \"Wallpaper\"  (0.070, 0.622, 0.861, 0.057)\n  AXTextField \"Settings-Wallpaper\"  (0.100, 0.634, 0.075, 0.034)\n  AXStaticText \"Wallpaper\"  (0.194, 0.639, 0.213, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.644, 0.025, 0.015)\n  AXButton \"General\"  (0.070, 0.708, 0.861, 0.057)\n  AXTextField \"Settings-General\"  (0.100, 0.720, 0.075, 0.034)\n  AXStaticText \"General\"  (0.194, 0.724, 0.167, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.730, 0.025, 0.015)\n  AXButton \"Mail, Contacts, Calendars\"  (0.070, 0.765, 0.861, 0.057)\n  AXTextField \"Settings-MCC\"  (0.100, 0.777, 0.075, 0.034)\n  AXStaticText \"Mail, Contacts, Calendars\"  (0.194, 0.782, 0.551, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.787, 0.025, 0.015)\n  AXButton \"Phone\"  (0.070, 0.823, 0.861, 0.057)\n  AXTextField \"Settings-Phone\"  (0.100, 0.834, 0.075, 0.034)\n  AXStaticText \"Phone\"  (0.194, 0.839, 0.137, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.844, 0.025, 0.015)\n  AXButton \"Safari\"  (0.070, 0.880, 0.861, 0.057)\n  AXTextField \"Settings-Safari\"  (0.100, 0.891, 0.075, 0.034)\n  AXStaticText \"Safari\"  (0.194, 0.896, 0.124, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.901, 0.025, 0.015)\n  AXButton \"Messages\"  (0.070, 0.937, 0.861, 0.057)\n  AXTextField \"Settings-Messages\"  (0.100, 0.949, 0.075, 0.034)\n  AXStaticText \"Messages\"  (0.194, 0.953, 0.217, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.958, 0.025, 0.015)\n  AXButton \"iPod\"  (0.070, 0.994, 0.861, 0.006)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.5,
+            "y": 0.737
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXButton \"Settings\"  (0.040, 0.122, 0.206, 0.040)\n  AXTextField \"Button2\"  (0.055, 0.122, 0.192, 0.040)\n  AXStaticText \"General\"  (0.398, 0.127, 0.204, 0.030)\n  AXStaticText \"General\"  (0.398, 0.128, 0.204, 0.030)\n  AXStaticText \"Settings\"  (0.093, 0.132, 0.128, 0.018)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXButton \"About\"  (0.070, 0.193, 0.861, 0.057)\n  AXStaticText \"About\"  (0.100, 0.210, 0.129, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.215, 0.025, 0.015)\n  AXButton \"Usage\"  (0.070, 0.251, 0.861, 0.057)\n  AXStaticText \"Usage\"  (0.100, 0.267, 0.136, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.272, 0.025, 0.015)\n  AXButton \"Network\"  (0.070, 0.336, 0.861, 0.057)\n  AXStaticText \"Network\"  (0.100, 0.353, 0.182, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.358, 0.025, 0.015)\n  AXButton \"Bluetooth\"  (0.070, 0.394, 0.861, 0.057)\n  AXStaticText \"Bluetooth\"  (0.100, 0.410, 0.208, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.415, 0.025, 0.015)\n  AXStaticText \"Spotlight Search\"  (0.100, 0.496, 0.355, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.501, 0.025, 0.015)\n  AXButton \"Auto-Lock\"  (0.070, 0.565, 0.861, 0.057)\n  AXStaticText \"Auto-Lock\"  (0.100, 0.581, 0.224, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.587, 0.025, 0.015)\n  AXButton \"Date & Time\"  (0.070, 0.651, 0.861, 0.057)\n  AXStaticText \"Date & Time\"  (0.100, 0.667, 0.261, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.672, 0.025, 0.015)\n  AXButton \"Keyboard\"  (0.070, 0.708, 0.861, 0.057)\n  AXStaticText \"Keyboard\"  (0.100, 0.724, 0.206, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.730, 0.025, 0.015)\n  AXButton \"International\"  (0.070, 0.765, 0.861, 0.057)\n  AXStaticText \"International\"  (0.100, 0.782, 0.270, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.787, 0.025, 0.015)\n  AXButton \"Accessibility\"  (0.070, 0.823, 0.861, 0.057)\n  AXStaticText \"Accessibility\"  (0.100, 0.839, 0.269, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.844, 0.025, 0.015)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.5,
+            "y": 0.221
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXButton \"General\"  (0.040, 0.122, 0.206, 0.040)\n  AXTextField \"Button2\"  (0.055, 0.122, 0.192, 0.040)\n  AXStaticText \"About\"  (0.422, 0.127, 0.157, 0.030)\n  AXStaticText \"About\"  (0.422, 0.128, 0.157, 0.030)\n  AXStaticText \"General\"  (0.096, 0.132, 0.121, 0.018)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXStaticText \"iPhone 16 Pro\"  (0.100, 0.193, 0.280, 0.023)\n  AXStaticText \"Network\"  (0.100, 0.245, 0.182, 0.025)\n  AXStaticText \"Not Available\"  (0.639, 0.245, 0.261, 0.024)\n  AXStaticText \"Songs\"  (0.100, 0.302, 0.135, 0.025)\n  AXStaticText \"0\"  (0.875, 0.302, 0.026, 0.024)\n  AXStaticText \"Videos\"  (0.100, 0.359, 0.143, 0.025)\n  AXStaticText \"0\"  (0.875, 0.360, 0.026, 0.024)\n  AXStaticText \"Photos\"  (0.100, 0.416, 0.152, 0.025)\n  AXStaticText \"0\"  (0.875, 0.417, 0.026, 0.024)\n  AXStaticText \"Applications\"  (0.100, 0.474, 0.265, 0.025)\n  AXStaticText \"19\"  (0.850, 0.474, 0.051, 0.024)\n  AXStaticText \"Capacity\"  (0.100, 0.531, 0.188, 0.025)\n  AXStaticText \"994,66 GB\"  (0.686, 0.531, 0.215, 0.024)\n  AXStaticText \"Available\"  (0.100, 0.588, 0.192, 0.025)\n  AXStaticText \"166,02 GB\"  (0.686, 0.588, 0.215, 0.024)\n  AXStaticText \"Version\"  (0.100, 0.645, 0.158, 0.025)\n  AXStaticText \"4.3 (8F190)\"  (0.668, 0.646, 0.232, 0.024)\n  AXStaticText \"Carrier\"  (0.100, 0.702, 0.148, 0.025)\n  AXStaticText \"Carrier 10.0\"  (0.663, 0.703, 0.237, 0.024)\n  AXStaticText \"Model\"  (0.100, 0.760, 0.133, 0.025)\n  AXStaticText \"iPhone\"  (0.760, 0.760, 0.140, 0.024)\n  AXStaticText \"Serial Number\"  (0.100, 0.817, 0.304, 0.025)\n  AXStaticText \"W8LV12JM8UF\"  (0.587, 0.817, 0.313, 0.024)\n  AXStaticText \"Wi-Fi Address\"  (0.100, 0.874, 0.299, 0.025)\n  AXStaticText \"3J:QT:B8:3H:5J:IH\"  (0.529, 0.874, 0.371, 0.024)\n  AXStaticText \"Bluetooth\"  (0.100, 0.931, 0.208, 0.025)\n  AXStaticText \"0K:XT:TE:H3:P5:NX\"  (0.499, 0.932, 0.401, 0.024)\n  AXStaticText \"IMEI\"  (0.100, 0.989, 0.096, 0.011)\n  AXStaticText \"95 039705 493421 8\"  (0.489, 0.989, 0.411, 0.011)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.143,
+            "y": 0.142
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXButton \"Settings\"  (0.040, 0.122, 0.206, 0.040)\n  AXTextField \"Button2\"  (0.055, 0.122, 0.192, 0.040)\n  AXStaticText \"General\"  (0.398, 0.127, 0.204, 0.030)\n  AXStaticText \"General\"  (0.398, 0.128, 0.204, 0.030)\n  AXStaticText \"Settings\"  (0.093, 0.132, 0.128, 0.018)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXButton \"About\"  (0.070, 0.193, 0.861, 0.057)\n  AXStaticText \"About\"  (0.100, 0.210, 0.129, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.215, 0.025, 0.015)\n  AXButton \"Usage\"  (0.070, 0.251, 0.861, 0.057)\n  AXStaticText \"Usage\"  (0.100, 0.267, 0.136, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.272, 0.025, 0.015)\n  AXButton \"Network\"  (0.070, 0.336, 0.861, 0.057)\n  AXStaticText \"Network\"  (0.100, 0.353, 0.182, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.358, 0.025, 0.015)\n  AXButton \"Bluetooth\"  (0.070, 0.394, 0.861, 0.057)\n  AXStaticText \"Bluetooth\"  (0.100, 0.410, 0.208, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.415, 0.025, 0.015)\n  AXStaticText \"Spotlight Search\"  (0.100, 0.496, 0.355, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.501, 0.025, 0.015)\n  AXButton \"Auto-Lock\"  (0.070, 0.565, 0.861, 0.057)\n  AXStaticText \"Auto-Lock\"  (0.100, 0.581, 0.224, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.587, 0.025, 0.015)\n  AXButton \"Date & Time\"  (0.070, 0.651, 0.861, 0.057)\n  AXStaticText \"Date & Time\"  (0.100, 0.667, 0.261, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.672, 0.025, 0.015)\n  AXButton \"Keyboard\"  (0.070, 0.708, 0.861, 0.057)\n  AXStaticText \"Keyboard\"  (0.100, 0.724, 0.206, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.730, 0.025, 0.015)\n  AXButton \"International\"  (0.070, 0.765, 0.861, 0.057)\n  AXStaticText \"International\"  (0.100, 0.782, 0.270, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.787, 0.025, 0.015)\n  AXButton \"Accessibility\"  (0.070, 0.823, 0.861, 0.057)\n  AXStaticText \"Accessibility\"  (0.100, 0.839, 0.269, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.844, 0.025, 0.015)"
+        }
+      }
+    ],
+    "finalAnswer": "Navigated into About and back out to the General settings list."
+  },
+  {
+    "meta": {
+      "id": "real-oldos-6",
+      "app": "zzanehip__The-OldOS-Project",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.zrc.BudgetingBuddy",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "swipe",
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Unlock OldOS, open the Settings app, then press the home button to return to the home screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXTextField \"Lock\"  (0.488, 0.086, 0.025, 0.016)\n  AXStaticText \"1:38\"  (0.354, 0.117, 0.291, 0.081)\n  AXStaticText \"1:38\"  (0.354, 0.119, 0.291, 0.081)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.199, 0.347, 0.024)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.201, 0.347, 0.024)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.389, 0.657, 0.148)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.537, 0.657, 0.148)\n  AXStaticText \"\u2b95\"  (0.153, 0.756, 0.097, 0.052)\n  AXStaticText \"\u2b95\"  (0.155, 0.758, 0.097, 0.052)\n  AXStaticText \"slide to unlock\"  (0.391, 0.766, 0.404, 0.034)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "fromX": 0.18,
+            "fromY": 0.782,
+            "toX": 0.85,
+            "toY": 0.782
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXButton \"Messages\"  (0.092, 0.142, 0.154, 0.095)\n  AXTextField \"Messages\"  (0.092, 0.142, 0.154, 0.072)\n  AXButton \"Tuesday, 23, Calendar\"  (0.281, 0.142, 0.218, 0.095)\n  AXTextField \"Calendar\"  (0.313, 0.142, 0.154, 0.072)\n  AXButton \"Photos\"  (0.533, 0.142, 0.154, 0.095)\n  AXTextField \"Photos\"  (0.533, 0.142, 0.154, 0.072)\n  AXButton \"Camera\"  (0.754, 0.142, 0.154, 0.095)\n  AXTextField \"Camera\"  (0.754, 0.142, 0.154, 0.072)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.878, 0.142, 0.075, 0.598)\n  AXStaticText \"Tuesday\"  (0.342, 0.144, 0.096, 0.014)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.149, 0.206, 0.095)\n  AXStaticText \"23\"  (0.341, 0.160, 0.097, 0.048)\n  AXStaticText \"Messages\"  (0.093, 0.214, 0.153, 0.018)\n  AXStaticText \"Calendar\"  (0.322, 0.214, 0.135, 0.018)\n  AXStaticText \"Photos\"  (0.557, 0.214, 0.106, 0.018)\n  AXStaticText \"Camera\"  (0.772, 0.214, 0.117, 0.018)\n  AXButton \"YouTube\"  (0.092, 0.284, 0.154, 0.095)\n  AXTextField \"YouTube\"  (0.092, 0.284, 0.154, 0.072)\n  AXButton \"Stocks\"  (0.313, 0.284, 0.154, 0.095)\n  AXTextField \"Stocks\"  (0.313, 0.284, 0.154, 0.072)\n  AXButton \"Maps\"  (0.533, 0.284, 0.154, 0.095)\n  AXTextField \"Maps\"  (0.533, 0.284, 0.154, 0.072)\n  AXButton \"Weather\"  (0.754, 0.284, 0.154, 0.095)\n  AXTextField \"Weather Fahrenheit\"  (0.754, 0.284, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.291, 0.206, 0.095)\n  AXStaticText \"YouTube\"  (0.105, 0.357, 0.129, 0.018)\n  AXStaticText \"Stocks\"  (0.338, 0.357, 0.104, 0.018)\n  AXStaticText \"Maps\"  (0.568, 0.357, 0.084, 0.018)\n  AXStaticText \"Weather\"  (0.768, 0.357, 0.125, 0.018)\n  AXButton \"Utilities\"  (0.313, 0.427, 0.154, 0.097)\n  AXTextField \"Folder\"  (0.313, 0.427, 0.154, 0.074)\n  AXButton \"Notes\"  (0.092, 0.428, 0.154, 0.095)\n  AXTextField \"Notes\"  (0.092, 0.428, 0.154, 0.072)\n  AXButton \"iTunes\"  (0.533, 0.428, 0.154, 0.095)\n  AXTextField \"iTunes\"  (0.533, 0.428, 0.154, 0.072)\n  AXButton \"App Store\"  (0.754, 0.428, 0.154, 0.095)\n  AXTextField \"App Store\"  (0.754, 0.428, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.284, 0.434, 0.212, 0.097)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.435, 0.206, 0.095)\n  AXTextField \"Clock-Small\"  (0.333, 0.436, 0.033, 0.016)\n  AXTextField \"Calculator-Small\"  (0.373, 0.436, 0.033, 0.016)\n  AXTextField \"Compass-Small\"  (0.414, 0.436, 0.034, 0.016)\n  AXTextField \"Voice Memos-Small\"  (0.333, 0.454, 0.033, 0.016)\n  AXStaticText \"Notes\"  (0.125, 0.500, 0.089, 0.018)\n  AXStaticText \"iTunes\"  (0.562, 0.500, 0.096, 0.018)\n  AXStaticText \"App Store\"  (0.756, 0.500, 0.150, 0.018)\n  AXStaticText \"Utilities\"  (0.334, 0.502, 0.111, 0.018)\n  AXButton \"Game Center\"  (0.070, 0.572, 0.198, 0.095)\n  AXTextField \"Game Center\"  (0.092, 0.572, 0.154, 0.072)\n  AXButton \"Settings\"  (0.313, 0.572, 0.154, 0.095)\n  AXTextField \"Settings\"  (0.313, 0.572, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.579, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.579, 0.206, 0.095)\n  AXStaticText \"Game Center\"  (0.070, 0.644, 0.198, 0.018)\n  AXStaticText \"Settings\"  (0.328, 0.644, 0.124, 0.018)\n  AXButton  (0.047, 0.711, 0.383, 0.009)\n  AXButton \"Search\"  (0.450, 0.711, 0.020, 0.009)\n  AXButton  (0.490, 0.711, 0.020, 0.009)\n  AXButton  (0.530, 0.711, 0.020, 0.009)\n  AXButton  (0.570, 0.711, 0.383, 0.009)\n  AXButton \"Phone\"  (0.092, 0.749, 0.154, 0.095)\n  AXTextField \"Phone\"  (0.092, 0.749, 0.154, 0.072)\n  AXButton \"Mail\"  (0.313, 0.749, 0.154, 0.095)\n  AXTextField \"Mail\"  (0.313, 0.749, 0.154, 0.072)\n  AXButton \"Safari\"  (0.533, 0.749, 0.154, 0.095)\n  AXTextField \"Safari\"  (0.533, 0.749, 0.154, 0.072)\n  AXButton \"iPod\"  (0.754, 0.749, 0.154, 0.095)\n  AXTextField \"iPod\"  (0.754, 0.749, 0.154, 0.072)\n  AXTextField \"SBDockBG 2\"  (0.040, 0.786, 0.920, 0.059)\n  AXTextField \"Phone\"  (0.092, 0.819, 0.154, 0.072)\n  AXTextField \"Mail\"  (0.313, 0.819, 0.154, 0.072)\n  AXTextField \"Safari\"  (0.533, 0.819, 0.154, 0.072)\n  AXTextField \"iPod\"  (0.754, 0.819, 0.154, 0.072)\n  AXStaticText \"Phone\"  (0.121, 0.822, 0.096, 0.018)\n  AXStaticText \"Mail\"  (0.358, 0.822, 0.063, 0.018)\n  AXStaticText \"Safari\"  (0.567, 0.822, 0.087, 0.018)\n  AXStaticText \"iPod\"  (0.796, 0.822, 0.069, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.39,
+            "y": 0.62
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.130, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.204, 0.086, 0.048, 0.016)\n  AXTextField \"Flash\"  (0.897, 0.088, 0.020, 0.011)\n  AXStaticText \"Settings\"  (0.392, 0.127, 0.216, 0.030)\n  AXStaticText \"Settings\"  (0.392, 0.128, 0.216, 0.030)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.878, 0.176, 0.075, 0.669)\n  AXTextField \"Settings-Airplane Mode\"  (0.100, 0.205, 0.075, 0.034)\n  AXStaticText \"Airplane Mode\"  (0.194, 0.210, 0.310, 0.025)\n  AXStaticText \"ON\"  (0.543, 0.210, 0.069, 0.025)\n  AXStaticText \"OFF\"  (0.782, 0.210, 0.089, 0.025)\n  AXButton \"Wi-Fi, Not Connected\"  (0.070, 0.251, 0.861, 0.057)\n  AXTextField \"Settings-Wifi\"  (0.100, 0.262, 0.075, 0.034)\n  AXStaticText \"Wi-Fi\"  (0.194, 0.267, 0.110, 0.025)\n  AXStaticText \"Not Connected\"  (0.556, 0.267, 0.299, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.272, 0.025, 0.015)\n  AXButton \"Notifications, On\"  (0.070, 0.308, 0.861, 0.057)\n  AXTextField \"Settings-Notifications\"  (0.100, 0.319, 0.075, 0.034)\n  AXStaticText \"Notifications\"  (0.194, 0.324, 0.272, 0.025)\n  AXStaticText \"On\"  (0.795, 0.324, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.329, 0.025, 0.015)\n  AXButton \"Location Services, On\"  (0.070, 0.365, 0.861, 0.057)\n  AXTextField \"Settings-Location\"  (0.100, 0.376, 0.075, 0.034)\n  AXStaticText \"Location Services\"  (0.194, 0.381, 0.382, 0.025)\n  AXStaticText \"On\"  (0.795, 0.382, 0.061, 0.024)\n  AXTextField \"UITableNext\"  (0.876, 0.386, 0.025, 0.015)\n  AXButton \"Carrier\"  (0.070, 0.422, 0.861, 0.057)\n  AXTextField \"Settings-Carrier\"  (0.100, 0.434, 0.075, 0.034)\n  AXStaticText \"Carrier\"  (0.194, 0.438, 0.148, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.444, 0.025, 0.015)\n  AXButton \"Sounds\"  (0.070, 0.508, 0.861, 0.057)\n  AXTextField \"Settings-Sound\"  (0.100, 0.519, 0.075, 0.034)\n  AXStaticText \"Sounds\"  (0.194, 0.524, 0.162, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.529, 0.025, 0.015)\n  AXButton \"Brightness\"  (0.070, 0.565, 0.861, 0.057)\n  AXTextField \"Settings-Brightness\"  (0.100, 0.577, 0.075, 0.034)\n  AXStaticText \"Brightness\"  (0.194, 0.581, 0.231, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.587, 0.025, 0.015)\n  AXButton \"Wallpaper\"  (0.070, 0.622, 0.861, 0.057)\n  AXTextField \"Settings-Wallpaper\"  (0.100, 0.634, 0.075, 0.034)\n  AXStaticText \"Wallpaper\"  (0.194, 0.639, 0.213, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.644, 0.025, 0.015)\n  AXButton \"General\"  (0.070, 0.708, 0.861, 0.057)\n  AXTextField \"Settings-General\"  (0.100, 0.720, 0.075, 0.034)\n  AXStaticText \"General\"  (0.194, 0.724, 0.167, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.730, 0.025, 0.015)\n  AXButton \"Mail, Contacts, Calendars\"  (0.070, 0.765, 0.861, 0.057)\n  AXTextField \"Settings-MCC\"  (0.100, 0.777, 0.075, 0.034)\n  AXStaticText \"Mail, Contacts, Calendars\"  (0.194, 0.782, 0.551, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.787, 0.025, 0.015)\n  AXButton \"Phone\"  (0.070, 0.823, 0.861, 0.057)\n  AXTextField \"Settings-Phone\"  (0.100, 0.834, 0.075, 0.034)\n  AXStaticText \"Phone\"  (0.194, 0.839, 0.137, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.844, 0.025, 0.015)\n  AXButton \"Safari\"  (0.070, 0.880, 0.861, 0.057)\n  AXTextField \"Settings-Safari\"  (0.100, 0.891, 0.075, 0.034)\n  AXStaticText \"Safari\"  (0.194, 0.896, 0.124, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.901, 0.025, 0.015)\n  AXButton \"Messages\"  (0.070, 0.937, 0.861, 0.057)\n  AXTextField \"Settings-Messages\"  (0.100, 0.949, 0.075, 0.034)\n  AXStaticText \"Messages\"  (0.194, 0.953, 0.217, 0.025)\n  AXTextField \"UITableNext\"  (0.876, 0.958, 0.025, 0.015)\n  AXButton \"iPod\"  (0.070, 0.994, 0.861, 0.006)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.5,
+            "y": 0.93
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXButton \"Messages\"  (0.092, 0.142, 0.154, 0.095)\n  AXTextField \"Messages\"  (0.092, 0.142, 0.154, 0.072)\n  AXButton \"Tuesday, 23, Calendar\"  (0.281, 0.142, 0.218, 0.095)\n  AXTextField \"Calendar\"  (0.313, 0.142, 0.154, 0.072)\n  AXButton \"Photos\"  (0.533, 0.142, 0.154, 0.095)\n  AXTextField \"Photos\"  (0.533, 0.142, 0.154, 0.072)\n  AXButton \"Camera\"  (0.754, 0.142, 0.154, 0.095)\n  AXTextField \"Camera\"  (0.754, 0.142, 0.154, 0.072)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.878, 0.142, 0.075, 0.598)\n  AXStaticText \"Tuesday\"  (0.342, 0.144, 0.096, 0.014)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.149, 0.206, 0.095)\n  AXStaticText \"23\"  (0.341, 0.160, 0.097, 0.048)\n  AXStaticText \"Messages\"  (0.093, 0.214, 0.153, 0.018)\n  AXStaticText \"Calendar\"  (0.322, 0.214, 0.135, 0.018)\n  AXStaticText \"Photos\"  (0.557, 0.214, 0.106, 0.018)\n  AXStaticText \"Camera\"  (0.772, 0.214, 0.117, 0.018)\n  AXButton \"YouTube\"  (0.092, 0.284, 0.154, 0.095)\n  AXTextField \"YouTube\"  (0.092, 0.284, 0.154, 0.072)\n  AXButton \"Stocks\"  (0.313, 0.284, 0.154, 0.095)\n  AXTextField \"Stocks\"  (0.313, 0.284, 0.154, 0.072)\n  AXButton \"Maps\"  (0.533, 0.284, 0.154, 0.095)\n  AXTextField \"Maps\"  (0.533, 0.284, 0.154, 0.072)\n  AXButton \"Weather\"  (0.754, 0.284, 0.154, 0.095)\n  AXTextField \"Weather Fahrenheit\"  (0.754, 0.284, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.291, 0.206, 0.095)\n  AXStaticText \"YouTube\"  (0.105, 0.357, 0.129, 0.018)\n  AXStaticText \"Stocks\"  (0.338, 0.357, 0.104, 0.018)\n  AXStaticText \"Maps\"  (0.568, 0.357, 0.084, 0.018)\n  AXStaticText \"Weather\"  (0.768, 0.357, 0.125, 0.018)\n  AXButton \"Utilities\"  (0.313, 0.427, 0.154, 0.097)\n  AXTextField \"Folder\"  (0.313, 0.427, 0.154, 0.074)\n  AXButton \"Notes\"  (0.092, 0.428, 0.154, 0.095)\n  AXTextField \"Notes\"  (0.092, 0.428, 0.154, 0.072)\n  AXButton \"iTunes\"  (0.533, 0.428, 0.154, 0.095)\n  AXTextField \"iTunes\"  (0.533, 0.428, 0.154, 0.072)\n  AXButton \"App Store\"  (0.754, 0.428, 0.154, 0.095)\n  AXTextField \"App Store\"  (0.754, 0.428, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.284, 0.434, 0.212, 0.097)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.435, 0.206, 0.095)\n  AXTextField \"Clock-Small\"  (0.333, 0.436, 0.033, 0.016)\n  AXTextField \"Calculator-Small\"  (0.373, 0.436, 0.033, 0.016)\n  AXTextField \"Compass-Small\"  (0.414, 0.436, 0.034, 0.016)\n  AXTextField \"Voice Memos-Small\"  (0.333, 0.454, 0.033, 0.016)\n  AXStaticText \"Notes\"  (0.125, 0.500, 0.089, 0.018)\n  AXStaticText \"iTunes\"  (0.562, 0.500, 0.096, 0.018)\n  AXStaticText \"App Store\"  (0.756, 0.500, 0.150, 0.018)\n  AXStaticText \"Utilities\"  (0.334, 0.502, 0.111, 0.018)\n  AXButton \"Game Center\"  (0.070, 0.572, 0.198, 0.095)\n  AXTextField \"Game Center\"  (0.092, 0.572, 0.154, 0.072)\n  AXButton \"Settings\"  (0.313, 0.572, 0.154, 0.095)\n  AXTextField \"Settings\"  (0.313, 0.572, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.579, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.579, 0.206, 0.095)\n  AXStaticText \"Game Center\"  (0.070, 0.644, 0.198, 0.018)\n  AXStaticText \"Settings\"  (0.328, 0.644, 0.124, 0.018)\n  AXButton  (0.047, 0.711, 0.383, 0.009)\n  AXButton \"Search\"  (0.450, 0.711, 0.020, 0.009)\n  AXButton  (0.490, 0.711, 0.020, 0.009)\n  AXButton  (0.530, 0.711, 0.020, 0.009)\n  AXButton  (0.570, 0.711, 0.383, 0.009)\n  AXButton \"Phone\"  (0.092, 0.749, 0.154, 0.095)\n  AXTextField \"Phone\"  (0.092, 0.749, 0.154, 0.072)\n  AXButton \"Mail\"  (0.313, 0.749, 0.154, 0.095)\n  AXTextField \"Mail\"  (0.313, 0.749, 0.154, 0.072)\n  AXButton \"Safari\"  (0.533, 0.749, 0.154, 0.095)\n  AXTextField \"Safari\"  (0.533, 0.749, 0.154, 0.072)\n  AXButton \"iPod\"  (0.754, 0.749, 0.154, 0.095)\n  AXTextField \"iPod\"  (0.754, 0.749, 0.154, 0.072)\n  AXTextField \"SBDockBG 2\"  (0.040, 0.786, 0.920, 0.059)\n  AXTextField \"Phone\"  (0.092, 0.819, 0.154, 0.072)\n  AXTextField \"Mail\"  (0.313, 0.819, 0.154, 0.072)\n  AXTextField \"Safari\"  (0.533, 0.819, 0.154, 0.072)\n  AXTextField \"iPod\"  (0.754, 0.819, 0.154, 0.072)\n  AXStaticText \"Phone\"  (0.121, 0.822, 0.096, 0.018)\n  AXStaticText \"Mail\"  (0.358, 0.822, 0.063, 0.018)\n  AXStaticText \"Safari\"  (0.567, 0.822, 0.087, 0.018)\n  AXStaticText \"iPod\"  (0.796, 0.822, 0.069, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened Settings and returned to the home screen using the home button."
+  },
+  {
+    "meta": {
+      "id": "real-oldos-7",
+      "app": "zzanehip__The-OldOS-Project",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.zrc.BudgetingBuddy",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "swipe",
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Unlock OldOS and open the Notes app.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXTextField \"Lock\"  (0.488, 0.086, 0.025, 0.016)\n  AXStaticText \"1:38\"  (0.354, 0.117, 0.291, 0.081)\n  AXStaticText \"1:38\"  (0.354, 0.119, 0.291, 0.081)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.199, 0.347, 0.024)\n  AXStaticText \"Tuesday, June 23\"  (0.326, 0.201, 0.347, 0.024)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.389, 0.657, 0.148)\n  AXTextField \"BatteryBG_17\"  (0.172, 0.537, 0.657, 0.148)\n  AXStaticText \"\u2b95\"  (0.153, 0.756, 0.097, 0.052)\n  AXStaticText \"\u2b95\"  (0.155, 0.758, 0.097, 0.052)\n  AXStaticText \"slide to unlock\"  (0.391, 0.766, 0.404, 0.034)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "fromX": 0.18,
+            "fromY": 0.782,
+            "toX": 0.85,
+            "toY": 0.782
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXTextField \"Wallpaper_1\"  (0.032, 0.080, 0.937, 0.765)\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXButton \"Messages\"  (0.092, 0.142, 0.154, 0.095)\n  AXTextField \"Messages\"  (0.092, 0.142, 0.154, 0.072)\n  AXButton \"Tuesday, 23, Calendar\"  (0.281, 0.142, 0.218, 0.095)\n  AXTextField \"Calendar\"  (0.313, 0.142, 0.154, 0.072)\n  AXButton \"Photos\"  (0.533, 0.142, 0.154, 0.095)\n  AXTextField \"Photos\"  (0.533, 0.142, 0.154, 0.072)\n  AXButton \"Camera\"  (0.754, 0.142, 0.154, 0.095)\n  AXTextField \"Camera\"  (0.754, 0.142, 0.154, 0.072)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.878, 0.142, 0.075, 0.598)\n  AXStaticText \"Tuesday\"  (0.342, 0.144, 0.096, 0.014)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.149, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.149, 0.206, 0.095)\n  AXStaticText \"23\"  (0.341, 0.160, 0.097, 0.048)\n  AXStaticText \"Messages\"  (0.093, 0.214, 0.153, 0.018)\n  AXStaticText \"Calendar\"  (0.322, 0.214, 0.135, 0.018)\n  AXStaticText \"Photos\"  (0.557, 0.214, 0.106, 0.018)\n  AXStaticText \"Camera\"  (0.772, 0.214, 0.117, 0.018)\n  AXButton \"YouTube\"  (0.092, 0.284, 0.154, 0.095)\n  AXTextField \"YouTube\"  (0.092, 0.284, 0.154, 0.072)\n  AXButton \"Stocks\"  (0.313, 0.284, 0.154, 0.095)\n  AXTextField \"Stocks\"  (0.313, 0.284, 0.154, 0.072)\n  AXButton \"Maps\"  (0.533, 0.284, 0.154, 0.095)\n  AXTextField \"Maps\"  (0.533, 0.284, 0.154, 0.072)\n  AXButton \"Weather\"  (0.754, 0.284, 0.154, 0.095)\n  AXTextField \"Weather Fahrenheit\"  (0.754, 0.284, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.291, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.291, 0.206, 0.095)\n  AXStaticText \"YouTube\"  (0.105, 0.357, 0.129, 0.018)\n  AXStaticText \"Stocks\"  (0.338, 0.357, 0.104, 0.018)\n  AXStaticText \"Maps\"  (0.568, 0.357, 0.084, 0.018)\n  AXStaticText \"Weather\"  (0.768, 0.357, 0.125, 0.018)\n  AXButton \"Utilities\"  (0.313, 0.427, 0.154, 0.097)\n  AXTextField \"Folder\"  (0.313, 0.427, 0.154, 0.074)\n  AXButton \"Notes\"  (0.092, 0.428, 0.154, 0.095)\n  AXTextField \"Notes\"  (0.092, 0.428, 0.154, 0.072)\n  AXButton \"iTunes\"  (0.533, 0.428, 0.154, 0.095)\n  AXTextField \"iTunes\"  (0.533, 0.428, 0.154, 0.072)\n  AXButton \"App Store\"  (0.754, 0.428, 0.154, 0.095)\n  AXTextField \"App Store\"  (0.754, 0.428, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.284, 0.434, 0.212, 0.097)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.507, 0.435, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.727, 0.435, 0.206, 0.095)\n  AXTextField \"Clock-Small\"  (0.333, 0.436, 0.033, 0.016)\n  AXTextField \"Calculator-Small\"  (0.373, 0.436, 0.033, 0.016)\n  AXTextField \"Compass-Small\"  (0.414, 0.436, 0.034, 0.016)\n  AXTextField \"Voice Memos-Small\"  (0.333, 0.454, 0.033, 0.016)\n  AXStaticText \"Notes\"  (0.125, 0.500, 0.089, 0.018)\n  AXStaticText \"iTunes\"  (0.562, 0.500, 0.096, 0.018)\n  AXStaticText \"App Store\"  (0.756, 0.500, 0.150, 0.018)\n  AXStaticText \"Utilities\"  (0.334, 0.502, 0.111, 0.018)\n  AXButton \"Game Center\"  (0.070, 0.572, 0.198, 0.095)\n  AXTextField \"Game Center\"  (0.092, 0.572, 0.154, 0.072)\n  AXButton \"Settings\"  (0.313, 0.572, 0.154, 0.095)\n  AXTextField \"Settings\"  (0.313, 0.572, 0.154, 0.072)\n  AXTextField \"WallpaperIconShadow\"  (0.066, 0.579, 0.206, 0.095)\n  AXTextField \"WallpaperIconShadow\"  (0.287, 0.579, 0.206, 0.095)\n  AXStaticText \"Game Center\"  (0.070, 0.644, 0.198, 0.018)\n  AXStaticText \"Settings\"  (0.328, 0.644, 0.124, 0.018)\n  AXButton  (0.047, 0.711, 0.383, 0.009)\n  AXButton \"Search\"  (0.450, 0.711, 0.020, 0.009)\n  AXButton  (0.490, 0.711, 0.020, 0.009)\n  AXButton  (0.530, 0.711, 0.020, 0.009)\n  AXButton  (0.570, 0.711, 0.383, 0.009)\n  AXButton \"Phone\"  (0.092, 0.749, 0.154, 0.095)\n  AXTextField \"Phone\"  (0.092, 0.749, 0.154, 0.072)\n  AXButton \"Mail\"  (0.313, 0.749, 0.154, 0.095)\n  AXTextField \"Mail\"  (0.313, 0.749, 0.154, 0.072)\n  AXButton \"Safari\"  (0.533, 0.749, 0.154, 0.095)\n  AXTextField \"Safari\"  (0.533, 0.749, 0.154, 0.072)\n  AXButton \"iPod\"  (0.754, 0.749, 0.154, 0.095)\n  AXTextField \"iPod\"  (0.754, 0.749, 0.154, 0.072)\n  AXTextField \"SBDockBG 2\"  (0.040, 0.786, 0.920, 0.059)\n  AXTextField \"Phone\"  (0.092, 0.819, 0.154, 0.072)\n  AXTextField \"Mail\"  (0.313, 0.819, 0.154, 0.072)\n  AXTextField \"Safari\"  (0.533, 0.819, 0.154, 0.072)\n  AXTextField \"iPod\"  (0.754, 0.819, 0.154, 0.072)\n  AXStaticText \"Phone\"  (0.121, 0.822, 0.096, 0.018)\n  AXStaticText \"Mail\"  (0.358, 0.822, 0.063, 0.018)\n  AXStaticText \"Safari\"  (0.567, 0.822, 0.087, 0.018)\n  AXStaticText \"iPod\"  (0.796, 0.822, 0.069, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "x": 0.169,
+            "y": 0.475
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"No SIM\"  (0.050, 0.084, 0.128, 0.021)\n  AXStaticText \"1:38 PM\"  (0.429, 0.084, 0.142, 0.021)\n  AXTextField \"Wi-Fi\"  (0.201, 0.086, 0.048, 0.016)\n  AXTextField \"NotesTopBar\"  (0.040, 0.108, 0.920, 0.069)\n  AXButton \"header button, UIButtonBarPlus\"  (0.865, 0.124, 0.087, 0.037)\n  AXTextField \"header button\"  (0.868, 0.124, 0.080, 0.037)\n  AXStaticText \"Notes (0)\"  (0.384, 0.127, 0.232, 0.030)\n  AXStaticText \"Notes (0)\"  (0.384, 0.128, 0.232, 0.030)\n  AXTextField \"UIButtonBarPlus\"  (0.892, 0.134, 0.032, 0.016)\n  AXTextField \"NotesBody\"  (0.000, 0.176, 1.000, 0.669)\n  AXTextField \"NotesEdgeTop\"  (0.040, 0.176, 0.920, 0.014)\n  AXTextField \"NotesEdgeBottom\"  (0.040, 0.839, 0.920, 0.006)"
+        }
+      }
+    ],
+    "finalAnswer": "The Notes app is open, showing an empty notes list."
+  }
+]

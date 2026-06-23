@@ -1,0 +1,894 @@
+[
+  {
+    "meta": {
+      "id": "real-horizoncalendar-1",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the example menu, open the \"Single Day Selection\" demo screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.177
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Single Day Selection\"  (0.316, 0.071, 0.369, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.113, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.141, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.141, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.141, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Jan 2020\"  (0.331, 0.196, 0.101, 0.046)\n  AXButton \"Thursday, 2 Jan 2020\"  (0.450, 0.196, 0.101, 0.046)\n  AXButton \"Friday, 3 Jan 2020\"  (0.569, 0.196, 0.101, 0.046)\n  AXButton \"Saturday, 4 Jan 2020\"  (0.688, 0.196, 0.101, 0.046)\n  AXButton \"Sunday, 5 Jan 2020\"  (0.808, 0.196, 0.101, 0.046)\n  AXButton \"Monday, 6 Jan 2020\"  (0.092, 0.251, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Jan 2020\"  (0.211, 0.251, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Jan 2020\"  (0.331, 0.251, 0.101, 0.046)\n  AXButton \"Thursday, 9 Jan 2020\"  (0.450, 0.251, 0.101, 0.046)\n  AXButton \"Friday, 10 Jan 2020\"  (0.569, 0.251, 0.101, 0.046)\n  AXButton \"Saturday, 11 Jan 2020\"  (0.688, 0.251, 0.101, 0.046)\n  AXButton \"Sunday, 12 Jan 2020\"  (0.808, 0.251, 0.101, 0.046)\n  AXButton \"Monday, 13 Jan 2020\"  (0.092, 0.305, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Jan 2020\"  (0.211, 0.305, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Jan 2020\"  (0.331, 0.305, 0.101, 0.046)\n  AXButton \"Thursday, 16 Jan 2020\"  (0.450, 0.305, 0.101, 0.046)\n  AXButton \"Friday, 17 Jan 2020\"  (0.569, 0.305, 0.101, 0.046)\n  AXButton \"Saturday, 18 Jan 2020\"  (0.688, 0.305, 0.101, 0.046)\n  AXButton \"Sunday, 19 Jan 2020\"  (0.808, 0.305, 0.101, 0.046)\n  AXButton \"Monday, 20 Jan 2020\"  (0.092, 0.360, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Jan 2020\"  (0.211, 0.360, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Jan 2020\"  (0.331, 0.360, 0.101, 0.046)\n  AXButton \"Thursday, 23 Jan 2020\"  (0.450, 0.360, 0.101, 0.046)\n  AXButton \"Friday, 24 Jan 2020\"  (0.569, 0.360, 0.101, 0.046)\n  AXButton \"Saturday, 25 Jan 2020\"  (0.688, 0.360, 0.101, 0.046)\n  AXButton \"Sunday, 26 Jan 2020\"  (0.808, 0.360, 0.101, 0.046)\n  AXButton \"Monday, 27 Jan 2020\"  (0.092, 0.415, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Jan 2020\"  (0.211, 0.415, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Jan 2020\"  (0.331, 0.415, 0.101, 0.046)\n  AXButton \"Thursday, 30 Jan 2020\"  (0.450, 0.415, 0.101, 0.046)\n  AXButton \"Friday, 31 Jan 2020\"  (0.569, 0.415, 0.101, 0.046)\n  AXGroup \"February 2020\"  (0.092, 0.487, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.514, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.514, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.514, 0.101, 0.046)\n  AXButton \"Saturday, 1 Feb 2020\"  (0.688, 0.569, 0.101, 0.046)\n  AXButton \"Sunday, 2 Feb 2020\"  (0.808, 0.569, 0.101, 0.046)\n  AXButton \"Monday, 3 Feb 2020\"  (0.092, 0.624, 0.101, 0.046)\n  AXButton \"Tuesday, 4 Feb 2020\"  (0.211, 0.624, 0.101, 0.046)\n  AXButton \"Wednesday, 5 Feb 2020\"  (0.331, 0.624, 0.101, 0.046)\n  AXButton \"Thursday, 6 Feb 2020\"  (0.450, 0.624, 0.101, 0.046)\n  AXButton \"Friday, 7 Feb 2020\"  (0.569, 0.624, 0.101, 0.046)\n  AXButton \"Saturday, 8 Feb 2020\"  (0.688, 0.624, 0.101, 0.046)\n  AXButton \"Sunday, 9 Feb 2020\"  (0.808, 0.624, 0.101, 0.046)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.679, 0.101, 0.046)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.679, 0.101, 0.046)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.679, 0.101, 0.046)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.679, 0.101, 0.046)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.679, 0.101, 0.046)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.679, 0.101, 0.046)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.679, 0.101, 0.046)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.734, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.734, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.734, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.734, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.734, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.734, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.734, 0.101, 0.046)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.788, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.788, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.788, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.788, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.788, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.788, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.860, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.887, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.887, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.887, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.942, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.997, 0.101, 0.003)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.997, 0.101, 0.003)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.997, 0.101, 0.003)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.997, 0.101, 0.003)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.997, 0.101, 0.003)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.997, 0.101, 0.003)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.997, 0.101, 0.003)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the \"Single Day Selection\" demo; its calendar screen is now shown."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-2",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the example menu, open the \"Day Range Selection\" demo screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.223
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Day Range Selection\"  (0.314, 0.071, 0.371, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.113, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.141, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.141, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.141, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Jan 2020\"  (0.331, 0.196, 0.101, 0.046)\n  AXButton \"Thursday, 2 Jan 2020\"  (0.450, 0.196, 0.101, 0.046)\n  AXButton \"Friday, 3 Jan 2020\"  (0.569, 0.196, 0.101, 0.046)\n  AXButton \"Saturday, 4 Jan 2020\"  (0.688, 0.196, 0.101, 0.046)\n  AXButton \"Sunday, 5 Jan 2020\"  (0.808, 0.196, 0.101, 0.046)\n  AXButton \"Monday, 6 Jan 2020\"  (0.092, 0.251, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Jan 2020\"  (0.211, 0.251, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Jan 2020\"  (0.331, 0.251, 0.101, 0.046)\n  AXButton \"Thursday, 9 Jan 2020\"  (0.450, 0.251, 0.101, 0.046)\n  AXButton \"Friday, 10 Jan 2020\"  (0.569, 0.251, 0.101, 0.046)\n  AXButton \"Saturday, 11 Jan 2020\"  (0.688, 0.251, 0.101, 0.046)\n  AXButton \"Sunday, 12 Jan 2020\"  (0.808, 0.251, 0.101, 0.046)\n  AXButton \"Monday, 13 Jan 2020\"  (0.092, 0.305, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Jan 2020\"  (0.211, 0.305, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Jan 2020\"  (0.331, 0.305, 0.101, 0.046)\n  AXButton \"Thursday, 16 Jan 2020\"  (0.450, 0.305, 0.101, 0.046)\n  AXButton \"Friday, 17 Jan 2020\"  (0.569, 0.305, 0.101, 0.046)\n  AXButton \"Saturday, 18 Jan 2020\"  (0.688, 0.305, 0.101, 0.046)\n  AXButton \"Sunday, 19 Jan 2020\"  (0.808, 0.305, 0.101, 0.046)\n  AXButton \"Monday, 20 Jan 2020\"  (0.092, 0.360, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Jan 2020\"  (0.211, 0.360, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Jan 2020\"  (0.331, 0.360, 0.101, 0.046)\n  AXButton \"Thursday, 23 Jan 2020\"  (0.450, 0.360, 0.101, 0.046)\n  AXButton \"Friday, 24 Jan 2020\"  (0.569, 0.360, 0.101, 0.046)\n  AXButton \"Saturday, 25 Jan 2020\"  (0.688, 0.360, 0.101, 0.046)\n  AXButton \"Sunday, 26 Jan 2020\"  (0.808, 0.360, 0.101, 0.046)\n  AXButton \"Monday, 27 Jan 2020\"  (0.092, 0.415, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Jan 2020\"  (0.211, 0.415, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Jan 2020\"  (0.331, 0.415, 0.101, 0.046)\n  AXButton \"Thursday, 30 Jan 2020\"  (0.450, 0.415, 0.101, 0.046)\n  AXButton \"Friday, 31 Jan 2020\"  (0.569, 0.415, 0.101, 0.046)\n  AXGroup \"February 2020\"  (0.092, 0.487, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.514, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.514, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.514, 0.101, 0.046)\n  AXButton \"Saturday, 1 Feb 2020\"  (0.688, 0.569, 0.101, 0.046)\n  AXButton \"Sunday, 2 Feb 2020\"  (0.808, 0.569, 0.101, 0.046)\n  AXButton \"Monday, 3 Feb 2020\"  (0.092, 0.624, 0.101, 0.046)\n  AXButton \"Tuesday, 4 Feb 2020\"  (0.211, 0.624, 0.101, 0.046)\n  AXButton \"Wednesday, 5 Feb 2020\"  (0.331, 0.624, 0.101, 0.046)\n  AXButton \"Thursday, 6 Feb 2020\"  (0.450, 0.624, 0.101, 0.046)\n  AXButton \"Friday, 7 Feb 2020\"  (0.569, 0.624, 0.101, 0.046)\n  AXButton \"Saturday, 8 Feb 2020\"  (0.688, 0.624, 0.101, 0.046)\n  AXButton \"Sunday, 9 Feb 2020\"  (0.808, 0.624, 0.101, 0.046)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.679, 0.101, 0.046)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.679, 0.101, 0.046)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.679, 0.101, 0.046)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.679, 0.101, 0.046)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.679, 0.101, 0.046)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.679, 0.101, 0.046)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.679, 0.101, 0.046)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.734, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.734, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.734, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.734, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.734, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.734, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.734, 0.101, 0.046)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.788, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.788, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.788, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.788, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.788, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.788, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.860, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.887, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.887, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.887, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.942, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.997, 0.101, 0.003)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.997, 0.101, 0.003)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.997, 0.101, 0.003)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.997, 0.101, 0.003)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.997, 0.101, 0.003)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.997, 0.101, 0.003)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.997, 0.101, 0.003)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the \"Day Range Selection\" demo; its calendar screen is now shown."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-3",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the example menu, open the \"Selected Day Tooltip\" demo screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.269
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Selected Day Tooltip\"  (0.315, 0.071, 0.370, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.113, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.141, 0.117, 0.054)\n  AXGroup \"T\"  (0.209, 0.141, 0.117, 0.054)\n  AXGroup \"W\"  (0.326, 0.141, 0.117, 0.054)\n  AXGroup \"T\"  (0.442, 0.141, 0.117, 0.054)\n  AXGroup \"F\"  (0.558, 0.141, 0.117, 0.054)\n  AXGroup \"S\"  (0.675, 0.141, 0.117, 0.054)\n  AXGroup \"S\"  (0.792, 0.141, 0.117, 0.054)\n  AXButton \"Wednesday, 1 Jan 2020\"  (0.326, 0.195, 0.117, 0.054)\n  AXButton \"Thursday, 2 Jan 2020\"  (0.442, 0.195, 0.117, 0.054)\n  AXButton \"Friday, 3 Jan 2020\"  (0.558, 0.195, 0.117, 0.054)\n  AXButton \"Saturday, 4 Jan 2020\"  (0.675, 0.195, 0.117, 0.054)\n  AXButton \"Sunday, 5 Jan 2020\"  (0.792, 0.195, 0.117, 0.054)\n  AXButton \"Monday, 6 Jan 2020\"  (0.092, 0.248, 0.117, 0.054)\n  AXButton \"Tuesday, 7 Jan 2020\"  (0.209, 0.248, 0.117, 0.054)\n  AXButton \"Wednesday, 8 Jan 2020\"  (0.326, 0.248, 0.117, 0.054)\n  AXButton \"Thursday, 9 Jan 2020\"  (0.442, 0.248, 0.117, 0.054)\n  AXButton \"Friday, 10 Jan 2020\"  (0.558, 0.248, 0.117, 0.054)\n  AXButton \"Saturday, 11 Jan 2020\"  (0.675, 0.248, 0.117, 0.054)\n  AXButton \"Sunday, 12 Jan 2020\"  (0.792, 0.248, 0.117, 0.054)\n  AXButton \"Monday, 13 Jan 2020\"  (0.092, 0.302, 0.117, 0.054)\n  AXButton \"Tuesday, 14 Jan 2020\"  (0.209, 0.302, 0.117, 0.054)\n  AXButton \"Wednesday, 15 Jan 2020\"  (0.326, 0.302, 0.117, 0.054)\n  AXButton \"Thursday, 16 Jan 2020\"  (0.442, 0.302, 0.117, 0.054)\n  AXButton \"Friday, 17 Jan 2020\"  (0.558, 0.302, 0.117, 0.054)\n  AXButton \"Saturday, 18 Jan 2020\"  (0.675, 0.302, 0.117, 0.054)\n  AXButton \"Sunday, 19 Jan 2020\"  (0.792, 0.302, 0.117, 0.054)\n  AXButton \"Monday, 20 Jan 2020\"  (0.092, 0.355, 0.117, 0.054)\n  AXButton \"Tuesday, 21 Jan 2020\"  (0.209, 0.355, 0.117, 0.054)\n  AXButton \"Wednesday, 22 Jan 2020\"  (0.326, 0.355, 0.117, 0.054)\n  AXButton \"Thursday, 23 Jan 2020\"  (0.442, 0.355, 0.117, 0.054)\n  AXButton \"Friday, 24 Jan 2020\"  (0.558, 0.355, 0.117, 0.054)\n  AXButton \"Saturday, 25 Jan 2020\"  (0.675, 0.355, 0.117, 0.054)\n  AXButton \"Sunday, 26 Jan 2020\"  (0.792, 0.355, 0.117, 0.054)\n  AXButton \"Monday, 27 Jan 2020\"  (0.092, 0.409, 0.117, 0.054)\n  AXButton \"Tuesday, 28 Jan 2020\"  (0.209, 0.409, 0.117, 0.054)\n  AXButton \"Wednesday, 29 Jan 2020\"  (0.326, 0.409, 0.117, 0.054)\n  AXButton \"Thursday, 30 Jan 2020\"  (0.442, 0.409, 0.117, 0.054)\n  AXButton \"Friday, 31 Jan 2020\"  (0.558, 0.409, 0.117, 0.054)\n  AXGroup \"February 2020\"  (0.092, 0.488, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.515, 0.117, 0.054)\n  AXGroup \"T\"  (0.209, 0.515, 0.117, 0.054)\n  AXGroup \"W\"  (0.326, 0.515, 0.117, 0.054)\n  AXGroup \"T\"  (0.442, 0.515, 0.117, 0.054)\n  AXGroup \"F\"  (0.558, 0.515, 0.117, 0.054)\n  AXGroup \"S\"  (0.675, 0.515, 0.117, 0.054)\n  AXGroup \"S\"  (0.792, 0.515, 0.117, 0.054)\n  AXButton \"Saturday, 1 Feb 2020\"  (0.675, 0.569, 0.117, 0.054)\n  AXButton \"Sunday, 2 Feb 2020\"  (0.792, 0.569, 0.117, 0.054)\n  AXButton \"Monday, 3 Feb 2020\"  (0.092, 0.623, 0.117, 0.054)\n  AXButton \"Tuesday, 4 Feb 2020\"  (0.209, 0.623, 0.117, 0.054)\n  AXButton \"Wednesday, 5 Feb 2020\"  (0.326, 0.623, 0.117, 0.054)\n  AXButton \"Thursday, 6 Feb 2020\"  (0.442, 0.623, 0.117, 0.054)\n  AXButton \"Friday, 7 Feb 2020\"  (0.558, 0.623, 0.117, 0.054)\n  AXButton \"Saturday, 8 Feb 2020\"  (0.675, 0.623, 0.117, 0.054)\n  AXButton \"Sunday, 9 Feb 2020\"  (0.792, 0.623, 0.117, 0.054)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.676, 0.117, 0.054)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.209, 0.676, 0.117, 0.054)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.326, 0.676, 0.117, 0.054)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.442, 0.676, 0.117, 0.054)\n  AXButton \"Friday, 14 Feb 2020\"  (0.558, 0.676, 0.117, 0.054)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.675, 0.676, 0.117, 0.054)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.792, 0.676, 0.117, 0.054)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.730, 0.117, 0.054)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.209, 0.730, 0.117, 0.054)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.326, 0.730, 0.117, 0.054)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.442, 0.730, 0.117, 0.054)\n  AXButton \"Friday, 21 Feb 2020\"  (0.558, 0.730, 0.117, 0.054)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.675, 0.730, 0.117, 0.054)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.792, 0.730, 0.117, 0.054)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.783, 0.117, 0.054)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.209, 0.783, 0.117, 0.054)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.326, 0.783, 0.117, 0.054)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.442, 0.783, 0.117, 0.054)\n  AXButton \"Friday, 28 Feb 2020\"  (0.558, 0.783, 0.117, 0.054)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.675, 0.783, 0.117, 0.054)\n  AXGroup \"March 2020\"  (0.092, 0.862, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.890, 0.117, 0.054)\n  AXGroup \"T\"  (0.209, 0.890, 0.117, 0.054)\n  AXGroup \"W\"  (0.326, 0.890, 0.117, 0.054)\n  AXGroup \"T\"  (0.442, 0.890, 0.117, 0.054)\n  AXGroup \"F\"  (0.558, 0.890, 0.117, 0.054)\n  AXGroup \"S\"  (0.675, 0.890, 0.117, 0.054)\n  AXGroup \"S\"  (0.792, 0.890, 0.117, 0.054)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.792, 0.944, 0.117, 0.054)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.997, 0.117, 0.003)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.209, 0.997, 0.117, 0.003)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.326, 0.997, 0.117, 0.003)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.442, 0.997, 0.117, 0.003)\n  AXButton \"Friday, 6 Mar 2020\"  (0.558, 0.997, 0.117, 0.003)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.675, 0.997, 0.117, 0.003)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.792, 0.997, 0.117, 0.003)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the \"Selected Day Tooltip\" demo; its calendar screen is now shown."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-4",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the example menu, open the \"Month Grid Background\" demo screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.453
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Month Grid Background\"  (0.286, 0.071, 0.429, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.113, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.141, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.141, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.141, 0.101, 0.046)\n  AXStaticText \"Wednesday, 1 Jan 2020\"  (0.331, 0.196, 0.101, 0.046)\n  AXStaticText \"Thursday, 2 Jan 2020\"  (0.450, 0.196, 0.101, 0.046)\n  AXStaticText \"Friday, 3 Jan 2020\"  (0.569, 0.196, 0.101, 0.046)\n  AXStaticText \"Saturday, 4 Jan 2020\"  (0.688, 0.196, 0.101, 0.046)\n  AXStaticText \"Sunday, 5 Jan 2020\"  (0.808, 0.196, 0.101, 0.046)\n  AXStaticText \"Monday, 6 Jan 2020\"  (0.092, 0.251, 0.101, 0.046)\n  AXStaticText \"Tuesday, 7 Jan 2020\"  (0.211, 0.251, 0.101, 0.046)\n  AXStaticText \"Wednesday, 8 Jan 2020\"  (0.331, 0.251, 0.101, 0.046)\n  AXStaticText \"Thursday, 9 Jan 2020\"  (0.450, 0.251, 0.101, 0.046)\n  AXStaticText \"Friday, 10 Jan 2020\"  (0.569, 0.251, 0.101, 0.046)\n  AXStaticText \"Saturday, 11 Jan 2020\"  (0.688, 0.251, 0.101, 0.046)\n  AXStaticText \"Sunday, 12 Jan 2020\"  (0.808, 0.251, 0.101, 0.046)\n  AXStaticText \"Monday, 13 Jan 2020\"  (0.092, 0.305, 0.101, 0.046)\n  AXStaticText \"Tuesday, 14 Jan 2020\"  (0.211, 0.305, 0.101, 0.046)\n  AXStaticText \"Wednesday, 15 Jan 2020\"  (0.331, 0.305, 0.101, 0.046)\n  AXStaticText \"Thursday, 16 Jan 2020\"  (0.450, 0.305, 0.101, 0.046)\n  AXStaticText \"Friday, 17 Jan 2020\"  (0.569, 0.305, 0.101, 0.046)\n  AXStaticText \"Saturday, 18 Jan 2020\"  (0.688, 0.305, 0.101, 0.046)\n  AXStaticText \"Sunday, 19 Jan 2020\"  (0.808, 0.305, 0.101, 0.046)\n  AXStaticText \"Monday, 20 Jan 2020\"  (0.092, 0.360, 0.101, 0.046)\n  AXStaticText \"Tuesday, 21 Jan 2020\"  (0.211, 0.360, 0.101, 0.046)\n  AXStaticText \"Wednesday, 22 Jan 2020\"  (0.331, 0.360, 0.101, 0.046)\n  AXStaticText \"Thursday, 23 Jan 2020\"  (0.450, 0.360, 0.101, 0.046)\n  AXStaticText \"Friday, 24 Jan 2020\"  (0.569, 0.360, 0.101, 0.046)\n  AXStaticText \"Saturday, 25 Jan 2020\"  (0.688, 0.360, 0.101, 0.046)\n  AXStaticText \"Sunday, 26 Jan 2020\"  (0.808, 0.360, 0.101, 0.046)\n  AXStaticText \"Monday, 27 Jan 2020\"  (0.092, 0.415, 0.101, 0.046)\n  AXStaticText \"Tuesday, 28 Jan 2020\"  (0.211, 0.415, 0.101, 0.046)\n  AXStaticText \"Wednesday, 29 Jan 2020\"  (0.331, 0.415, 0.101, 0.046)\n  AXStaticText \"Thursday, 30 Jan 2020\"  (0.450, 0.415, 0.101, 0.046)\n  AXStaticText \"Friday, 31 Jan 2020\"  (0.569, 0.415, 0.101, 0.046)\n  AXGroup \"February 2020\"  (0.092, 0.487, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.514, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.514, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.514, 0.101, 0.046)\n  AXStaticText \"Saturday, 1 Feb 2020\"  (0.688, 0.569, 0.101, 0.046)\n  AXStaticText \"Sunday, 2 Feb 2020\"  (0.808, 0.569, 0.101, 0.046)\n  AXStaticText \"Monday, 3 Feb 2020\"  (0.092, 0.624, 0.101, 0.046)\n  AXStaticText \"Tuesday, 4 Feb 2020\"  (0.211, 0.624, 0.101, 0.046)\n  AXStaticText \"Wednesday, 5 Feb 2020\"  (0.331, 0.624, 0.101, 0.046)\n  AXStaticText \"Thursday, 6 Feb 2020\"  (0.450, 0.624, 0.101, 0.046)\n  AXStaticText \"Friday, 7 Feb 2020\"  (0.569, 0.624, 0.101, 0.046)\n  AXStaticText \"Saturday, 8 Feb 2020\"  (0.688, 0.624, 0.101, 0.046)\n  AXStaticText \"Sunday, 9 Feb 2020\"  (0.808, 0.624, 0.101, 0.046)\n  AXStaticText \"Monday, 10 Feb 2020\"  (0.092, 0.679, 0.101, 0.046)\n  AXStaticText \"Tuesday, 11 Feb 2020\"  (0.211, 0.679, 0.101, 0.046)\n  AXStaticText \"Wednesday, 12 Feb 2020\"  (0.331, 0.679, 0.101, 0.046)\n  AXStaticText \"Thursday, 13 Feb 2020\"  (0.450, 0.679, 0.101, 0.046)\n  AXStaticText \"Friday, 14 Feb 2020\"  (0.569, 0.679, 0.101, 0.046)\n  AXStaticText \"Saturday, 15 Feb 2020\"  (0.688, 0.679, 0.101, 0.046)\n  AXStaticText \"Sunday, 16 Feb 2020\"  (0.808, 0.679, 0.101, 0.046)\n  AXStaticText \"Monday, 17 Feb 2020\"  (0.092, 0.734, 0.101, 0.046)\n  AXStaticText \"Tuesday, 18 Feb 2020\"  (0.211, 0.734, 0.101, 0.046)\n  AXStaticText \"Wednesday, 19 Feb 2020\"  (0.331, 0.734, 0.101, 0.046)\n  AXStaticText \"Thursday, 20 Feb 2020\"  (0.450, 0.734, 0.101, 0.046)\n  AXStaticText \"Friday, 21 Feb 2020\"  (0.569, 0.734, 0.101, 0.046)\n  AXStaticText \"Saturday, 22 Feb 2020\"  (0.688, 0.734, 0.101, 0.046)\n  AXStaticText \"Sunday, 23 Feb 2020\"  (0.808, 0.734, 0.101, 0.046)\n  AXStaticText \"Monday, 24 Feb 2020\"  (0.092, 0.788, 0.101, 0.046)\n  AXStaticText \"Tuesday, 25 Feb 2020\"  (0.211, 0.788, 0.101, 0.046)\n  AXStaticText \"Wednesday, 26 Feb 2020\"  (0.331, 0.788, 0.101, 0.046)\n  AXStaticText \"Thursday, 27 Feb 2020\"  (0.450, 0.788, 0.101, 0.046)\n  AXStaticText \"Friday, 28 Feb 2020\"  (0.569, 0.788, 0.101, 0.046)\n  AXStaticText \"Saturday, 29 Feb 2020\"  (0.688, 0.788, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.860, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.887, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.887, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.887, 0.101, 0.046)\n  AXStaticText \"Sunday, 1 Mar 2020\"  (0.808, 0.942, 0.101, 0.046)\n  AXStaticText \"Monday, 2 Mar 2020\"  (0.092, 0.997, 0.101, 0.003)\n  AXStaticText \"Tuesday, 3 Mar 2020\"  (0.211, 0.997, 0.101, 0.003)\n  AXStaticText \"Wednesday, 4 Mar 2020\"  (0.331, 0.997, 0.101, 0.003)\n  AXStaticText \"Thursday, 5 Mar 2020\"  (0.450, 0.997, 0.101, 0.003)\n  AXStaticText \"Friday, 6 Mar 2020\"  (0.569, 0.997, 0.101, 0.003)\n  AXStaticText \"Saturday, 7 Mar 2020\"  (0.688, 0.997, 0.101, 0.003)\n  AXStaticText \"Sunday, 8 Mar 2020\"  (0.808, 0.997, 0.101, 0.003)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the \"Month Grid Background\" demo; its calendar screen is now shown."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-5",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the example menu, open the \"SwiftUI Day and Month View\" demo screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.499
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"SwiftUI Day and Month Views\"  (0.235, 0.071, 0.530, 0.021)\n  AXStaticText \"January 2020\"  (0.092, 0.130, 0.252, 0.021)\n  AXGroup \"M\"  (0.092, 0.168, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.168, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.168, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.168, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.168, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.168, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.168, 0.101, 0.046)\n  AXButton \"1\"  (0.373, 0.235, 0.017, 0.021)\n  AXButton \"2\"  (0.489, 0.235, 0.023, 0.021)\n  AXButton \"3\"  (0.608, 0.235, 0.023, 0.021)\n  AXButton \"4\"  (0.726, 0.235, 0.024, 0.021)\n  AXButton \"5\"  (0.846, 0.235, 0.023, 0.021)\n  AXButton \"6\"  (0.131, 0.290, 0.024, 0.021)\n  AXButton \"7\"  (0.251, 0.290, 0.021, 0.021)\n  AXButton \"8\"  (0.369, 0.290, 0.024, 0.021)\n  AXButton \"9\"  (0.488, 0.290, 0.024, 0.021)\n  AXButton \"10\"  (0.599, 0.290, 0.041, 0.021)\n  AXButton \"11\"  (0.721, 0.290, 0.034, 0.021)\n  AXButton \"12\"  (0.838, 0.290, 0.039, 0.021)\n  AXButton \"13\"  (0.122, 0.345, 0.041, 0.021)\n  AXButton \"14\"  (0.241, 0.345, 0.041, 0.021)\n  AXButton \"15\"  (0.361, 0.345, 0.040, 0.021)\n  AXButton \"16\"  (0.480, 0.345, 0.041, 0.021)\n  AXButton \"17\"  (0.600, 0.345, 0.039, 0.021)\n  AXButton \"18\"  (0.718, 0.345, 0.041, 0.021)\n  AXButton \"19\"  (0.838, 0.345, 0.041, 0.021)\n  AXButton \"20\"  (0.120, 0.400, 0.046, 0.021)\n  AXButton \"21\"  (0.242, 0.400, 0.039, 0.021)\n  AXButton \"22\"  (0.359, 0.400, 0.045, 0.021)\n  AXButton \"23\"  (0.477, 0.400, 0.046, 0.021)\n  AXButton \"24\"  (0.596, 0.400, 0.046, 0.021)\n  AXButton \"25\"  (0.716, 0.400, 0.045, 0.021)\n  AXButton \"26\"  (0.835, 0.400, 0.046, 0.021)\n  AXButton \"27\"  (0.121, 0.455, 0.044, 0.021)\n  AXButton \"28\"  (0.239, 0.455, 0.046, 0.021)\n  AXButton \"29\"  (0.358, 0.455, 0.046, 0.021)\n  AXButton \"30\"  (0.477, 0.455, 0.047, 0.021)\n  AXButton \"31\"  (0.599, 0.455, 0.041, 0.021)\n  AXStaticText \"February 2020\"  (0.092, 0.531, 0.268, 0.021)\n  AXGroup \"M\"  (0.092, 0.569, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.569, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.569, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.569, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.569, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.569, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.569, 0.101, 0.046)\n  AXButton \"1\"  (0.730, 0.636, 0.017, 0.021)\n  AXButton \"2\"  (0.847, 0.636, 0.023, 0.021)\n  AXButton \"3\"  (0.131, 0.691, 0.023, 0.021)\n  AXButton \"4\"  (0.250, 0.691, 0.024, 0.021)\n  AXButton \"5\"  (0.370, 0.691, 0.023, 0.021)\n  AXButton \"6\"  (0.488, 0.691, 0.024, 0.021)\n  AXButton \"7\"  (0.609, 0.691, 0.021, 0.021)\n  AXButton \"8\"  (0.726, 0.691, 0.024, 0.021)\n  AXButton \"9\"  (0.846, 0.691, 0.024, 0.021)\n  AXButton \"10\"  (0.122, 0.746, 0.041, 0.021)\n  AXButton \"11\"  (0.245, 0.746, 0.034, 0.021)\n  AXButton \"12\"  (0.362, 0.746, 0.039, 0.021)\n  AXButton \"13\"  (0.480, 0.746, 0.041, 0.021)\n  AXButton \"14\"  (0.599, 0.746, 0.041, 0.021)\n  AXButton \"15\"  (0.718, 0.746, 0.040, 0.021)\n  AXButton \"16\"  (0.838, 0.746, 0.041, 0.021)\n  AXButton \"17\"  (0.123, 0.801, 0.039, 0.021)\n  AXButton \"18\"  (0.241, 0.801, 0.041, 0.021)\n  AXButton \"19\"  (0.361, 0.801, 0.041, 0.021)\n  AXButton \"20\"  (0.477, 0.801, 0.046, 0.021)\n  AXButton \"21\"  (0.600, 0.801, 0.039, 0.021)\n  AXButton \"22\"  (0.716, 0.801, 0.045, 0.021)\n  AXButton \"23\"  (0.835, 0.801, 0.046, 0.021)\n  AXButton \"24\"  (0.120, 0.855, 0.046, 0.021)\n  AXButton \"25\"  (0.239, 0.855, 0.045, 0.021)\n  AXButton \"26\"  (0.358, 0.855, 0.046, 0.021)\n  AXButton \"27\"  (0.478, 0.855, 0.044, 0.021)\n  AXButton \"28\"  (0.596, 0.855, 0.046, 0.021)\n  AXButton \"29\"  (0.715, 0.855, 0.046, 0.021)\n  AXStaticText \"March 2020\"  (0.092, 0.931, 0.219, 0.021)\n  AXGroup \"M\"  (0.092, 0.969, 0.101, 0.031)\n  AXGroup \"T\"  (0.211, 0.969, 0.101, 0.031)\n  AXGroup \"W\"  (0.331, 0.969, 0.101, 0.031)\n  AXGroup \"T\"  (0.450, 0.969, 0.101, 0.031)\n  AXGroup \"F\"  (0.569, 0.969, 0.101, 0.031)\n  AXGroup \"S\"  (0.688, 0.969, 0.101, 0.031)\n  AXGroup \"S\"  (0.808, 0.969, 0.101, 0.031)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the \"SwiftUI Day and Month View\" demo; its calendar screen is now shown."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-6",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the example menu, open the \"SwiftUI Screen\" demo screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.545
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"SwiftUI Screen\"  (0.366, 0.071, 0.268, 0.021)\n  AXButton \"19\"  (0.107, 0.103, 0.041, 0.021)\n  AXButton \"20\"  (0.228, 0.103, 0.046, 0.021)\n  AXButton \"21\"  (0.356, 0.103, 0.039, 0.021)\n  AXButton \"22\"  (0.478, 0.103, 0.045, 0.021)\n  AXButton \"23\"  (0.602, 0.103, 0.046, 0.021)\n  AXButton \"24\"  (0.726, 0.103, 0.046, 0.021)\n  AXButton \"25\"  (0.851, 0.103, 0.045, 0.021)\n  AXButton \"26\"  (0.104, 0.160, 0.046, 0.021)\n  AXButton \"27\"  (0.230, 0.160, 0.044, 0.021)\n  AXButton \"28\"  (0.353, 0.160, 0.046, 0.021)\n  AXButton \"29\"  (0.477, 0.160, 0.046, 0.021)\n  AXButton \"30\"  (0.602, 0.160, 0.047, 0.021)\n  AXStaticText \"July 2023\"  (0.111, 0.237, 0.217, 0.028)\n  AXGroup \"M\"  (0.074, 0.281, 0.106, 0.049)\n  AXGroup \"T\"  (0.198, 0.281, 0.106, 0.049)\n  AXGroup \"W\"  (0.323, 0.281, 0.106, 0.049)\n  AXGroup \"T\"  (0.447, 0.281, 0.106, 0.049)\n  AXGroup \"F\"  (0.572, 0.281, 0.106, 0.049)\n  AXGroup \"S\"  (0.696, 0.281, 0.106, 0.049)\n  AXGroup \"S\"  (0.820, 0.281, 0.106, 0.049)\n  AXButton \"1\"  (0.741, 0.352, 0.017, 0.021)\n  AXButton \"2\"  (0.862, 0.352, 0.023, 0.021)\n  AXButton \"3\"  (0.116, 0.410, 0.023, 0.021)\n  AXButton \"4\"  (0.239, 0.410, 0.024, 0.021)\n  AXButton \"5\"  (0.364, 0.410, 0.023, 0.021)\n  AXButton \"6\"  (0.488, 0.410, 0.024, 0.021)\n  AXButton \"7\"  (0.614, 0.410, 0.021, 0.021)\n  AXButton \"8\"  (0.737, 0.410, 0.024, 0.021)\n  AXButton \"9\"  (0.861, 0.410, 0.024, 0.021)\n  AXButton \"10\"  (0.107, 0.467, 0.041, 0.021)\n  AXButton \"11\"  (0.234, 0.467, 0.034, 0.021)\n  AXButton \"12\"  (0.356, 0.467, 0.039, 0.021)\n  AXButton \"13\"  (0.480, 0.467, 0.041, 0.021)\n  AXButton \"14\"  (0.605, 0.467, 0.041, 0.021)\n  AXButton \"15\"  (0.729, 0.467, 0.040, 0.021)\n  AXButton \"16\"  (0.853, 0.467, 0.041, 0.021)\n  AXButton \"17\"  (0.108, 0.524, 0.039, 0.021)\n  AXButton \"18\"  (0.231, 0.524, 0.041, 0.021)\n  AXButton \"19\"  (0.355, 0.524, 0.041, 0.021)\n  AXButton \"20\"  (0.477, 0.524, 0.046, 0.021)\n  AXButton \"21\"  (0.605, 0.524, 0.039, 0.021)\n  AXButton \"22\"  (0.727, 0.524, 0.045, 0.021)\n  AXButton \"23\"  (0.850, 0.524, 0.046, 0.021)\n  AXButton \"24\"  (0.104, 0.581, 0.046, 0.021)\n  AXButton \"25\"  (0.229, 0.581, 0.045, 0.021)\n  AXButton \"26\"  (0.353, 0.581, 0.046, 0.021)\n  AXButton \"27\"  (0.478, 0.581, 0.044, 0.021)\n  AXButton \"28\"  (0.602, 0.581, 0.046, 0.021)\n  AXButton \"29\"  (0.726, 0.581, 0.046, 0.021)\n  AXButton \"30\"  (0.850, 0.581, 0.047, 0.021)\n  AXButton \"31\"  (0.107, 0.639, 0.041, 0.021)\n  AXStaticText \"August 2023\"  (0.111, 0.715, 0.283, 0.028)\n  AXGroup \"M\"  (0.074, 0.760, 0.106, 0.049)\n  AXGroup \"T\"  (0.198, 0.760, 0.106, 0.049)\n  AXGroup \"W\"  (0.323, 0.760, 0.106, 0.049)\n  AXGroup \"T\"  (0.447, 0.760, 0.106, 0.049)\n  AXGroup \"F\"  (0.572, 0.760, 0.106, 0.049)\n  AXGroup \"S\"  (0.696, 0.760, 0.106, 0.049)\n  AXGroup \"S\"  (0.820, 0.760, 0.106, 0.049)\n  AXButton \"1\"  (0.243, 0.831, 0.017, 0.021)\n  AXButton \"2\"  (0.364, 0.831, 0.023, 0.021)\n  AXButton \"3\"  (0.488, 0.831, 0.023, 0.021)\n  AXButton \"4\"  (0.613, 0.831, 0.024, 0.021)\n  AXButton \"5\"  (0.738, 0.831, 0.023, 0.021)\n  AXButton \"6\"  (0.861, 0.831, 0.024, 0.021)\n  AXButton \"7\"  (0.117, 0.888, 0.021, 0.021)\n  AXButton \"8\"  (0.239, 0.888, 0.024, 0.021)\n  AXButton \"9\"  (0.364, 0.888, 0.024, 0.021)\n  AXButton \"10\"  (0.480, 0.888, 0.041, 0.021)\n  AXButton \"11\"  (0.608, 0.888, 0.034, 0.021)\n  AXButton \"12\"  (0.730, 0.888, 0.039, 0.021)\n  AXButton \"13\"  (0.853, 0.888, 0.041, 0.021)\n  AXButton \"14\"  (0.107, 0.945, 0.041, 0.021)\n  AXButton \"15\"  (0.231, 0.945, 0.040, 0.021)\n  AXButton \"16\"  (0.355, 0.945, 0.041, 0.021)\n  AXButton \"17\"  (0.481, 0.945, 0.039, 0.021)\n  AXButton \"18\"  (0.605, 0.945, 0.041, 0.021)\n  AXButton \"19\"  (0.729, 0.945, 0.041, 0.021)\n  AXButton \"20\"  (0.850, 0.945, 0.046, 0.021)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the \"SwiftUI Screen\" demo; its calendar screen is now shown."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-7",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the \"Single Day Selection\" demo, then go back to the main example menu.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.177
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Single Day Selection\"  (0.316, 0.071, 0.369, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.113, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.141, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.141, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.141, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Jan 2020\"  (0.331, 0.196, 0.101, 0.046)\n  AXButton \"Thursday, 2 Jan 2020\"  (0.450, 0.196, 0.101, 0.046)\n  AXButton \"Friday, 3 Jan 2020\"  (0.569, 0.196, 0.101, 0.046)\n  AXButton \"Saturday, 4 Jan 2020\"  (0.688, 0.196, 0.101, 0.046)\n  AXButton \"Sunday, 5 Jan 2020\"  (0.808, 0.196, 0.101, 0.046)\n  AXButton \"Monday, 6 Jan 2020\"  (0.092, 0.251, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Jan 2020\"  (0.211, 0.251, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Jan 2020\"  (0.331, 0.251, 0.101, 0.046)\n  AXButton \"Thursday, 9 Jan 2020\"  (0.450, 0.251, 0.101, 0.046)\n  AXButton \"Friday, 10 Jan 2020\"  (0.569, 0.251, 0.101, 0.046)\n  AXButton \"Saturday, 11 Jan 2020\"  (0.688, 0.251, 0.101, 0.046)\n  AXButton \"Sunday, 12 Jan 2020\"  (0.808, 0.251, 0.101, 0.046)\n  AXButton \"Monday, 13 Jan 2020\"  (0.092, 0.305, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Jan 2020\"  (0.211, 0.305, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Jan 2020\"  (0.331, 0.305, 0.101, 0.046)\n  AXButton \"Thursday, 16 Jan 2020\"  (0.450, 0.305, 0.101, 0.046)\n  AXButton \"Friday, 17 Jan 2020\"  (0.569, 0.305, 0.101, 0.046)\n  AXButton \"Saturday, 18 Jan 2020\"  (0.688, 0.305, 0.101, 0.046)\n  AXButton \"Sunday, 19 Jan 2020\"  (0.808, 0.305, 0.101, 0.046)\n  AXButton \"Monday, 20 Jan 2020\"  (0.092, 0.360, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Jan 2020\"  (0.211, 0.360, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Jan 2020\"  (0.331, 0.360, 0.101, 0.046)\n  AXButton \"Thursday, 23 Jan 2020\"  (0.450, 0.360, 0.101, 0.046)\n  AXButton \"Friday, 24 Jan 2020\"  (0.569, 0.360, 0.101, 0.046)\n  AXButton \"Saturday, 25 Jan 2020\"  (0.688, 0.360, 0.101, 0.046)\n  AXButton \"Sunday, 26 Jan 2020\"  (0.808, 0.360, 0.101, 0.046)\n  AXButton \"Monday, 27 Jan 2020\"  (0.092, 0.415, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Jan 2020\"  (0.211, 0.415, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Jan 2020\"  (0.331, 0.415, 0.101, 0.046)\n  AXButton \"Thursday, 30 Jan 2020\"  (0.450, 0.415, 0.101, 0.046)\n  AXButton \"Friday, 31 Jan 2020\"  (0.569, 0.415, 0.101, 0.046)\n  AXGroup \"February 2020\"  (0.092, 0.487, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.514, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.514, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.514, 0.101, 0.046)\n  AXButton \"Saturday, 1 Feb 2020\"  (0.688, 0.569, 0.101, 0.046)\n  AXButton \"Sunday, 2 Feb 2020\"  (0.808, 0.569, 0.101, 0.046)\n  AXButton \"Monday, 3 Feb 2020\"  (0.092, 0.624, 0.101, 0.046)\n  AXButton \"Tuesday, 4 Feb 2020\"  (0.211, 0.624, 0.101, 0.046)\n  AXButton \"Wednesday, 5 Feb 2020\"  (0.331, 0.624, 0.101, 0.046)\n  AXButton \"Thursday, 6 Feb 2020\"  (0.450, 0.624, 0.101, 0.046)\n  AXButton \"Friday, 7 Feb 2020\"  (0.569, 0.624, 0.101, 0.046)\n  AXButton \"Saturday, 8 Feb 2020\"  (0.688, 0.624, 0.101, 0.046)\n  AXButton \"Sunday, 9 Feb 2020\"  (0.808, 0.624, 0.101, 0.046)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.679, 0.101, 0.046)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.679, 0.101, 0.046)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.679, 0.101, 0.046)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.679, 0.101, 0.046)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.679, 0.101, 0.046)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.679, 0.101, 0.046)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.679, 0.101, 0.046)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.734, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.734, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.734, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.734, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.734, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.734, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.734, 0.101, 0.046)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.788, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.788, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.788, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.788, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.788, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.788, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.860, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.887, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.887, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.887, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.942, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.997, 0.101, 0.003)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.997, 0.101, 0.003)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.997, 0.101, 0.003)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.997, 0.101, 0.003)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.997, 0.101, 0.003)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.997, 0.101, 0.003)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.997, 0.101, 0.003)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.082,
+            "y": 0.082
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      }
+    ],
+    "finalAnswer": "Returned to the main HorizonCalendar example menu; the list of demos is shown again."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-8",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Switch the calendar layout to Horizontal, then open the \"Single Day Selection\" demo.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.595,
+            "y": 0.13
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.476, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.177
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Single Day Selection\"  (0.316, 0.071, 0.369, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.411, 0.514, 0.028)\n  AXGroup \"February 2020\"  (0.661, 0.411, 0.339, 0.028)\n  AXGroup \"M\"  (0.092, 0.439, 0.058, 0.026)\n  AXGroup \"T\"  (0.168, 0.439, 0.058, 0.026)\n  AXGroup \"W\"  (0.245, 0.439, 0.058, 0.026)\n  AXGroup \"T\"  (0.320, 0.439, 0.058, 0.026)\n  AXGroup \"F\"  (0.396, 0.439, 0.058, 0.026)\n  AXGroup \"S\"  (0.472, 0.439, 0.058, 0.026)\n  AXGroup \"S\"  (0.548, 0.439, 0.058, 0.026)\n  AXGroup \"M\"  (0.661, 0.439, 0.058, 0.026)\n  AXGroup \"T\"  (0.736, 0.439, 0.058, 0.026)\n  AXGroup \"W\"  (0.813, 0.439, 0.058, 0.026)\n  AXGroup \"T\"  (0.889, 0.439, 0.058, 0.026)\n  AXButton \"Wednesday, 1 Jan 2020\"  (0.245, 0.474, 0.058, 0.026)\n  AXButton \"Thursday, 2 Jan 2020\"  (0.320, 0.474, 0.058, 0.026)\n  AXButton \"Friday, 3 Jan 2020\"  (0.396, 0.474, 0.058, 0.026)\n  AXButton \"Saturday, 4 Jan 2020\"  (0.472, 0.474, 0.058, 0.026)\n  AXButton \"Sunday, 5 Jan 2020\"  (0.548, 0.474, 0.058, 0.026)\n  AXButton \"Monday, 6 Jan 2020\"  (0.092, 0.509, 0.058, 0.026)\n  AXButton \"Tuesday, 7 Jan 2020\"  (0.168, 0.509, 0.058, 0.026)\n  AXButton \"Wednesday, 8 Jan 2020\"  (0.245, 0.509, 0.058, 0.026)\n  AXButton \"Thursday, 9 Jan 2020\"  (0.320, 0.509, 0.058, 0.026)\n  AXButton \"Friday, 10 Jan 2020\"  (0.396, 0.509, 0.058, 0.026)\n  AXButton \"Saturday, 11 Jan 2020\"  (0.472, 0.509, 0.058, 0.026)\n  AXButton \"Sunday, 12 Jan 2020\"  (0.548, 0.509, 0.058, 0.026)\n  AXButton \"Monday, 3 Feb 2020\"  (0.661, 0.509, 0.058, 0.026)\n  AXButton \"Tuesday, 4 Feb 2020\"  (0.736, 0.509, 0.058, 0.026)\n  AXButton \"Wednesday, 5 Feb 2020\"  (0.813, 0.509, 0.058, 0.026)\n  AXButton \"Thursday, 6 Feb 2020\"  (0.889, 0.509, 0.058, 0.026)\n  AXButton \"Monday, 13 Jan 2020\"  (0.092, 0.544, 0.058, 0.026)\n  AXButton \"Tuesday, 14 Jan 2020\"  (0.168, 0.544, 0.058, 0.026)\n  AXButton \"Wednesday, 15 Jan 2020\"  (0.245, 0.544, 0.058, 0.026)\n  AXButton \"Thursday, 16 Jan 2020\"  (0.320, 0.544, 0.058, 0.026)\n  AXButton \"Friday, 17 Jan 2020\"  (0.396, 0.544, 0.058, 0.026)\n  AXButton \"Saturday, 18 Jan 2020\"  (0.472, 0.544, 0.058, 0.026)\n  AXButton \"Sunday, 19 Jan 2020\"  (0.548, 0.544, 0.058, 0.026)\n  AXButton \"Monday, 10 Feb 2020\"  (0.661, 0.544, 0.058, 0.026)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.736, 0.544, 0.058, 0.026)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.813, 0.544, 0.058, 0.026)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.889, 0.544, 0.058, 0.026)\n  AXButton \"Monday, 20 Jan 2020\"  (0.092, 0.578, 0.058, 0.026)\n  AXButton \"Tuesday, 21 Jan 2020\"  (0.168, 0.578, 0.058, 0.026)\n  AXButton \"Wednesday, 22 Jan 2020\"  (0.245, 0.578, 0.058, 0.026)\n  AXButton \"Thursday, 23 Jan 2020\"  (0.320, 0.578, 0.058, 0.026)\n  AXButton \"Friday, 24 Jan 2020\"  (0.396, 0.578, 0.058, 0.026)\n  AXButton \"Saturday, 25 Jan 2020\"  (0.472, 0.578, 0.058, 0.026)\n  AXButton \"Sunday, 26 Jan 2020\"  (0.548, 0.578, 0.058, 0.026)\n  AXButton \"Monday, 17 Feb 2020\"  (0.661, 0.578, 0.058, 0.026)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.736, 0.578, 0.058, 0.026)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.813, 0.578, 0.058, 0.026)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.889, 0.578, 0.058, 0.026)\n  AXButton \"Monday, 27 Jan 2020\"  (0.092, 0.613, 0.058, 0.026)\n  AXButton \"Tuesday, 28 Jan 2020\"  (0.168, 0.613, 0.058, 0.026)\n  AXButton \"Wednesday, 29 Jan 2020\"  (0.245, 0.613, 0.058, 0.026)\n  AXButton \"Thursday, 30 Jan 2020\"  (0.320, 0.613, 0.058, 0.026)\n  AXButton \"Friday, 31 Jan 2020\"  (0.396, 0.613, 0.058, 0.026)\n  AXButton \"Monday, 24 Feb 2020\"  (0.661, 0.613, 0.058, 0.026)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.736, 0.613, 0.058, 0.026)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.813, 0.613, 0.058, 0.026)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.889, 0.613, 0.058, 0.026)"
+        }
+      }
+    ],
+    "finalAnswer": "Layout set to Horizontal; the Single Day Selection calendar lays months out side-by-side (January and February visible together)."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-9",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "swipe",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap",
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "Open the \"Single Day Selection\" demo and swipe up once to scroll the calendar forward to a later month.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.177
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Single Day Selection\"  (0.316, 0.071, 0.369, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.113, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.141, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.141, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.141, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Jan 2020\"  (0.331, 0.196, 0.101, 0.046)\n  AXButton \"Thursday, 2 Jan 2020\"  (0.450, 0.196, 0.101, 0.046)\n  AXButton \"Friday, 3 Jan 2020\"  (0.569, 0.196, 0.101, 0.046)\n  AXButton \"Saturday, 4 Jan 2020\"  (0.688, 0.196, 0.101, 0.046)\n  AXButton \"Sunday, 5 Jan 2020\"  (0.808, 0.196, 0.101, 0.046)\n  AXButton \"Monday, 6 Jan 2020\"  (0.092, 0.251, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Jan 2020\"  (0.211, 0.251, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Jan 2020\"  (0.331, 0.251, 0.101, 0.046)\n  AXButton \"Thursday, 9 Jan 2020\"  (0.450, 0.251, 0.101, 0.046)\n  AXButton \"Friday, 10 Jan 2020\"  (0.569, 0.251, 0.101, 0.046)\n  AXButton \"Saturday, 11 Jan 2020\"  (0.688, 0.251, 0.101, 0.046)\n  AXButton \"Sunday, 12 Jan 2020\"  (0.808, 0.251, 0.101, 0.046)\n  AXButton \"Monday, 13 Jan 2020\"  (0.092, 0.305, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Jan 2020\"  (0.211, 0.305, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Jan 2020\"  (0.331, 0.305, 0.101, 0.046)\n  AXButton \"Thursday, 16 Jan 2020\"  (0.450, 0.305, 0.101, 0.046)\n  AXButton \"Friday, 17 Jan 2020\"  (0.569, 0.305, 0.101, 0.046)\n  AXButton \"Saturday, 18 Jan 2020\"  (0.688, 0.305, 0.101, 0.046)\n  AXButton \"Sunday, 19 Jan 2020\"  (0.808, 0.305, 0.101, 0.046)\n  AXButton \"Monday, 20 Jan 2020\"  (0.092, 0.360, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Jan 2020\"  (0.211, 0.360, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Jan 2020\"  (0.331, 0.360, 0.101, 0.046)\n  AXButton \"Thursday, 23 Jan 2020\"  (0.450, 0.360, 0.101, 0.046)\n  AXButton \"Friday, 24 Jan 2020\"  (0.569, 0.360, 0.101, 0.046)\n  AXButton \"Saturday, 25 Jan 2020\"  (0.688, 0.360, 0.101, 0.046)\n  AXButton \"Sunday, 26 Jan 2020\"  (0.808, 0.360, 0.101, 0.046)\n  AXButton \"Monday, 27 Jan 2020\"  (0.092, 0.415, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Jan 2020\"  (0.211, 0.415, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Jan 2020\"  (0.331, 0.415, 0.101, 0.046)\n  AXButton \"Thursday, 30 Jan 2020\"  (0.450, 0.415, 0.101, 0.046)\n  AXButton \"Friday, 31 Jan 2020\"  (0.569, 0.415, 0.101, 0.046)\n  AXGroup \"February 2020\"  (0.092, 0.487, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.514, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.514, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.514, 0.101, 0.046)\n  AXButton \"Saturday, 1 Feb 2020\"  (0.688, 0.569, 0.101, 0.046)\n  AXButton \"Sunday, 2 Feb 2020\"  (0.808, 0.569, 0.101, 0.046)\n  AXButton \"Monday, 3 Feb 2020\"  (0.092, 0.624, 0.101, 0.046)\n  AXButton \"Tuesday, 4 Feb 2020\"  (0.211, 0.624, 0.101, 0.046)\n  AXButton \"Wednesday, 5 Feb 2020\"  (0.331, 0.624, 0.101, 0.046)\n  AXButton \"Thursday, 6 Feb 2020\"  (0.450, 0.624, 0.101, 0.046)\n  AXButton \"Friday, 7 Feb 2020\"  (0.569, 0.624, 0.101, 0.046)\n  AXButton \"Saturday, 8 Feb 2020\"  (0.688, 0.624, 0.101, 0.046)\n  AXButton \"Sunday, 9 Feb 2020\"  (0.808, 0.624, 0.101, 0.046)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.679, 0.101, 0.046)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.679, 0.101, 0.046)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.679, 0.101, 0.046)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.679, 0.101, 0.046)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.679, 0.101, 0.046)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.679, 0.101, 0.046)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.679, 0.101, 0.046)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.734, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.734, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.734, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.734, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.734, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.734, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.734, 0.101, 0.046)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.788, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.788, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.788, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.788, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.788, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.788, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.860, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.887, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.887, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.887, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.942, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.997, 0.101, 0.003)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.997, 0.101, 0.003)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.997, 0.101, 0.003)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.997, 0.101, 0.003)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.997, 0.101, 0.003)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.997, 0.101, 0.003)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.997, 0.101, 0.003)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.5,
+            "fromY": 0.7,
+            "toX": 0.5,
+            "toY": 0.4
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.000, 0.101, 0.033)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.000, 0.101, 0.028)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.000, 0.101, 0.033)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.000, 0.101, 0.028)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.000, 0.101, 0.033)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.000, 0.101, 0.028)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.000, 0.101, 0.033)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.000, 0.101, 0.028)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.000, 0.101, 0.033)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.000, 0.101, 0.028)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.000, 0.101, 0.033)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.000, 0.101, 0.028)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.000, 0.101, 0.033)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.000, 0.101, 0.028)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.036, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.036, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.036, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.036, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.036, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.036, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.036, 0.101, 0.046)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.041, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.041, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.041, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.041, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.041, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.041, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.041, 0.101, 0.046)\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Single Day Selection\"  (0.316, 0.071, 0.369, 0.021)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.090, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.090, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.090, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.090, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.090, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.090, 0.101, 0.046)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.095, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.095, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.095, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.095, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.095, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.095, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.161, 0.816, 0.028)\n  AXGroup \"March 2020\"  (0.092, 0.167, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.189, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.189, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.189, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.189, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.189, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.189, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.189, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.244, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.249, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.298, 0.101, 0.046)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.298, 0.101, 0.046)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.298, 0.101, 0.046)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.298, 0.101, 0.046)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.298, 0.101, 0.046)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.298, 0.101, 0.046)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.298, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.304, 0.101, 0.046)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.304, 0.101, 0.046)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.304, 0.101, 0.046)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.304, 0.101, 0.046)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.304, 0.101, 0.046)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.304, 0.101, 0.046)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.304, 0.101, 0.046)\n  AXButton \"Thursday, 12 Mar 2020\"  (0.450, 0.352, 0.101, 0.046)\n  AXButton \"Friday, 13 Mar 2020\"  (0.569, 0.352, 0.101, 0.046)\n  AXButton \"Saturday, 14 Mar 2020\"  (0.688, 0.352, 0.101, 0.046)\n  AXButton \"Sunday, 15 Mar 2020\"  (0.808, 0.352, 0.101, 0.046)\n  AXButton \"Monday, 9 Mar 2020\"  (0.092, 0.353, 0.101, 0.046)\n  AXButton \"Tuesday, 10 Mar 2020\"  (0.211, 0.353, 0.101, 0.046)\n  AXButton \"Wednesday, 11 Mar 2020\"  (0.331, 0.353, 0.101, 0.046)\n  AXButton \"Monday, 9 Mar 2020\"  (0.092, 0.359, 0.101, 0.046)\n  AXButton \"Tuesday, 10 Mar 2020\"  (0.211, 0.359, 0.101, 0.046)\n  AXButton \"Wednesday, 11 Mar 2020\"  (0.331, 0.359, 0.101, 0.046)\n  AXButton \"Thursday, 12 Mar 2020\"  (0.450, 0.359, 0.101, 0.046)\n  AXButton \"Friday, 13 Mar 2020\"  (0.569, 0.359, 0.101, 0.046)\n  AXButton \"Saturday, 14 Mar 2020\"  (0.688, 0.359, 0.101, 0.046)\n  AXButton \"Sunday, 15 Mar 2020\"  (0.808, 0.359, 0.101, 0.046)\n  AXButton \"Monday, 16 Mar 2020\"  (0.092, 0.407, 0.101, 0.046)\n  AXButton \"Tuesday, 17 Mar 2020\"  (0.211, 0.407, 0.101, 0.046)\n  AXButton \"Wednesday, 18 Mar 2020\"  (0.331, 0.407, 0.101, 0.046)\n  AXButton \"Thursday, 19 Mar 2020\"  (0.450, 0.407, 0.101, 0.046)\n  AXButton \"Friday, 20 Mar 2020\"  (0.569, 0.407, 0.101, 0.046)\n  AXButton \"Saturday, 21 Mar 2020\"  (0.688, 0.407, 0.101, 0.046)\n  AXButton \"Sunday, 22 Mar 2020\"  (0.808, 0.407, 0.101, 0.046)\n  AXButton \"Monday, 16 Mar 2020\"  (0.092, 0.414, 0.101, 0.046)\n  AXButton \"Tuesday, 17 Mar 2020\"  (0.211, 0.414, 0.101, 0.046)\n  AXButton \"Wednesday, 18 Mar 2020\"  (0.331, 0.414, 0.101, 0.046)\n  AXButton \"Thursday, 19 Mar 2020\"  (0.450, 0.414, 0.101, 0.046)\n  AXButton \"Friday, 20 Mar 2020\"  (0.569, 0.414, 0.101, 0.046)\n  AXButton \"Saturday, 21 Mar 2020\"  (0.688, 0.414, 0.101, 0.046)\n  AXButton \"Sunday, 22 Mar 2020\"  (0.808, 0.414, 0.101, 0.046)\n  AXButton \"Monday, 23 Mar 2020\"  (0.092, 0.462, 0.101, 0.046)\n  AXButton \"Tuesday, 24 Mar 2020\"  (0.211, 0.462, 0.101, 0.046)\n  AXButton \"Wednesday, 25 Mar 2020\"  (0.331, 0.462, 0.101, 0.046)\n  AXButton \"Thursday, 26 Mar 2020\"  (0.450, 0.462, 0.101, 0.046)\n  AXButton \"Friday, 27 Mar 2020\"  (0.569, 0.462, 0.101, 0.046)\n  AXButton \"Saturday, 28 Mar 2020\"  (0.688, 0.462, 0.101, 0.046)\n  AXButton \"Sunday, 29 Mar 2020\"  (0.808, 0.462, 0.101, 0.046)\n  AXButton \"Monday, 23 Mar 2020\"  (0.092, 0.469, 0.101, 0.046)\n  AXButton \"Tuesday, 24 Mar 2020\"  (0.211, 0.469, 0.101, 0.046)\n  AXButton \"Wednesday, 25 Mar 2020\"  (0.331, 0.469, 0.101, 0.046)\n  AXButton \"Thursday, 26 Mar 2020\"  (0.450, 0.469, 0.101, 0.046)\n  AXButton \"Friday, 27 Mar 2020\"  (0.569, 0.469, 0.101, 0.046)\n  AXButton \"Saturday, 28 Mar 2020\"  (0.688, 0.469, 0.101, 0.046)\n  AXButton \"Sunday, 29 Mar 2020\"  (0.808, 0.469, 0.101, 0.046)\n  AXButton \"Monday, 30 Mar 2020\"  (0.092, 0.517, 0.101, 0.046)\n  AXButton \"Tuesday, 31 Mar 2020\"  (0.211, 0.517, 0.101, 0.046)\n  AXButton \"Monday, 30 Mar 2020\"  (0.092, 0.523, 0.101, 0.046)\n  AXButton \"Tuesday, 31 Mar 2020\"  (0.211, 0.523, 0.101, 0.046)\n  AXGroup \"April 2020\"  (0.092, 0.588, 0.816, 0.028)\n  AXGroup \"April 2020\"  (0.092, 0.595, 0.816, 0.028)\n  AXStaticText \"S\"  (0.808, 0.615, 0.101, 0.046)\n  AXGroup \"M\"  (0.092, 0.616, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.616, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.616, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.616, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.616, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.616, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.616, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Apr 2020\"  (0.331, 0.670, 0.101, 0.046)\n  AXButton \"Thursday, 2 Apr 2020\"  (0.450, 0.670, 0.101, 0.046)\n  AXButton \"Friday, 3 Apr 2020\"  (0.569, 0.670, 0.101, 0.046)\n  AXButton \"Saturday, 4 Apr 2020\"  (0.688, 0.670, 0.101, 0.046)\n  AXButton \"Sunday, 5 Apr 2020\"  (0.808, 0.670, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Apr 2020\"  (0.331, 0.677, 0.101, 0.046)\n  AXButton \"Thursday, 2 Apr 2020\"  (0.450, 0.677, 0.101, 0.046)\n  AXButton \"Friday, 3 Apr 2020\"  (0.569, 0.677, 0.101, 0.046)\n  AXButton \"Saturday, 4 Apr 2020\"  (0.688, 0.677, 0.101, 0.046)\n  AXButton \"Sunday, 5 Apr 2020\"  (0.808, 0.677, 0.101, 0.046)\n  AXButton \"Monday, 6 Apr 2020\"  (0.092, 0.725, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Apr 2020\"  (0.211, 0.725, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Apr 2020\"  (0.331, 0.725, 0.101, 0.046)\n  AXButton \"Thursday, 9 Apr 2020\"  (0.450, 0.725, 0.101, 0.046)\n  AXButton \"Friday, 10 Apr 2020\"  (0.569, 0.725, 0.101, 0.046)\n  AXButton \"Saturday, 11 Apr 2020\"  (0.688, 0.725, 0.101, 0.046)\n  AXButton \"Sunday, 12 Apr 2020\"  (0.808, 0.725, 0.101, 0.046)\n  AXButton \"Monday, 6 Apr 2020\"  (0.092, 0.732, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Apr 2020\"  (0.211, 0.732, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Apr 2020\"  (0.331, 0.732, 0.101, 0.046)\n  AXButton \"Thursday, 9 Apr 2020\"  (0.450, 0.732, 0.101, 0.046)\n  AXButton \"Friday, 10 Apr 2020\"  (0.569, 0.732, 0.101, 0.046)\n  AXButton \"Saturday, 11 Apr 2020\"  (0.688, 0.732, 0.101, 0.046)\n  AXButton \"Sunday, 12 Apr 2020\"  (0.808, 0.732, 0.101, 0.046)\n  AXButton \"Monday, 13 Apr 2020\"  (0.092, 0.780, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Apr 2020\"  (0.211, 0.780, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Apr 2020\"  (0.331, 0.780, 0.101, 0.046)\n  AXButton \"Thursday, 16 Apr 2020\"  (0.450, 0.780, 0.101, 0.046)\n  AXButton \"Friday, 17 Apr 2020\"  (0.569, 0.780, 0.101, 0.046)\n  AXButton \"Saturday, 18 Apr 2020\"  (0.688, 0.780, 0.101, 0.046)\n  AXButton \"Sunday, 19 Apr 2020\"  (0.808, 0.780, 0.101, 0.046)\n  AXButton \"Monday, 13 Apr 2020\"  (0.092, 0.787, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Apr 2020\"  (0.211, 0.787, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Apr 2020\"  (0.331, 0.787, 0.101, 0.046)\n  AXButton \"Thursday, 16 Apr 2020\"  (0.450, 0.787, 0.101, 0.046)\n  AXButton \"Friday, 17 Apr 2020\"  (0.569, 0.787, 0.101, 0.046)\n  AXButton \"Saturday, 18 Apr 2020\"  (0.688, 0.787, 0.101, 0.046)\n  AXButton \"Sunday, 19 Apr 2020\"  (0.808, 0.787, 0.101, 0.046)\n  AXButton \"Monday, 20 Apr 2020\"  (0.092, 0.835, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Apr 2020\"  (0.211, 0.835, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Apr 2020\"  (0.331, 0.835, 0.101, 0.046)\n  AXButton \"Thursday, 23 Apr 2020\"  (0.450, 0.835, 0.101, 0.046)\n  AXButton \"Friday, 24 Apr 2020\"  (0.569, 0.835, 0.101, 0.046)\n  AXButton \"Saturday, 25 Apr 2020\"  (0.688, 0.835, 0.101, 0.046)\n  AXButton \"Sunday, 26 Apr 2020\"  (0.808, 0.835, 0.101, 0.046)\n  AXButton \"Thursday, 23 Apr 2020\"  (0.450, 0.841, 0.101, 0.046)\n  AXButton \"Friday, 24 Apr 2020\"  (0.569, 0.841, 0.101, 0.046)\n  AXButton \"Saturday, 25 Apr 2020\"  (0.688, 0.841, 0.101, 0.046)\n  AXButton \"Sunday, 26 Apr 2020\"  (0.808, 0.841, 0.101, 0.046)\n  AXButton \"Monday, 20 Apr 2020\"  (0.092, 0.842, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Apr 2020\"  (0.211, 0.842, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Apr 2020\"  (0.331, 0.842, 0.101, 0.046)\n  AXButton \"Monday, 27 Apr 2020\"  (0.092, 0.889, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Apr 2020\"  (0.211, 0.889, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Apr 2020\"  (0.331, 0.889, 0.101, 0.046)\n  AXButton \"Thursday, 30 Apr 2020\"  (0.450, 0.889, 0.101, 0.046)\n  AXButton \"Monday, 27 Apr 2020\"  (0.092, 0.895, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Apr 2020\"  (0.211, 0.895, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Apr 2020\"  (0.331, 0.895, 0.101, 0.046)\n  AXButton \"Thursday, 30 Apr 2020\"  (0.450, 0.895, 0.101, 0.046)\n  AXGroup \"May 2020\"  (0.092, 0.961, 0.816, 0.028)\n  AXGroup \"May 2020\"  (0.092, 0.967, 0.816, 0.028)\n  AXGroup \"T\"  (0.211, 0.987, 0.101, 0.013)\n  AXGroup \"W\"  (0.331, 0.987, 0.101, 0.013)\n  AXGroup \"T\"  (0.450, 0.987, 0.101, 0.013)\n  AXGroup \"F\"  (0.569, 0.987, 0.101, 0.013)\n  AXGroup \"S\"  (0.688, 0.987, 0.101, 0.013)\n  AXGroup \"S\"  (0.808, 0.987, 0.101, 0.013)\n  AXGroup \"M\"  (0.092, 0.988, 0.101, 0.012)"
+        }
+      }
+    ],
+    "finalAnswer": "Swiped up; the calendar scrolled forward and now shows later months (March / April 2020)."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-10",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "scroll-find",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap",
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "Open the \"Single Day Selection\" demo and scroll the calendar forward until May 2020 is visible.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.177
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Single Day Selection\"  (0.316, 0.071, 0.369, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.113, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.141, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.141, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.141, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Jan 2020\"  (0.331, 0.196, 0.101, 0.046)\n  AXButton \"Thursday, 2 Jan 2020\"  (0.450, 0.196, 0.101, 0.046)\n  AXButton \"Friday, 3 Jan 2020\"  (0.569, 0.196, 0.101, 0.046)\n  AXButton \"Saturday, 4 Jan 2020\"  (0.688, 0.196, 0.101, 0.046)\n  AXButton \"Sunday, 5 Jan 2020\"  (0.808, 0.196, 0.101, 0.046)\n  AXButton \"Monday, 6 Jan 2020\"  (0.092, 0.251, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Jan 2020\"  (0.211, 0.251, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Jan 2020\"  (0.331, 0.251, 0.101, 0.046)\n  AXButton \"Thursday, 9 Jan 2020\"  (0.450, 0.251, 0.101, 0.046)\n  AXButton \"Friday, 10 Jan 2020\"  (0.569, 0.251, 0.101, 0.046)\n  AXButton \"Saturday, 11 Jan 2020\"  (0.688, 0.251, 0.101, 0.046)\n  AXButton \"Sunday, 12 Jan 2020\"  (0.808, 0.251, 0.101, 0.046)\n  AXButton \"Monday, 13 Jan 2020\"  (0.092, 0.305, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Jan 2020\"  (0.211, 0.305, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Jan 2020\"  (0.331, 0.305, 0.101, 0.046)\n  AXButton \"Thursday, 16 Jan 2020\"  (0.450, 0.305, 0.101, 0.046)\n  AXButton \"Friday, 17 Jan 2020\"  (0.569, 0.305, 0.101, 0.046)\n  AXButton \"Saturday, 18 Jan 2020\"  (0.688, 0.305, 0.101, 0.046)\n  AXButton \"Sunday, 19 Jan 2020\"  (0.808, 0.305, 0.101, 0.046)\n  AXButton \"Monday, 20 Jan 2020\"  (0.092, 0.360, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Jan 2020\"  (0.211, 0.360, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Jan 2020\"  (0.331, 0.360, 0.101, 0.046)\n  AXButton \"Thursday, 23 Jan 2020\"  (0.450, 0.360, 0.101, 0.046)\n  AXButton \"Friday, 24 Jan 2020\"  (0.569, 0.360, 0.101, 0.046)\n  AXButton \"Saturday, 25 Jan 2020\"  (0.688, 0.360, 0.101, 0.046)\n  AXButton \"Sunday, 26 Jan 2020\"  (0.808, 0.360, 0.101, 0.046)\n  AXButton \"Monday, 27 Jan 2020\"  (0.092, 0.415, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Jan 2020\"  (0.211, 0.415, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Jan 2020\"  (0.331, 0.415, 0.101, 0.046)\n  AXButton \"Thursday, 30 Jan 2020\"  (0.450, 0.415, 0.101, 0.046)\n  AXButton \"Friday, 31 Jan 2020\"  (0.569, 0.415, 0.101, 0.046)\n  AXGroup \"February 2020\"  (0.092, 0.487, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.514, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.514, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.514, 0.101, 0.046)\n  AXButton \"Saturday, 1 Feb 2020\"  (0.688, 0.569, 0.101, 0.046)\n  AXButton \"Sunday, 2 Feb 2020\"  (0.808, 0.569, 0.101, 0.046)\n  AXButton \"Monday, 3 Feb 2020\"  (0.092, 0.624, 0.101, 0.046)\n  AXButton \"Tuesday, 4 Feb 2020\"  (0.211, 0.624, 0.101, 0.046)\n  AXButton \"Wednesday, 5 Feb 2020\"  (0.331, 0.624, 0.101, 0.046)\n  AXButton \"Thursday, 6 Feb 2020\"  (0.450, 0.624, 0.101, 0.046)\n  AXButton \"Friday, 7 Feb 2020\"  (0.569, 0.624, 0.101, 0.046)\n  AXButton \"Saturday, 8 Feb 2020\"  (0.688, 0.624, 0.101, 0.046)\n  AXButton \"Sunday, 9 Feb 2020\"  (0.808, 0.624, 0.101, 0.046)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.679, 0.101, 0.046)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.679, 0.101, 0.046)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.679, 0.101, 0.046)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.679, 0.101, 0.046)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.679, 0.101, 0.046)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.679, 0.101, 0.046)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.679, 0.101, 0.046)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.734, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.734, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.734, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.734, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.734, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.734, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.734, 0.101, 0.046)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.788, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.788, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.788, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.788, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.788, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.788, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.860, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.887, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.887, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.887, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.942, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.997, 0.101, 0.003)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.997, 0.101, 0.003)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.997, 0.101, 0.003)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.997, 0.101, 0.003)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.997, 0.101, 0.003)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.997, 0.101, 0.003)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.997, 0.101, 0.003)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.5,
+            "fromY": 0.7,
+            "toX": 0.5,
+            "toY": 0.4
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.000, 0.101, 0.040)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.000, 0.101, 0.034)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.000, 0.101, 0.040)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.000, 0.101, 0.034)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.000, 0.101, 0.040)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.000, 0.101, 0.034)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.000, 0.101, 0.040)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.000, 0.101, 0.034)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.000, 0.101, 0.040)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.000, 0.101, 0.034)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.000, 0.101, 0.040)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.000, 0.101, 0.034)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.000, 0.101, 0.040)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.000, 0.101, 0.034)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.042, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.042, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.042, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.042, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.042, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.042, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.042, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.047, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.047, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.047, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.047, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.047, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.047, 0.101, 0.046)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.048, 0.101, 0.046)\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Single Day Selection\"  (0.316, 0.071, 0.369, 0.021)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.096, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.096, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.096, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.096, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.096, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.096, 0.101, 0.046)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.102, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.102, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.102, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.102, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.102, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.102, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.167, 0.816, 0.028)\n  AXGroup \"March 2020\"  (0.092, 0.173, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.195, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.195, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.195, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.195, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.195, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.195, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.195, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.250, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.256, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.305, 0.101, 0.046)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.305, 0.101, 0.046)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.305, 0.101, 0.046)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.305, 0.101, 0.046)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.305, 0.101, 0.046)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.305, 0.101, 0.046)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.305, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.311, 0.101, 0.046)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.311, 0.101, 0.046)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.311, 0.101, 0.046)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.311, 0.101, 0.046)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.311, 0.101, 0.046)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.311, 0.101, 0.046)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.311, 0.101, 0.046)\n  AXButton \"Wednesday, 11 Mar 2020\"  (0.331, 0.358, 0.101, 0.046)\n  AXButton \"Thursday, 12 Mar 2020\"  (0.450, 0.358, 0.101, 0.046)\n  AXButton \"Friday, 13 Mar 2020\"  (0.569, 0.358, 0.101, 0.046)\n  AXButton \"Saturday, 14 Mar 2020\"  (0.688, 0.358, 0.101, 0.046)\n  AXButton \"Sunday, 15 Mar 2020\"  (0.808, 0.358, 0.101, 0.046)\n  AXButton \"Monday, 9 Mar 2020\"  (0.092, 0.359, 0.101, 0.046)\n  AXButton \"Tuesday, 10 Mar 2020\"  (0.211, 0.359, 0.101, 0.046)\n  AXButton \"Monday, 9 Mar 2020\"  (0.092, 0.365, 0.101, 0.046)\n  AXButton \"Tuesday, 10 Mar 2020\"  (0.211, 0.365, 0.101, 0.046)\n  AXButton \"Wednesday, 11 Mar 2020\"  (0.331, 0.365, 0.101, 0.046)\n  AXButton \"Thursday, 12 Mar 2020\"  (0.450, 0.365, 0.101, 0.046)\n  AXButton \"Friday, 13 Mar 2020\"  (0.569, 0.365, 0.101, 0.046)\n  AXButton \"Saturday, 14 Mar 2020\"  (0.688, 0.365, 0.101, 0.046)\n  AXButton \"Sunday, 15 Mar 2020\"  (0.808, 0.365, 0.101, 0.046)\n  AXButton \"Monday, 16 Mar 2020\"  (0.092, 0.414, 0.101, 0.046)\n  AXButton \"Tuesday, 17 Mar 2020\"  (0.211, 0.414, 0.101, 0.046)\n  AXButton \"Wednesday, 18 Mar 2020\"  (0.331, 0.414, 0.101, 0.046)\n  AXButton \"Thursday, 19 Mar 2020\"  (0.450, 0.414, 0.101, 0.046)\n  AXButton \"Friday, 20 Mar 2020\"  (0.569, 0.414, 0.101, 0.046)\n  AXButton \"Saturday, 21 Mar 2020\"  (0.688, 0.414, 0.101, 0.046)\n  AXButton \"Sunday, 22 Mar 2020\"  (0.808, 0.414, 0.101, 0.046)\n  AXButton \"Monday, 16 Mar 2020\"  (0.092, 0.421, 0.101, 0.046)\n  AXButton \"Tuesday, 17 Mar 2020\"  (0.211, 0.421, 0.101, 0.046)\n  AXButton \"Wednesday, 18 Mar 2020\"  (0.331, 0.421, 0.101, 0.046)\n  AXButton \"Thursday, 19 Mar 2020\"  (0.450, 0.421, 0.101, 0.046)\n  AXButton \"Friday, 20 Mar 2020\"  (0.569, 0.421, 0.101, 0.046)\n  AXButton \"Saturday, 21 Mar 2020\"  (0.688, 0.421, 0.101, 0.046)\n  AXButton \"Sunday, 22 Mar 2020\"  (0.808, 0.421, 0.101, 0.046)\n  AXButton \"Monday, 23 Mar 2020\"  (0.092, 0.468, 0.101, 0.046)\n  AXButton \"Tuesday, 24 Mar 2020\"  (0.211, 0.468, 0.101, 0.046)\n  AXButton \"Wednesday, 25 Mar 2020\"  (0.331, 0.468, 0.101, 0.046)\n  AXButton \"Thursday, 26 Mar 2020\"  (0.450, 0.468, 0.101, 0.046)\n  AXButton \"Friday, 27 Mar 2020\"  (0.569, 0.468, 0.101, 0.046)\n  AXButton \"Saturday, 28 Mar 2020\"  (0.688, 0.468, 0.101, 0.046)\n  AXButton \"Sunday, 29 Mar 2020\"  (0.808, 0.468, 0.101, 0.046)\n  AXButton \"Monday, 23 Mar 2020\"  (0.092, 0.475, 0.101, 0.046)\n  AXButton \"Tuesday, 24 Mar 2020\"  (0.211, 0.475, 0.101, 0.046)\n  AXButton \"Wednesday, 25 Mar 2020\"  (0.331, 0.475, 0.101, 0.046)\n  AXButton \"Thursday, 26 Mar 2020\"  (0.450, 0.475, 0.101, 0.046)\n  AXButton \"Friday, 27 Mar 2020\"  (0.569, 0.475, 0.101, 0.046)\n  AXButton \"Saturday, 28 Mar 2020\"  (0.688, 0.475, 0.101, 0.046)\n  AXButton \"Sunday, 29 Mar 2020\"  (0.808, 0.475, 0.101, 0.046)\n  AXButton \"Monday, 30 Mar 2020\"  (0.092, 0.523, 0.101, 0.046)\n  AXButton \"Tuesday, 31 Mar 2020\"  (0.211, 0.523, 0.101, 0.046)\n  AXButton \"Monday, 30 Mar 2020\"  (0.092, 0.530, 0.101, 0.046)\n  AXButton \"Tuesday, 31 Mar 2020\"  (0.211, 0.530, 0.101, 0.046)\n  AXGroup \"April 2020\"  (0.092, 0.594, 0.816, 0.028)\n  AXGroup \"April 2020\"  (0.092, 0.601, 0.816, 0.028)\n  AXGroup \"F\"  (0.569, 0.621, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.621, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.621, 0.101, 0.046)\n  AXGroup \"M\"  (0.092, 0.622, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.622, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.622, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.622, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Apr 2020\"  (0.331, 0.676, 0.101, 0.046)\n  AXButton \"Thursday, 2 Apr 2020\"  (0.450, 0.676, 0.101, 0.046)\n  AXButton \"Friday, 3 Apr 2020\"  (0.569, 0.676, 0.101, 0.046)\n  AXButton \"Saturday, 4 Apr 2020\"  (0.688, 0.676, 0.101, 0.046)\n  AXButton \"Sunday, 5 Apr 2020\"  (0.808, 0.676, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Apr 2020\"  (0.331, 0.684, 0.101, 0.046)\n  AXButton \"Thursday, 2 Apr 2020\"  (0.450, 0.684, 0.101, 0.046)\n  AXButton \"Friday, 3 Apr 2020\"  (0.569, 0.684, 0.101, 0.046)\n  AXButton \"Saturday, 4 Apr 2020\"  (0.688, 0.684, 0.101, 0.046)\n  AXButton \"Sunday, 5 Apr 2020\"  (0.808, 0.684, 0.101, 0.046)\n  AXButton \"Monday, 6 Apr 2020\"  (0.092, 0.731, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Apr 2020\"  (0.211, 0.731, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Apr 2020\"  (0.331, 0.731, 0.101, 0.046)\n  AXButton \"Thursday, 9 Apr 2020\"  (0.450, 0.731, 0.101, 0.046)\n  AXButton \"Friday, 10 Apr 2020\"  (0.569, 0.731, 0.101, 0.046)\n  AXButton \"Saturday, 11 Apr 2020\"  (0.688, 0.731, 0.101, 0.046)\n  AXButton \"Sunday, 12 Apr 2020\"  (0.808, 0.731, 0.101, 0.046)\n  AXButton \"Friday, 10 Apr 2020\"  (0.569, 0.738, 0.101, 0.046)\n  AXButton \"Saturday, 11 Apr 2020\"  (0.688, 0.738, 0.101, 0.046)\n  AXButton \"Sunday, 12 Apr 2020\"  (0.808, 0.738, 0.101, 0.046)\n  AXButton \"Monday, 6 Apr 2020\"  (0.092, 0.739, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Apr 2020\"  (0.211, 0.739, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Apr 2020\"  (0.331, 0.739, 0.101, 0.046)\n  AXButton \"Thursday, 9 Apr 2020\"  (0.450, 0.739, 0.101, 0.046)\n  AXButton \"Monday, 13 Apr 2020\"  (0.092, 0.786, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Apr 2020\"  (0.211, 0.786, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Apr 2020\"  (0.331, 0.786, 0.101, 0.046)\n  AXButton \"Thursday, 16 Apr 2020\"  (0.450, 0.786, 0.101, 0.046)\n  AXButton \"Friday, 17 Apr 2020\"  (0.569, 0.786, 0.101, 0.046)\n  AXButton \"Saturday, 18 Apr 2020\"  (0.688, 0.786, 0.101, 0.046)\n  AXButton \"Sunday, 19 Apr 2020\"  (0.808, 0.786, 0.101, 0.046)\n  AXButton \"Monday, 13 Apr 2020\"  (0.092, 0.793, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Apr 2020\"  (0.211, 0.793, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Apr 2020\"  (0.331, 0.793, 0.101, 0.046)\n  AXButton \"Thursday, 16 Apr 2020\"  (0.450, 0.793, 0.101, 0.046)\n  AXButton \"Friday, 17 Apr 2020\"  (0.569, 0.793, 0.101, 0.046)\n  AXButton \"Saturday, 18 Apr 2020\"  (0.688, 0.793, 0.101, 0.046)\n  AXButton \"Sunday, 19 Apr 2020\"  (0.808, 0.793, 0.101, 0.046)\n  AXButton \"Sunday, 26 Apr 2020\"  (0.808, 0.840, 0.101, 0.046)\n  AXButton \"Monday, 20 Apr 2020\"  (0.092, 0.841, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Apr 2020\"  (0.211, 0.841, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Apr 2020\"  (0.331, 0.841, 0.101, 0.046)\n  AXButton \"Thursday, 23 Apr 2020\"  (0.450, 0.841, 0.101, 0.046)\n  AXButton \"Friday, 24 Apr 2020\"  (0.569, 0.841, 0.101, 0.046)\n  AXButton \"Saturday, 25 Apr 2020\"  (0.688, 0.841, 0.101, 0.046)\n  AXButton \"Monday, 20 Apr 2020\"  (0.092, 0.848, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Apr 2020\"  (0.211, 0.848, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Apr 2020\"  (0.331, 0.848, 0.101, 0.046)\n  AXButton \"Thursday, 23 Apr 2020\"  (0.450, 0.848, 0.101, 0.046)\n  AXButton \"Friday, 24 Apr 2020\"  (0.569, 0.848, 0.101, 0.046)\n  AXButton \"Saturday, 25 Apr 2020\"  (0.688, 0.848, 0.101, 0.046)\n  AXButton \"Sunday, 26 Apr 2020\"  (0.808, 0.848, 0.101, 0.046)\n  AXButton \"Monday, 27 Apr 2020\"  (0.092, 0.895, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Apr 2020\"  (0.211, 0.895, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Apr 2020\"  (0.331, 0.895, 0.101, 0.046)\n  AXButton \"Thursday, 30 Apr 2020\"  (0.450, 0.895, 0.101, 0.046)\n  AXButton \"Monday, 27 Apr 2020\"  (0.092, 0.902, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Apr 2020\"  (0.211, 0.902, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Apr 2020\"  (0.331, 0.902, 0.101, 0.046)\n  AXButton \"Thursday, 30 Apr 2020\"  (0.450, 0.902, 0.101, 0.046)\n  AXGroup \"May 2020\"  (0.092, 0.966, 0.816, 0.028)\n  AXGroup \"May 2020\"  (0.092, 0.974, 0.816, 0.026)\n  AXGroup \"T\"  (0.450, 0.998, 0.101, 0.002)\n  AXGroup \"F\"  (0.569, 0.998, 0.101, 0.002)\n  AXGroup \"S\"  (0.688, 0.998, 0.101, 0.002)\n  AXStaticText \"S\"  (0.808, 0.998, 0.101, 0.002)\n  AXGroup \"M\"  (0.092, 0.998, 0.101, 0.002)\n  AXGroup \"T\"  (0.211, 0.998, 0.101, 0.002)\n  AXGroup \"W\"  (0.331, 0.998, 0.101, 0.002)\n  AXGroup \"S\"  (0.808, 0.998, 0.101, 0.002)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.5,
+            "fromY": 0.7,
+            "toX": 0.5,
+            "toY": 0.4
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Wednesday, 1 Apr 2020\"  (0.331, 0.000, 0.101, 0.032)\n  AXButton \"Wednesday, 1 Apr 2020\"  (0.331, 0.000, 0.101, 0.026)\n  AXButton \"Thursday, 2 Apr 2020\"  (0.450, 0.000, 0.101, 0.032)\n  AXButton \"Thursday, 2 Apr 2020\"  (0.450, 0.000, 0.101, 0.026)\n  AXButton \"Friday, 3 Apr 2020\"  (0.569, 0.000, 0.101, 0.032)\n  AXButton \"Friday, 3 Apr 2020\"  (0.569, 0.000, 0.101, 0.026)\n  AXButton \"Saturday, 4 Apr 2020\"  (0.688, 0.000, 0.101, 0.032)\n  AXButton \"Saturday, 4 Apr 2020\"  (0.688, 0.000, 0.101, 0.026)\n  AXButton \"Sunday, 5 Apr 2020\"  (0.808, 0.000, 0.101, 0.032)\n  AXButton \"Sunday, 5 Apr 2020\"  (0.808, 0.000, 0.101, 0.026)\n  AXButton \"Tuesday, 7 Apr 2020\"  (0.211, 0.034, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Apr 2020\"  (0.331, 0.034, 0.101, 0.046)\n  AXButton \"Thursday, 9 Apr 2020\"  (0.450, 0.034, 0.101, 0.046)\n  AXButton \"Friday, 10 Apr 2020\"  (0.569, 0.034, 0.101, 0.046)\n  AXButton \"Saturday, 11 Apr 2020\"  (0.688, 0.034, 0.101, 0.046)\n  AXButton \"Sunday, 12 Apr 2020\"  (0.808, 0.034, 0.101, 0.046)\n  AXButton \"Monday, 6 Apr 2020\"  (0.092, 0.035, 0.101, 0.046)\n  AXButton \"Monday, 6 Apr 2020\"  (0.092, 0.040, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Apr 2020\"  (0.211, 0.040, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Apr 2020\"  (0.331, 0.040, 0.101, 0.046)\n  AXButton \"Thursday, 9 Apr 2020\"  (0.450, 0.040, 0.101, 0.046)\n  AXButton \"Friday, 10 Apr 2020\"  (0.569, 0.040, 0.101, 0.046)\n  AXButton \"Saturday, 11 Apr 2020\"  (0.688, 0.040, 0.101, 0.046)\n  AXButton \"Sunday, 12 Apr 2020\"  (0.808, 0.040, 0.101, 0.046)\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Single Day Selection\"  (0.316, 0.071, 0.369, 0.021)\n  AXButton \"Monday, 13 Apr 2020\"  (0.092, 0.089, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Apr 2020\"  (0.211, 0.089, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Apr 2020\"  (0.331, 0.089, 0.101, 0.046)\n  AXButton \"Thursday, 16 Apr 2020\"  (0.450, 0.089, 0.101, 0.046)\n  AXButton \"Friday, 17 Apr 2020\"  (0.569, 0.089, 0.101, 0.046)\n  AXButton \"Saturday, 18 Apr 2020\"  (0.688, 0.089, 0.101, 0.046)\n  AXButton \"Sunday, 19 Apr 2020\"  (0.808, 0.089, 0.101, 0.046)\n  AXButton \"Monday, 13 Apr 2020\"  (0.092, 0.095, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Apr 2020\"  (0.211, 0.095, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Apr 2020\"  (0.331, 0.095, 0.101, 0.046)\n  AXButton \"Thursday, 16 Apr 2020\"  (0.450, 0.095, 0.101, 0.046)\n  AXButton \"Friday, 17 Apr 2020\"  (0.569, 0.095, 0.101, 0.046)\n  AXButton \"Saturday, 18 Apr 2020\"  (0.688, 0.095, 0.101, 0.046)\n  AXButton \"Sunday, 19 Apr 2020\"  (0.808, 0.095, 0.101, 0.046)\n  AXButton \"Monday, 20 Apr 2020\"  (0.092, 0.144, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Apr 2020\"  (0.211, 0.144, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Apr 2020\"  (0.331, 0.144, 0.101, 0.046)\n  AXButton \"Thursday, 23 Apr 2020\"  (0.450, 0.144, 0.101, 0.046)\n  AXButton \"Friday, 24 Apr 2020\"  (0.569, 0.144, 0.101, 0.046)\n  AXButton \"Saturday, 25 Apr 2020\"  (0.688, 0.144, 0.101, 0.046)\n  AXButton \"Sunday, 26 Apr 2020\"  (0.808, 0.144, 0.101, 0.046)\n  AXButton \"Monday, 20 Apr 2020\"  (0.092, 0.150, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Apr 2020\"  (0.211, 0.150, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Apr 2020\"  (0.331, 0.150, 0.101, 0.046)\n  AXButton \"Thursday, 23 Apr 2020\"  (0.450, 0.150, 0.101, 0.046)\n  AXButton \"Friday, 24 Apr 2020\"  (0.569, 0.150, 0.101, 0.046)\n  AXButton \"Saturday, 25 Apr 2020\"  (0.688, 0.150, 0.101, 0.046)\n  AXButton \"Sunday, 26 Apr 2020\"  (0.808, 0.150, 0.101, 0.046)\n  AXButton \"Monday, 27 Apr 2020\"  (0.092, 0.198, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Apr 2020\"  (0.211, 0.198, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Apr 2020\"  (0.331, 0.198, 0.101, 0.046)\n  AXButton \"Thursday, 30 Apr 2020\"  (0.450, 0.198, 0.101, 0.046)\n  AXButton \"Monday, 27 Apr 2020\"  (0.092, 0.205, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Apr 2020\"  (0.211, 0.205, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Apr 2020\"  (0.331, 0.205, 0.101, 0.046)\n  AXButton \"Thursday, 30 Apr 2020\"  (0.450, 0.205, 0.101, 0.046)\n  AXGroup \"May 2020\"  (0.092, 0.270, 0.816, 0.028)\n  AXGroup \"May 2020\"  (0.092, 0.276, 0.816, 0.028)\n  AXStaticText \"F\"  (0.569, 0.296, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.296, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.296, 0.101, 0.046)\n  AXGroup \"M\"  (0.092, 0.297, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.297, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.297, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.297, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.297, 0.101, 0.046)\n  AXButton \"Friday, 1 May 2020\"  (0.569, 0.351, 0.101, 0.046)\n  AXButton \"Saturday, 2 May 2020\"  (0.688, 0.351, 0.101, 0.046)\n  AXButton \"Sunday, 3 May 2020\"  (0.808, 0.351, 0.101, 0.046)\n  AXButton \"Friday, 1 May 2020\"  (0.569, 0.358, 0.101, 0.046)\n  AXButton \"Saturday, 2 May 2020\"  (0.688, 0.358, 0.101, 0.046)\n  AXButton \"Sunday, 3 May 2020\"  (0.808, 0.358, 0.101, 0.046)\n  AXButton \"Monday, 4 May 2020\"  (0.092, 0.406, 0.101, 0.046)\n  AXButton \"Tuesday, 5 May 2020\"  (0.211, 0.406, 0.101, 0.046)\n  AXButton \"Wednesday, 6 May 2020\"  (0.331, 0.406, 0.101, 0.046)\n  AXButton \"Thursday, 7 May 2020\"  (0.450, 0.406, 0.101, 0.046)\n  AXButton \"Friday, 8 May 2020\"  (0.569, 0.406, 0.101, 0.046)\n  AXButton \"Saturday, 9 May 2020\"  (0.688, 0.406, 0.101, 0.046)\n  AXButton \"Sunday, 10 May 2020\"  (0.808, 0.406, 0.101, 0.046)\n  AXButton \"Sunday, 10 May 2020\"  (0.808, 0.412, 0.101, 0.046)\n  AXButton \"Monday, 4 May 2020\"  (0.092, 0.414, 0.101, 0.046)\n  AXButton \"Tuesday, 5 May 2020\"  (0.211, 0.414, 0.101, 0.046)\n  AXButton \"Wednesday, 6 May 2020\"  (0.331, 0.414, 0.101, 0.046)\n  AXButton \"Thursday, 7 May 2020\"  (0.450, 0.414, 0.101, 0.046)\n  AXButton \"Friday, 8 May 2020\"  (0.569, 0.414, 0.101, 0.046)\n  AXButton \"Saturday, 9 May 2020\"  (0.688, 0.414, 0.101, 0.046)\n  AXButton \"Monday, 11 May 2020\"  (0.092, 0.461, 0.101, 0.046)\n  AXButton \"Tuesday, 12 May 2020\"  (0.211, 0.461, 0.101, 0.046)\n  AXButton \"Wednesday, 13 May 2020\"  (0.331, 0.461, 0.101, 0.046)\n  AXButton \"Thursday, 14 May 2020\"  (0.450, 0.461, 0.101, 0.046)\n  AXButton \"Friday, 15 May 2020\"  (0.569, 0.461, 0.101, 0.046)\n  AXButton \"Saturday, 16 May 2020\"  (0.688, 0.461, 0.101, 0.046)\n  AXButton \"Sunday, 17 May 2020\"  (0.808, 0.461, 0.101, 0.046)\n  AXButton \"Monday, 11 May 2020\"  (0.092, 0.467, 0.101, 0.046)\n  AXButton \"Tuesday, 12 May 2020\"  (0.211, 0.467, 0.101, 0.046)\n  AXButton \"Wednesday, 13 May 2020\"  (0.331, 0.467, 0.101, 0.046)\n  AXButton \"Thursday, 14 May 2020\"  (0.450, 0.467, 0.101, 0.046)\n  AXButton \"Friday, 15 May 2020\"  (0.569, 0.467, 0.101, 0.046)\n  AXButton \"Saturday, 16 May 2020\"  (0.688, 0.467, 0.101, 0.046)\n  AXButton \"Sunday, 17 May 2020\"  (0.808, 0.467, 0.101, 0.046)\n  AXButton \"Monday, 18 May 2020\"  (0.092, 0.516, 0.101, 0.046)\n  AXButton \"Tuesday, 19 May 2020\"  (0.211, 0.516, 0.101, 0.046)\n  AXButton \"Wednesday, 20 May 2020\"  (0.331, 0.516, 0.101, 0.046)\n  AXButton \"Thursday, 21 May 2020\"  (0.450, 0.516, 0.101, 0.046)\n  AXButton \"Friday, 22 May 2020\"  (0.569, 0.516, 0.101, 0.046)\n  AXButton \"Saturday, 23 May 2020\"  (0.688, 0.516, 0.101, 0.046)\n  AXButton \"Sunday, 24 May 2020\"  (0.808, 0.516, 0.101, 0.046)\n  AXButton \"Monday, 18 May 2020\"  (0.092, 0.522, 0.101, 0.046)\n  AXButton \"Tuesday, 19 May 2020\"  (0.211, 0.522, 0.101, 0.046)\n  AXButton \"Wednesday, 20 May 2020\"  (0.331, 0.522, 0.101, 0.046)\n  AXButton \"Thursday, 21 May 2020\"  (0.450, 0.522, 0.101, 0.046)\n  AXButton \"Friday, 22 May 2020\"  (0.569, 0.522, 0.101, 0.046)\n  AXButton \"Saturday, 23 May 2020\"  (0.688, 0.522, 0.101, 0.046)\n  AXButton \"Sunday, 24 May 2020\"  (0.808, 0.522, 0.101, 0.046)\n  AXButton \"Sunday, 31 May 2020\"  (0.808, 0.570, 0.101, 0.046)\n  AXButton \"Monday, 25 May 2020\"  (0.092, 0.571, 0.101, 0.046)\n  AXButton \"Tuesday, 26 May 2020\"  (0.211, 0.571, 0.101, 0.046)\n  AXButton \"Wednesday, 27 May 2020\"  (0.331, 0.571, 0.101, 0.046)\n  AXButton \"Thursday, 28 May 2020\"  (0.450, 0.571, 0.101, 0.046)\n  AXButton \"Friday, 29 May 2020\"  (0.569, 0.571, 0.101, 0.046)\n  AXButton \"Saturday, 30 May 2020\"  (0.688, 0.571, 0.101, 0.046)\n  AXButton \"Monday, 25 May 2020\"  (0.092, 0.577, 0.101, 0.046)\n  AXButton \"Tuesday, 26 May 2020\"  (0.211, 0.577, 0.101, 0.046)\n  AXButton \"Wednesday, 27 May 2020\"  (0.331, 0.577, 0.101, 0.046)\n  AXButton \"Thursday, 28 May 2020\"  (0.450, 0.577, 0.101, 0.046)\n  AXButton \"Friday, 29 May 2020\"  (0.569, 0.577, 0.101, 0.046)\n  AXButton \"Saturday, 30 May 2020\"  (0.688, 0.577, 0.101, 0.046)\n  AXButton \"Sunday, 31 May 2020\"  (0.808, 0.577, 0.101, 0.046)\n  AXGroup \"June 2020\"  (0.092, 0.641, 0.816, 0.028)\n  AXGroup \"June 2020\"  (0.092, 0.649, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.669, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.669, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.669, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.669, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.669, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.669, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.669, 0.101, 0.046)\n  AXButton \"Monday, 1 Jun 2020\"  (0.092, 0.724, 0.101, 0.046)\n  AXButton \"Tuesday, 2 Jun 2020\"  (0.211, 0.724, 0.101, 0.046)\n  AXButton \"Wednesday, 3 Jun 2020\"  (0.331, 0.724, 0.101, 0.046)\n  AXButton \"Thursday, 4 Jun 2020\"  (0.450, 0.724, 0.101, 0.046)\n  AXButton \"Friday, 5 Jun 2020\"  (0.569, 0.724, 0.101, 0.046)\n  AXButton \"Saturday, 6 Jun 2020\"  (0.688, 0.724, 0.101, 0.046)\n  AXButton \"Sunday, 7 Jun 2020\"  (0.808, 0.724, 0.101, 0.046)\n  AXButton \"Monday, 1 Jun 2020\"  (0.092, 0.731, 0.101, 0.046)\n  AXButton \"Tuesday, 2 Jun 2020\"  (0.211, 0.731, 0.101, 0.046)\n  AXButton \"Wednesday, 3 Jun 2020\"  (0.331, 0.731, 0.101, 0.046)\n  AXButton \"Thursday, 4 Jun 2020\"  (0.450, 0.731, 0.101, 0.046)\n  AXButton \"Friday, 5 Jun 2020\"  (0.569, 0.731, 0.101, 0.046)\n  AXButton \"Saturday, 6 Jun 2020\"  (0.688, 0.731, 0.101, 0.046)\n  AXButton \"Sunday, 7 Jun 2020\"  (0.808, 0.731, 0.101, 0.046)\n  AXButton \"Monday, 8 Jun 2020\"  (0.092, 0.778, 0.101, 0.046)\n  AXButton \"Tuesday, 9 Jun 2020\"  (0.211, 0.778, 0.101, 0.046)\n  AXButton \"Wednesday, 10 Jun 2020\"  (0.331, 0.778, 0.101, 0.046)\n  AXButton \"Thursday, 11 Jun 2020\"  (0.450, 0.778, 0.101, 0.046)\n  AXButton \"Friday, 12 Jun 2020\"  (0.569, 0.778, 0.101, 0.046)\n  AXButton \"Saturday, 13 Jun 2020\"  (0.688, 0.778, 0.101, 0.046)\n  AXButton \"Sunday, 14 Jun 2020\"  (0.808, 0.778, 0.101, 0.046)\n  AXButton \"Monday, 8 Jun 2020\"  (0.092, 0.786, 0.101, 0.046)\n  AXButton \"Tuesday, 9 Jun 2020\"  (0.211, 0.786, 0.101, 0.046)\n  AXButton \"Wednesday, 10 Jun 2020\"  (0.331, 0.786, 0.101, 0.046)\n  AXButton \"Thursday, 11 Jun 2020\"  (0.450, 0.786, 0.101, 0.046)\n  AXButton \"Friday, 12 Jun 2020\"  (0.569, 0.786, 0.101, 0.046)\n  AXButton \"Saturday, 13 Jun 2020\"  (0.688, 0.786, 0.101, 0.046)\n  AXButton \"Sunday, 14 Jun 2020\"  (0.808, 0.786, 0.101, 0.046)\n  AXButton \"Wednesday, 17 Jun 2020\"  (0.331, 0.833, 0.101, 0.046)\n  AXButton \"Thursday, 18 Jun 2020\"  (0.450, 0.833, 0.101, 0.046)\n  AXButton \"Friday, 19 Jun 2020\"  (0.569, 0.833, 0.101, 0.046)\n  AXButton \"Saturday, 20 Jun 2020\"  (0.688, 0.833, 0.101, 0.046)\n  AXButton \"Sunday, 21 Jun 2020\"  (0.808, 0.833, 0.101, 0.046)\n  AXButton \"Monday, 15 Jun 2020\"  (0.092, 0.833, 0.101, 0.046)\n  AXButton \"Tuesday, 16 Jun 2020\"  (0.211, 0.833, 0.101, 0.046)\n  AXButton \"Monday, 15 Jun 2020\"  (0.092, 0.841, 0.101, 0.046)\n  AXButton \"Tuesday, 16 Jun 2020\"  (0.211, 0.841, 0.101, 0.046)\n  AXButton \"Wednesday, 17 Jun 2020\"  (0.331, 0.841, 0.101, 0.046)\n  AXButton \"Thursday, 18 Jun 2020\"  (0.450, 0.841, 0.101, 0.046)\n  AXButton \"Friday, 19 Jun 2020\"  (0.569, 0.841, 0.101, 0.046)\n  AXButton \"Saturday, 20 Jun 2020\"  (0.688, 0.841, 0.101, 0.046)\n  AXButton \"Sunday, 21 Jun 2020\"  (0.808, 0.841, 0.101, 0.046)\n  AXButton \"Monday, 22 Jun 2020\"  (0.092, 0.887, 0.101, 0.046)\n  AXButton \"Tuesday, 23 Jun 2020\"  (0.211, 0.887, 0.101, 0.046)\n  AXButton \"Wednesday, 24 Jun 2020\"  (0.331, 0.887, 0.101, 0.046)\n  AXButton \"Thursday, 25 Jun 2020\"  (0.450, 0.887, 0.101, 0.046)\n  AXButton \"Friday, 26 Jun 2020\"  (0.569, 0.887, 0.101, 0.046)\n  AXButton \"Saturday, 27 Jun 2020\"  (0.688, 0.887, 0.101, 0.046)\n  AXButton \"Sunday, 28 Jun 2020\"  (0.808, 0.887, 0.101, 0.046)\n  AXButton \"Monday, 22 Jun 2020\"  (0.092, 0.895, 0.101, 0.046)\n  AXButton \"Tuesday, 23 Jun 2020\"  (0.211, 0.895, 0.101, 0.046)\n  AXButton \"Wednesday, 24 Jun 2020\"  (0.331, 0.895, 0.101, 0.046)\n  AXButton \"Thursday, 25 Jun 2020\"  (0.450, 0.895, 0.101, 0.046)\n  AXButton \"Friday, 26 Jun 2020\"  (0.569, 0.895, 0.101, 0.046)\n  AXButton \"Saturday, 27 Jun 2020\"  (0.688, 0.895, 0.101, 0.046)\n  AXButton \"Sunday, 28 Jun 2020\"  (0.808, 0.895, 0.101, 0.046)\n  AXButton \"Monday, 29 Jun 2020\"  (0.092, 0.942, 0.101, 0.046)\n  AXButton \"Tuesday, 30 Jun 2020\"  (0.211, 0.942, 0.101, 0.046)\n  AXButton \"Monday, 29 Jun 2020\"  (0.092, 0.950, 0.101, 0.046)\n  AXButton \"Tuesday, 30 Jun 2020\"  (0.211, 0.950, 0.101, 0.046)"
+        }
+      }
+    ],
+    "finalAnswer": "Scrolled the calendar forward; May 2020 is now visible."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-11",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the \"Day Range Selection\" demo and then return to the example menu.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.223
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Day Range Selection\"  (0.314, 0.071, 0.371, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.113, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.141, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.141, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.141, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Jan 2020\"  (0.331, 0.196, 0.101, 0.046)\n  AXButton \"Thursday, 2 Jan 2020\"  (0.450, 0.196, 0.101, 0.046)\n  AXButton \"Friday, 3 Jan 2020\"  (0.569, 0.196, 0.101, 0.046)\n  AXButton \"Saturday, 4 Jan 2020\"  (0.688, 0.196, 0.101, 0.046)\n  AXButton \"Sunday, 5 Jan 2020\"  (0.808, 0.196, 0.101, 0.046)\n  AXButton \"Monday, 6 Jan 2020\"  (0.092, 0.251, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Jan 2020\"  (0.211, 0.251, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Jan 2020\"  (0.331, 0.251, 0.101, 0.046)\n  AXButton \"Thursday, 9 Jan 2020\"  (0.450, 0.251, 0.101, 0.046)\n  AXButton \"Friday, 10 Jan 2020\"  (0.569, 0.251, 0.101, 0.046)\n  AXButton \"Saturday, 11 Jan 2020\"  (0.688, 0.251, 0.101, 0.046)\n  AXButton \"Sunday, 12 Jan 2020\"  (0.808, 0.251, 0.101, 0.046)\n  AXButton \"Monday, 13 Jan 2020\"  (0.092, 0.305, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Jan 2020\"  (0.211, 0.305, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Jan 2020\"  (0.331, 0.305, 0.101, 0.046)\n  AXButton \"Thursday, 16 Jan 2020\"  (0.450, 0.305, 0.101, 0.046)\n  AXButton \"Friday, 17 Jan 2020\"  (0.569, 0.305, 0.101, 0.046)\n  AXButton \"Saturday, 18 Jan 2020\"  (0.688, 0.305, 0.101, 0.046)\n  AXButton \"Sunday, 19 Jan 2020\"  (0.808, 0.305, 0.101, 0.046)\n  AXButton \"Monday, 20 Jan 2020\"  (0.092, 0.360, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Jan 2020\"  (0.211, 0.360, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Jan 2020\"  (0.331, 0.360, 0.101, 0.046)\n  AXButton \"Thursday, 23 Jan 2020\"  (0.450, 0.360, 0.101, 0.046)\n  AXButton \"Friday, 24 Jan 2020\"  (0.569, 0.360, 0.101, 0.046)\n  AXButton \"Saturday, 25 Jan 2020\"  (0.688, 0.360, 0.101, 0.046)\n  AXButton \"Sunday, 26 Jan 2020\"  (0.808, 0.360, 0.101, 0.046)\n  AXButton \"Monday, 27 Jan 2020\"  (0.092, 0.415, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Jan 2020\"  (0.211, 0.415, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Jan 2020\"  (0.331, 0.415, 0.101, 0.046)\n  AXButton \"Thursday, 30 Jan 2020\"  (0.450, 0.415, 0.101, 0.046)\n  AXButton \"Friday, 31 Jan 2020\"  (0.569, 0.415, 0.101, 0.046)\n  AXGroup \"February 2020\"  (0.092, 0.487, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.514, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.514, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.514, 0.101, 0.046)\n  AXButton \"Saturday, 1 Feb 2020\"  (0.688, 0.569, 0.101, 0.046)\n  AXButton \"Sunday, 2 Feb 2020\"  (0.808, 0.569, 0.101, 0.046)\n  AXButton \"Monday, 3 Feb 2020\"  (0.092, 0.624, 0.101, 0.046)\n  AXButton \"Tuesday, 4 Feb 2020\"  (0.211, 0.624, 0.101, 0.046)\n  AXButton \"Wednesday, 5 Feb 2020\"  (0.331, 0.624, 0.101, 0.046)\n  AXButton \"Thursday, 6 Feb 2020\"  (0.450, 0.624, 0.101, 0.046)\n  AXButton \"Friday, 7 Feb 2020\"  (0.569, 0.624, 0.101, 0.046)\n  AXButton \"Saturday, 8 Feb 2020\"  (0.688, 0.624, 0.101, 0.046)\n  AXButton \"Sunday, 9 Feb 2020\"  (0.808, 0.624, 0.101, 0.046)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.679, 0.101, 0.046)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.679, 0.101, 0.046)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.679, 0.101, 0.046)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.679, 0.101, 0.046)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.679, 0.101, 0.046)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.679, 0.101, 0.046)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.679, 0.101, 0.046)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.734, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.734, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.734, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.734, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.734, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.734, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.734, 0.101, 0.046)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.788, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.788, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.788, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.788, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.788, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.788, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.860, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.887, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.887, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.887, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.942, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.997, 0.101, 0.003)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.997, 0.101, 0.003)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.997, 0.101, 0.003)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.997, 0.101, 0.003)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.997, 0.101, 0.003)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.997, 0.101, 0.003)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.997, 0.101, 0.003)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.082,
+            "y": 0.082
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      }
+    ],
+    "finalAnswer": "Viewed the Day Range Selection demo and returned to the main example menu."
+  },
+  {
+    "meta": {
+      "id": "real-horizoncalendar-12",
+      "app": "airbnb__HorizonCalendar",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "com.airbnb.HorizonCalendarExample",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Switch the layout to Horizontal, then switch it back to Vertical, and open the \"Single Day Selection\" demo.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.595,
+            "y": 0.13
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.476, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.406,
+            "y": 0.13
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"HorizonCalendar Example App\"  (0.225, 0.071, 0.550, 0.021)\n  AXButton \"Vertical\"  (0.313, 0.113, 0.186, 0.033)\n  AXButton \"Horizontal\"  (0.502, 0.113, 0.186, 0.033)\n  AXStaticText \"Single Day Selection\"  (0.000, 0.154, 1.000, 0.046)\n  AXStaticText \"Single Day Selection\"  (0.045, 0.154, 0.909, 0.046)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.183, 0.068, 0.758)\n  AXStaticText \"Day Range Selection\"  (0.000, 0.200, 1.000, 0.046)\n  AXStaticText \"Day Range Selection\"  (0.045, 0.200, 0.909, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.000, 0.246, 1.000, 0.046)\n  AXStaticText \"Selected Day Tooltip\"  (0.045, 0.246, 0.909, 0.046)\n  AXStaticText \"Large Day Range\"  (0.000, 0.292, 1.000, 0.046)\n  AXStaticText \"Large Day Range\"  (0.045, 0.292, 0.909, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.000, 0.338, 1.000, 0.046)\n  AXStaticText \"Scroll to Day With Animation\"  (0.045, 0.338, 0.909, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.000, 0.384, 1.000, 0.046)\n  AXStaticText \"Partial Month Visibility\"  (0.045, 0.384, 0.909, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.000, 0.430, 1.000, 0.046)\n  AXStaticText \"Month Grid Background\"  (0.045, 0.430, 0.909, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.000, 0.476, 1.000, 0.046)\n  AXStaticText \"SwiftUI Day and Month View\"  (0.045, 0.476, 0.909, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.000, 0.522, 1.000, 0.046)\n  AXStaticText \"SwiftUI Screen\"  (0.045, 0.522, 0.909, 0.046)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.177
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"HorizonCalendar Example App\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Single Day Selection\"  (0.316, 0.071, 0.369, 0.021)\n  AXGroup \"January 2020\"  (0.092, 0.113, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.141, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.141, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.141, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.141, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.141, 0.101, 0.046)\n  AXButton \"Wednesday, 1 Jan 2020\"  (0.331, 0.196, 0.101, 0.046)\n  AXButton \"Thursday, 2 Jan 2020\"  (0.450, 0.196, 0.101, 0.046)\n  AXButton \"Friday, 3 Jan 2020\"  (0.569, 0.196, 0.101, 0.046)\n  AXButton \"Saturday, 4 Jan 2020\"  (0.688, 0.196, 0.101, 0.046)\n  AXButton \"Sunday, 5 Jan 2020\"  (0.808, 0.196, 0.101, 0.046)\n  AXButton \"Monday, 6 Jan 2020\"  (0.092, 0.251, 0.101, 0.046)\n  AXButton \"Tuesday, 7 Jan 2020\"  (0.211, 0.251, 0.101, 0.046)\n  AXButton \"Wednesday, 8 Jan 2020\"  (0.331, 0.251, 0.101, 0.046)\n  AXButton \"Thursday, 9 Jan 2020\"  (0.450, 0.251, 0.101, 0.046)\n  AXButton \"Friday, 10 Jan 2020\"  (0.569, 0.251, 0.101, 0.046)\n  AXButton \"Saturday, 11 Jan 2020\"  (0.688, 0.251, 0.101, 0.046)\n  AXButton \"Sunday, 12 Jan 2020\"  (0.808, 0.251, 0.101, 0.046)\n  AXButton \"Monday, 13 Jan 2020\"  (0.092, 0.305, 0.101, 0.046)\n  AXButton \"Tuesday, 14 Jan 2020\"  (0.211, 0.305, 0.101, 0.046)\n  AXButton \"Wednesday, 15 Jan 2020\"  (0.331, 0.305, 0.101, 0.046)\n  AXButton \"Thursday, 16 Jan 2020\"  (0.450, 0.305, 0.101, 0.046)\n  AXButton \"Friday, 17 Jan 2020\"  (0.569, 0.305, 0.101, 0.046)\n  AXButton \"Saturday, 18 Jan 2020\"  (0.688, 0.305, 0.101, 0.046)\n  AXButton \"Sunday, 19 Jan 2020\"  (0.808, 0.305, 0.101, 0.046)\n  AXButton \"Monday, 20 Jan 2020\"  (0.092, 0.360, 0.101, 0.046)\n  AXButton \"Tuesday, 21 Jan 2020\"  (0.211, 0.360, 0.101, 0.046)\n  AXButton \"Wednesday, 22 Jan 2020\"  (0.331, 0.360, 0.101, 0.046)\n  AXButton \"Thursday, 23 Jan 2020\"  (0.450, 0.360, 0.101, 0.046)\n  AXButton \"Friday, 24 Jan 2020\"  (0.569, 0.360, 0.101, 0.046)\n  AXButton \"Saturday, 25 Jan 2020\"  (0.688, 0.360, 0.101, 0.046)\n  AXButton \"Sunday, 26 Jan 2020\"  (0.808, 0.360, 0.101, 0.046)\n  AXButton \"Monday, 27 Jan 2020\"  (0.092, 0.415, 0.101, 0.046)\n  AXButton \"Tuesday, 28 Jan 2020\"  (0.211, 0.415, 0.101, 0.046)\n  AXButton \"Wednesday, 29 Jan 2020\"  (0.331, 0.415, 0.101, 0.046)\n  AXButton \"Thursday, 30 Jan 2020\"  (0.450, 0.415, 0.101, 0.046)\n  AXButton \"Friday, 31 Jan 2020\"  (0.569, 0.415, 0.101, 0.046)\n  AXGroup \"February 2020\"  (0.092, 0.487, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.514, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.514, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.514, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.514, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.514, 0.101, 0.046)\n  AXButton \"Saturday, 1 Feb 2020\"  (0.688, 0.569, 0.101, 0.046)\n  AXButton \"Sunday, 2 Feb 2020\"  (0.808, 0.569, 0.101, 0.046)\n  AXButton \"Monday, 3 Feb 2020\"  (0.092, 0.624, 0.101, 0.046)\n  AXButton \"Tuesday, 4 Feb 2020\"  (0.211, 0.624, 0.101, 0.046)\n  AXButton \"Wednesday, 5 Feb 2020\"  (0.331, 0.624, 0.101, 0.046)\n  AXButton \"Thursday, 6 Feb 2020\"  (0.450, 0.624, 0.101, 0.046)\n  AXButton \"Friday, 7 Feb 2020\"  (0.569, 0.624, 0.101, 0.046)\n  AXButton \"Saturday, 8 Feb 2020\"  (0.688, 0.624, 0.101, 0.046)\n  AXButton \"Sunday, 9 Feb 2020\"  (0.808, 0.624, 0.101, 0.046)\n  AXButton \"Monday, 10 Feb 2020\"  (0.092, 0.679, 0.101, 0.046)\n  AXButton \"Tuesday, 11 Feb 2020\"  (0.211, 0.679, 0.101, 0.046)\n  AXButton \"Wednesday, 12 Feb 2020\"  (0.331, 0.679, 0.101, 0.046)\n  AXButton \"Thursday, 13 Feb 2020\"  (0.450, 0.679, 0.101, 0.046)\n  AXButton \"Friday, 14 Feb 2020\"  (0.569, 0.679, 0.101, 0.046)\n  AXButton \"Saturday, 15 Feb 2020\"  (0.688, 0.679, 0.101, 0.046)\n  AXButton \"Sunday, 16 Feb 2020\"  (0.808, 0.679, 0.101, 0.046)\n  AXButton \"Monday, 17 Feb 2020\"  (0.092, 0.734, 0.101, 0.046)\n  AXButton \"Tuesday, 18 Feb 2020\"  (0.211, 0.734, 0.101, 0.046)\n  AXButton \"Wednesday, 19 Feb 2020\"  (0.331, 0.734, 0.101, 0.046)\n  AXButton \"Thursday, 20 Feb 2020\"  (0.450, 0.734, 0.101, 0.046)\n  AXButton \"Friday, 21 Feb 2020\"  (0.569, 0.734, 0.101, 0.046)\n  AXButton \"Saturday, 22 Feb 2020\"  (0.688, 0.734, 0.101, 0.046)\n  AXButton \"Sunday, 23 Feb 2020\"  (0.808, 0.734, 0.101, 0.046)\n  AXButton \"Monday, 24 Feb 2020\"  (0.092, 0.788, 0.101, 0.046)\n  AXButton \"Tuesday, 25 Feb 2020\"  (0.211, 0.788, 0.101, 0.046)\n  AXButton \"Wednesday, 26 Feb 2020\"  (0.331, 0.788, 0.101, 0.046)\n  AXButton \"Thursday, 27 Feb 2020\"  (0.450, 0.788, 0.101, 0.046)\n  AXButton \"Friday, 28 Feb 2020\"  (0.569, 0.788, 0.101, 0.046)\n  AXButton \"Saturday, 29 Feb 2020\"  (0.688, 0.788, 0.101, 0.046)\n  AXGroup \"March 2020\"  (0.092, 0.860, 0.816, 0.028)\n  AXGroup \"M\"  (0.092, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.211, 0.887, 0.101, 0.046)\n  AXGroup \"W\"  (0.331, 0.887, 0.101, 0.046)\n  AXGroup \"T\"  (0.450, 0.887, 0.101, 0.046)\n  AXGroup \"F\"  (0.569, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.688, 0.887, 0.101, 0.046)\n  AXGroup \"S\"  (0.808, 0.887, 0.101, 0.046)\n  AXButton \"Sunday, 1 Mar 2020\"  (0.808, 0.942, 0.101, 0.046)\n  AXButton \"Monday, 2 Mar 2020\"  (0.092, 0.997, 0.101, 0.003)\n  AXButton \"Tuesday, 3 Mar 2020\"  (0.211, 0.997, 0.101, 0.003)\n  AXButton \"Wednesday, 4 Mar 2020\"  (0.331, 0.997, 0.101, 0.003)\n  AXButton \"Thursday, 5 Mar 2020\"  (0.450, 0.997, 0.101, 0.003)\n  AXButton \"Friday, 6 Mar 2020\"  (0.569, 0.997, 0.101, 0.003)\n  AXButton \"Saturday, 7 Mar 2020\"  (0.688, 0.997, 0.101, 0.003)\n  AXButton \"Sunday, 8 Mar 2020\"  (0.808, 0.997, 0.101, 0.003)"
+        }
+      }
+    ],
+    "finalAnswer": "Layout returned to Vertical; the Single Day Selection calendar stacks months vertically (January above February)."
+  }
+]

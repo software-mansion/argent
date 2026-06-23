@@ -1,0 +1,426 @@
+[
+  {
+    "meta": {
+      "id": "real-proton-1",
+      "app": "rajdeep__proton",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.raj.proton.ExampleApp4",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Proton Examples list, open the 'Autogrowing Editor' example.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Proton Examples\"  (0.348, 0.071, 0.305, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.836)\n  AXStaticText \"Basic features\"  (0.000, 0.128, 1.000, 0.029)\n  AXButton \"Autogrowing Editor\"  (0.000, 0.157, 1.000, 0.050)\n  AXStaticText \"Autogrowing Editor\"  (0.045, 0.157, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.175, 0.023, 0.015)\n  AXStaticText \"Attachment\"  (0.000, 0.230, 1.000, 0.029)\n  AXButton \"Match Content\"  (0.000, 0.260, 1.000, 0.050)\n  AXStaticText \"Match Content\"  (0.045, 0.260, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.278, 0.023, 0.015)\n  AXButton \"Full Width\"  (0.000, 0.310, 1.000, 0.050)\n  AXStaticText \"Full Width\"  (0.045, 0.310, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.328, 0.023, 0.015)\n  AXButton \"Fixed Width\"  (0.000, 0.360, 1.000, 0.050)\n  AXStaticText \"Fixed Width\"  (0.045, 0.360, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.378, 0.023, 0.015)\n  AXButton \"Width Range\"  (0.000, 0.410, 1.000, 0.050)\n  AXStaticText \"Width Range\"  (0.045, 0.410, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.428, 0.023, 0.015)\n  AXButton \"Percent Width\"  (0.000, 0.461, 1.000, 0.050)\n  AXStaticText \"Percent Width\"  (0.045, 0.461, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.478, 0.023, 0.015)\n  AXButton \"TableView\"  (0.000, 0.511, 1.000, 0.050)\n  AXStaticText \"TableView\"  (0.045, 0.511, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.529, 0.023, 0.015)\n  AXStaticText \"Advanced features\"  (0.000, 0.584, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.613, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.613, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.631, 0.023, 0.015)\n  AXButton \"Text Processors\"  (0.000, 0.664, 1.000, 0.050)\n  AXStaticText \"Text Processors\"  (0.045, 0.664, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.681, 0.023, 0.015)\n  AXStaticText \"Renderer\"  (0.000, 0.737, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.766, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.766, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.784, 0.023, 0.015)\n  AXStaticText \"Miscellaneous\"  (0.000, 0.839, 1.000, 0.029)\n  AXButton \"Menu\"  (0.000, 0.869, 1.000, 0.050)\n  AXStaticText \"Menu\"  (0.045, 0.869, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.886, 0.023, 0.015)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.182
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Proton Examples\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Autogrowing Editor\"  (0.327, 0.071, 0.348, 0.021)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the 'Autogrowing Editor' example screen from the Proton Examples list."
+  },
+  {
+    "meta": {
+      "id": "real-proton-2",
+      "app": "rajdeep__proton",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.raj.proton.ExampleApp4",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Proton Examples list, open the 'Match Content' example.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Proton Examples\"  (0.348, 0.071, 0.305, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.836)\n  AXStaticText \"Basic features\"  (0.000, 0.128, 1.000, 0.029)\n  AXButton \"Autogrowing Editor\"  (0.000, 0.157, 1.000, 0.050)\n  AXStaticText \"Autogrowing Editor\"  (0.045, 0.157, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.175, 0.023, 0.015)\n  AXStaticText \"Attachment\"  (0.000, 0.230, 1.000, 0.029)\n  AXButton \"Match Content\"  (0.000, 0.260, 1.000, 0.050)\n  AXStaticText \"Match Content\"  (0.045, 0.260, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.278, 0.023, 0.015)\n  AXButton \"Full Width\"  (0.000, 0.310, 1.000, 0.050)\n  AXStaticText \"Full Width\"  (0.045, 0.310, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.328, 0.023, 0.015)\n  AXButton \"Fixed Width\"  (0.000, 0.360, 1.000, 0.050)\n  AXStaticText \"Fixed Width\"  (0.045, 0.360, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.378, 0.023, 0.015)\n  AXButton \"Width Range\"  (0.000, 0.410, 1.000, 0.050)\n  AXStaticText \"Width Range\"  (0.045, 0.410, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.428, 0.023, 0.015)\n  AXButton \"Percent Width\"  (0.000, 0.461, 1.000, 0.050)\n  AXStaticText \"Percent Width\"  (0.045, 0.461, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.478, 0.023, 0.015)\n  AXButton \"TableView\"  (0.000, 0.511, 1.000, 0.050)\n  AXStaticText \"TableView\"  (0.045, 0.511, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.529, 0.023, 0.015)\n  AXStaticText \"Advanced features\"  (0.000, 0.584, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.613, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.613, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.631, 0.023, 0.015)\n  AXButton \"Text Processors\"  (0.000, 0.664, 1.000, 0.050)\n  AXStaticText \"Text Processors\"  (0.045, 0.664, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.681, 0.023, 0.015)\n  AXStaticText \"Renderer\"  (0.000, 0.737, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.766, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.766, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.784, 0.023, 0.015)\n  AXStaticText \"Miscellaneous\"  (0.000, 0.839, 1.000, 0.029)\n  AXButton \"Menu\"  (0.000, 0.869, 1.000, 0.050)\n  AXStaticText \"Menu\"  (0.045, 0.869, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.886, 0.023, 0.015)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.285
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Proton Examples\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Match Content\"  (0.366, 0.071, 0.268, 0.021)\n  AXButton \"Insert attachment\"  (0.045, 0.126, 0.277, 0.031)\n  AXStaticText \"Insert attachment\"  (0.045, 0.132, 0.277, 0.019)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the 'Match Content' example screen from the Proton Examples list."
+  },
+  {
+    "meta": {
+      "id": "real-proton-3",
+      "app": "rajdeep__proton",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.raj.proton.ExampleApp4",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Proton Examples list, open the 'TableView' example.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Proton Examples\"  (0.348, 0.071, 0.305, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.836)\n  AXStaticText \"Basic features\"  (0.000, 0.128, 1.000, 0.029)\n  AXButton \"Autogrowing Editor\"  (0.000, 0.157, 1.000, 0.050)\n  AXStaticText \"Autogrowing Editor\"  (0.045, 0.157, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.175, 0.023, 0.015)\n  AXStaticText \"Attachment\"  (0.000, 0.230, 1.000, 0.029)\n  AXButton \"Match Content\"  (0.000, 0.260, 1.000, 0.050)\n  AXStaticText \"Match Content\"  (0.045, 0.260, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.278, 0.023, 0.015)\n  AXButton \"Full Width\"  (0.000, 0.310, 1.000, 0.050)\n  AXStaticText \"Full Width\"  (0.045, 0.310, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.328, 0.023, 0.015)\n  AXButton \"Fixed Width\"  (0.000, 0.360, 1.000, 0.050)\n  AXStaticText \"Fixed Width\"  (0.045, 0.360, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.378, 0.023, 0.015)\n  AXButton \"Width Range\"  (0.000, 0.410, 1.000, 0.050)\n  AXStaticText \"Width Range\"  (0.045, 0.410, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.428, 0.023, 0.015)\n  AXButton \"Percent Width\"  (0.000, 0.461, 1.000, 0.050)\n  AXStaticText \"Percent Width\"  (0.045, 0.461, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.478, 0.023, 0.015)\n  AXButton \"TableView\"  (0.000, 0.511, 1.000, 0.050)\n  AXStaticText \"TableView\"  (0.045, 0.511, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.529, 0.023, 0.015)\n  AXStaticText \"Advanced features\"  (0.000, 0.584, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.613, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.613, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.631, 0.023, 0.015)\n  AXButton \"Text Processors\"  (0.000, 0.664, 1.000, 0.050)\n  AXStaticText \"Text Processors\"  (0.045, 0.664, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.681, 0.023, 0.015)\n  AXStaticText \"Renderer\"  (0.000, 0.737, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.766, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.766, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.784, 0.023, 0.015)\n  AXStaticText \"Miscellaneous\"  (0.000, 0.839, 1.000, 0.029)\n  AXButton \"Menu\"  (0.000, 0.869, 1.000, 0.050)\n  AXStaticText \"Menu\"  (0.045, 0.869, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.886, 0.023, 0.015)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.536
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Proton Examples\"  (0.000, 0.059, 0.369, 0.046)\n  AXGroup \"TableView\"  (0.408, 0.071, 0.183, 0.021)\n  AXGroup value=\"Rows\"  (0.045, 0.126, 0.136, 0.036)\n  AXButton \"Generate rows\"  (0.205, 0.126, 0.227, 0.031)\n  AXStaticText \"Generate rows\"  (0.205, 0.132, 0.227, 0.019)\n  AXGroup \"Empty list\"  (0.045, 0.178, 0.909, 0.418)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.880, 0.178, 0.068, 0.418)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.045, 0.562, 0.909, 0.031)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the 'TableView' example screen from the Proton Examples list."
+  },
+  {
+    "meta": {
+      "id": "real-proton-4",
+      "app": "rajdeep__proton",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.raj.proton.ExampleApp4",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Proton Examples list, open the 'Text Processors' example.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Proton Examples\"  (0.348, 0.071, 0.305, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.836)\n  AXStaticText \"Basic features\"  (0.000, 0.128, 1.000, 0.029)\n  AXButton \"Autogrowing Editor\"  (0.000, 0.157, 1.000, 0.050)\n  AXStaticText \"Autogrowing Editor\"  (0.045, 0.157, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.175, 0.023, 0.015)\n  AXStaticText \"Attachment\"  (0.000, 0.230, 1.000, 0.029)\n  AXButton \"Match Content\"  (0.000, 0.260, 1.000, 0.050)\n  AXStaticText \"Match Content\"  (0.045, 0.260, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.278, 0.023, 0.015)\n  AXButton \"Full Width\"  (0.000, 0.310, 1.000, 0.050)\n  AXStaticText \"Full Width\"  (0.045, 0.310, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.328, 0.023, 0.015)\n  AXButton \"Fixed Width\"  (0.000, 0.360, 1.000, 0.050)\n  AXStaticText \"Fixed Width\"  (0.045, 0.360, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.378, 0.023, 0.015)\n  AXButton \"Width Range\"  (0.000, 0.410, 1.000, 0.050)\n  AXStaticText \"Width Range\"  (0.045, 0.410, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.428, 0.023, 0.015)\n  AXButton \"Percent Width\"  (0.000, 0.461, 1.000, 0.050)\n  AXStaticText \"Percent Width\"  (0.045, 0.461, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.478, 0.023, 0.015)\n  AXButton \"TableView\"  (0.000, 0.511, 1.000, 0.050)\n  AXStaticText \"TableView\"  (0.045, 0.511, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.529, 0.023, 0.015)\n  AXStaticText \"Advanced features\"  (0.000, 0.584, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.613, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.613, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.631, 0.023, 0.015)\n  AXButton \"Text Processors\"  (0.000, 0.664, 1.000, 0.050)\n  AXStaticText \"Text Processors\"  (0.045, 0.664, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.681, 0.023, 0.015)\n  AXStaticText \"Renderer\"  (0.000, 0.737, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.766, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.766, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.784, 0.023, 0.015)\n  AXStaticText \"Miscellaneous\"  (0.000, 0.839, 1.000, 0.029)\n  AXButton \"Menu\"  (0.000, 0.869, 1.000, 0.050)\n  AXStaticText \"Menu\"  (0.045, 0.869, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.886, 0.023, 0.015)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.689
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Proton Examples\"  (0.000, 0.059, 0.164, 0.046)\n  AXGroup \"Text Processors\"  (0.356, 0.071, 0.289, 0.021)\n  AXGroup value=\"test\"  (0.045, 0.126, 0.909, 0.105)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the 'Text Processors' example screen from the Proton Examples list."
+  },
+  {
+    "meta": {
+      "id": "real-proton-5",
+      "app": "rajdeep__proton",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.raj.proton.ExampleApp4",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Proton Examples list, open the 'Menu' example.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Proton Examples\"  (0.348, 0.071, 0.305, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.836)\n  AXStaticText \"Basic features\"  (0.000, 0.128, 1.000, 0.029)\n  AXButton \"Autogrowing Editor\"  (0.000, 0.157, 1.000, 0.050)\n  AXStaticText \"Autogrowing Editor\"  (0.045, 0.157, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.175, 0.023, 0.015)\n  AXStaticText \"Attachment\"  (0.000, 0.230, 1.000, 0.029)\n  AXButton \"Match Content\"  (0.000, 0.260, 1.000, 0.050)\n  AXStaticText \"Match Content\"  (0.045, 0.260, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.278, 0.023, 0.015)\n  AXButton \"Full Width\"  (0.000, 0.310, 1.000, 0.050)\n  AXStaticText \"Full Width\"  (0.045, 0.310, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.328, 0.023, 0.015)\n  AXButton \"Fixed Width\"  (0.000, 0.360, 1.000, 0.050)\n  AXStaticText \"Fixed Width\"  (0.045, 0.360, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.378, 0.023, 0.015)\n  AXButton \"Width Range\"  (0.000, 0.410, 1.000, 0.050)\n  AXStaticText \"Width Range\"  (0.045, 0.410, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.428, 0.023, 0.015)\n  AXButton \"Percent Width\"  (0.000, 0.461, 1.000, 0.050)\n  AXStaticText \"Percent Width\"  (0.045, 0.461, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.478, 0.023, 0.015)\n  AXButton \"TableView\"  (0.000, 0.511, 1.000, 0.050)\n  AXStaticText \"TableView\"  (0.045, 0.511, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.529, 0.023, 0.015)\n  AXStaticText \"Advanced features\"  (0.000, 0.584, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.613, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.613, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.631, 0.023, 0.015)\n  AXButton \"Text Processors\"  (0.000, 0.664, 1.000, 0.050)\n  AXStaticText \"Text Processors\"  (0.045, 0.664, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.681, 0.023, 0.015)\n  AXStaticText \"Renderer\"  (0.000, 0.737, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.766, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.766, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.784, 0.023, 0.015)\n  AXStaticText \"Miscellaneous\"  (0.000, 0.839, 1.000, 0.029)\n  AXButton \"Menu\"  (0.000, 0.869, 1.000, 0.050)\n  AXStaticText \"Menu\"  (0.045, 0.869, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.886, 0.023, 0.015)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.894
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Proton Examples\"  (0.000, 0.059, 0.369, 0.046)\n  AXGroup \"Menu\"  (0.450, 0.071, 0.101, 0.021)\n  AXButton \"Insert panel\"  (0.045, 0.126, 0.184, 0.031)\n  AXStaticText \"Insert panel\"  (0.045, 0.132, 0.184, 0.019)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the 'Menu' example screen from the Proton Examples list."
+  },
+  {
+    "meta": {
+      "id": "real-proton-6",
+      "app": "rajdeep__proton",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.raj.proton.ExampleApp4",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the 'Full Width' attachment example, then navigate back to the Proton Examples list.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Proton Examples\"  (0.348, 0.071, 0.305, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.836)\n  AXStaticText \"Basic features\"  (0.000, 0.128, 1.000, 0.029)\n  AXButton \"Autogrowing Editor\"  (0.000, 0.157, 1.000, 0.050)\n  AXStaticText \"Autogrowing Editor\"  (0.045, 0.157, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.175, 0.023, 0.015)\n  AXStaticText \"Attachment\"  (0.000, 0.230, 1.000, 0.029)\n  AXButton \"Match Content\"  (0.000, 0.260, 1.000, 0.050)\n  AXStaticText \"Match Content\"  (0.045, 0.260, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.278, 0.023, 0.015)\n  AXButton \"Full Width\"  (0.000, 0.310, 1.000, 0.050)\n  AXStaticText \"Full Width\"  (0.045, 0.310, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.328, 0.023, 0.015)\n  AXButton \"Fixed Width\"  (0.000, 0.360, 1.000, 0.050)\n  AXStaticText \"Fixed Width\"  (0.045, 0.360, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.378, 0.023, 0.015)\n  AXButton \"Width Range\"  (0.000, 0.410, 1.000, 0.050)\n  AXStaticText \"Width Range\"  (0.045, 0.410, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.428, 0.023, 0.015)\n  AXButton \"Percent Width\"  (0.000, 0.461, 1.000, 0.050)\n  AXStaticText \"Percent Width\"  (0.045, 0.461, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.478, 0.023, 0.015)\n  AXButton \"TableView\"  (0.000, 0.511, 1.000, 0.050)\n  AXStaticText \"TableView\"  (0.045, 0.511, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.529, 0.023, 0.015)\n  AXStaticText \"Advanced features\"  (0.000, 0.584, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.613, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.613, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.631, 0.023, 0.015)\n  AXButton \"Text Processors\"  (0.000, 0.664, 1.000, 0.050)\n  AXStaticText \"Text Processors\"  (0.045, 0.664, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.681, 0.023, 0.015)\n  AXStaticText \"Renderer\"  (0.000, 0.737, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.766, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.766, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.784, 0.023, 0.015)\n  AXStaticText \"Miscellaneous\"  (0.000, 0.839, 1.000, 0.029)\n  AXButton \"Menu\"  (0.000, 0.869, 1.000, 0.050)\n  AXStaticText \"Menu\"  (0.045, 0.869, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.886, 0.023, 0.015)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.335
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Proton Examples\"  (0.000, 0.059, 0.369, 0.046)\n  AXGroup \"Full Width\"  (0.410, 0.071, 0.181, 0.021)\n  AXButton \"Insert attachment\"  (0.045, 0.126, 0.277, 0.031)\n  AXStaticText \"Insert attachment\"  (0.045, 0.132, 0.277, 0.019)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.082,
+            "y": 0.082
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Proton Examples\"  (0.348, 0.071, 0.305, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.836)\n  AXStaticText \"Basic features\"  (0.000, 0.128, 1.000, 0.029)\n  AXButton \"Autogrowing Editor\"  (0.000, 0.157, 1.000, 0.050)\n  AXStaticText \"Autogrowing Editor\"  (0.045, 0.157, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.175, 0.023, 0.015)\n  AXStaticText \"Attachment\"  (0.000, 0.230, 1.000, 0.029)\n  AXButton \"Match Content\"  (0.000, 0.260, 1.000, 0.050)\n  AXStaticText \"Match Content\"  (0.045, 0.260, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.278, 0.023, 0.015)\n  AXButton \"Full Width\"  (0.000, 0.310, 1.000, 0.050)\n  AXStaticText \"Full Width\"  (0.045, 0.310, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.328, 0.023, 0.015)\n  AXButton \"Fixed Width\"  (0.000, 0.360, 1.000, 0.050)\n  AXStaticText \"Fixed Width\"  (0.045, 0.360, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.378, 0.023, 0.015)\n  AXButton \"Width Range\"  (0.000, 0.410, 1.000, 0.050)\n  AXStaticText \"Width Range\"  (0.045, 0.410, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.428, 0.023, 0.015)\n  AXButton \"Percent Width\"  (0.000, 0.461, 1.000, 0.050)\n  AXStaticText \"Percent Width\"  (0.045, 0.461, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.478, 0.023, 0.015)\n  AXButton \"TableView\"  (0.000, 0.511, 1.000, 0.050)\n  AXStaticText \"TableView\"  (0.045, 0.511, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.529, 0.023, 0.015)\n  AXStaticText \"Advanced features\"  (0.000, 0.584, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.613, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.613, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.631, 0.023, 0.015)\n  AXButton \"Text Processors\"  (0.000, 0.664, 1.000, 0.050)\n  AXStaticText \"Text Processors\"  (0.045, 0.664, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.681, 0.023, 0.015)\n  AXStaticText \"Renderer\"  (0.000, 0.737, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.766, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.766, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.784, 0.023, 0.015)\n  AXStaticText \"Miscellaneous\"  (0.000, 0.839, 1.000, 0.029)\n  AXButton \"Menu\"  (0.000, 0.869, 1.000, 0.050)\n  AXStaticText \"Menu\"  (0.045, 0.869, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.886, 0.023, 0.015)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      }
+    ],
+    "finalAnswer": "Returned to the Proton Examples list after viewing the Full Width attachment example."
+  },
+  {
+    "meta": {
+      "id": "real-proton-7",
+      "app": "rajdeep__proton",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.raj.proton.ExampleApp4",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the Proton Examples list, open the 'Commands' example.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Proton Examples\"  (0.348, 0.071, 0.305, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.836)\n  AXStaticText \"Basic features\"  (0.000, 0.128, 1.000, 0.029)\n  AXButton \"Autogrowing Editor\"  (0.000, 0.157, 1.000, 0.050)\n  AXStaticText \"Autogrowing Editor\"  (0.045, 0.157, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.175, 0.023, 0.015)\n  AXStaticText \"Attachment\"  (0.000, 0.230, 1.000, 0.029)\n  AXButton \"Match Content\"  (0.000, 0.260, 1.000, 0.050)\n  AXStaticText \"Match Content\"  (0.045, 0.260, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.278, 0.023, 0.015)\n  AXButton \"Full Width\"  (0.000, 0.310, 1.000, 0.050)\n  AXStaticText \"Full Width\"  (0.045, 0.310, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.328, 0.023, 0.015)\n  AXButton \"Fixed Width\"  (0.000, 0.360, 1.000, 0.050)\n  AXStaticText \"Fixed Width\"  (0.045, 0.360, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.378, 0.023, 0.015)\n  AXButton \"Width Range\"  (0.000, 0.410, 1.000, 0.050)\n  AXStaticText \"Width Range\"  (0.045, 0.410, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.428, 0.023, 0.015)\n  AXButton \"Percent Width\"  (0.000, 0.461, 1.000, 0.050)\n  AXStaticText \"Percent Width\"  (0.045, 0.461, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.478, 0.023, 0.015)\n  AXButton \"TableView\"  (0.000, 0.511, 1.000, 0.050)\n  AXStaticText \"TableView\"  (0.045, 0.511, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.529, 0.023, 0.015)\n  AXStaticText \"Advanced features\"  (0.000, 0.584, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.613, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.613, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.631, 0.023, 0.015)\n  AXButton \"Text Processors\"  (0.000, 0.664, 1.000, 0.050)\n  AXStaticText \"Text Processors\"  (0.045, 0.664, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.681, 0.023, 0.015)\n  AXStaticText \"Renderer\"  (0.000, 0.737, 1.000, 0.029)\n  AXButton \"Commands\"  (0.000, 0.766, 1.000, 0.050)\n  AXStaticText \"Commands\"  (0.045, 0.766, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.784, 0.023, 0.015)\n  AXStaticText \"Miscellaneous\"  (0.000, 0.839, 1.000, 0.029)\n  AXButton \"Menu\"  (0.000, 0.869, 1.000, 0.050)\n  AXStaticText \"Menu\"  (0.045, 0.869, 0.867, 0.050)\n  AXButton \"chevron\"  (0.931, 0.886, 0.023, 0.015)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.127, 0.965, 0.745, 0.031)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.638
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Proton Examples\"  (0.000, 0.059, 0.369, 0.046)\n  AXGroup \"Commands\"  (0.397, 0.071, 0.206, 0.021)\n  AXButton \"Panel\"  (0.045, 0.126, 0.159, 0.031)\n  AXButton \"Expand\"  (0.227, 0.126, 0.159, 0.031)\n  AXButton \"Table\"  (0.409, 0.126, 0.159, 0.031)\n  AXButton \"List\"  (0.591, 0.126, 0.159, 0.031)\n  AXButton \"Bold\"  (0.773, 0.126, 0.159, 0.031)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.880, 0.126, 0.068, 0.042)\n  AXButton \"Italics\"  (0.955, 0.126, 0.045, 0.031)\n  AXStaticText \"Panel\"  (0.082, 0.132, 0.086, 0.019)\n  AXStaticText \"Expand\"  (0.249, 0.132, 0.116, 0.019)\n  AXStaticText \"Table\"  (0.447, 0.132, 0.084, 0.019)\n  AXStaticText \"List\"  (0.642, 0.132, 0.057, 0.019)\n  AXStaticText \"Bold\"  (0.817, 0.132, 0.070, 0.019)\n  AXStaticText \"Italics\"  (0.989, 0.132, 0.011, 0.019)\n  AXGroup \"Horizontal scroll bar, 3 pages\" value=\"0%\"  (0.045, 0.144, 0.909, 0.021)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the 'Commands' example (Advanced features) from the Proton Examples list."
+  }
+]
