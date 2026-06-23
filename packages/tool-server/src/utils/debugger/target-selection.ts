@@ -23,7 +23,7 @@ export function selectTarget(
 ): SelectedTarget {
   let candidates = targets;
 
-  if (options?.deviceId) {
+  if (typeof options?.deviceId === "string" && options.deviceId) {
     const deviceId = options.deviceId;
     const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === deviceId);
     if (filtered.length) {
@@ -46,7 +46,7 @@ export function selectTarget(
       ];
       if (distinctDeviceIds.length > 1) {
         throw new Error(
-          `No debugger target matches device_id "${String(deviceId)}". ` +
+          `No debugger target matches device_id "${deviceId}". ` +
             `${distinctDeviceIds.length} devices are connected to Metro on port ${port}: ` +
             `${distinctDeviceIds.join(", ")}. Pass one of these as device_id ` +
             `(the logicalDeviceId returned by debugger-connect).`
