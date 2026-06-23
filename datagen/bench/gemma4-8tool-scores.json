@@ -1,0 +1,57 @@
+{
+  "cell": "argent_gemma4_8tool",
+  "n": 8,
+  "passed": 4,
+  "success_pct": 50.0,
+  "backend": "manual-claude",
+  "rows": [
+    {
+      "id": "ios-version",
+      "pass": true,
+      "reason": "navigated to About, reported iOS 18.5",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "device-name",
+      "pass": true,
+      "reason": "reached About, reported iPhone 16 Pro Max",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "accessibility-option",
+      "pass": true,
+      "reason": "reached Accessibility, listed real options (Motion, etc.)",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "search-bluetooth",
+      "pass": true,
+      "reason": "used search, opened the Bluetooth screen",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "airplane-on",
+      "pass": false,
+      "reason": "described Settings but never toggled Airplane Mode",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "wifi-state",
+      "pass": false,
+      "reason": "36 calls, derailed by 'cannot process images', no wifi state reported",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "appearance",
+      "pass": false,
+      "reason": "never reached Display & Brightness / reported appearance",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "back-to-root",
+      "pass": false,
+      "reason": "26 messy calls (repeated launch-app/open-url), didn't complete back-nav",
+      "backend": "manual-claude"
+    }
+  ]
+}

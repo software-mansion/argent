@@ -1,0 +1,57 @@
+{
+  "cell": "argent_silver_realistic",
+  "n": 8,
+  "passed": 0,
+  "success_pct": 0.0,
+  "backend": "manual-claude",
+  "rows": [
+    {
+      "id": "ios-version",
+      "pass": false,
+      "reason": "correct describe-then-tap loop but gesture-name truncation (tap/swipe -> argent_tap -> 'invalid') errored all gestures; task never completed",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "device-name",
+      "pass": false,
+      "reason": "correct describe-then-tap loop but gesture-name truncation (tap/swipe -> argent_tap -> 'invalid') errored all gestures; task never completed",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "airplane-on",
+      "pass": false,
+      "reason": "correct describe-then-tap loop but gesture-name truncation (tap/swipe -> argent_tap -> 'invalid') errored all gestures; task never completed",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "wifi-state",
+      "pass": false,
+      "reason": "correct describe-then-tap loop but gesture-name truncation (tap/swipe -> argent_tap -> 'invalid') errored all gestures; task never completed",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "appearance",
+      "pass": false,
+      "reason": "correct describe-then-tap loop but gesture-name truncation (tap/swipe -> argent_tap -> 'invalid') errored all gestures; task never completed",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "accessibility-option",
+      "pass": false,
+      "reason": "correct describe-then-tap loop but gesture-name truncation (tap/swipe -> argent_tap -> 'invalid') errored all gestures; task never completed",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "search-bluetooth",
+      "pass": false,
+      "reason": "correct describe-then-tap loop but gesture-name truncation (tap/swipe -> argent_tap -> 'invalid') errored all gestures; task never completed",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "back-to-root",
+      "pass": false,
+      "reason": "correct describe-then-tap loop but gesture-name truncation (tap/swipe -> argent_tap -> 'invalid') errored all gestures; task never completed",
+      "backend": "manual-claude"
+    }
+  ]
+}

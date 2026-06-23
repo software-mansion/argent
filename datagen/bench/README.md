@@ -5,20 +5,25 @@ as the agent harness (an established runtime — we do not reimplement the agent
 driving a model through a toolkit's MCP tools against a **real booted iOS simulator**,
 plus a thin judge pass for task success.
 
-**Full write-up + the silver fine-tuning journey: [RESULTS.md](./RESULTS.md).**
+Write-ups: the **corrected overnight run** is in **[RESULTS-realistic.md](./RESULTS-realistic.md)**;
+the earlier journey is in [RESULTS.md](./RESULTS.md).
 
-Matrix (2 toolkits × 3 models) — Argent column run; agent-device + Haiku pending:
+Latest (corrected `silver-realistic`, 8-tool agent, identical conditions):
 
-|                  | **Argent** (MCP)       | **agent-device** (MCP) |
-| ---------------- | ---------------------- | ---------------------- |
-| **gemma4:e4b**   | **2/8 (25%)** baseline | pending (build)        |
-| **silver:e4b**   | 0/8 — see RESULTS.md   | pending                |
-| **Claude Haiku** | pending (key)          | pending (key)          |
+|                      | **Argent** (MCP)       |
+| -------------------- | ---------------------- |
+| **gemma4:e4b**       | **4/8 (50%)** baseline |
+| **silver-realistic** | **0/8** (see below)    |
+| **Claude Haiku**     | pending (key)          |
 
-Short version: the silver fine-tune was retrained until it became a true OpenCode drop-in
-(native gemma4 tool format → executes tools; `--no-narration` → full multi-step), but the
-4B model still wanders and completes 0/8 vs gemma's 2/8. The harness-compatibility problems
-are solved; navigation quality is the open gap. Details + next steps in RESULTS.md.
+The corrected training fixed the **behaviour** — silver now runs the right
+`describe → tap → describe` loop, persists, and never hallucinates a tool name (vs every prior
+version). It still completes 0/8 for one specific reason: under a _real_ argent `describe` (live
+screens have ~20+ elements vs the gym's ~5-8) the 4B truncates gesture tool names (`gesture-tap` →
+`tap` → `argent_tap` → "unavailable tool 'invalid'"), so taps error. Navigation is correct; the
+fix is richer/longer training describes and/or a larger base. Full detail + fix path in
+RESULTS-realistic.md. (gemma improved 25%→50% here because the focused 8-tool agent cut the context
+bloat.)
 
 ## The setup that works (OpenCode + ollama + argent)
 
