@@ -1,0 +1,914 @@
+[
+  {
+    "meta": {
+      "id": "real-pusher-b01",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Turn the 'Use sandbox' switch on, then turn it back off.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.642,
+            "y": 0.142
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"1\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.642,
+            "y": 0.142
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)"
+        }
+      }
+    ],
+    "finalAnswer": "The Use sandbox switch is back in the off position."
+  },
+  {
+    "meta": {
+      "id": "real-pusher-b02",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Tap the payload field and append '123' to the existing text.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.21
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "text": "123"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..123\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)\n  AXGroup \"Typing Predictions\"  (0.000, 0.908, 1.000, 0.055)\n  AXTabBar \"„123”\"  (0.000, 0.908, 0.333, 0.055)\n  AXImage \"q\"  (0.000, 0.979, 0.100, 0.021)\n  AXImage \"w\"  (0.100, 0.979, 0.100, 0.021)\n  AXImage \"e\"  (0.200, 0.979, 0.100, 0.021)\n  AXImage \"r\"  (0.300, 0.979, 0.100, 0.021)\n  AXImage \"t\"  (0.400, 0.979, 0.100, 0.021)\n  AXImage \"y\"  (0.500, 0.979, 0.100, 0.021)\n  AXImage \"u\"  (0.600, 0.979, 0.100, 0.021)\n  AXImage \"i\"  (0.700, 0.979, 0.100, 0.021)\n  AXImage \"o\"  (0.800, 0.979, 0.100, 0.021)\n  AXImage \"p\"  (0.900, 0.979, 0.100, 0.021)"
+        }
+      }
+    ],
+    "finalAnswer": "The payload field now reads 'Testing..123'."
+  },
+  {
+    "meta": {
+      "id": "real-pusher-b03",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Tap the payload field and clear all of its text.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.21
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)\n  AXGroup \"Typing Predictions\"  (0.000, 0.908, 1.000, 0.055)\n  AXTabBar \"Nie\"  (0.000, 0.908, 0.333, 0.055)\n  AXTabBar \"A\"  (0.333, 0.908, 0.333, 0.055)\n  AXTabBar \"No\"  (0.667, 0.908, 0.333, 0.055)\n  AXImage \"Q\"  (0.000, 0.979, 0.100, 0.021)\n  AXImage \"W\"  (0.100, 0.979, 0.100, 0.021)\n  AXImage \"E\"  (0.200, 0.979, 0.100, 0.021)\n  AXImage \"R\"  (0.300, 0.979, 0.100, 0.021)\n  AXImage \"T\"  (0.400, 0.979, 0.100, 0.021)\n  AXImage \"Y\"  (0.500, 0.979, 0.100, 0.021)\n  AXImage \"U\"  (0.600, 0.979, 0.100, 0.021)\n  AXImage \"I\"  (0.700, 0.979, 0.100, 0.021)\n  AXImage \"O\"  (0.800, 0.979, 0.100, 0.021)\n  AXImage \"P\"  (0.900, 0.979, 0.100, 0.021)"
+        }
+      }
+    ],
+    "finalAnswer": "The payload field is now empty."
+  },
+  {
+    "meta": {
+      "id": "real-pusher-b04",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Replace the payload text: clear the field and type 'Hello'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.21
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "text": "Hello"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Hello\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)\n  AXGroup \"Typing Predictions\"  (0.000, 0.908, 1.000, 0.055)\n  AXTabBar \"„Hello”\"  (0.000, 0.908, 0.333, 0.055)\n  AXImage \"q\"  (0.000, 0.979, 0.100, 0.021)\n  AXImage \"w\"  (0.100, 0.979, 0.100, 0.021)\n  AXImage \"e\"  (0.200, 0.979, 0.100, 0.021)\n  AXImage \"r\"  (0.300, 0.979, 0.100, 0.021)\n  AXImage \"t\"  (0.400, 0.979, 0.100, 0.021)\n  AXImage \"y\"  (0.500, 0.979, 0.100, 0.021)\n  AXImage \"u\"  (0.600, 0.979, 0.100, 0.021)\n  AXImage \"i\"  (0.700, 0.979, 0.100, 0.021)\n  AXImage \"o\"  (0.800, 0.979, 0.100, 0.021)\n  AXImage \"p\"  (0.900, 0.979, 0.100, 0.021)"
+        }
+      }
+    ],
+    "finalAnswer": "The payload field now reads 'Hello'."
+  },
+  {
+    "meta": {
+      "id": "real-pusher-b05",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Clear the payload field and type 'NewPayload' as the new message body.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.21
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "backspace"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "text": "NewPayload"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"NewPayload\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)\n  AXGroup \"Typing Predictions\"  (0.000, 0.908, 1.000, 0.055)\n  AXTabBar \"„NewPayload”\"  (0.000, 0.908, 0.333, 0.055)\n  AXImage \"q\"  (0.000, 0.979, 0.100, 0.021)\n  AXImage \"w\"  (0.100, 0.979, 0.100, 0.021)\n  AXImage \"e\"  (0.200, 0.979, 0.100, 0.021)\n  AXImage \"r\"  (0.300, 0.979, 0.100, 0.021)\n  AXImage \"t\"  (0.400, 0.979, 0.100, 0.021)\n  AXImage \"y\"  (0.500, 0.979, 0.100, 0.021)\n  AXImage \"u\"  (0.600, 0.979, 0.100, 0.021)\n  AXImage \"i\"  (0.700, 0.979, 0.100, 0.021)\n  AXImage \"o\"  (0.800, 0.979, 0.100, 0.021)\n  AXImage \"p\"  (0.900, 0.979, 0.100, 0.021)"
+        }
+      }
+    ],
+    "finalAnswer": "The payload field now reads 'NewPayload'."
+  },
+  {
+    "meta": {
+      "id": "real-pusher-b06",
+      "app": "noodlewerk__NWPusher",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "com.noodlewerk.pusher",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Turn on the 'Use sandbox' switch, then append 'Alert' to the payload text.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"0\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.642,
+            "y": 0.142
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"1\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.21
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "text": "Alert"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Connect\"  (0.063, 0.120, 0.438, 0.058)\n  AXButton value=\"1\"  (0.563, 0.120, 0.159, 0.045)\n  AXStaticText \"Use sandbox\"  (0.753, 0.120, 0.247, 0.058)\n  AXStaticText \"Connect\"  (0.190, 0.136, 0.184, 0.026)\n  AXGroup value=\"Testing..Alert\"  (0.063, 0.192, 0.875, 0.037)\n  AXButton \"Push\"  (0.063, 0.244, 0.875, 0.058)\n  AXStaticText \"Push\"  (0.446, 0.260, 0.109, 0.026)\n  AXStaticText \"Unable to read p12 file: PKCS12 data is empty\"  (0.063, 0.316, 0.875, 0.086)\n  AXGroup \"Typing Predictions\"  (0.000, 0.908, 1.000, 0.055)\n  AXTabBar \"„Alert”\"  (0.000, 0.908, 0.333, 0.055)\n  AXTabBar \"Alerty\"  (0.333, 0.908, 0.333, 0.055)\n  AXTabBar \"Alertem\"  (0.667, 0.908, 0.333, 0.055)\n  AXImage \"q\"  (0.000, 0.979, 0.100, 0.021)\n  AXImage \"w\"  (0.100, 0.979, 0.100, 0.021)\n  AXImage \"e\"  (0.200, 0.979, 0.100, 0.021)\n  AXImage \"r\"  (0.300, 0.979, 0.100, 0.021)\n  AXImage \"t\"  (0.400, 0.979, 0.100, 0.021)\n  AXImage \"y\"  (0.500, 0.979, 0.100, 0.021)\n  AXImage \"u\"  (0.600, 0.979, 0.100, 0.021)\n  AXImage \"i\"  (0.700, 0.979, 0.100, 0.021)\n  AXImage \"o\"  (0.800, 0.979, 0.100, 0.021)\n  AXImage \"p\"  (0.900, 0.979, 0.100, 0.021)"
+        }
+      }
+    ],
+    "finalAnswer": "Use sandbox is on and the payload reads 'Testing..Alert'."
+  }
+]

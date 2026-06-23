@@ -1,0 +1,833 @@
+[
+  {
+    "meta": {
+      "id": "real-2048-b01",
+      "app": "danqing__2048",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "me.danqing.m2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "From the game board, open Settings and then open the Game Type option to see the available game modes.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"2048\"  (0.050, 0.152, 0.409, 0.081)\n  AXStaticText \"SCORE\"  (0.516, 0.155, 0.134, 0.030)\n  AXStaticText \"BEST\"  (0.769, 0.155, 0.131, 0.030)\n  AXStaticText \"0\"  (0.466, 0.197, 0.231, 0.030)\n  AXStaticText \"0\"  (0.719, 0.197, 0.231, 0.030)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.050, 0.235, 0.391, 0.062)\n  AXButton \"Settings\"  (0.466, 0.245, 0.231, 0.043)\n  AXButton \"Restart\"  (0.719, 0.245, 0.231, 0.043)\n  AXStaticText \"Settings\"  (0.499, 0.253, 0.166, 0.029)\n  AXStaticText \"Restart\"  (0.762, 0.253, 0.144, 0.029)\n  AXGroup \"2\"  (0.581, 0.619, 0.056, 0.037)\n  AXGroup \"2\"  (0.803, 0.721, 0.056, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.582,
+            "y": 0.266
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.311
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Game Type\"  (0.360, 0.174, 0.280, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Powers of 2\"  (0.050, 0.280, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.299, 0.059, 0.025)\n  AXStaticText \"Powers of 3\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Powers of 3\"  (0.050, 0.343, 0.900, 0.063)\n  AXStaticText \"Fibonacci\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Fibonacci\"  (0.050, 0.407, 0.900, 0.063)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXStaticText \"For Fibonacci games, a tile can be joined with a tile that is one level above or below it, but not to one equal to it. For Powers of 3, you need 3 consecutive tiles to be the same to trigger a merge!\"  (0.000, 0.470, 1.000, 0.135)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      }
+    ],
+    "finalAnswer": "The Game Type picker is open, showing Powers of 2 (selected), Powers of 3, and Fibonacci."
+  },
+  {
+    "meta": {
+      "id": "real-2048-b02",
+      "app": "danqing__2048",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "me.danqing.m2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings, open Game Type, and select 'Powers of 3'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"2048\"  (0.050, 0.152, 0.409, 0.081)\n  AXStaticText \"SCORE\"  (0.516, 0.155, 0.134, 0.030)\n  AXStaticText \"BEST\"  (0.769, 0.155, 0.131, 0.030)\n  AXStaticText \"0\"  (0.466, 0.197, 0.231, 0.030)\n  AXStaticText \"0\"  (0.719, 0.197, 0.231, 0.030)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.050, 0.235, 0.391, 0.062)\n  AXButton \"Settings\"  (0.466, 0.245, 0.231, 0.043)\n  AXButton \"Restart\"  (0.719, 0.245, 0.231, 0.043)\n  AXStaticText \"Settings\"  (0.499, 0.253, 0.166, 0.029)\n  AXStaticText \"Restart\"  (0.762, 0.253, 0.144, 0.029)\n  AXGroup \"2\"  (0.581, 0.619, 0.056, 0.037)\n  AXGroup \"2\"  (0.803, 0.721, 0.056, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.582,
+            "y": 0.266
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.311
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Game Type\"  (0.360, 0.174, 0.280, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Powers of 2\"  (0.050, 0.280, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.299, 0.059, 0.025)\n  AXStaticText \"Powers of 3\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Powers of 3\"  (0.050, 0.343, 0.900, 0.063)\n  AXStaticText \"Fibonacci\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Fibonacci\"  (0.050, 0.407, 0.900, 0.063)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXStaticText \"For Fibonacci games, a tile can be joined with a tile that is one level above or below it, but not to one equal to it. For Powers of 3, you need 3 consecutive tiles to be the same to trigger a merge!\"  (0.000, 0.470, 1.000, 0.135)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.374
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Game Type\"  (0.360, 0.174, 0.280, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Powers of 2\"  (0.050, 0.280, 0.900, 0.063)\n  AXStaticText \"Powers of 3\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Powers of 3\"  (0.050, 0.343, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.362, 0.059, 0.025)\n  AXStaticText \"Fibonacci\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Fibonacci\"  (0.050, 0.407, 0.900, 0.063)\n  AXStaticText \"For Fibonacci games, a tile can be joined with a tile that is one level above or below it, but not to one equal to it. For Powers of 3, you need 3 consecutive tiles to be the same to trigger a merge!\"  (0.000, 0.470, 1.000, 0.135)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"2\"  (0.573, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      }
+    ],
+    "finalAnswer": "The 'Powers of 3' game type is now selected (checkmark moved to it)."
+  },
+  {
+    "meta": {
+      "id": "real-2048-b03",
+      "app": "danqing__2048",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "me.danqing.m2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings, open Game Type, select 'Fibonacci', then go back to the Settings screen and confirm Game Type now reads Fibonacci.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"2048\"  (0.050, 0.152, 0.409, 0.081)\n  AXStaticText \"SCORE\"  (0.516, 0.155, 0.134, 0.030)\n  AXStaticText \"BEST\"  (0.769, 0.155, 0.131, 0.030)\n  AXStaticText \"0\"  (0.466, 0.197, 0.231, 0.030)\n  AXStaticText \"0\"  (0.719, 0.197, 0.231, 0.030)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.050, 0.235, 0.391, 0.062)\n  AXButton \"Settings\"  (0.466, 0.245, 0.231, 0.043)\n  AXButton \"Restart\"  (0.719, 0.245, 0.231, 0.043)\n  AXStaticText \"Settings\"  (0.499, 0.253, 0.166, 0.029)\n  AXStaticText \"Restart\"  (0.762, 0.253, 0.144, 0.029)\n  AXGroup \"2\"  (0.581, 0.619, 0.056, 0.037)\n  AXGroup \"2\"  (0.803, 0.721, 0.056, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.582,
+            "y": 0.266
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.311
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Game Type\"  (0.360, 0.174, 0.280, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Powers of 2\"  (0.050, 0.280, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.299, 0.059, 0.025)\n  AXStaticText \"Powers of 3\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Powers of 3\"  (0.050, 0.343, 0.900, 0.063)\n  AXStaticText \"Fibonacci\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Fibonacci\"  (0.050, 0.407, 0.900, 0.063)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXStaticText \"For Fibonacci games, a tile can be joined with a tile that is one level above or below it, but not to one equal to it. For Powers of 3, you need 3 consecutive tiles to be the same to trigger a merge!\"  (0.000, 0.470, 1.000, 0.135)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.438
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Game Type\"  (0.360, 0.174, 0.280, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Powers of 2\"  (0.050, 0.280, 0.900, 0.063)\n  AXStaticText \"Powers of 3\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Powers of 3\"  (0.050, 0.343, 0.900, 0.063)\n  AXStaticText \"Fibonacci\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Fibonacci\"  (0.050, 0.407, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.426, 0.059, 0.025)\n  AXGroup \"2\"  (0.773, 0.426, 0.051, 0.034)\n  AXStaticText \"For Fibonacci games, a tile can be joined with a tile that is one level above or below it, but not to one equal to it. For Powers of 3, you need 3 consecutive tiles to be the same to trigger a merge!\"  (0.000, 0.470, 1.000, 0.135)\n  AXGroup \"4\"  (0.171, 0.702, 0.059, 0.032)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.146,
+            "y": 0.189
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Fibonacci\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Fibonacci\"  (0.664, 0.297, 0.229, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.773, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"4\"  (0.171, 0.702, 0.059, 0.032)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      }
+    ],
+    "finalAnswer": "Game Type is set to Fibonacci on the Settings screen."
+  },
+  {
+    "meta": {
+      "id": "real-2048-b04",
+      "app": "danqing__2048",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "me.danqing.m2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings, open Board Size, and select the '3 x 3' board.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"2048\"  (0.050, 0.152, 0.409, 0.081)\n  AXStaticText \"SCORE\"  (0.516, 0.155, 0.134, 0.030)\n  AXStaticText \"BEST\"  (0.769, 0.155, 0.131, 0.030)\n  AXStaticText \"0\"  (0.466, 0.197, 0.231, 0.030)\n  AXStaticText \"0\"  (0.719, 0.197, 0.231, 0.030)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.050, 0.235, 0.391, 0.062)\n  AXButton \"Settings\"  (0.466, 0.245, 0.231, 0.043)\n  AXButton \"Restart\"  (0.719, 0.245, 0.231, 0.043)\n  AXStaticText \"Settings\"  (0.499, 0.253, 0.166, 0.029)\n  AXStaticText \"Restart\"  (0.762, 0.253, 0.144, 0.029)\n  AXGroup \"2\"  (0.581, 0.619, 0.056, 0.037)\n  AXGroup \"2\"  (0.803, 0.721, 0.056, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.582,
+            "y": 0.266
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.374
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Board Size\"  (0.368, 0.174, 0.266, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"3 x 3\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"3 x 3\"  (0.050, 0.280, 0.900, 0.063)\n  AXStaticText \"4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"4 x 4\"  (0.050, 0.343, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.362, 0.059, 0.025)\n  AXStaticText \"5 x 5\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"5 x 5\"  (0.050, 0.407, 0.900, 0.063)\n  AXStaticText \"The smaller the board is, the harder! For 5 x 5 board, two tiles will be added every round if you are playing Powers of 2.\"  (0.000, 0.470, 1.000, 0.089)\n  AXGroup \"2\"  (0.573, 0.518, 0.051, 0.034)\n  AXGroup \"2\"  (0.174, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.311
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Board Size\"  (0.368, 0.174, 0.266, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"3 x 3\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"3 x 3\"  (0.050, 0.280, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.299, 0.059, 0.025)\n  AXStaticText \"4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"4 x 4\"  (0.050, 0.343, 0.900, 0.063)\n  AXStaticText \"5 x 5\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"5 x 5\"  (0.050, 0.407, 0.900, 0.063)\n  AXStaticText \"The smaller the board is, the harder! For 5 x 5 board, two tiles will be added every round if you are playing Powers of 2.\"  (0.000, 0.470, 1.000, 0.089)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"2\"  (0.573, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      }
+    ],
+    "finalAnswer": "The 3 x 3 board size is now selected (checkmark moved to it)."
+  },
+  {
+    "meta": {
+      "id": "real-2048-b05",
+      "app": "danqing__2048",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "me.danqing.m2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings, open Board Size, and select the '5 x 5' board.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"2048\"  (0.050, 0.152, 0.409, 0.081)\n  AXStaticText \"SCORE\"  (0.516, 0.155, 0.134, 0.030)\n  AXStaticText \"BEST\"  (0.769, 0.155, 0.131, 0.030)\n  AXStaticText \"0\"  (0.466, 0.197, 0.231, 0.030)\n  AXStaticText \"0\"  (0.719, 0.197, 0.231, 0.030)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.050, 0.235, 0.391, 0.062)\n  AXButton \"Settings\"  (0.466, 0.245, 0.231, 0.043)\n  AXButton \"Restart\"  (0.719, 0.245, 0.231, 0.043)\n  AXStaticText \"Settings\"  (0.499, 0.253, 0.166, 0.029)\n  AXStaticText \"Restart\"  (0.762, 0.253, 0.144, 0.029)\n  AXGroup \"2\"  (0.581, 0.619, 0.056, 0.037)\n  AXGroup \"2\"  (0.803, 0.721, 0.056, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.582,
+            "y": 0.266
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.374
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Board Size\"  (0.368, 0.174, 0.266, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"3 x 3\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"3 x 3\"  (0.050, 0.280, 0.900, 0.063)\n  AXStaticText \"4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"4 x 4\"  (0.050, 0.343, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.362, 0.059, 0.025)\n  AXStaticText \"5 x 5\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"5 x 5\"  (0.050, 0.407, 0.900, 0.063)\n  AXStaticText \"The smaller the board is, the harder! For 5 x 5 board, two tiles will be added every round if you are playing Powers of 2.\"  (0.000, 0.470, 1.000, 0.089)\n  AXGroup \"2\"  (0.573, 0.518, 0.051, 0.034)\n  AXGroup \"2\"  (0.174, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.438
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Board Size\"  (0.368, 0.174, 0.266, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"3 x 3\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"3 x 3\"  (0.050, 0.280, 0.900, 0.063)\n  AXStaticText \"4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"4 x 4\"  (0.050, 0.343, 0.900, 0.063)\n  AXStaticText \"5 x 5\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"5 x 5\"  (0.050, 0.407, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.426, 0.059, 0.025)\n  AXStaticText \"The smaller the board is, the harder! For 5 x 5 board, two tiles will be added every round if you are playing Powers of 2.\"  (0.000, 0.470, 1.000, 0.089)\n  AXGroup \"2\"  (0.573, 0.518, 0.051, 0.034)\n  AXGroup \"2\"  (0.174, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      }
+    ],
+    "finalAnswer": "The 5 x 5 board size is now selected (checkmark moved to it)."
+  },
+  {
+    "meta": {
+      "id": "real-2048-b06",
+      "app": "danqing__2048",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "me.danqing.m2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings and open the Theme option.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"2048\"  (0.050, 0.152, 0.409, 0.081)\n  AXStaticText \"SCORE\"  (0.516, 0.155, 0.134, 0.030)\n  AXStaticText \"BEST\"  (0.769, 0.155, 0.131, 0.030)\n  AXStaticText \"0\"  (0.466, 0.197, 0.231, 0.030)\n  AXStaticText \"0\"  (0.719, 0.197, 0.231, 0.030)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.050, 0.235, 0.391, 0.062)\n  AXButton \"Settings\"  (0.466, 0.245, 0.231, 0.043)\n  AXButton \"Restart\"  (0.719, 0.245, 0.231, 0.043)\n  AXStaticText \"Settings\"  (0.499, 0.253, 0.166, 0.029)\n  AXStaticText \"Restart\"  (0.762, 0.253, 0.144, 0.029)\n  AXGroup \"2\"  (0.581, 0.619, 0.056, 0.037)\n  AXGroup \"2\"  (0.803, 0.721, 0.056, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.582,
+            "y": 0.266
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.438
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Theme\"  (0.415, 0.174, 0.172, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"Default\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Default\"  (0.050, 0.280, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.299, 0.059, 0.025)\n  AXStaticText \"Vibrant\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Vibrant\"  (0.050, 0.343, 0.900, 0.063)\n  AXStaticText \"Joyful\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Joyful\"  (0.050, 0.407, 0.900, 0.063)\n  AXStaticText \"Choose your favorite appearance and get your own feeling of 2048! More (and higher quality) themes are in the works so check back regularly!\"  (0.000, 0.470, 1.000, 0.112)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"2\"  (0.573, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      }
+    ],
+    "finalAnswer": "The Theme picker is open, showing the Default theme selected."
+  },
+  {
+    "meta": {
+      "id": "real-2048-b07",
+      "app": "danqing__2048",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "me.danqing.m2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings, drill into the Game Type picker, then navigate back to the Settings screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"2048\"  (0.050, 0.152, 0.409, 0.081)\n  AXStaticText \"SCORE\"  (0.516, 0.155, 0.134, 0.030)\n  AXStaticText \"BEST\"  (0.769, 0.155, 0.131, 0.030)\n  AXStaticText \"0\"  (0.466, 0.197, 0.231, 0.030)\n  AXStaticText \"0\"  (0.719, 0.197, 0.231, 0.030)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.050, 0.235, 0.391, 0.062)\n  AXButton \"Settings\"  (0.466, 0.245, 0.231, 0.043)\n  AXButton \"Restart\"  (0.719, 0.245, 0.231, 0.043)\n  AXStaticText \"Settings\"  (0.499, 0.253, 0.166, 0.029)\n  AXStaticText \"Restart\"  (0.762, 0.253, 0.144, 0.029)\n  AXGroup \"2\"  (0.581, 0.619, 0.056, 0.037)\n  AXGroup \"2\"  (0.803, 0.721, 0.056, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.582,
+            "y": 0.266
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.311
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Game Type\"  (0.360, 0.174, 0.280, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Powers of 2\"  (0.050, 0.280, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.299, 0.059, 0.025)\n  AXStaticText \"Powers of 3\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Powers of 3\"  (0.050, 0.343, 0.900, 0.063)\n  AXStaticText \"Fibonacci\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Fibonacci\"  (0.050, 0.407, 0.900, 0.063)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXStaticText \"For Fibonacci games, a tile can be joined with a tile that is one level above or below it, but not to one equal to it. For Powers of 3, you need 3 consecutive tiles to be the same to trigger a merge!\"  (0.000, 0.470, 1.000, 0.135)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.146,
+            "y": 0.189
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      }
+    ],
+    "finalAnswer": "Back on the Settings screen."
+  },
+  {
+    "meta": {
+      "id": "real-2048-b08",
+      "app": "danqing__2048",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "me.danqing.m2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings, open the Theme picker, then navigate back to the Settings screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"2048\"  (0.050, 0.152, 0.409, 0.081)\n  AXStaticText \"SCORE\"  (0.516, 0.155, 0.134, 0.030)\n  AXStaticText \"BEST\"  (0.769, 0.155, 0.131, 0.030)\n  AXStaticText \"0\"  (0.466, 0.197, 0.231, 0.030)\n  AXStaticText \"0\"  (0.719, 0.197, 0.231, 0.030)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.050, 0.235, 0.391, 0.062)\n  AXButton \"Settings\"  (0.466, 0.245, 0.231, 0.043)\n  AXButton \"Restart\"  (0.719, 0.245, 0.231, 0.043)\n  AXStaticText \"Settings\"  (0.499, 0.253, 0.166, 0.029)\n  AXStaticText \"Restart\"  (0.762, 0.253, 0.144, 0.029)\n  AXGroup \"2\"  (0.581, 0.619, 0.056, 0.037)\n  AXGroup \"2\"  (0.803, 0.721, 0.056, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.582,
+            "y": 0.266
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.438
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Settings\"  (0.000, 0.158, 0.292, 0.063)\n  AXGroup \"Theme\"  (0.415, 0.174, 0.172, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.679)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXStaticText \"Default\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Default\"  (0.050, 0.280, 0.800, 0.063)\n  AXButton \"checkmark\"  (0.883, 0.299, 0.059, 0.025)\n  AXStaticText \"Vibrant\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Vibrant\"  (0.050, 0.343, 0.900, 0.063)\n  AXStaticText \"Joyful\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Joyful\"  (0.050, 0.407, 0.900, 0.063)\n  AXStaticText \"Choose your favorite appearance and get your own feeling of 2048! More (and higher quality) themes are in the works so check back regularly!\"  (0.000, 0.470, 1.000, 0.112)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"2\"  (0.573, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.861, 1.000, 0.043)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.146,
+            "y": 0.189
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Done\"  (0.824, 0.158, 0.151, 0.063)\n  AXGroup \"Settings\"  (0.396, 0.174, 0.208, 0.029)\n  AXStaticText \"2048\"  (0.095, 0.189, 0.368, 0.072)\n  AXStaticText \"SCORE\"  (0.514, 0.192, 0.121, 0.027)\n  AXStaticText \"BEST\"  (0.742, 0.192, 0.118, 0.027)\n  AXStaticText \"0\"  (0.469, 0.229, 0.208, 0.027)\n  AXStaticText \"0\"  (0.697, 0.229, 0.208, 0.027)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.897, 0.230, 0.094, 0.736)\n  AXStaticText \"Join the numbers to get to 2048!\"  (0.095, 0.264, 0.352, 0.056)\n  AXButton \"Settings\"  (0.469, 0.273, 0.208, 0.039)\n  AXButton \"Restart\"  (0.697, 0.273, 0.208, 0.039)\n  AXStaticText \"Settings\"  (0.499, 0.280, 0.149, 0.026)\n  AXStaticText \"Restart\"  (0.736, 0.280, 0.129, 0.026)\n  AXButton \"Game Type, Powers of 2\"  (0.000, 0.280, 1.000, 0.063)\n  AXStaticText \"Game Type\"  (0.050, 0.297, 0.271, 0.029)\n  AXStaticText \"Powers of 2\"  (0.614, 0.297, 0.279, 0.029)\n  AXButton \"chevron\"  (0.918, 0.302, 0.032, 0.020)\n  AXButton \"Board Size, 4 x 4\"  (0.000, 0.343, 1.000, 0.063)\n  AXStaticText \"Board Size\"  (0.050, 0.360, 0.255, 0.029)\n  AXStaticText \"4 x 4\"  (0.773, 0.360, 0.120, 0.029)\n  AXButton \"chevron\"  (0.918, 0.365, 0.032, 0.020)\n  AXButton \"Theme, Default\"  (0.000, 0.407, 1.000, 0.063)\n  AXStaticText \"Theme\"  (0.050, 0.424, 0.166, 0.029)\n  AXStaticText \"Default\"  (0.721, 0.424, 0.172, 0.029)\n  AXGroup \"2\"  (0.174, 0.426, 0.051, 0.034)\n  AXButton \"chevron\"  (0.918, 0.428, 0.032, 0.020)\n  AXStaticText \"Please note: Changing the settings above would restart the game.\"  (0.000, 0.470, 1.000, 0.066)\n  AXButton \"About 2048\"  (0.000, 0.550, 1.000, 0.063)\n  AXStaticText \"About 2048\"  (0.050, 0.568, 0.285, 0.029)\n  AXButton \"chevron\"  (0.918, 0.572, 0.032, 0.020)\n  AXGroup \"2\"  (0.373, 0.610, 0.051, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.919, 1.000, 0.043)"
+        }
+      }
+    ],
+    "finalAnswer": "Back on the Settings screen."
+  }
+]

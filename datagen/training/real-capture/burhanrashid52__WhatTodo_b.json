@@ -1,0 +1,1380 @@
+[
+ {
+  "meta": {
+   "id": "real-whattodo-9",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "easy",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From the Today screen, open the navigation drawer and go to the Inbox.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.071,
+      "y": 0.102,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.465, 0.774, 0.068)\n  AXStaticText \"Labels\"  (0.000, 0.533, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.301,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Inbox\"  (0.436, 0.086, 0.127, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-10",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the navigation drawer and expand the Projects section to reveal 'Add Project'.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.071,
+      "y": 0.102,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.465, 0.774, 0.068)\n  AXStaticText \"Labels\"  (0.000, 0.533, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.499,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.466, 0.774, 0.066)\n  AXStaticText \"Add Project\"  (0.000, 0.532, 0.774, 0.066)\n  AXStaticText \"Labels\"  (0.000, 0.599, 0.774, 0.068)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-11",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the drawer, expand Projects, and open the Add Project form.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.071,
+      "y": 0.102,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.465, 0.774, 0.068)\n  AXStaticText \"Labels\"  (0.000, 0.533, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.499,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.466, 0.774, 0.066)\n  AXStaticText \"Add Project\"  (0.000, 0.532, 0.774, 0.066)\n  AXStaticText \"Labels\"  (0.000, 0.599, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.566,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Project\"  (0.364, 0.086, 0.271, 0.033)\n  AXGroup \"Project Name\"  (0.000, 0.135, 1.000, 0.099)\n  AXStaticText \"20 characters remaining\"  (0.909, 0.205, 0.070, 0.019)\n  AXStaticText \"Grey\"  (0.000, 0.234, 1.000, 0.073)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-12",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "search",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap",
+    "keyboard"
+   ],
+   "verified": true
+  },
+  "task": "In the Add Project form, type the project name 'Work'.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.071,
+      "y": 0.102,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.465, 0.774, 0.068)\n  AXStaticText \"Labels\"  (0.000, 0.533, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.499,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.466, 0.774, 0.066)\n  AXStaticText \"Add Project\"  (0.000, 0.532, 0.774, 0.066)\n  AXStaticText \"Labels\"  (0.000, 0.599, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.566,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Project\"  (0.364, 0.086, 0.271, 0.033)\n  AXGroup \"Project Name\"  (0.000, 0.135, 1.000, 0.099)\n  AXStaticText \"20 characters remaining\"  (0.909, 0.205, 0.070, 0.019)\n  AXStaticText \"Grey\"  (0.000, 0.234, 1.000, 0.073)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.184,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Project\"  (0.364, 0.086, 0.271, 0.033)\n  AXGroup \"Project Name\"  (0.000, 0.135, 1.000, 0.099)\n  AXGroup \"20 characters remaining\"  (0.909, 0.205, 0.070, 0.019)\n  AXStaticText \"Grey\"  (0.000, 0.234, 1.000, 0.073)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "keyboard",
+     "arguments": {
+      "text": "Work",
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Project\"  (0.364, 0.086, 0.271, 0.033)\n  AXGroup value=\"Work\"  (0.000, 0.135, 1.000, 0.099)\n  AXGroup \"16 characters remaining\"  (0.909, 0.205, 0.071, 0.019)\n  AXStaticText \"Grey\"  (0.000, 0.234, 1.000, 0.073)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-13",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Add Project form and open the project color picker.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.071,
+      "y": 0.102,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.465, 0.774, 0.068)\n  AXStaticText \"Labels\"  (0.000, 0.533, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.499,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.466, 0.774, 0.066)\n  AXStaticText \"Add Project\"  (0.000, 0.532, 0.774, 0.066)\n  AXStaticText \"Labels\"  (0.000, 0.599, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.566,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Project\"  (0.364, 0.086, 0.271, 0.033)\n  AXGroup \"Project Name\"  (0.000, 0.135, 1.000, 0.099)\n  AXStaticText \"20 characters remaining\"  (0.909, 0.205, 0.070, 0.019)\n  AXStaticText \"Grey\"  (0.000, 0.234, 1.000, 0.073)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.27,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Project\"  (0.364, 0.086, 0.271, 0.033)\n  AXGroup \"Project Name\"  (0.000, 0.135, 1.000, 0.099)\n  AXStaticText \"20 characters remaining\"  (0.909, 0.205, 0.070, 0.019)\n  AXStaticText \"Grey\"  (0.000, 0.239, 1.000, 0.066)\n  AXStaticText \"Red\"  (0.000, 0.305, 1.000, 0.066)\n  AXStaticText \"Pink\"  (0.000, 0.371, 1.000, 0.066)\n  AXStaticText \"Purple\"  (0.000, 0.437, 1.000, 0.066)\n  AXStaticText \"Deep Purple\"  (0.000, 0.502, 1.000, 0.066)\n  AXStaticText \"Indigo\"  (0.000, 0.568, 1.000, 0.066)\n  AXStaticText \"Blue\"  (0.000, 0.634, 1.000, 0.066)\n  AXStaticText \"Lightblue\"  (0.000, 0.700, 1.000, 0.066)\n  AXStaticText \"Cyan\"  (0.000, 0.765, 1.000, 0.066)\n  AXStaticText \"Teal\"  (0.000, 0.831, 1.000, 0.066)\n  AXButton  (0.817, 0.876, 0.142, 0.066)\n  AXStaticText \"Green\"  (0.000, 0.897, 1.000, 0.066)\n  AXStaticText \"Lightgreen\"  (0.000, 0.962, 1.000, 0.038)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-14",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "In the Add Project form, change the project color to Red.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.071,
+      "y": 0.102,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.465, 0.774, 0.068)\n  AXStaticText \"Labels\"  (0.000, 0.533, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.499,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.466, 0.774, 0.066)\n  AXStaticText \"Add Project\"  (0.000, 0.532, 0.774, 0.066)\n  AXStaticText \"Labels\"  (0.000, 0.599, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.566,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Project\"  (0.364, 0.086, 0.271, 0.033)\n  AXGroup \"Project Name\"  (0.000, 0.135, 1.000, 0.099)\n  AXStaticText \"20 characters remaining\"  (0.909, 0.205, 0.070, 0.019)\n  AXStaticText \"Grey\"  (0.000, 0.234, 1.000, 0.073)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.27,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Project\"  (0.364, 0.086, 0.271, 0.033)\n  AXGroup \"Project Name\"  (0.000, 0.135, 1.000, 0.099)\n  AXStaticText \"20 characters remaining\"  (0.909, 0.205, 0.070, 0.019)\n  AXStaticText \"Grey\"  (0.000, 0.239, 1.000, 0.066)\n  AXStaticText \"Red\"  (0.000, 0.305, 1.000, 0.066)\n  AXStaticText \"Pink\"  (0.000, 0.371, 1.000, 0.066)\n  AXStaticText \"Purple\"  (0.000, 0.437, 1.000, 0.066)\n  AXStaticText \"Deep Purple\"  (0.000, 0.502, 1.000, 0.066)\n  AXStaticText \"Indigo\"  (0.000, 0.568, 1.000, 0.066)\n  AXStaticText \"Blue\"  (0.000, 0.634, 1.000, 0.066)\n  AXStaticText \"Lightblue\"  (0.000, 0.700, 1.000, 0.066)\n  AXStaticText \"Cyan\"  (0.000, 0.765, 1.000, 0.066)\n  AXStaticText \"Teal\"  (0.000, 0.831, 1.000, 0.066)\n  AXButton  (0.817, 0.876, 0.142, 0.066)\n  AXStaticText \"Green\"  (0.000, 0.897, 1.000, 0.066)\n  AXStaticText \"Lightgreen\"  (0.000, 0.962, 1.000, 0.038)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.338,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Project\"  (0.364, 0.086, 0.271, 0.033)\n  AXGroup \"Project Name\"  (0.000, 0.135, 1.000, 0.099)\n  AXStaticText \"20 characters remaining\"  (0.909, 0.205, 0.070, 0.019)\n  AXStaticText \"Red\"  (0.000, 0.234, 1.000, 0.073)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-15",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Add Task form and open the Due Date calendar picker.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.888,
+      "y": 0.909,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Task\"  (0.393, 0.086, 0.215, 0.033)\n  AXGroup \"Title\"  (0.000, 0.135, 1.000, 0.075)\n  AXStaticText \"Project\\nInbox\"  (0.000, 0.210, 1.000, 0.085)\n  AXStaticText \"Due Date\\nJun  23\"  (0.000, 0.295, 1.000, 0.085)\n  AXStaticText \"Priority\\nPriority 4\"  (0.000, 0.379, 1.000, 0.085)\n  AXStaticText \"Labels\\nNo Labels\"  (0.000, 0.464, 1.000, 0.085)\n  AXStaticText \"Comments\\nNo Comments\"  (0.000, 0.548, 1.000, 0.085)\n  AXStaticText \"Reminder\\nNo Reminder\"  (0.000, 0.633, 1.000, 0.085)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.337,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"Select date\\nTue, Jun 23\"  (0.083, 0.214, 0.835, 0.141)\n  AXButton \"Switch to input\"  (0.765, 0.285, 0.122, 0.056)\n  AXButton \"Select year\"  (0.123, 0.355, 0.509, 0.061)\n  AXButton \"Previous month\"  (0.663, 0.357, 0.122, 0.056)\n  AXButton \"Next month\"  (0.785, 0.357, 0.122, 0.056)\n  AXButton \"1, Monday, June 1, 2026\"  (0.216, 0.464, 0.113, 0.048)\n  AXButton \"2, Tuesday, June 2, 2026\"  (0.330, 0.464, 0.113, 0.048)\n  AXButton \"3, Wednesday, June 3, 2026\"  (0.443, 0.464, 0.113, 0.048)\n  AXButton \"4, Thursday, June 4, 2026\"  (0.557, 0.464, 0.113, 0.048)\n  AXButton \"5, Friday, June 5, 2026\"  (0.670, 0.464, 0.113, 0.048)\n  AXButton \"6, Saturday, June 6, 2026\"  (0.784, 0.464, 0.113, 0.048)\n  AXButton \"7, Sunday, June 7, 2026\"  (0.103, 0.513, 0.113, 0.048)\n  AXButton \"8, Monday, June 8, 2026\"  (0.216, 0.513, 0.113, 0.048)\n  AXButton \"9, Tuesday, June 9, 2026\"  (0.330, 0.513, 0.113, 0.048)\n  AXButton \"10, Wednesday, June 10, 2026\"  (0.443, 0.513, 0.113, 0.048)\n  AXButton \"11, Thursday, June 11, 2026\"  (0.557, 0.513, 0.113, 0.048)\n  AXButton \"12, Friday, June 12, 2026\"  (0.670, 0.513, 0.113, 0.048)\n  AXButton \"13, Saturday, June 13, 2026\"  (0.784, 0.513, 0.113, 0.048)\n  AXButton \"14, Sunday, June 14, 2026\"  (0.103, 0.561, 0.113, 0.048)\n  AXButton \"15, Monday, June 15, 2026\"  (0.216, 0.561, 0.113, 0.048)\n  AXButton \"16, Tuesday, June 16, 2026\"  (0.330, 0.561, 0.113, 0.048)\n  AXButton \"17, Wednesday, June 17, 2026\"  (0.443, 0.561, 0.113, 0.048)\n  AXButton \"18, Thursday, June 18, 2026\"  (0.557, 0.561, 0.113, 0.048)\n  AXButton \"19, Friday, June 19, 2026\"  (0.670, 0.561, 0.113, 0.048)\n  AXButton \"20, Saturday, June 20, 2026\"  (0.784, 0.561, 0.113, 0.048)\n  AXButton \"21, Sunday, June 21, 2026\"  (0.103, 0.609, 0.113, 0.048)\n  AXButton \"22, Monday, June 22, 2026\"  (0.216, 0.609, 0.113, 0.048)\n  AXButton \"23, Tuesday, June 23, 2026, Today\"  (0.330, 0.609, 0.113, 0.048)\n  AXButton \"24, Wednesday, June 24, 2026\"  (0.443, 0.609, 0.113, 0.048)\n  AXButton \"25, Thursday, June 25, 2026\"  (0.557, 0.609, 0.113, 0.048)\n  AXButton \"26, Friday, June 26, 2026\"  (0.670, 0.609, 0.113, 0.048)\n  AXButton \"27, Saturday, June 27, 2026\"  (0.784, 0.609, 0.113, 0.048)\n  AXButton \"28, Sunday, June 28, 2026\"  (0.103, 0.658, 0.113, 0.048)\n  AXButton \"29, Monday, June 29, 2026\"  (0.216, 0.658, 0.113, 0.048)\n  AXButton \"30, Tuesday, June 30, 2026\"  (0.330, 0.658, 0.113, 0.048)\n  AXButton \"Cancel\"  (0.533, 0.756, 0.181, 0.056)\n  AXButton \"OK\"  (0.734, 0.756, 0.163, 0.056)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-16",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Add Task form, open the Due Date picker, choose June 25 and confirm.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.888,
+      "y": 0.909,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Task\"  (0.393, 0.086, 0.215, 0.033)\n  AXGroup \"Title\"  (0.000, 0.135, 1.000, 0.075)\n  AXStaticText \"Project\\nInbox\"  (0.000, 0.210, 1.000, 0.085)\n  AXStaticText \"Due Date\\nJun  23\"  (0.000, 0.295, 1.000, 0.085)\n  AXStaticText \"Priority\\nPriority 4\"  (0.000, 0.379, 1.000, 0.085)\n  AXStaticText \"Labels\\nNo Labels\"  (0.000, 0.464, 1.000, 0.085)\n  AXStaticText \"Comments\\nNo Comments\"  (0.000, 0.548, 1.000, 0.085)\n  AXStaticText \"Reminder\\nNo Reminder\"  (0.000, 0.633, 1.000, 0.085)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.337,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"Select date\\nTue, Jun 23\"  (0.083, 0.214, 0.835, 0.141)\n  AXButton \"Switch to input\"  (0.765, 0.285, 0.122, 0.056)\n  AXButton \"Select year\"  (0.123, 0.355, 0.509, 0.061)\n  AXButton \"Previous month\"  (0.663, 0.357, 0.122, 0.056)\n  AXButton \"Next month\"  (0.785, 0.357, 0.122, 0.056)\n  AXButton \"1, Monday, June 1, 2026\"  (0.216, 0.464, 0.113, 0.048)\n  AXButton \"2, Tuesday, June 2, 2026\"  (0.330, 0.464, 0.113, 0.048)\n  AXButton \"3, Wednesday, June 3, 2026\"  (0.443, 0.464, 0.113, 0.048)\n  AXButton \"4, Thursday, June 4, 2026\"  (0.557, 0.464, 0.113, 0.048)\n  AXButton \"5, Friday, June 5, 2026\"  (0.670, 0.464, 0.113, 0.048)\n  AXButton \"6, Saturday, June 6, 2026\"  (0.784, 0.464, 0.113, 0.048)\n  AXButton \"7, Sunday, June 7, 2026\"  (0.103, 0.513, 0.113, 0.048)\n  AXButton \"8, Monday, June 8, 2026\"  (0.216, 0.513, 0.113, 0.048)\n  AXButton \"9, Tuesday, June 9, 2026\"  (0.330, 0.513, 0.113, 0.048)\n  AXButton \"10, Wednesday, June 10, 2026\"  (0.443, 0.513, 0.113, 0.048)\n  AXButton \"11, Thursday, June 11, 2026\"  (0.557, 0.513, 0.113, 0.048)\n  AXButton \"12, Friday, June 12, 2026\"  (0.670, 0.513, 0.113, 0.048)\n  AXButton \"13, Saturday, June 13, 2026\"  (0.784, 0.513, 0.113, 0.048)\n  AXButton \"14, Sunday, June 14, 2026\"  (0.103, 0.561, 0.113, 0.048)\n  AXButton \"15, Monday, June 15, 2026\"  (0.216, 0.561, 0.113, 0.048)\n  AXButton \"16, Tuesday, June 16, 2026\"  (0.330, 0.561, 0.113, 0.048)\n  AXButton \"17, Wednesday, June 17, 2026\"  (0.443, 0.561, 0.113, 0.048)\n  AXButton \"18, Thursday, June 18, 2026\"  (0.557, 0.561, 0.113, 0.048)\n  AXButton \"19, Friday, June 19, 2026\"  (0.670, 0.561, 0.113, 0.048)\n  AXButton \"20, Saturday, June 20, 2026\"  (0.784, 0.561, 0.113, 0.048)\n  AXButton \"21, Sunday, June 21, 2026\"  (0.103, 0.609, 0.113, 0.048)\n  AXButton \"22, Monday, June 22, 2026\"  (0.216, 0.609, 0.113, 0.048)\n  AXButton \"23, Tuesday, June 23, 2026, Today\"  (0.330, 0.609, 0.113, 0.048)\n  AXButton \"24, Wednesday, June 24, 2026\"  (0.443, 0.609, 0.113, 0.048)\n  AXButton \"25, Thursday, June 25, 2026\"  (0.557, 0.609, 0.113, 0.048)\n  AXButton \"26, Friday, June 26, 2026\"  (0.670, 0.609, 0.113, 0.048)\n  AXButton \"27, Saturday, June 27, 2026\"  (0.784, 0.609, 0.113, 0.048)\n  AXButton \"28, Sunday, June 28, 2026\"  (0.103, 0.658, 0.113, 0.048)\n  AXButton \"29, Monday, June 29, 2026\"  (0.216, 0.658, 0.113, 0.048)\n  AXButton \"30, Tuesday, June 30, 2026\"  (0.330, 0.658, 0.113, 0.048)\n  AXButton \"Cancel\"  (0.533, 0.756, 0.181, 0.056)\n  AXButton \"OK\"  (0.734, 0.756, 0.163, 0.056)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.614,
+      "y": 0.633,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXGroup \"Select date\\nThu, Jun 25\"  (0.083, 0.214, 0.835, 0.141)\n  AXButton \"Switch to input\"  (0.765, 0.285, 0.122, 0.056)\n  AXButton \"Select year\"  (0.123, 0.355, 0.509, 0.061)\n  AXButton \"Previous month\"  (0.663, 0.357, 0.122, 0.056)\n  AXButton \"Next month\"  (0.785, 0.357, 0.122, 0.056)\n  AXButton \"1, Monday, June 1, 2026\"  (0.216, 0.464, 0.113, 0.048)\n  AXButton \"2, Tuesday, June 2, 2026\"  (0.330, 0.464, 0.113, 0.048)\n  AXButton \"3, Wednesday, June 3, 2026\"  (0.443, 0.464, 0.113, 0.048)\n  AXButton \"4, Thursday, June 4, 2026\"  (0.557, 0.464, 0.113, 0.048)\n  AXButton \"5, Friday, June 5, 2026\"  (0.670, 0.464, 0.113, 0.048)\n  AXButton \"6, Saturday, June 6, 2026\"  (0.784, 0.464, 0.113, 0.048)\n  AXButton \"7, Sunday, June 7, 2026\"  (0.103, 0.513, 0.113, 0.048)\n  AXButton \"8, Monday, June 8, 2026\"  (0.216, 0.513, 0.113, 0.048)\n  AXButton \"9, Tuesday, June 9, 2026\"  (0.330, 0.513, 0.113, 0.048)\n  AXButton \"10, Wednesday, June 10, 2026\"  (0.443, 0.513, 0.113, 0.048)\n  AXButton \"11, Thursday, June 11, 2026\"  (0.557, 0.513, 0.113, 0.048)\n  AXButton \"12, Friday, June 12, 2026\"  (0.670, 0.513, 0.113, 0.048)\n  AXButton \"13, Saturday, June 13, 2026\"  (0.784, 0.513, 0.113, 0.048)\n  AXButton \"14, Sunday, June 14, 2026\"  (0.103, 0.561, 0.113, 0.048)\n  AXButton \"15, Monday, June 15, 2026\"  (0.216, 0.561, 0.113, 0.048)\n  AXButton \"16, Tuesday, June 16, 2026\"  (0.330, 0.561, 0.113, 0.048)\n  AXButton \"17, Wednesday, June 17, 2026\"  (0.443, 0.561, 0.113, 0.048)\n  AXButton \"18, Thursday, June 18, 2026\"  (0.557, 0.561, 0.113, 0.048)\n  AXButton \"19, Friday, June 19, 2026\"  (0.670, 0.561, 0.113, 0.048)\n  AXButton \"20, Saturday, June 20, 2026\"  (0.784, 0.561, 0.113, 0.048)\n  AXButton \"21, Sunday, June 21, 2026\"  (0.103, 0.609, 0.113, 0.048)\n  AXButton \"22, Monday, June 22, 2026\"  (0.216, 0.609, 0.113, 0.048)\n  AXButton \"23, Tuesday, June 23, 2026, Today\"  (0.330, 0.609, 0.113, 0.048)\n  AXButton \"24, Wednesday, June 24, 2026\"  (0.443, 0.609, 0.113, 0.048)\n  AXButton \"25, Thursday, June 25, 2026\"  (0.557, 0.609, 0.113, 0.048)\n  AXButton \"26, Friday, June 26, 2026\"  (0.670, 0.609, 0.113, 0.048)\n  AXButton \"27, Saturday, June 27, 2026\"  (0.784, 0.609, 0.113, 0.048)\n  AXButton \"28, Sunday, June 28, 2026\"  (0.103, 0.658, 0.113, 0.048)\n  AXButton \"29, Monday, June 29, 2026\"  (0.216, 0.658, 0.113, 0.048)\n  AXButton \"30, Tuesday, June 30, 2026\"  (0.330, 0.658, 0.113, 0.048)\n  AXButton \"Cancel\"  (0.533, 0.756, 0.181, 0.056)\n  AXButton \"OK\"  (0.734, 0.756, 0.163, 0.056)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.815,
+      "y": 0.784,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Task\"  (0.393, 0.086, 0.215, 0.033)\n  AXGroup \"Title\"  (0.000, 0.135, 1.000, 0.075)\n  AXStaticText \"Project\\nInbox\"  (0.000, 0.210, 1.000, 0.085)\n  AXStaticText \"Due Date\\nJun  25\"  (0.000, 0.295, 1.000, 0.085)\n  AXStaticText \"Priority\\nPriority 4\"  (0.000, 0.379, 1.000, 0.085)\n  AXStaticText \"Labels\\nNo Labels\"  (0.000, 0.464, 1.000, 0.085)\n  AXStaticText \"Comments\\nNo Comments\"  (0.000, 0.548, 1.000, 0.085)\n  AXStaticText \"Reminder\\nNo Reminder\"  (0.000, 0.633, 1.000, 0.085)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-17",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Add Task form and open the Project selector.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.888,
+      "y": 0.909,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Task\"  (0.393, 0.086, 0.215, 0.033)\n  AXGroup \"Title\"  (0.000, 0.135, 1.000, 0.075)\n  AXStaticText \"Project\\nInbox\"  (0.000, 0.210, 1.000, 0.085)\n  AXStaticText \"Due Date\\nJun  23\"  (0.000, 0.295, 1.000, 0.085)\n  AXStaticText \"Priority\\nPriority 4\"  (0.000, 0.379, 1.000, 0.085)\n  AXStaticText \"Labels\\nNo Labels\"  (0.000, 0.464, 1.000, 0.085)\n  AXStaticText \"Comments\\nNo Comments\"  (0.000, 0.548, 1.000, 0.085)\n  AXStaticText \"Reminder\\nNo Reminder\"  (0.000, 0.633, 1.000, 0.085)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.252,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXStaticText \"Select Project\"  (0.205, 0.463, 0.590, 0.033)\n  AXStaticText \"Inbox\"  (0.144, 0.510, 0.712, 0.066)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-18",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the Add Task form and open the Labels selector.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.888,
+      "y": 0.909,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Task\"  (0.393, 0.086, 0.215, 0.033)\n  AXGroup \"Title\"  (0.000, 0.135, 1.000, 0.075)\n  AXStaticText \"Project\\nInbox\"  (0.000, 0.210, 1.000, 0.085)\n  AXStaticText \"Due Date\\nJun  23\"  (0.000, 0.295, 1.000, 0.085)\n  AXStaticText \"Priority\\nPriority 4\"  (0.000, 0.379, 1.000, 0.085)\n  AXStaticText \"Labels\\nNo Labels\"  (0.000, 0.464, 1.000, 0.085)\n  AXStaticText \"Comments\\nNo Comments\"  (0.000, 0.548, 1.000, 0.085)\n  AXStaticText \"Reminder\\nNo Reminder\"  (0.000, 0.633, 1.000, 0.085)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.506,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXStaticText \"Select Labels\"  (0.205, 0.496, 0.590, 0.033)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-19",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "search",
+   "source": "real",
+   "difficulty": "hard",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap",
+    "keyboard"
+   ],
+   "verified": true
+  },
+  "task": "Add a new task titled 'Pay rent' from the Today screen and save it.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.888,
+      "y": 0.909,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Task\"  (0.393, 0.086, 0.215, 0.033)\n  AXGroup \"Title\"  (0.000, 0.135, 1.000, 0.075)\n  AXStaticText \"Project\\nInbox\"  (0.000, 0.210, 1.000, 0.085)\n  AXStaticText \"Due Date\\nJun  23\"  (0.000, 0.295, 1.000, 0.085)\n  AXStaticText \"Priority\\nPriority 4\"  (0.000, 0.379, 1.000, 0.085)\n  AXStaticText \"Labels\\nNo Labels\"  (0.000, 0.464, 1.000, 0.085)\n  AXStaticText \"Comments\\nNo Comments\"  (0.000, 0.548, 1.000, 0.085)\n  AXStaticText \"Reminder\\nNo Reminder\"  (0.000, 0.633, 1.000, 0.085)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.5,
+      "y": 0.172,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Task\"  (0.393, 0.086, 0.215, 0.033)\n  AXGroup \"Title\"  (0.000, 0.135, 1.000, 0.075)\n  AXStaticText \"Project\\nInbox\"  (0.000, 0.210, 1.000, 0.085)\n  AXStaticText \"Due Date\\nJun  23\"  (0.000, 0.295, 1.000, 0.085)\n  AXStaticText \"Priority\\nPriority 4\"  (0.000, 0.379, 1.000, 0.085)\n  AXStaticText \"Labels\\nNo Labels\"  (0.000, 0.464, 1.000, 0.085)\n  AXStaticText \"Comments\\nNo Comments\"  (0.000, 0.548, 1.000, 0.085)\n  AXStaticText \"Reminder\\nNo Reminder\"  (0.000, 0.633, 1.000, 0.085)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "keyboard",
+     "arguments": {
+      "text": "Pay rent",
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Add Task\"  (0.393, 0.086, 0.215, 0.033)\n  AXGroup value=\"Pay rent\"  (0.000, 0.135, 1.000, 0.075)\n  AXStaticText \"Project\\nInbox\"  (0.000, 0.210, 1.000, 0.085)\n  AXStaticText \"Due Date\\nJun  23\"  (0.000, 0.295, 1.000, 0.085)\n  AXStaticText \"Priority\\nPriority 4\"  (0.000, 0.379, 1.000, 0.085)\n  AXStaticText \"Labels\\nNo Labels\"  (0.000, 0.464, 1.000, 0.085)\n  AXStaticText \"Comments\\nNo Comments\"  (0.000, 0.548, 1.000, 0.085)\n  AXStaticText \"Reminder\\nNo Reminder\"  (0.000, 0.633, 1.000, 0.085)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.888,
+      "y": 0.909,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"Pay rent\\nJun  23\\nInbox\"  (0.000, 0.144, 1.000, 0.084)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-20",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "From the Today screen, open the overflow menu and open Completed Tasks.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.939,
+      "y": 0.102,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Completed Tasks\"  (0.552, 0.088, 0.427, 0.056)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.76,
+      "y": 0.102,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.069, 0.142, 0.066)\n  AXGroup \"Task Completed\"  (0.311, 0.086, 0.378, 0.033)"
+    }
+   }
+  ]
+ },
+ {
+  "meta": {
+   "id": "real-whattodo-21",
+   "app": "burhanrashid52__WhatTodo",
+   "platform": "ios",
+   "task_kind": "navigate-tap",
+   "source": "real",
+   "difficulty": "medium",
+   "bundleId": "burhanrashid52.whattodo",
+   "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+   "gestures": [
+    "tap"
+   ],
+   "verified": true
+  },
+  "task": "Open the navigation drawer and expand the Labels section to reveal 'Add Label'.",
+  "tools": [],
+  "steps": [
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.010, 0.074, 0.122, 0.056)\n  AXButton \"Show menu\"  (0.878, 0.074, 0.122, 0.056)\n  AXGroup \"Today\"  (0.429, 0.086, 0.141, 0.033)\n  AXStaticText \"No Task Added\"  (0.351, 0.554, 0.297, 0.027)\n  AXButton  (0.817, 0.876, 0.142, 0.066)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.071,
+      "y": 0.102,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.465, 0.774, 0.068)\n  AXStaticText \"Labels\"  (0.000, 0.533, 0.774, 0.068)"
+    }
+   },
+   {
+    "call": {
+     "name": "gesture-tap",
+     "arguments": {
+      "x": 0.38,
+      "y": 0.567,
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "",
+     "hasScreenshot": true
+    }
+   },
+   {
+    "call": {
+     "name": "describe",
+     "arguments": {
+      "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+     }
+    },
+    "observation": {
+     "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Signed in\\nBurhanuddin Rashid\\nburhanrashid5253@gmail.com\"  (0.000, 0.000, 0.774, 0.268)\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton  (0.631, 0.088, 0.102, 0.047)\n  AXStaticText \"Inbox\"  (0.000, 0.268, 0.774, 0.066)\n  AXStaticText \"Today\"  (0.000, 0.333, 0.774, 0.066)\n  AXStaticText \"Next 7 Days\"  (0.000, 0.399, 0.774, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.465, 0.774, 0.068)\n  AXStaticText \"Labels\"  (0.000, 0.534, 0.774, 0.066)\n  AXStaticText \"Add Label\"  (0.000, 0.600, 0.774, 0.066)"
+    }
+   }
+  ]
+ }
+]
