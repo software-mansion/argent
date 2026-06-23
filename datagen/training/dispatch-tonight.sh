@@ -35,6 +35,10 @@ PYEOF
   [ "${n:-0}" -lt 200 ] && { log "FATAL: dataset too small ($n) — aborting before training"; exit 1; }
 fi
 
+# free GPU/RAM for training — booted simulators linger ~2GB each and risk a Metal OOM at SEQ 4608
+xcrun simctl shutdown all 2>/dev/null || true
+log "shut down any booted simulators"
+
 cd training
 export DATA=data-multi ADAPTER=adapters/silver-multi PFX=runs/multinight
 export OLLAMA_NAME="silver:e4b" WORK="silver-multi"
