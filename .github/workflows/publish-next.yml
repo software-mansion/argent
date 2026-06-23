@@ -109,7 +109,14 @@ jobs:
       # Re-point `next` at the highest published version. `npm publish --tag next`
       # already tags this prerelease, but this also self-heals `next` if it was
       # left stale on an older version. Idempotent.
+      #
+      # continue-on-error: the prerelease publish above already succeeded and is
+      # irreversible. The sync script never moves `next` backward, so even if it
+      # briefly reads a stale packument it leaves the just-tagged prerelease in
+      # place; a transient failure here self-heals next publish and must not fail
+      # an otherwise-successful release.
       - name: Sync 'next' dist-tag to highest published version
+        continue-on-error: true
         run: node scripts/sync-next-dist-tag.mjs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

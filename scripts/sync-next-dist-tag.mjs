@@ -72,6 +72,24 @@ export function compareSemver(va, vb) {
   return Math.sign(a.pre.length - b.pre.length);
 }
 
+/**
+ * Decide whether `next` should be re-pointed at `max`. Only ever *advances*:
+ * returns true iff `max` is strictly newer than the current tag, or the current
+ * tag is unset/unparseable.
+ *
+ * This never moves `next` backward. The post-publish sync can momentarily read a
+ * stale (CDN-cached) packument that omits the version just published — so the
+ * computed `max` can lag behind the freshly-tagged release. A plain
+ * `current === max` check would then re-point `next` at the older `max`,
+ * demoting the new build. Requiring a strict advance keeps the sync idempotent
+ * and self-healing without that regression.
+ */
+export function shouldAdvanceTag(max, current) {
+  if (current === undefined || current === null) return true;
+  if (parseSemver(current) === null) return true;
+  return compareSemver(max, current) > 0;
+}
+
 // --- npm registry I/O --------------------------------------------------------
 
 function npmJson(args) {
@@ -118,8 +136,10 @@ function main() {
   console.log(`Highest version: ${max}`);
   console.log(`Current '${TAG}':   ${current ?? "(unset)"}`);
 
-  if (current === max) {
-    console.log(`'${TAG}' is already at the latest version (${max}); nothing to do.`);
+  if (!shouldAdvanceTag(max, current)) {
+    console.log(
+      `'${TAG}' (${current}) is already at or ahead of the highest published version (${max}); nothing to do.`
+    );
     return;
   }
 

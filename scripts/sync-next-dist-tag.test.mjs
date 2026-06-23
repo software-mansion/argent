@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import semver from "semver";
 
-import { compareSemver } from "./sync-next-dist-tag.mjs";
+import { compareSemver, shouldAdvanceTag } from "./sync-next-dist-tag.mjs";
 
 // Real published history of @swmansion/argent plus tricky prerelease cases that
 // exercise every branch of SemVer precedence (numeric-vs-alphanumeric ids,
@@ -59,4 +59,24 @@ test("prerelease ranks below its release; numeric id below alphanumeric", () => 
   assert.ok(compareSemver("1.0.0-next.0", "1.0.0") < 0);
   assert.ok(compareSemver("1.0.0-next.0", "1.0.0-next.alpha") < 0);
   assert.ok(compareSemver("0.6.0-next.2", "0.6.0-next.10") < 0); // numeric, not lexical
+});
+
+test("shouldAdvanceTag only advances, never regresses 'next'", () => {
+  // Self-heal: drifted `next` advances to the true max (the bug this fixes).
+  assert.equal(shouldAdvanceTag("0.11.0", "0.7.0-next.4"), true);
+  assert.equal(shouldAdvanceTag("0.7.0-next.6", "0.7.0-next.4"), true);
+
+  // Unset or unparseable current => set it.
+  assert.equal(shouldAdvanceTag("0.11.0", undefined), true);
+  assert.equal(shouldAdvanceTag("0.11.0", null), true);
+  assert.equal(shouldAdvanceTag("0.11.0", "not-a-version"), true);
+
+  // Idempotent: already at the max => no-op.
+  assert.equal(shouldAdvanceTag("0.11.0", "0.11.0"), false);
+  assert.equal(shouldAdvanceTag("0.12.0-next.0", "0.12.0-next.0"), false);
+
+  // Regression guard: a stale packument can compute a `max` older than the
+  // just-tagged prerelease `next` already points at — must NOT move backward.
+  assert.equal(shouldAdvanceTag("0.11.0", "0.12.0-next.0"), false);
+  assert.equal(shouldAdvanceTag("0.7.0-next.4", "0.11.0"), false);
 });
