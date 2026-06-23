@@ -1,0 +1,948 @@
+[
+  {
+    "meta": {
+      "id": "real-rnpokemon-01-saved-tab",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "Open the Saved tab to view your favourite Pokemon.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.13,
+            "y": 0.97
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.46)\n  FavouritesHeader (tap: 0.50,0.16)\n    Text \"Favourites\" (tap: 0.33,0.12)\n    Text \"Export\" (tap: 0.83,0.12)\n    StatTile (tap: 0.28,0.19)\n      Text \"Saved\" (tap: 0.28,0.21)\n    StatTile (tap: 0.72,0.19)\n      Text \"Total stats\" (tap: 0.72,0.21)\n    Text \"Rank\" (tap: 0.21,0.27)\n    Text \"Recent\" (tap: 0.50,0.27)\n    Text \"Id\" (tap: 0.79,0.27)\n  ScrollView (tap: 0.50,0.62)\n    PokemonExploreEntry (tap: 0.50,0.37)\n      LinearGradient (tap: 0.22,0.37)\n      Text \"simisear\" (tap: 0.57,0.36)\n      Text \"gluttony\" (tap: 0.38,0.38)\n      Text \"blaze\" (tap: 0.50,0.38)\n    PokemonExploreEntry (tap: 0.50,0.47)\n      LinearGradient (tap: 0.22,0.47)\n      Text \"froslass\" (tap: 0.57,0.46)\n      Text \"snow-cloak\" (tap: 0.40,0.48)\n      Text \"cursed-body\" (tap: 0.57,0.48)\n    PokemonExploreEntry (tap: 0.50,0.57)\n      LinearGradient (tap: 0.22,0.57)\n      Text \"darkrai\" (tap: 0.57,0.56)\n      Text \"bad-dreams\" (tap: 0.40,0.59)\n    PokemonExploreEntry (tap: 0.50,0.67)\n      LinearGradient (tap: 0.22,0.67)\n      Text \"emboar\" (tap: 0.57,0.66)\n      Text \"blaze\" (tap: 0.36,0.69)\n      Text \"reckless\" (tap: 0.48,0.69)\n    PokemonExploreEntry (tap: 0.50,0.77)\n      LinearGradient (tap: 0.22,0.77)\n      Text \"giratina-altered\" (tap: 0.57,0.76)\n      Text \"pressure\" (tap: 0.38,0.79)\n      Text \"telepathy\" (tap: 0.52,0.79)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the Saved tab; the Favourites screen is showing."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-02-map-tab",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "Switch to the Map tab to see nearby Pokemon on the map.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.63,
+            "y": 0.97
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.46)\n  PokemonMarker (tap: 0.56,0.57)\n  PokemonMarker (tap: 0.26,-0.10)\n  PokemonMarker (tap: 0.36,0.38)\n  PokemonMarker (tap: 0.84,0.86)\n  PokemonMarker (tap: 0.45,0.40)\n  Text \"Pokemon Map\" (tap: 0.50,0.08)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the Map tab; the Pokemon Map with nearby markers is showing."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-03-compare-tab",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "Go to the Compare tab to compare Pokemon side by side.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.88,
+            "y": 0.97
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  Text \"Pokemon Comparison\" (tap: 0.50,0.09)\n  TextInput \"Enter Pokemon ID (1-1025)\" (tap: 0.32,0.16)\n  Text \"Add\" (tap: 0.70,0.16)\n  Text \"Random\" (tap: 0.88,0.16)\n  ScrollView (tap: 0.50,0.21)\n    Text \"bulbasaur\" (tap: 0.17,0.21)\n  ScrollView (tap: 0.50,0.57)\n    Text \"No Comparisons Yet\" (tap: 0.50,0.28)\n    Text \"Add at least 2 Pokemon using the input above to see detailed stat comparisons\" (tap: 0.50,0.32)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the Compare tab; the Pokemon Comparison screen is showing."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-04-expand-card",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "On the Browse list, tap the Gloom card to expand its detailed stats.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.2
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.51)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n      Text \"GRASS\" (tap: 0.14,0.27)\n      Text \"POISON\" (tap: 0.29,0.27)\n      Text \"Type\" (tap: 0.22,0.29)\n      Text \"Height\" (tap: 0.49,0.29)\n      Text \"Weight\" (tap: 0.68,0.29)\n      Text \"Base XP\" (tap: 0.87,0.29)\n      StatBar (tap: 0.50,0.32)\n        Text \"HP\" (tap: 0.07,0.32)\n      StatBar (tap: 0.50,0.34)\n        Text \"ATK\" (tap: 0.07,0.34)\n      StatBar (tap: 0.50,0.36)\n        Text \"DEF\" (tap: 0.07,0.36)\n      StatBar (tap: 0.50,0.38)\n        Text \"SpA\" (tap: 0.07,0.38)\n      StatBar (tap: 0.50,0.40)\n        Text \"SpD\" (tap: 0.07,0.40)\n      StatBar (tap: 0.50,0.42)\n        Text \"SPD\" (tap: 0.07,0.42)\n      Text \"Strengths\" (tap: 0.50,0.45)\n      Text \"fire\" (tap: 0.07,0.47)\n      Text \"electric\" (tap: 0.17,0.47)\n      Text \"fighting\" (tap: 0.29,0.47)\n      Text \"rock\" (tap: 0.40,0.47)\n      Text \"dark\" (tap: 0.49,0.47)\n      Text \"normal\" (tap: 0.59,0.47)\n      Text \"Weaknesses\" (tap: 0.50,0.49)\n      Text \"water\" (tap: 0.08,0.51)\n      Text \"grass\" (tap: 0.18,0.51)\n      Text \"ghost\" (tap: 0.28,0.51)\n      Text \"steel\" (tap: 0.38,0.51)\n      Text \"fairy\" (tap: 0.47,0.51)\n      Text \"Moves\" (tap: 0.50,0.54)\n      Text \"swords dance\" (tap: 0.13,0.56)\n      Text \"cut\" (tap: 0.27,0.56)\n      Text \"headbutt\" (tap: 0.38,0.56)\n      Text \"take down\" (tap: 0.54,0.56)\n      Text \"double edge\" (tap: 0.71,0.56)\n      Text \"acid\" (tap: 0.85,0.56)\n      Text \"absorb\" (tap: 0.09,0.58)\n      Text \"mega drain\" (tap: 0.24,0.58)\n      Text \"leech seed\" (tap: 0.41,0.58)\n      Text \"growth\" (tap: 0.55,0.58)\n      Text \"razor leaf\" (tap: 0.69,0.58)\n      Text \"solar beam\" (tap: 0.85,0.58)\n      Text \"poison powder\" (tap: 0.14,0.60)\n      Text \"stun spore\" (tap: 0.33,0.60)\n      Text \"sleep powder\" (tap: 0.51,0.60)\n      Text \"petal dance\" (tap: 0.70,0.60)\n      Text \"toxic\" (tap: 0.83,0.60)\n      Text \"rage\" (tap: 0.08,0.63)\n      Text \"mimic\" (tap: 0.17,0.63)\n      Text \"double team\" (tap: 0.33,0.63)\n      Text \"reflect\" (tap: 0.48,0.63)\n      Text \"bide\" (tap: 0.58,0.63)\n      Text \"flash\" (tap: 0.67,0.63)\n      Text \"rest\" (tap: 0.76,0.63)\n      Text \"substitute\" (tap: 0.89,0.63)\n      Text \"snore\" (tap: 0.08,0.65)\n      Text \"curse\" (tap: 0.19,0.65)\n      Text \"flail\" (tap: 0.28,0.65)\n      Text \"protect\" (tap: 0.38,0.65)\n      Text \"sludge bomb\" (tap: 0.54,0.65)\n      Text \"giga drain\" (tap: 0.72,0.65)\n      Text \"endure\" (tap: 0.86,0.65)\n      Text \"charm\" (tap: 0.09,0.67)\n      Text \"swagger\" (tap: 0.21,0.67)\n      Text \"attract\" (tap: 0.34,0.67)\n      Text \"sleep talk\" (tap: 0.48,0.67)\n      Text \"return\" (tap: 0.61,0.67)\n      Text \"frustration\" (tap: 0.75,0.67)\n      Text \"sweet scent\" (tap: 0.12,0.70)\n      Text \"synthesis\" (tap: 0.29,0.70)\n      Text \"moonlight\" (tap: 0.44,0.70)\n      Text \"hidden power\" (tap: 0.62,0.70)\n      Text \"sunny day\" (tap: 0.80,0.70)\n      Text \"facade\" (tap: 0.09,0.72)\n      Text \"nature power\" (tap: 0.25,0.72)\n      Text \"helping hand\" (tap: 0.44,0.72)\n      Text \"ingrain\" (tap: 0.60,0.72)\n      Text \"secret power\" (tap: 0.75,0.72)\n      Text \"teeter dance\" (tap: 0.13,0.74)\n      Text \"tickle\" (tap: 0.27,0.74)\n      Text \"bullet seed\" (tap: 0.41,0.74)\n      Text \"magical leaf\" (tap: 0.58,0.74)\n      Text \"natural gift\" (tap: 0.76,0.74)\n      Text \"fling\" (tap: 0.89,0.74)\n      Text \"gastro acid\" (tap: 0.12,0.77)\n      Text \"lucky chant\" (tap: 0.29,0.77)\n      Text \"worry seed\" (tap: 0.46,0.77)\n      Text \"seed bomb\" (tap: 0.63,0.77)\n      Text \"drain punch\" (tap: 0.81,0.77)\n      Text \"energy ball\" (tap: 0.11,0.79)\n      Text \"leaf storm\" (tap: 0.28,0.79)\n      Text \"captivate\" (tap: 0.43,0.79)\n      Text \"grass knot\" (tap: 0.59,0.79)\n      Text \"venoshock\" (tap: 0.75,0.79)\n      Text \"acid spray\" (tap: 0.11,0.81)\n      Text \"after you\" (tap: 0.26,0.81)\n      Text \"round\" (tap: 0.39,0.81)\n      Text \"petal blizzard\" (tap: 0.54,0.81)\n      Text \"grassy terrain\" (tap: 0.74,0.81)\n      Text \"moonblast\" (tap: 0.11,0.84)\n      Text \"confide\" (tap: 0.26,0.84)\n      Text \"dazzling gleam\" (tap: 0.43,0.84)\n      Text \"infestation\" (tap: 0.62,0.84)\n      Text \"strength sap\" (tap: 0.80,0.84)\n      Text \"pollen puff\" (tap: 0.11,0.86)\n      Text \"grassy glide\" (tap: 0.29,0.86)\n      Text \"tera blast\" (tap: 0.46,0.86)\n      Text \"trailblaze\" (tap: 0.60,0.86)\n    PokemonExploreEntry (tap: 0.50,0.93)\n      LinearGradient (tap: 0.22,0.93)\n      Text \"fearow\" (tap: 0.57,0.92)\n      Text \"keen-eye\" (tap: 0.39,0.95)\n      Text \"sniper\" (tap: 0.51,0.95)\n    PokemonExploreEntry (tap: 0.50,1.03)\n      LinearGradient (tap: 0.22,1.03)\n      Text \"spearow\" (tap: 0.57,1.02)\n      Text \"keen-eye\" (tap: 0.39,1.05)\n      Text \"sniper\" (tap: 0.51,1.05)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Expanded the Gloom card; its stats, strengths, weaknesses and moves are shown."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-05-expand-collapse",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "Expand the Bulbasaur card to read its stats, then collapse it again.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.5
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.84)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n      Text \"GRASS\" (tap: 0.14,0.58)\n      Text \"POISON\" (tap: 0.29,0.58)\n      Text \"Type\" (tap: 0.22,0.59)\n      Text \"Height\" (tap: 0.49,0.59)\n      Text \"Weight\" (tap: 0.68,0.59)\n      Text \"Base XP\" (tap: 0.87,0.59)\n      StatBar (tap: 0.50,0.62)\n        Text \"HP\" (tap: 0.07,0.62)\n      StatBar (tap: 0.50,0.64)\n        Text \"ATK\" (tap: 0.07,0.64)\n      StatBar (tap: 0.50,0.66)\n        Text \"DEF\" (tap: 0.07,0.66)\n      StatBar (tap: 0.50,0.68)\n        Text \"SpA\" (tap: 0.07,0.68)\n      StatBar (tap: 0.50,0.70)\n        Text \"SpD\" (tap: 0.07,0.70)\n      StatBar (tap: 0.50,0.72)\n        Text \"SPD\" (tap: 0.07,0.72)\n      Text \"Strengths\" (tap: 0.50,0.75)\n      Text \"fire\" (tap: 0.07,0.77)\n      Text \"electric\" (tap: 0.17,0.77)\n      Text \"fighting\" (tap: 0.29,0.77)\n      Text \"rock\" (tap: 0.40,0.77)\n      Text \"dark\" (tap: 0.49,0.77)\n      Text \"normal\" (tap: 0.59,0.77)\n      Text \"Weaknesses\" (tap: 0.50,0.79)\n      Text \"water\" (tap: 0.08,0.81)\n      Text \"grass\" (tap: 0.18,0.81)\n      Text \"ghost\" (tap: 0.28,0.81)\n      Text \"steel\" (tap: 0.38,0.81)\n      Text \"fairy\" (tap: 0.47,0.81)\n      Text \"Moves\" (tap: 0.50,0.84)\n      Text \"razor wind\" (tap: 0.11,0.86)\n      Text \"swords dance\" (tap: 0.30,0.86)\n      Text \"cut\" (tap: 0.43,0.86)\n      Text \"bind\" (tap: 0.52,0.86)\n      Text \"vine whip\" (tap: 0.64,0.86)\n      Text \"headbutt\" (tap: 0.79,0.86)\n      Text \"tackle\" (tap: 0.09,0.88)\n      Text \"body slam\" (tap: 0.22,0.88)\n      Text \"take down\" (tap: 0.38,0.88)\n      Text \"double edge\" (tap: 0.55,0.88)\n      Text \"growl\" (tap: 0.70,0.88)\n      Text \"strength\" (tap: 0.82,0.88)\n      Text \"mega drain\" (tap: 0.12,0.90)\n      Text \"leech seed\" (tap: 0.28,0.90)\n      Text \"growth\" (tap: 0.43,0.90)\n      Text \"razor leaf\" (tap: 0.57,0.90)\n      Text \"solar beam\" (tap: 0.73,0.90)\n      Text \"poison powder\" (tap: 0.14,0.93)\n      Text \"sleep powder\" (tap: 0.34,0.93)\n      Text \"petal dance\" (tap: 0.53,0.93)\n      Text \"string shot\" (tap: 0.70,0.93)\n      Text \"toxic\" (tap: 0.83,0.93)\n      Text \"rage\" (tap: 0.08,0.95)\n      Text \"mimic\" (tap: 0.17,0.95)\n      Text \"double team\" (tap: 0.33,0.95)\n      Text \"defense curl\" (tap: 0.51,0.95)\n      Text \"light screen\" (tap: 0.69,0.95)\n      Text \"reflect\" (tap: 0.84,0.95)\n      Text \"bide\" (tap: 0.07,0.97)\n      Text \"sludge\" (tap: 0.18,0.97)\n      Text \"skull bash\" (tap: 0.32,0.97)\n      Text \"amnesia\" (tap: 0.47,0.97)\n      Text \"flash\" (tap: 0.58,0.97)\n      Text \"rest\" (tap: 0.67,0.97)\n      Text \"substitute\" (tap: 0.80,0.97)\n      Text \"snore\" (tap: 0.08,1.00)\n      Text \"curse\" (tap: 0.19,1.00)\n      Text \"protect\" (tap: 0.30,1.00)\n      Text \"sludge bomb\" (tap: 0.46,1.00)\n      Text \"mud slap\" (tap: 0.63,1.00)\n      Text \"outrage\" (tap: 0.77,1.00)\n      Text \"giga drain\" (tap: 0.11,1.02)\n      Text \"endure\" (tap: 0.25,1.02)\n      Text \"charm\" (tap: 0.37,1.02)\n      Text \"false swipe\" (tap: 0.51,1.02)\n      Text \"swagger\" (tap: 0.66,1.02)\n      Text \"fury cutter\" (tap: 0.82,1.02)\n      Text \"attract\" (tap: 0.09,1.04)\n      Text \"sleep talk\" (tap: 0.23,1.04)\n      Text \"return\" (tap: 0.36,1.04)\n      Text \"frustration\" (tap: 0.50,1.04)\n      Text \"safeguard\" (tap: 0.66,1.04)\n      Text \"sweet scent\" (tap: 0.82,1.04)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.57,
+            "y": 0.49
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Expanded Bulbasaur, read its stats, then collapsed the card back."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-06-search-filter",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "Use the search box on Browse to filter the list to Pokemon with ID 22.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.1
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "text": "22"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"fearow\" (tap: 0.57,0.19)\n      Text \"keen-eye\" (tap: 0.39,0.21)\n      Text \"sniper\" (tap: 0.51,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"spearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    Text \"Load More Pokemon\" (tap: 0.50,0.40)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Filtered the Browse list by ID 22; only matching Pokemon (fearow) remain."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-07-load-more",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "Tap 'Load More Pokemon' on the Browse list to load additional Pokemon.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.6
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"greavard\" (tap: 0.57,0.19)\n      Text \"pickup\" (tap: 0.37,0.21)\n      Text \"fluffy\" (tap: 0.48,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"orthworm\" (tap: 0.57,0.29)\n      Text \"earth-eater\" (tap: 0.40,0.31)\n      Text \"sand-veil\" (tap: 0.55,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"hatterene\" (tap: 0.57,0.39)\n      Text \"healer\" (tap: 0.37,0.41)\n      Text \"anticipation\" (tap: 0.51,0.41)\n      Text \"magic-bounce\" (tap: 0.69,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"rookidee\" (tap: 0.57,0.49)\n      Text \"keen-eye\" (tap: 0.39,0.51)\n      Text \"unnerve\" (tap: 0.52,0.51)\n      Text \"big-pecks\" (tap: 0.66,0.51)\n    PokemonExploreEntry (tap: 0.50,0.60)\n      LinearGradient (tap: 0.22,0.60)\n      Text \"pyroar-male\" (tap: 0.57,0.59)\n      Text \"rivalry\" (tap: 0.37,0.61)\n      Text \"unnerve\" (tap: 0.49,0.61)\n      Text \"moxie\" (tap: 0.60,0.61)\n    PokemonExploreEntry (tap: 0.50,0.70)\n      LinearGradient (tap: 0.22,0.70)\n      Text \"volcarona\" (tap: 0.57,0.69)\n      Text \"flame-body\" (tap: 0.40,0.71)\n      Text \"swarm\" (tap: 0.54,0.71)\n    PokemonExploreEntry (tap: 0.50,0.80)\n      LinearGradient (tap: 0.22,0.80)\n      Text \"hydreigon\" (tap: 0.57,0.79)\n      Text \"levitate\" (tap: 0.38,0.81)\n    PokemonExploreEntry (tap: 0.50,0.90)\n      LinearGradient (tap: 0.22,0.90)\n      Text \"durant\" (tap: 0.57,0.89)\n      Text \"swarm\" (tap: 0.37,0.91)\n      Text \"hustle\" (tap: 0.48,0.91)\n      Text \"truant\" (tap: 0.59,0.91)\n    PokemonExploreEntry (tap: 0.50,1.00)\n      LinearGradient (tap: 0.22,1.00)\n      Text \"eelektrik\" (tap: 0.57,0.99)\n      Text \"levitate\" (tap: 0.38,1.02)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Loaded more Pokemon; the Browse list now has additional entries."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-08-scroll-find",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "scroll-find",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap",
+        "swipe"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "Load more Pokemon, then scroll the Browse list down to reveal Pokemon further down the list.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.6
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"oinkologne-male\" (tap: 0.57,0.19)\n      Text \"lingering-aroma\" (tap: 0.42,0.21)\n      Text \"gluttony\" (tap: 0.59,0.21)\n      Text \"thick-fat\" (tap: 0.73,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"lechonk\" (tap: 0.57,0.29)\n      Text \"aroma-veil\" (tap: 0.39,0.31)\n      Text \"gluttony\" (tap: 0.54,0.31)\n      Text \"thick-fat\" (tap: 0.67,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"quaquaval\" (tap: 0.57,0.39)\n      Text \"torrent\" (tap: 0.37,0.41)\n      Text \"moxie\" (tap: 0.48,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"cursola\" (tap: 0.57,0.49)\n      Text \"weak-armor\" (tap: 0.40,0.51)\n      Text \"perish-body\" (tap: 0.57,0.51)\n    PokemonExploreEntry (tap: 0.50,0.60)\n      LinearGradient (tap: 0.22,0.60)\n      Text \"necrozma\" (tap: 0.57,0.59)\n      Text \"prism-armor\" (tap: 0.40,0.61)\n    PokemonExploreEntry (tap: 0.50,0.70)\n      LinearGradient (tap: 0.22,0.70)\n      Text \"tapu-koko\" (tap: 0.57,0.69)\n      Text \"electric-surge\" (tap: 0.41,0.71)\n      Text \"telepathy\" (tap: 0.58,0.71)\n    PokemonExploreEntry (tap: 0.50,0.80)\n      LinearGradient (tap: 0.22,0.80)\n      Text \"wimpod\" (tap: 0.57,0.79)\n      Text \"wimp-out\" (tap: 0.39,0.81)\n    PokemonExploreEntry (tap: 0.50,0.90)\n      LinearGradient (tap: 0.22,0.90)\n      Text \"wishiwashi-solo\" (tap: 0.57,0.89)\n      Text \"schooling\" (tap: 0.39,0.91)\n    PokemonExploreEntry (tap: 0.50,1.00)\n      LinearGradient (tap: 0.22,1.00)\n      Text \"oricorio-baile\" (tap: 0.57,0.99)\n      Text \"dancer\" (tap: 0.37,1.02)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.5,
+            "fromY": 0.8,
+            "toX": 0.5,
+            "toY": 0.2
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,-0.02)\n      LinearGradient (tap: 0.22,-0.02)\n      Text \"simisear\" (tap: 0.57,-0.03)\n      Text \"gluttony\" (tap: 0.38,-0.01)\n      Text \"blaze\" (tap: 0.50,-0.01)\n    PokemonExploreEntry (tap: 0.50,0.08)\n      LinearGradient (tap: 0.22,0.08)\n      Text \"arceus\" (tap: 0.57,0.07)\n      Text \"multitype\" (tap: 0.39,0.09)\n    PokemonExploreEntry (tap: 0.50,0.18)\n      LinearGradient (tap: 0.22,0.18)\n      Text \"cresselia\" (tap: 0.57,0.17)\n      Text \"levitate\" (tap: 0.38,0.20)\n    PokemonExploreEntry (tap: 0.50,0.28)\n      LinearGradient (tap: 0.22,0.28)\n      Text \"uxie\" (tap: 0.57,0.27)\n      Text \"levitate\" (tap: 0.38,0.30)\n    PokemonExploreEntry (tap: 0.50,0.38)\n      LinearGradient (tap: 0.22,0.38)\n      Text \"shellos\" (tap: 0.57,0.37)\n      Text \"sticky-hold\" (tap: 0.40,0.40)\n      Text \"storm-drain\" (tap: 0.56,0.40)\n      Text \"sand-force\" (tap: 0.73,0.40)\n    PokemonExploreEntry (tap: 0.50,0.48)\n      LinearGradient (tap: 0.22,0.48)\n      Text \"bastiodon\" (tap: 0.57,0.47)\n      Text \"sturdy\" (tap: 0.37,0.50)\n      Text \"soundproof\" (tap: 0.51,0.50)\n    PokemonExploreEntry (tap: 0.50,0.58)\n      LinearGradient (tap: 0.22,0.58)\n      Text \"infernape\" (tap: 0.57,0.57)\n      Text \"blaze\" (tap: 0.36,0.60)\n      Text \"iron-fist\" (tap: 0.48,0.60)\n    PokemonExploreEntry (tap: 0.50,0.68)\n      LinearGradient (tap: 0.22,0.68)\n      Text \"claydol\" (tap: 0.57,0.67)\n      Text \"levitate\" (tap: 0.38,0.70)\n    PokemonExploreEntry (tap: 0.50,0.78)\n      LinearGradient (tap: 0.22,0.78)\n      Text \"spoink\" (tap: 0.57,0.77)\n      Text \"thick-fat\" (tap: 0.38,0.80)\n      Text \"own-tempo\" (tap: 0.53,0.80)\n      Text \"gluttony\" (tap: 0.68,0.80)\n    PokemonExploreEntry (tap: 0.50,0.88)\n      LinearGradient (tap: 0.22,0.88)\n      Text \"lairon\" (tap: 0.57,0.87)\n      Text \"sturdy\" (tap: 0.37,0.90)\n      Text \"rock-head\" (tap: 0.50,0.90)\n      Text \"heavy-metal\" (tap: 0.66,0.90)\n    PokemonExploreEntry (tap: 0.50,0.98)\n      LinearGradient (tap: 0.22,0.98)\n      Text \"breloom\" (tap: 0.57,0.97)\n      Text \"effect-spore\" (tap: 0.40,1.00)\n      Text \"poison-heal\" (tap: 0.57,1.00)\n      Text \"technician\" (tap: 0.74,1.00)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Scrolled the Browse list down; Pokemon further down the list are now visible."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-09-compare-by-id",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "On the Compare tab, enter Pokemon ID 7 in the input and tap Add to queue that Pokemon for comparison.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082,
+            "onScreenOnly": false
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  Text \"Pokemon Comparison\" (tap: 0.50,0.09)\n  TextInput \"Enter Pokemon ID (1-1025)\" (tap: 0.32,0.16)\n  Text \"Add\" (tap: 0.70,0.16)\n  Text \"Random\" (tap: 0.88,0.16)\n  ScrollView (tap: 0.50,0.55)\n    Text \"No Comparisons Yet\" (tap: 0.50,0.25)\n    Text \"Add at least 2 Pokemon using the input above to see detailed stat comparisons\" (tap: 0.50,0.28)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.32,
+            "y": 0.16
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "text": "7"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082,
+            "onScreenOnly": false
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  Text \"Pokemon Comparison\" (tap: 0.50,0.09)\n  TextInput \"Enter Pokemon ID (1-1025)\" (tap: 0.32,0.16)\n  Text \"Add\" (tap: 0.70,0.16)\n  Text \"Random\" (tap: 0.88,0.16)\n  ScrollView (tap: 0.50,0.55)\n    Text \"No Comparisons Yet\" (tap: 0.50,0.25)\n    Text \"Add at least 2 Pokemon using the input above to see detailed stat comparisons\" (tap: 0.50,0.28)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.7,
+            "y": 0.16
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082,
+            "onScreenOnly": false
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  Text \"Pokemon Comparison\" (tap: 0.50,0.09)\n  TextInput \"Enter Pokemon ID (1-1025)\" (tap: 0.32,0.16)\n  Text \"Add\" (tap: 0.70,0.16)\n  Text \"Random\" (tap: 0.88,0.16)\n  ScrollView (tap: 0.50,0.21)\n    Text \"squirtle\" (tap: 0.16,0.21)\n  ScrollView (tap: 0.50,0.57)\n    Text \"No Comparisons Yet\" (tap: 0.50,0.28)\n    Text \"Add at least 2 Pokemon using the input above to see detailed stat comparisons\" (tap: 0.50,0.32)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Entered ID 7 and tapped Add; Squirtle is now queued in the comparison list."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-10-compare-random",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "On the Compare tab, add a random Pokemon to the comparison using the Random button.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082,
+            "onScreenOnly": false
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  Text \"Pokemon Comparison\" (tap: 0.50,0.09)\n  TextInput \"Enter Pokemon ID (1-1025)\" (tap: 0.32,0.16)\n  Text \"Add\" (tap: 0.70,0.16)\n  Text \"Random\" (tap: 0.88,0.16)\n  ScrollView (tap: 0.50,0.55)\n    Text \"No Comparisons Yet\" (tap: 0.50,0.25)\n    Text \"Add at least 2 Pokemon using the input above to see detailed stat comparisons\" (tap: 0.50,0.28)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.88,
+            "y": 0.16
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082,
+            "onScreenOnly": false
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  Text \"Pokemon Comparison\" (tap: 0.50,0.09)\n  TextInput \"Enter Pokemon ID (1-1025)\" (tap: 0.32,0.16)\n  Text \"Add\" (tap: 0.70,0.16)\n  Text \"Random\" (tap: 0.88,0.16)\n  ScrollView (tap: 0.50,0.21)\n    Text \"castform\" (tap: 0.16,0.21)\n  ScrollView (tap: 0.50,0.57)\n    Text \"No Comparisons Yet\" (tap: 0.50,0.28)\n    Text \"Add at least 2 Pokemon using the input above to see detailed stat comparisons\" (tap: 0.50,0.32)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Tapped Random on Compare; a random Pokemon was added to the comparison queue."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-11-saved-sort",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "On the Saved screen, change the sort order to sort the favourites by Id.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.13,
+            "y": 0.97
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.46)\n  FavouritesHeader (tap: 0.50,0.16)\n    Text \"Favourites\" (tap: 0.33,0.12)\n    Text \"Export\" (tap: 0.83,0.12)\n    StatTile (tap: 0.28,0.19)\n      Text \"Saved\" (tap: 0.28,0.21)\n    StatTile (tap: 0.72,0.19)\n      Text \"Total stats\" (tap: 0.72,0.21)\n    Text \"Rank\" (tap: 0.21,0.27)\n    Text \"Recent\" (tap: 0.50,0.27)\n    Text \"Id\" (tap: 0.79,0.27)\n  ScrollView (tap: 0.50,0.62)\n    PokemonExploreEntry (tap: 0.50,0.37)\n      LinearGradient (tap: 0.22,0.37)\n      Text \"simisear\" (tap: 0.57,0.36)\n      Text \"gluttony\" (tap: 0.38,0.38)\n      Text \"blaze\" (tap: 0.50,0.38)\n    PokemonExploreEntry (tap: 0.50,0.47)\n      LinearGradient (tap: 0.22,0.47)\n      Text \"froslass\" (tap: 0.57,0.46)\n      Text \"snow-cloak\" (tap: 0.40,0.48)\n      Text \"cursed-body\" (tap: 0.57,0.48)\n    PokemonExploreEntry (tap: 0.50,0.57)\n      LinearGradient (tap: 0.22,0.57)\n      Text \"darkrai\" (tap: 0.57,0.56)\n      Text \"bad-dreams\" (tap: 0.40,0.59)\n    PokemonExploreEntry (tap: 0.50,0.67)\n      LinearGradient (tap: 0.22,0.67)\n      Text \"emboar\" (tap: 0.57,0.66)\n      Text \"blaze\" (tap: 0.36,0.69)\n      Text \"reckless\" (tap: 0.48,0.69)\n    PokemonExploreEntry (tap: 0.50,0.77)\n      LinearGradient (tap: 0.22,0.77)\n      Text \"giratina-altered\" (tap: 0.57,0.76)\n      Text \"pressure\" (tap: 0.38,0.79)\n      Text \"telepathy\" (tap: 0.52,0.79)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.79,
+            "y": 0.27
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.46)\n  FavouritesHeader (tap: 0.50,0.16)\n    Text \"Favourites\" (tap: 0.33,0.12)\n    Text \"Export\" (tap: 0.83,0.12)\n    StatTile (tap: 0.28,0.19)\n      Text \"Saved\" (tap: 0.28,0.21)\n    StatTile (tap: 0.72,0.19)\n      Text \"Total stats\" (tap: 0.72,0.21)\n    Text \"Rank\" (tap: 0.21,0.27)\n    Text \"Recent\" (tap: 0.50,0.27)\n    Text \"Id\" (tap: 0.79,0.27)\n  ScrollView (tap: 0.50,0.62)\n    PokemonExploreEntry (tap: 0.50,0.37)\n      LinearGradient (tap: 0.22,0.37)\n      Text \"froslass\" (tap: 0.57,0.36)\n      Text \"snow-cloak\" (tap: 0.40,0.38)\n      Text \"cursed-body\" (tap: 0.57,0.38)\n    PokemonExploreEntry (tap: 0.50,0.47)\n      LinearGradient (tap: 0.22,0.47)\n      Text \"giratina-altered\" (tap: 0.57,0.46)\n      Text \"pressure\" (tap: 0.38,0.48)\n      Text \"telepathy\" (tap: 0.52,0.48)\n    PokemonExploreEntry (tap: 0.50,0.57)\n      LinearGradient (tap: 0.22,0.57)\n      Text \"darkrai\" (tap: 0.57,0.56)\n      Text \"bad-dreams\" (tap: 0.40,0.59)\n    PokemonExploreEntry (tap: 0.50,0.67)\n      LinearGradient (tap: 0.22,0.67)\n      Text \"emboar\" (tap: 0.57,0.66)\n      Text \"blaze\" (tap: 0.36,0.69)\n      Text \"reckless\" (tap: 0.48,0.69)\n    PokemonExploreEntry (tap: 0.50,0.77)\n      LinearGradient (tap: 0.22,0.77)\n      Text \"simisear\" (tap: 0.57,0.76)\n      Text \"gluttony\" (tap: 0.38,0.79)\n      Text \"blaze\" (tap: 0.50,0.79)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Changed the Favourites sort to Id; the saved list is now ordered by Pokemon Id."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-12-tab-roundtrip",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "From Browse, open the Map tab, then return to the Browse tab.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.63,
+            "y": 0.97
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.46)\n  PokemonMarker (tap: 0.56,0.57)\n  PokemonMarker (tap: 0.26,-0.10)\n  PokemonMarker (tap: 0.36,0.38)\n  PokemonMarker (tap: 0.84,0.86)\n  PokemonMarker (tap: 0.45,0.40)\n  Text \"Pokemon Map\" (tap: 0.50,0.08)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.37,
+            "y": 0.97
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  TextInput \"Search by ID...\" (tap: 0.50,0.10)\n  ScrollView (tap: 0.50,0.53)\n    PokemonExploreEntry (tap: 0.50,0.20)\n      LinearGradient (tap: 0.22,0.20)\n      Text \"gloom\" (tap: 0.57,0.19)\n      Text \"chlorophyll\" (tap: 0.40,0.21)\n      Text \"stench\" (tap: 0.53,0.21)\n    PokemonExploreEntry (tap: 0.50,0.30)\n      LinearGradient (tap: 0.22,0.30)\n      Text \"fearow\" (tap: 0.57,0.29)\n      Text \"keen-eye\" (tap: 0.39,0.31)\n      Text \"sniper\" (tap: 0.51,0.31)\n    PokemonExploreEntry (tap: 0.50,0.40)\n      LinearGradient (tap: 0.22,0.40)\n      Text \"spearow\" (tap: 0.57,0.39)\n      Text \"keen-eye\" (tap: 0.39,0.41)\n      Text \"sniper\" (tap: 0.51,0.41)\n    PokemonExploreEntry (tap: 0.50,0.50)\n      LinearGradient (tap: 0.22,0.50)\n      Text \"bulbasaur\" (tap: 0.57,0.49)\n      Text \"overgrow\" (tap: 0.39,0.51)\n      Text \"chlorophyll\" (tap: 0.54,0.51)\n    Text \"Load More Pokemon\" (tap: 0.50,0.60)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.38,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Navigated Browse -> Map -> Browse; back on the Browse list."
+  },
+  {
+    "meta": {
+      "id": "real-rnpokemon-13-compare-remove",
+      "app": "latekvo__pokemon",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.latekvo.pokemon",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true,
+      "notes": "react-native"
+    },
+    "task": "On the Compare tab with Squirtle and Bulbasaur queued, remove Squirtle from the comparison by tapping its chip.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082,
+            "onScreenOnly": false
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  Text \"Pokemon Comparison\" (tap: 0.50,0.09)\n  TextInput \"Enter Pokemon ID (1-1025)\" (tap: 0.32,0.16)\n  Text \"Add\" (tap: 0.70,0.16)\n  Text \"Random\" (tap: 0.88,0.16)\n  ScrollView (tap: 0.50,0.21)\n    Text \"squirtle\" (tap: 0.16,0.21)\n    Text \"bulbasaur\" (tap: 0.44,0.21)\n  ScrollView (tap: 0.50,0.57)\n    Text \"squirtle\" (tap: 0.26,0.32)\n    Text \"water\" (tap: 0.26,0.34)\n    Text \"VS\" (tap: 0.50,0.30)\n    Text \"bulbasaur\" (tap: 0.74,0.32)\n    Text \"grass\" (tap: 0.69,0.34)\n    Text \"poison\" (tap: 0.79,0.34)\n    Text \"HP\" (tap: 0.50,0.37)\n    Text \"ATT\" (tap: 0.50,0.39)\n    Text \"DEF\" (tap: 0.50,0.41)\n    Text \"SPE\" (tap: 0.50,0.42)\n    Text \"SPE\" (tap: 0.50,0.44)\n    Text \"SPE\" (tap: 0.50,0.46)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.16,
+            "y": 0.21
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "debugger-component-tree",
+          "arguments": {
+            "device_id": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "port": 8082,
+            "onScreenOnly": false
+          }
+        },
+        "observation": {
+          "text": "[device: iPhone 16 Pro Max | app: com.latekvo.pokemon (iPhone 16 Pro Max) | udid: a1956f6bd1e3a3ac3dbb505e24d79687a5ea60b1]\nScreen: 440x956\n\nRouteNode (tap: 0.50,0.49)\n  Text \"Pokemon Comparison\" (tap: 0.50,0.09)\n  TextInput \"Enter Pokemon ID (1-1025)\" (tap: 0.32,0.16)\n  Text \"Add\" (tap: 0.70,0.16)\n  Text \"Random\" (tap: 0.88,0.16)\n  ScrollView (tap: 0.50,0.21)\n    Text \"bulbasaur\" (tap: 0.17,0.21)\n  ScrollView (tap: 0.50,0.57)\n    Text \"No Comparisons Yet\" (tap: 0.50,0.28)\n    Text \"Add at least 2 Pokemon using the input above to see detailed stat comparisons\" (tap: 0.50,0.32)\nBottomTabBar (tap: 0.50,0.96)\n  BottomTabItem (tap: 0.13,0.96)\n    TabBarLabel \"Saved\" (tap: 0.13,0.97)\n  BottomTabItem (tap: 0.38,0.96)\n    TabBarLabel \"Browse\" (tap: 0.37,0.97)\n  BottomTabItem (tap: 0.63,0.96)\n    TabBarLabel \"Map\" (tap: 0.63,0.97)\n  BottomTabItem (tap: 0.88,0.96)\n    TabBarLabel \"Compare\" (tap: 0.88,0.97)"
+        }
+      }
+    ],
+    "finalAnswer": "Tapped the Squirtle chip on Compare; it was removed, leaving Bulbasaur in the queue."
+  }
+]
