@@ -1,0 +1,2184 @@
+[
+  {
+    "meta": {
+      "id": "real-timecop-1",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the app's Settings screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.313,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nAutomatic\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"0\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"0\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The Settings screen is open, showing options like Theme, Language and several toggles."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-2",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the About screen to see the app version.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.378,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"About\"  (0.429, 0.089, 0.141, 0.027)\n  AXTextField \"Time Cop Logo\"  (0.000, 0.146, 1.000, 0.114)\n  AXStaticText \"Time Cop\"  (0.060, 0.281, 0.881, 0.032)\n  AXStaticText \"v1.6.0+36\"  (0.060, 0.314, 0.881, 0.018)\n  AXStaticText \"Copyright \u00a9 Kenton Hamaluik, 2020\"  (0.060, 0.352, 0.881, 0.016)\n  AXStaticText \"A time tracking app that respects your privacy and gets the job done without getting too fancy.\"  (0.060, 0.396, 0.881, 0.037)\n  AXStaticText \"Readme\"  (0.000, 0.481, 1.000, 0.064)\n  AXStaticText \"Changelog\"  (0.000, 0.545, 1.000, 0.064)\n  AXStaticText \"Contributors\"  (0.000, 0.609, 1.000, 0.064)\n  AXStaticText \"Translate\"  (0.000, 0.673, 1.000, 0.064)\n  AXStaticText \"Source Code\"  (0.000, 0.737, 1.000, 0.064)\n  AXStaticText \"Licenses\"  (0.000, 0.801, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The About screen is open. The app version shown is v1.6.0+36."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-3",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Navigate to the Reports screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.185,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Reports\"  (0.409, 0.089, 0.182, 0.027)\n  AXStaticText \"Filter\"  (0.000, 0.649, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.731, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.731, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.731, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.731, 0.142, 0.055)\n  AXGroup \"From\\nSun, May 24, 2026\"  (0.000, 0.804, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.809, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.868, 1.000, 0.064)\n  AXStaticText \"Projects\"  (0.000, 0.935, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The Reports screen is open with period filters (This week, This month, Last month, Last 30 days) and date range controls."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-4",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Import and Export screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.249,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Show menu\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Import and Export\"  (0.291, 0.089, 0.417, 0.027)\n  AXStaticText \"Filter\"  (0.000, 0.136, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.219, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.219, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.219, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.219, 0.142, 0.055)\n  AXGroup \"From\\nSun, May 24, 2026\"  (0.000, 0.292, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.296, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.356, 1.000, 0.064)\n  AXStaticText \"Columns\"  (0.000, 0.421, 1.000, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.487, 1.000, 0.066)\n  AXStaticText \"Options\"  (0.000, 0.554, 1.000, 0.066)\n  AXButton \"To CSV\"  (0.188, 0.927, 0.303, 0.055)\n  AXButton \"To PDF\"  (0.511, 0.927, 0.300, 0.055)"
+        }
+      }
+    ],
+    "finalAnswer": "The Import and Export screen is open, offering To CSV and To PDF export buttons."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-5",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Projects screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.121,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Projects\"  (0.405, 0.089, 0.190, 0.027)\n  AXButton \"Create New Project\"  (0.821, 0.879, 0.139, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The Projects screen is open with a Create New Project button."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-6",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings and turn on the 'Show Project Names' option.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.313,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nAutomatic\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"0\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"0\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.396,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nAutomatic\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"1\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"0\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "'Show Project Names' is now turned on (value 1) in Settings."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-7",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings and enable the 'Collapse Days' option.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.313,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nAutomatic\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"0\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"0\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.46,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nAutomatic\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"0\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"1\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "'Collapse Days' is now enabled (value 1) in Settings."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-8",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings and change the Theme to Dark.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.313,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nAutomatic\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"0\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"0\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.176,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Scrim\"  (0.000, 0.000, 1.000, 0.513)\n  AXButton \"Automatic\"  (0.000, 0.513, 1.000, 0.064)\n  AXButton \"Light\"  (0.000, 0.577, 1.000, 0.064)\n  AXButton \"Dark\"  (0.000, 0.641, 1.000, 0.064)\n  AXButton \"Black\"  (0.000, 0.705, 1.000, 0.064)\n  AXButton \"System Colors \u2013 Automatic\"  (0.000, 0.769, 1.000, 0.064)\n  AXButton \"System Colors \u2013 Light\"  (0.000, 0.833, 1.000, 0.064)\n  AXButton \"System Colors \u2013 Dark\"  (0.000, 0.897, 1.000, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.673,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nDark\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"0\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"0\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The app theme has been set to Dark."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-9",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Create a new project named 'Design'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.121,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Projects\"  (0.405, 0.089, 0.190, 0.027)\n  AXButton \"Create New Project\"  (0.821, 0.879, 0.139, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.89,
+            "y": 0.911,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXStaticText \"Create New Project\"  (0.139, 0.329, 0.721, 0.027)\n  AXGroup \"Project Name\"  (0.139, 0.356, 0.721, 0.055)\n  AXButton \"Cancel\"  (0.542, 0.648, 0.159, 0.055)\n  AXButton \"Create\"  (0.701, 0.648, 0.159, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.383,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "text": "Design",
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.78,
+            "y": 0.676,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Projects\"  (0.405, 0.089, 0.190, 0.027)\n  AXGroup \"Design\"  (0.000, 0.135, 1.000, 0.064)\n  AXButton \"Show menu\"  (0.841, 0.140, 0.119, 0.055)\n  AXButton \"Create New Project\"  (0.821, 0.879, 0.139, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "A new project named 'Design' has been created and appears in the Projects list."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-10",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Import and Export screen and expand the Columns section to show the column options.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.249,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Show menu\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Import and Export\"  (0.291, 0.089, 0.417, 0.027)\n  AXStaticText \"Filter\"  (0.000, 0.136, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.219, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.219, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.219, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.219, 0.142, 0.055)\n  AXGroup \"From\\nSun, May 24, 2026\"  (0.000, 0.292, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.296, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.356, 1.000, 0.064)\n  AXStaticText \"Columns\"  (0.000, 0.421, 1.000, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.487, 1.000, 0.066)\n  AXStaticText \"Options\"  (0.000, 0.554, 1.000, 0.066)\n  AXButton \"To CSV\"  (0.188, 0.927, 0.303, 0.055)\n  AXButton \"To PDF\"  (0.511, 0.927, 0.300, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.454,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Show menu\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Import and Export\"  (0.291, 0.089, 0.417, 0.027)\n  AXStaticText \"Filter\"  (0.000, 0.136, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.219, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.219, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.219, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.219, 0.142, 0.055)\n  AXGroup \"From\\nSun, May 24, 2026\"  (0.000, 0.292, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.296, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.356, 1.000, 0.064)\n  AXGroup \"Columns\"  (0.000, 0.421, 1.000, 0.579)\n  AXButton \"Date\" value=\"1\"  (0.000, 0.486, 1.000, 0.064)\n  AXButton \"Project\" value=\"1\"  (0.000, 0.550, 1.000, 0.064)\n  AXButton \"Description\" value=\"1\"  (0.000, 0.614, 1.000, 0.064)\n  AXButton \"Combined Project & Description\" value=\"0\"  (0.000, 0.678, 1.000, 0.064)\n  AXButton \"Start Time\" value=\"0\"  (0.000, 0.743, 1.000, 0.064)\n  AXButton \"End Time\" value=\"0\"  (0.000, 0.807, 1.000, 0.064)\n  AXButton \"Time (hours)\" value=\"1\"  (0.000, 0.871, 1.000, 0.064)\n  AXButton \"To CSV\"  (0.188, 0.927, 0.303, 0.055)\n  AXButton \"To PDF\"  (0.511, 0.927, 0.300, 0.055)\n  AXButton \"Notes\" value=\"1\"  (0.000, 0.935, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The Columns section is expanded, listing export columns such as Date, Project, Description, Start Time, End Time, Time (hours) and Notes."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-11",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "On the Import and Export screen, expand Columns and enable the 'Start Time' column in the export.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.249,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Show menu\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Import and Export\"  (0.291, 0.089, 0.417, 0.027)\n  AXStaticText \"Filter\"  (0.000, 0.136, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.219, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.219, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.219, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.219, 0.142, 0.055)\n  AXGroup \"From\\nSun, May 24, 2026\"  (0.000, 0.292, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.296, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.356, 1.000, 0.064)\n  AXStaticText \"Columns\"  (0.000, 0.421, 1.000, 0.066)\n  AXStaticText \"Projects\"  (0.000, 0.487, 1.000, 0.066)\n  AXStaticText \"Options\"  (0.000, 0.554, 1.000, 0.066)\n  AXButton \"To CSV\"  (0.188, 0.927, 0.303, 0.055)\n  AXButton \"To PDF\"  (0.511, 0.927, 0.300, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.454,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Show menu\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Import and Export\"  (0.291, 0.089, 0.417, 0.027)\n  AXStaticText \"Filter\"  (0.000, 0.136, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.219, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.219, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.219, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.219, 0.142, 0.055)\n  AXGroup \"From\\nSun, May 24, 2026\"  (0.000, 0.292, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.296, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.356, 1.000, 0.064)\n  AXGroup \"Columns\"  (0.000, 0.421, 1.000, 0.579)\n  AXButton \"Date\" value=\"1\"  (0.000, 0.486, 1.000, 0.064)\n  AXButton \"Project\" value=\"1\"  (0.000, 0.550, 1.000, 0.064)\n  AXButton \"Description\" value=\"1\"  (0.000, 0.614, 1.000, 0.064)\n  AXButton \"Combined Project & Description\" value=\"0\"  (0.000, 0.678, 1.000, 0.064)\n  AXButton \"Start Time\" value=\"0\"  (0.000, 0.743, 1.000, 0.064)\n  AXButton \"End Time\" value=\"0\"  (0.000, 0.807, 1.000, 0.064)\n  AXButton \"Time (hours)\" value=\"1\"  (0.000, 0.871, 1.000, 0.064)\n  AXButton \"To CSV\"  (0.188, 0.927, 0.303, 0.055)\n  AXButton \"To PDF\"  (0.511, 0.927, 0.300, 0.055)\n  AXButton \"Notes\" value=\"1\"  (0.000, 0.935, 1.000, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.775,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Show menu\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Import and Export\"  (0.291, 0.089, 0.417, 0.027)\n  AXStaticText \"Filter\"  (0.000, 0.136, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.219, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.219, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.219, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.219, 0.142, 0.055)\n  AXGroup \"From\\nSun, May 24, 2026\"  (0.000, 0.292, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.296, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.356, 1.000, 0.064)\n  AXGroup \"Columns\"  (0.000, 0.421, 1.000, 0.579)\n  AXButton \"Date\" value=\"1\"  (0.000, 0.486, 1.000, 0.064)\n  AXButton \"Project\" value=\"1\"  (0.000, 0.550, 1.000, 0.064)\n  AXButton \"Description\" value=\"1\"  (0.000, 0.614, 1.000, 0.064)\n  AXButton \"Combined Project & Description\" value=\"0\"  (0.000, 0.678, 1.000, 0.064)\n  AXButton \"Start Time\" value=\"1\"  (0.000, 0.743, 1.000, 0.064)\n  AXButton \"End Time\" value=\"0\"  (0.000, 0.807, 1.000, 0.064)\n  AXButton \"Time (hours)\" value=\"1\"  (0.000, 0.871, 1.000, 0.064)\n  AXButton \"To CSV\"  (0.188, 0.927, 0.303, 0.055)\n  AXButton \"To PDF\"  (0.511, 0.927, 0.300, 0.055)\n  AXButton \"Notes\" value=\"1\"  (0.000, 0.935, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The 'Start Time' column is now enabled (value 1) for export."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-12",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Reports and set the reporting period to 'This month'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.185,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Reports\"  (0.409, 0.089, 0.182, 0.027)\n  AXStaticText \"Filter\"  (0.000, 0.649, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.731, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.731, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.731, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.731, 0.142, 0.055)\n  AXGroup \"From\\nSun, May 24, 2026\"  (0.000, 0.804, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.809, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.868, 1.000, 0.064)\n  AXStaticText \"Projects\"  (0.000, 0.935, 1.000, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.419,
+            "y": 0.759,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Reports\"  (0.409, 0.089, 0.182, 0.027)\n  AXStaticText \"Filter\"  (0.000, 0.649, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.731, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.731, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.731, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.731, 0.142, 0.055)\n  AXGroup \"From\\nMon, Jun 1, 2026\"  (0.000, 0.804, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.809, 0.119, 0.055)\n  AXGroup \"To\\nTue, Jun 30, 2026\"  (0.000, 0.868, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.873, 0.119, 0.055)\n  AXStaticText \"Projects\"  (0.000, 0.935, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The reporting period is set to This month, with the date range From Mon, Jun 1, 2026 To Tue, Jun 30, 2026."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-13",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "On the main screen, type 'Writing report' as the activity and start the timer.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.47,
+            "y": 0.911,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "text": "Writing report",
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXGroup \"No items found\"  (0.149, 0.814, 0.642, 0.064)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup value=\"Writing report\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.89,
+            "y": 0.911,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXGroup \"Running Timers\\n00:01\"  (0.000, 0.712, 1.000, 0.149)\n  AXGroup \"Writing report\\n00:01\"  (0.000, 0.757, 1.000, 0.064)\n  AXButton \"Stop Timer\"  (0.841, 0.762, 0.119, 0.055)\n  AXButton \"Timer Menu\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      }
+    ],
+    "finalAnswer": "A timer for 'Writing report' is now running, shown under Running Timers with a Stop Timer button."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-14",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Settings screen, then navigate back to the main timers list.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.313,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nAutomatic\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"0\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"0\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      }
+    ],
+    "finalAnswer": "Navigated back from Settings to the main timers list, showing the Start Timer button and activity field."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-15",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "swipe",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap",
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "Log a 'Standup' time entry, then swipe the entry left to reveal its slide action.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.47,
+            "y": 0.911,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "text": "Standup",
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.89,
+            "y": 0.911,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXGroup \"Running Timers\\n00:01\"  (0.000, 0.712, 1.000, 0.149)\n  AXGroup \"Standup\\n00:01\"  (0.000, 0.757, 1.000, 0.064)\n  AXButton \"Stop Timer\"  (0.841, 0.762, 0.119, 0.055)\n  AXButton \"Timer Menu\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.9,
+            "y": 0.789,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Tue, Jun 23, 2026\\n00:01\\nStandup\\n00:01\"  (0.000, 0.135, 1.000, 0.124)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.259, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "fromX": 0.7,
+            "fromY": 0.197,
+            "toX": 0.2,
+            "toY": 0.197,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXGroup \"Tue, Jun 23, 2026\\n00:01\\nStandup\\n00:01\"  (0.000, 0.135, 1.000, 0.124)\n  AXButton  (0.850, 0.195, 0.150, 0.064)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.259, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      }
+    ],
+    "finalAnswer": "The 'Standup' time entry was swiped left, revealing its slide action button."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-16",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Log a 'Standup' time entry, then open it to view its Edit Timer details.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.47,
+            "y": 0.911,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "text": "Standup",
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.89,
+            "y": 0.911,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXGroup \"Running Timers\\n00:01\"  (0.000, 0.712, 1.000, 0.149)\n  AXGroup \"Standup\\n00:01\"  (0.000, 0.757, 1.000, 0.064)\n  AXButton \"Stop Timer\"  (0.841, 0.762, 0.119, 0.055)\n  AXButton \"Timer Menu\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.9,
+            "y": 0.789,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Tue, Jun 23, 2026\\n00:01\\nStandup\\n00:01\"  (0.000, 0.135, 1.000, 0.124)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.259, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.2,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Close\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Delete\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Edit Timer\"  (0.381, 0.089, 0.237, 0.027)\n  AXButton \"(no project)\"  (0.040, 0.153, 0.920, 0.055)\n  AXGroup \"Description\" value=\"Standup\"  (0.040, 0.217, 0.920, 0.068)\n  AXGroup \"Start Time\\nTue, Jun 23, 2026 4:15 PM\"  (0.000, 0.294, 1.000, 0.064)\n  AXButton \"Show menu\"  (0.841, 0.299, 0.119, 0.055)\n  AXGroup \"End Time\\nTue, Jun 23, 2026 4:15 PM\"  (0.000, 0.358, 1.000, 0.064)\n  AXButton \"Show menu\"  (0.841, 0.363, 0.119, 0.055)\n  AXButton \"Remove\"  (0.741, 0.367, 0.100, 0.046)\n  AXStaticText \"Duration\\n00:01\"  (0.000, 0.422, 1.000, 0.064)\n  AXStaticText \"Notes\"  (0.000, 0.486, 1.000, 0.064)\n  AXButton \"Save\"  (0.821, 0.879, 0.139, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The Edit Timer screen for the 'Standup' entry is open, showing its Description, Start/End times and Duration."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-17",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings and change the Theme to Light.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.07,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss menu\"  (0.000, 0.000, 1.000, 1.000)\n  AXButton \"Projects\"  (0.020, 0.089, 0.557, 0.064)\n  AXButton \"Reports\"  (0.020, 0.153, 0.557, 0.064)\n  AXButton \"Import and Export\"  (0.020, 0.217, 0.557, 0.064)\n  AXButton \"Settings\"  (0.020, 0.281, 0.557, 0.064)\n  AXButton \"About\"  (0.020, 0.346, 0.557, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.3,
+            "y": 0.313,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nAutomatic\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"0\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"0\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.176,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Scrim\"  (0.000, 0.000, 1.000, 0.513)\n  AXButton \"Automatic\"  (0.000, 0.513, 1.000, 0.064)\n  AXButton \"Light\"  (0.000, 0.577, 1.000, 0.064)\n  AXButton \"Dark\"  (0.000, 0.641, 1.000, 0.064)\n  AXButton \"Black\"  (0.000, 0.705, 1.000, 0.064)\n  AXButton \"System Colors \u2013 Automatic\"  (0.000, 0.769, 1.000, 0.064)\n  AXButton \"System Colors \u2013 Light\"  (0.000, 0.833, 1.000, 0.064)\n  AXButton \"System Colors \u2013 Dark\"  (0.000, 0.897, 1.000, 0.064)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.5,
+            "y": 0.609,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Back\"  (0.000, 0.071, 0.139, 0.064)\n  AXGroup \"Settings\"  (0.403, 0.089, 0.193, 0.027)\n  AXStaticText \"Theme\\nLight\"  (0.000, 0.135, 1.000, 0.082)\n  AXStaticText \"Language\\nAutomatic\"  (0.000, 0.217, 1.000, 0.082)\n  AXButton \"Group Similar Timers Per Day\" value=\"1\"  (0.000, 0.300, 1.000, 0.064)\n  AXButton \"Show Project Names\" value=\"0\"  (0.000, 0.364, 1.000, 0.064)\n  AXButton \"Collapse Days\" value=\"0\"  (0.000, 0.428, 1.000, 0.064)\n  AXButton \"Autocomplete Descriptions\" value=\"1\"  (0.000, 0.492, 1.000, 0.064)\n  AXButton \"Default Filter Start Date to Monday\" value=\"0\"  (0.000, 0.556, 1.000, 0.064)\n  AXGroup \"Default Filter Period (Days)\\n30\"  (0.000, 0.620, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.625, 0.119, 0.055)\n  AXButton \"Only Allow One Running Timer at a Time\" value=\"0\"  (0.000, 0.684, 1.000, 0.064)\n  AXButton \"Show Running Timer Count As App Icon Badge\" value=\"0\"  (0.000, 0.748, 1.000, 0.064)\n  AXButton \"Show Running Timer Notifications\" value=\"0\"  (0.000, 0.812, 1.000, 0.064)\n  AXButton \"Remind to Start a Timer when None are Running\" value=\"0\"  (0.000, 0.876, 1.000, 0.064)"
+        }
+      }
+    ],
+    "finalAnswer": "The app theme has been set to Light."
+  },
+  {
+    "meta": {
+      "id": "real-timecop-18",
+      "app": "hamaluik__timecop",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "ca.hamaluik.timecop",
+      "device": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Filter sheet from the main screen and set the period to 'This week'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "launch-app",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239",
+            "bundleId": "ca.hamaluik.timecop"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Show menu\"  (0.000, 0.071, 0.139, 0.064)\n  AXButton \"Search\"  (0.761, 0.071, 0.119, 0.064)\n  AXButton \"Filter\"  (0.881, 0.071, 0.119, 0.064)\n  AXGroup \"Time Cop\"  (0.347, 0.087, 0.307, 0.032)\n  AXTextField \"Time Cop Logo\"  (0.347, 0.087, 0.070, 0.032)\n  AXStaticText \"Filtering from May 24, 2026\"  (0.000, 0.135, 1.000, 0.062)\n  AXButton \"Start Timer\"  (0.821, 0.879, 0.139, 0.064)\n  AXButton \"Project\"  (0.020, 0.883, 0.119, 0.055)\n  AXGroup \"What are you doing?\"  (0.149, 0.883, 0.642, 0.055)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.94,
+            "y": 0.103,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Scrim\"  (0.000, 0.000, 1.000, 0.609)\n  AXStaticText \"Filter\"  (0.000, 0.610, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.692, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.692, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.692, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.692, 0.142, 0.055)\n  AXGroup \"From\\nSun, May 24, 2026\"  (0.000, 0.765, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.770, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.830, 1.000, 0.064)\n  AXStaticText \"Projects\"  (0.000, 0.895, 1.000, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "x": 0.15,
+            "y": 0.72,
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "52DE854E-338D-4F8A-8EC9-13854C6EA239"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Scrim\"  (0.000, 0.000, 1.000, 0.609)\n  AXStaticText \"Filter\"  (0.000, 0.610, 1.000, 0.064)\n  AXButton \"This week\"  (0.040, 0.692, 0.221, 0.055)\n  AXButton \"This month\"  (0.300, 0.692, 0.238, 0.055)\n  AXButton \"Last month\"  (0.578, 0.692, 0.240, 0.055)\n  AXButton \"Last 30 days\"  (0.858, 0.692, 0.142, 0.055)\n  AXGroup \"From\\nSun, Jun 21, 2026\"  (0.000, 0.765, 1.000, 0.064)\n  AXButton \"Remove\"  (0.841, 0.770, 0.119, 0.055)\n  AXStaticText \"To\\n--\"  (0.000, 0.830, 1.000, 0.064)\n  AXStaticText \"Projects\"  (0.000, 0.895, 1.000, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "The Filter is set to the 'This week' period."
+  }
+]
