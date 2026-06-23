@@ -12,12 +12,21 @@ import {
   flowRunToMcpContent,
   type FlowExecuteResult,
 } from "../src/content.js";
-import { ARTIFACT_MARKER, type ArtifactHandle } from "@argent/tools-client";
+import { ARTIFACT_MARKER, type ArtifactHandle, type ArtifactKind } from "@argent/tools-client";
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
+function artifactKind(filename: string, mimeType: string): ArtifactKind {
+  if (mimeType.startsWith("image/")) return "screenshot";
+  if (filename.includes("cpu")) return "native-profile-cpu";
+  if (filename.includes("hangs")) return "native-profile-hangs";
+  if (filename.includes("leaks")) return "native-profile-leaks";
+  return "native-profile-trace";
+}
+
 function artifactHandle(id: string, filename: string, mimeType: string): ArtifactHandle {
-  return { [ARTIFACT_MARKER]: true, id, filename, mimeType, size: 0 };
+  const kind = artifactKind(filename, mimeType);
+  return { [ARTIFACT_MARKER]: true, id, kind, filename, mimeType, size: 0 };
 }
 
 function fetchReturning(bytes: number[]): typeof fetch {

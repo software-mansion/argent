@@ -9,11 +9,21 @@ import {
   getDeviceIdFromArgs,
   artifactDir,
   ARTIFACT_MARKER,
+  type ArtifactKind,
   type ArtifactHandle,
 } from "../src/artifacts.js";
 
+function artifactKind(filename: string, mimeType: string): ArtifactKind {
+  if (mimeType.startsWith("image/")) return "screenshot";
+  if (filename.includes("cpu")) return "native-profile-cpu";
+  if (filename.includes("hangs")) return "native-profile-hangs";
+  if (filename.includes("leaks")) return "native-profile-leaks";
+  return "native-profile-trace";
+}
+
 function handle(id: string, filename: string, mimeType: string): ArtifactHandle {
-  return { [ARTIFACT_MARKER]: true, id, filename, mimeType, size: 0 };
+  const kind = artifactKind(filename, mimeType);
+  return { [ARTIFACT_MARKER]: true, id, kind, filename, mimeType, size: 0 };
 }
 
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x01, 0x02];
@@ -141,6 +151,7 @@ describe("materializeArtifacts", () => {
     const h: ArtifactHandle = {
       [ARTIFACT_MARKER]: true,
       id: "trunc",
+      kind: "native-profile-cpu",
       filename: "data.xml",
       mimeType: "application/xml",
       size: 99, // server announced 99 bytes…
@@ -190,6 +201,7 @@ describe("materializeArtifacts local short-circuit", () => {
     return {
       [ARTIFACT_MARKER]: true,
       id,
+      kind: artifactKind(filename, mimeType),
       filename,
       mimeType,
       size: st.size,
@@ -237,6 +249,7 @@ describe("materializeArtifacts local short-circuit", () => {
     const h: ArtifactHandle = {
       [ARTIFACT_MARKER]: true,
       id: "img2",
+      kind: "screenshot",
       filename: "shot.png",
       mimeType: "image/png",
       size: PNG.length,
@@ -258,6 +271,7 @@ describe("materializeArtifacts local short-circuit", () => {
     const h: ArtifactHandle = {
       [ARTIFACT_MARKER]: true,
       id: "img3",
+      kind: "screenshot",
       filename: "shot.png",
       mimeType: "image/png",
       size: PNG.length,
@@ -320,6 +334,7 @@ describe("materializeArtifacts directory bundles", () => {
     return {
       [ARTIFACT_MARKER]: true,
       id,
+      kind: "native-profile-trace",
       filename: "session.trace",
       mimeType: "application/octet-stream",
       size: 0,

@@ -84,7 +84,11 @@ async function runChromium(
     scale: params.scale,
     downscaler: params.downscaler,
   });
-  const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
+  const image = await requireArtifacts(ctx).register({
+    hostPath: path,
+    kind: "screenshot",
+    mimeType: "image/png",
+  });
   return { image };
 }
 
@@ -99,7 +103,11 @@ async function runSimulatorServer(
 ): Promise<Result> {
   const signal = ctx?.signal ?? AbortSignal.timeout(16_000);
   const { path } = await httpScreenshot(api, params.rotation, signal, params.scale);
-  const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
+  const image = await requireArtifacts(ctx).register({
+    hostPath: path,
+    kind: "screenshot",
+    mimeType: "image/png",
+  });
   return { image };
 }
 
@@ -108,7 +116,11 @@ async function runSimulatorServer(
 // branch's `requires` and preflighted by dispatchByPlatform before this runs.
 async function runVega(params: Params, ctx?: InvokeToolOptions): Promise<Result> {
   const path = await captureVegaScreenshotPng({ scale: params.scale });
-  const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
+  const image = await requireArtifacts(ctx).register({
+    hostPath: path,
+    kind: "screenshot",
+    mimeType: "image/png",
+  });
   return { image };
 }
 

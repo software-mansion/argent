@@ -31,6 +31,7 @@ export {
   type ArtifactHandle,
   type ArtifactEntry,
   type ArtifactListItem,
+  type ArtifactKind,
   type RegisterArtifactOptions,
 } from "@argent/registry";
 
