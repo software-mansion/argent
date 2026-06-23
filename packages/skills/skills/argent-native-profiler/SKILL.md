@@ -87,7 +87,7 @@ To revisit a previous trace:
 Bottlenecks are categorized by severity:
 
 - **RED**: CPU functions taking >15% of total time, all UI hangs, and **attributed** memory leaks (those with a resolved responsible frame). These require immediate attention.
-- **YELLOW**: CPU functions taking 5-15% of total time, and **unattributed** memory leaks (`<Call stack limit reached>`, no library — see the memory-leaks caveat below). Worth investigating but may be acceptable.
+- **YELLOW**: CPU functions taking 3-15% of total time, and **unattributed** memory leaks (`<Call stack limit reached>`, no library — see the memory-leaks caveat below). Worth investigating but may be acceptable.
 
 Each bottleneck type indicates a different class of problem:
 
