@@ -23,7 +23,7 @@ Pass the Android serial as `udid` to the unified interaction tools — `gesture-
 
 ## 4. Notes
 
-- **Android TV / leanback AVDs** boot through this exact flow (same `boot-device` + `avdName`), but they are **focus-driven, not touch-driven** — do not use `gesture-tap`/`gesture-swipe` on them. `list-devices` tags a leanback device with `runtimeKind: "tv"` (detected via the system feature list, not the serial — a TV AVD's serial looks just like a phone's). When you see `runtimeKind: "tv"`, drive it with the focus-driven tools (`describe` / `button` / `keyboard` / `tv-set-focus`) and the `argent-tv-interact` skill (it covers Android TV as well as Apple TV); `argent-tv-setup` has the full TV setup flow.
+- **Android TV / leanback AVDs** boot through this exact flow (same `boot-device` + `avdName`), but they are **focus-driven, not touch-driven** — do not use `gesture-tap`/`gesture-swipe` on them. `list-devices` tags a leanback device with `runtimeKind: "tv"` (detected via the system feature list, not the serial — a TV AVD's serial looks just like a phone's). When you see `runtimeKind: "tv"`, drive it with the focus-driven tools (`describe` / `tv-remote` / `keyboard`) and the `argent-tv-interact` skill (it covers Android TV as well as Apple TV, including the full TV setup flow).
 - Serials are the adb device id. iOS UDIDs and Android serials are not interchangeable, but you do NOT need to tell the tools which platform — dispatch is automatic.
 - `describe` on Android returns a shallower tree than iOS (no accessibility-service equivalent), but covers most tap-target discovery.
 - `reinstall-app` on Android always installs with `-g` so first-launch runtime permissions are pre-granted.

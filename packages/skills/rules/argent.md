@@ -108,10 +108,6 @@ ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
-TV (APPLE TV / ANDROID TV) SETUP
-Skill: `argent-tv-setup`
-When: Beginning a task that involves a TV target — an Apple TV simulator or an Android TV emulator. TV targets are identified by `runtimeKind: "tv"` from `list-devices` — an Apple TV simulator (UUID-shaped, like iOS) or an Android TV serial (`emulator-NNNN`, like a phone). Boot an Android TV AVD via `argent-android-emulator-setup`.
-
 VEGA / AMAZON FIRE TV APP CONTROL
 Skill: `argent-vega`
 When: Any task involving a Vega / Amazon Fire TV device (a `platform:"vega"` / `kind:"vvd"` entry in `list-devices`, or the user mentions Vega / Fire TV / VVD). Covers list/launch/restart/reinstall apps, on-screen element discovery via `describe`, D-pad navigation with the `tv-remote` tool (Vega is remote-driven, not touch), typing, screenshots, Fast Refresh setup, and VVD lifecycle (start/stop via the `vega` CLI — argent has no Vega stop tool).
@@ -123,7 +119,7 @@ When: Performing touch interactions, typing, pressing hardware buttons, launchin
 
 TV (APPLE TV / ANDROID TV) INTERACTION
 Skill: `argent-tv-interact`
-When: Interacting with a TV target (a `list-devices` entry with `runtimeKind: "tv"` — Apple TV simulator or Android TV device) — moving focus with the remote / D-pad, activating elements, typing into search fields, or reading TV focus state. A TV UI is focus-driven, not touch-driven: the `gesture-*` tools do NOT apply. Use `describe` to read focus, `button` for remote presses (up/down/left/right/select/menu/home/playpause), `keyboard` to type, and `tv-set-focus` to jump focus by label (the same tools drive both platforms).
+When: Any task involving a TV target (a `list-devices` entry with `runtimeKind: "tv"` — an Apple TV simulator or an Android TV emulator) — booting the target, moving focus with the remote / D-pad, activating elements, typing into search fields, or reading TV focus state. A TV UI is focus-driven, not touch-driven: the `gesture-*` tools do NOT apply. Use `describe` to read focus, `tv-remote` for remote presses (up/down/left/right/select/back/menu/home), and `keyboard` to type (the same tools drive both platforms). For Amazon Fire TV (Vega) use `argent-vega` instead.
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
