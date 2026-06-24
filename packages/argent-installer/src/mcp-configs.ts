@@ -831,8 +831,16 @@ const openCodeAdapter: McpConfigAdapter = {
 // MARK: Kiro
 // Format: { mcpServers: { argent: { command, args, env } } }
 // Project: <root>/.kiro/settings/mcp.json   Global: ~/.kiro/settings/mcp.json
-// Allowlist: autoApprove: ["*"] on the argent entry (Kiro's documented
-// auto-approve-all syntax). See https://kiro.dev/docs/mcp/configuration/
+//
+// The same .kiro/settings/mcp.json is read by both the Kiro IDE and the Kiro
+// CLI (the rebranded Amazon Q Developer CLI), so one entry serves both.
+//
+// Allowlist: autoApprove: ["*"] on the argent entry — the Kiro IDE's documented
+// "approve every tool" syntax. The Kiro CLI's server-config struct has no
+// autoApprove field and is NOT deny_unknown_fields, so the CLI silently ignores
+// the key (verified against kiro-cli 2.9.0 / upstream CustomToolConfig). Net:
+// honored by the IDE, harmless to the CLI, which carries its own trust model.
+// IDE: https://kiro.dev/docs/mcp/configuration/  CLI: https://kiro.dev/docs/cli/mcp/
 
 const KIRO_AUTO_APPROVE_ALL = ["*"];
 
