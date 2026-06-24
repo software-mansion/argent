@@ -50,16 +50,9 @@ export interface BuildToolsServerEnvOptions {
   iosDeviceSetPath?: string | null;
 }
 
-function normalizePath(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed === "~") return os.homedir();
-  if (trimmed.startsWith("~/")) return path.join(os.homedir(), trimmed.slice(2));
-  return path.resolve(trimmed);
-}
-
-export function normalizeIosDeviceSetPath(raw: string | null | undefined): string | null {
+export function resolveIosDeviceSetPath(raw: string | null | undefined): string | null {
   if (!raw?.trim()) return null;
-  return normalizePath(raw);
+  return path.resolve(raw.trim());
 }
 
 export function buildToolsServerEnv(
@@ -68,7 +61,7 @@ export function buildToolsServerEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
   options: BuildToolsServerEnvOptions = {}
 ): NodeJS.ProcessEnv {
-  const iosDeviceSetPath = normalizeIosDeviceSetPath(
+  const iosDeviceSetPath = resolveIosDeviceSetPath(
     options.iosDeviceSetPath ?? baseEnv[IOS_DEVICE_SET_ENV]
   );
   const env: NodeJS.ProcessEnv = {
@@ -380,7 +373,7 @@ export async function killToolServer(): Promise<void> {
 }
 
 export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsServerHandle> {
-  const requestedIosDeviceSetPath = normalizeIosDeviceSetPath(process.env[IOS_DEVICE_SET_ENV]);
+  const requestedIosDeviceSetPath = resolveIosDeviceSetPath(process.env[IOS_DEVICE_SET_ENV]);
   const state = await readState();
 
   if (state) {

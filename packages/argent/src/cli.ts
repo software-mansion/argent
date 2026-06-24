@@ -27,7 +27,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type * as Installer from "@argent/installer";
 import type * as Mcp from "@argent/mcp";
@@ -50,13 +49,6 @@ function getInstalledVersion(): string | null {
   }
 }
 
-function normalizePath(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed === "~") return os.homedir();
-  if (trimmed.startsWith("~/")) return path.join(os.homedir(), trimmed.slice(2));
-  return path.resolve(trimmed);
-}
-
 function parseTopLevelArgs(argv: string[]): { command: string | undefined; rest: string[] } {
   const pending = [...argv];
   while (pending.length > 0) {
@@ -67,7 +59,7 @@ function parseTopLevelArgs(argv: string[]): { command: string | undefined; rest:
         console.error("Error: --ios-device-set requires a non-empty path");
         process.exit(2);
       }
-      process.env[IOS_DEVICE_SET_ENV] = normalizePath(value);
+      process.env[IOS_DEVICE_SET_ENV] = path.resolve(value.trim());
       pending.splice(0, 2);
       continue;
     }
@@ -77,7 +69,7 @@ function parseTopLevelArgs(argv: string[]): { command: string | undefined; rest:
         console.error("Error: --ios-device-set requires a non-empty path");
         process.exit(2);
       }
-      process.env[IOS_DEVICE_SET_ENV] = normalizePath(value);
+      process.env[IOS_DEVICE_SET_ENV] = path.resolve(value.trim());
       pending.shift();
       continue;
     }

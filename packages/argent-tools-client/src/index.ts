@@ -15,7 +15,7 @@ export {
   AUTH_TOKEN_ENV,
   IOS_DEVICE_SET_ENV,
   STATE_PATHS,
-  normalizeIosDeviceSetPath,
+  resolveIosDeviceSetPath,
   type ToolsServerPaths,
   type ToolsServerState,
   type ToolsServerHandle,

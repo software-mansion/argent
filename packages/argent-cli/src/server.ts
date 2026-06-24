@@ -17,7 +17,7 @@ import {
   formatLinkUrl,
   generateAuthToken,
   IOS_DEVICE_SET_ENV,
-  normalizeIosDeviceSetPath,
+  resolveIosDeviceSetPath,
   type ToolsServerPaths,
   type ToolsServerState,
 } from "@argent/tools-client";
@@ -208,11 +208,11 @@ export function parseIdle(raw: string): number {
 }
 
 export function parseIosDeviceSetPath(raw: string): string {
-  const normalized = normalizeIosDeviceSetPath(raw);
-  if (!normalized) {
+  const resolved = resolveIosDeviceSetPath(raw);
+  if (!resolved) {
     throw new StartFlagError(`--ios-device-set requires a non-empty path`);
   }
-  return normalized;
+  return resolved;
 }
 
 function printStartHelp(): void {
@@ -358,7 +358,7 @@ async function startCmd(argv: string[], paths: ToolsServerPaths | undefined): Pr
 
   const port = await resolvePort(flags.port);
   const iosDeviceSetPath =
-    flags.iosDeviceSetPath ?? normalizeIosDeviceSetPath(process.env[IOS_DEVICE_SET_ENV]);
+    flags.iosDeviceSetPath ?? resolveIosDeviceSetPath(process.env[IOS_DEVICE_SET_ENV]);
 
   // Auth on by default; --no-auth opts out (token stays undefined → the
   // tool-server runs unauthenticated and prints its own warning).

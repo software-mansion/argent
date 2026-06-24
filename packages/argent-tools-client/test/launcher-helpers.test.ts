@@ -8,7 +8,7 @@ import {
   IOS_DEVICE_SET_ENV,
   isToolsServerHealthy,
   isToolsServerProcessAlive,
-  normalizeIosDeviceSetPath,
+  resolveIosDeviceSetPath,
 } from "../src/launcher.js";
 
 const paths = {
@@ -60,14 +60,14 @@ describe("buildToolsServerEnv — host and idle options", () => {
   });
 });
 
-describe("normalizeIosDeviceSetPath", () => {
+describe("resolveIosDeviceSetPath", () => {
   it("returns null for empty values", () => {
-    expect(normalizeIosDeviceSetPath(undefined)).toBeNull();
-    expect(normalizeIosDeviceSetPath(" ")).toBeNull();
+    expect(resolveIosDeviceSetPath(undefined)).toBeNull();
+    expect(resolveIosDeviceSetPath(" ")).toBeNull();
   });
 
   it("resolves relative paths", () => {
-    expect(normalizeIosDeviceSetPath("tmp/device-set")).toBe(path.resolve("tmp/device-set"));
+    expect(resolveIosDeviceSetPath("tmp/device-set")).toBe(path.resolve("tmp/device-set"));
   });
 });
 
