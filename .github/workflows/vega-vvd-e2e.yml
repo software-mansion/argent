@@ -78,10 +78,10 @@ jobs:
           swap-storage: false
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -115,7 +115,7 @@ jobs:
 
       - name: Boot VVD; drive remote + screenshot
         id: vvd
-        uses: finloop/vega-virtual-device-action/vega-virtual-device-action@ed210f760d5aec5cd3f7e54e1529d353b4e66a11 # main
+        uses: finloop/vega-virtual-device-action/vega-virtual-device-action@fe151d9a807b64e2838080e16a9ff2ea55ee48f6 # main
         with:
           image: ${{ env.HOST_IMAGE }}
           pull: true
@@ -134,7 +134,7 @@ jobs:
 
       - name: Upload screenshots + logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vega-vvd-e2e-artifacts
           path: artifacts/
