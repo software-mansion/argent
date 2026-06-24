@@ -7,7 +7,7 @@ import type { AiTelemetryProps } from "./ai-identity.js";
 // Single source of truth for the device platform enum: the TS union below and
 // sanitize.ts's runtime allowlist both derive from this tuple, so adding a
 // platform can't silently drift the two apart.
-export const PLATFORMS = ["ios", "android", "chromium"] as const;
+export const PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 // Installation events

@@ -89,6 +89,8 @@ function platformMatrix(
       return capability.android;
     case "chromium":
       return capability.chromium;
+    case "vega":
+      return capability.vega;
   }
 }
 

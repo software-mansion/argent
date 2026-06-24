@@ -88,9 +88,9 @@ export interface ToolContext extends InvokeToolOptions {
 
 // ── Device + Capability Types ──
 
-export type Platform = "ios" | "android" | "chromium";
+export type Platform = "ios" | "android" | "chromium" | "vega";
 
-export type DeviceKind = "simulator" | "emulator" | "device" | "app" | "unknown";
+export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
@@ -124,6 +124,10 @@ export interface ToolCapability {
   chromium?: {
     app?: boolean;
   };
+  vega?: {
+    vvd?: boolean;
+    device?: boolean;
+  };
   /** Optional refiner. Returns true if this device is supported. */
   supports?: (device: DeviceInfo) => boolean;
 }
@@ -148,7 +152,7 @@ export interface ToolCapability {
  * On a missing binary, the HTTP layer returns 424 Failed Dependency with an
  * install hint the agent can surface verbatim.
  */
-export type ToolDependency = "adb" | "xcrun" | "emulator";
+export type ToolDependency = "adb" | "xcrun" | "emulator" | "vega";
 
 // ── Tool Types ──
 

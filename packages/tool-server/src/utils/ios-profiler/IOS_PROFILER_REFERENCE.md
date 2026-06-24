@@ -205,8 +205,6 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 | Memory leak | attributed (resolved responsible frame)                      | RED          |
 | Memory leak | unattributed (`<Call stack limit reached>` under `--attach`) | YELLOW       |
 
-> Note: `argent-native-profiler/SKILL.md` currently documents the YELLOW band as 5–15 %. The implementation uses 3–15 % (`MIN_WEIGHT_PERCENTAGE = 3` in `02-aggregate.ts`). The code is the source of truth.
-
 ---
 
 ## 11. Caveats worth keeping in mind

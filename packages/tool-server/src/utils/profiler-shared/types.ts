@@ -33,6 +33,20 @@ export interface CpuHotspot {
   timeRangeMs: { first: number; last: number };
   /** Burst windows: clusters of activity separated by >500ms gaps */
   burstWindows: { startMs: number; endMs: number; sampleCount: number }[];
+  /**
+   * Android-only: whether the dominant frame is app code ("app") or
+   * system/emulator overhead ("system") such as the goldfish/QEMU GPU pipe or
+   * a kernel syscall. Drives the labelling and advice in the render layer.
+   * Undefined on iOS.
+   */
+  frameClass?: "app" | "system";
+  /**
+   * Android-only: the mapping (loaded object) the dominant leaf lives in —
+   * `/kernel` for kernel frames, a real module path for user space. Fed to
+   * classifyNativeFrame so kernel leaves with unrecognisable names are still
+   * classed as system. Undefined on iOS (no mapping in the iOS sample data).
+   */
+  dominantMapping?: string;
 }
 
 export interface UiHangStateBreakdownEntry {

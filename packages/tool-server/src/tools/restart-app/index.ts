@@ -3,9 +3,15 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
-import type { RestartAppAndroidServices, RestartAppIosServices, RestartAppResult } from "./types";
+import type {
+  RestartAppAndroidServices,
+  RestartAppIosServices,
+  RestartAppResult,
+  RestartAppVegaServices,
+} from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
+import { vegaImpl } from "./platforms/vega";
 
 // Bundle id / package name. Head must be letter or underscore so a bundleId
 // like `--user` can't masquerade as a flag inside `am force-stop …`.
@@ -39,6 +45,7 @@ type Params = z.infer<typeof zodSchema>;
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
+  vega: { vvd: true },
 };
 
 export const restartAppTool: ToolDefinition<Params, RestartAppResult> = {
@@ -63,11 +70,15 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
     RestartAppIosServices,
     RestartAppAndroidServices,
     Params,
-    RestartAppResult
+    RestartAppResult,
+    // No chromium branch — falls back to the ChromiumServices default.
+    Record<string, unknown>,
+    RestartAppVegaServices
   >({
     toolId: "restart-app",
     capability,
     ios: iosImpl,
     android: androidImpl,
+    vega: vegaImpl,
   }),
 };
