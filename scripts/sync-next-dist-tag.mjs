@@ -120,7 +120,10 @@ function getDistTags(name) {
 function main() {
   const argv = processArgv.slice(2);
   const dryRun = argv.includes("--dry-run") || env.DRY_RUN === "1";
-  const pkg = argv.find((a) => !a.startsWith("--")) ?? "@swmansion/argent";
+  // First non-flag arg is the package name. Skip anything starting with "-"
+  // (not just "--") so a stray "-x" can't slip through and be handed to npm as
+  // a flag (npm package names never start with "-").
+  const pkg = argv.find((a) => !a.startsWith("-")) ?? "@swmansion/argent";
 
   const versions = getVersions(pkg);
   if (versions.length === 0) {
