@@ -1,6 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, Server } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { WebSocket } from "ws";
 import { isWebsocketUpgradeAllowed } from "../src/http";
 import { attachChromiumServerWebsocket } from "../src/chromium-server/http-api";
 import type { ChromiumServer } from "../src/chromium-server/types";
@@ -136,5 +138,84 @@ describe("attachChromiumServerWebsocket — upgrade authorization wiring", () =>
     const socket = emitUpgrade({ host: "127.0.0.1:3001" }, "/some/other/path");
     expect(socket.destroy).not.toHaveBeenCalled();
     expect(resolveServer).not.toHaveBeenCalled();
+  });
+});
+
+// End-to-end over a REAL http.Server + REAL `ws` handshake (not the synthetic
+// EventEmitter above). Proves two things the unit/wiring tests structurally
+// cannot: (1) an AUTHORIZED upgrade actually completes to a 101 and yields an
+// open socket via wss.handleUpgrade → bindWsToServer; (2) a denied upgrade (or
+// one with no device) is torn down at the wire with no 101 — observed by the
+// client, not just an internal stub.
+describe("attachChromiumServerWebsocket — real handshake (http.Server + ws client)", () => {
+  let server: Server;
+  let port: number;
+  // When true, resolve to a minimal real ChromiumServer so an allowed upgrade
+  // reaches 101 — bindWsToServer only touches `.events`, so an EventEmitter is
+  // sufficient. When false, the device is "absent" (resolveServer → null).
+  let resolvable = true;
+  const device = { events: new EventEmitter() } as unknown as ChromiumServer;
+
+  beforeAll(async () => {
+    server = createServer();
+    attachChromiumServerWebsocket(
+      server,
+      "/chromium-server/",
+      () => (resolvable ? device : null),
+      (req) => isWebsocketUpgradeAllowed(req.headers as { host?: string; origin?: string }, guard)
+    );
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    port = (server.address() as AddressInfo).port;
+  });
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  // Connect with crafted headers; settle to "open" (101) or "rejected" (no 101)
+  // — never hang. A ws client sends no Origin unless one is supplied here, and
+  // honors an explicit Host override (used for the DNS-rebind case).
+  function handshake(headers: Record<string, string>): Promise<"open" | "rejected"> {
+    return new Promise((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/chromium-server/dev/ws`, { headers });
+      let settled = false;
+      const done = (r: "open" | "rejected") => {
+        if (settled) return;
+        settled = true;
+        try {
+          ws.close();
+        } catch {
+          /* already torn down */
+        }
+        resolve(r);
+      };
+      ws.on("open", () => done("open"));
+      ws.on("error", () => done("rejected"));
+      ws.on("unexpected-response", () => done("rejected"));
+    });
+  }
+
+  it("completes the 101 handshake for a same-origin loopback client", async () => {
+    resolvable = true;
+    expect(await handshake({ Origin: `http://127.0.0.1:${port}` })).toBe("open");
+  });
+
+  it("completes for a non-browser client that sends no Origin", async () => {
+    resolvable = true;
+    expect(await handshake({})).toBe("open");
+  });
+
+  it("rejects a cross-origin browser handshake at the wire (CSWSH, no 101)", async () => {
+    resolvable = true;
+    expect(await handshake({ Origin: "https://evil.com" })).toBe("rejected");
+  });
+
+  it("rejects a DNS-rebinding Host at the wire", async () => {
+    resolvable = true;
+    expect(await handshake({ Host: `evil.com:${port}` })).toBe("rejected");
+  });
+
+  it("tears down an authorized upgrade when no device is resolved (no 101)", async () => {
+    resolvable = false; // auth passes; resolveServer returns null
+    expect(await handshake({ Origin: `http://127.0.0.1:${port}` })).toBe("rejected");
   });
 });
