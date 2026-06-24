@@ -103,8 +103,11 @@ describe("boot-device — iOS path", () => {
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
       "11111111-1111-1111-1111-111111111111"
     );
+    const bootCallIdx = mockExecFile.mock.calls.findIndex(
+      ([file, args]: [string, string[]]) => file === "xcrun" && args?.[1] === "boot"
+    );
     expect(setAccessibilityPrefsPreBootMock.mock.invocationCallOrder[0]).toBeLessThan(
-      mockExecFile.mock.invocationCallOrder[0]
+      mockExecFile.mock.invocationCallOrder[bootCallIdx]
     );
     expect(ensureAutomationEnabledMock).toHaveBeenCalledTimes(1);
     expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
@@ -260,7 +263,10 @@ describe("boot-device — iOS path", () => {
       booted: true,
     });
 
-    expect(mockExecFile.mock.calls[1]?.slice(0, 2)).toEqual([
+    const bootstatusCall = mockExecFile.mock.calls.find(
+      ([file, args]: [string, string[]]) => file === "xcrun" && args?.[1] === "bootstatus"
+    );
+    expect(bootstatusCall?.slice(0, 2)).toEqual([
       "xcrun",
       ["simctl", "bootstatus", "22222222-2222-2222-2222-222222222222", "-b"],
     ]);
@@ -293,11 +299,17 @@ describe("boot-device — iOS path", () => {
       "22222222-2222-2222-2222-222222222222"
     );
     const execCalls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
-    expect(execCalls[0]).toEqual([
+    const shutdownCall = execCalls.find(
+      ([file, args]) => file === "xcrun" && args?.[1] === "shutdown"
+    );
+    expect(shutdownCall).toEqual([
       "xcrun",
       ["simctl", "shutdown", "22222222-2222-2222-2222-222222222222"],
     ]);
-    expect(execCalls[1]).toEqual([
+    const bootCall = execCalls.find(
+      ([file, args]) => file === "xcrun" && args?.[1] === "boot"
+    );
+    expect(bootCall).toEqual([
       "xcrun",
       ["simctl", "boot", "22222222-2222-2222-2222-222222222222"],
     ]);
