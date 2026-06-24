@@ -64,6 +64,7 @@
       .stage,
       .vcard,
       .float-controls,
+      .float-toolbelt,
       .float-status,
       .footbar,
       .comment-pop,
@@ -82,6 +83,13 @@
         align-items: center;
         gap: var(--gap-list);
         z-index: var(--z-overlay);
+      }
+      /* macOS traffic lights (native window controls) occupy the top-left in
+         Electron. Shift the status pill clear of them so a "Connecting…" or
+         error message never lands under the buttons. A browser tab has no
+         buttons, so .native-frame is absent and the pill keeps its corner. */
+      .native-frame .float-status {
+        left: var(--traffic-light-gutter);
       }
       .status {
         background: var(--color-surface);
@@ -297,12 +305,26 @@
         font-weight: var(--fw-semibold);
         box-shadow: var(--shadow-card);
       }
-      /* Floating top-right controls (theme, comment, close): a row of square
-         icon buttons that sit over the stream, away from the slim drag toolbar. */
+      /* Floating top-right controls (just the theme toggle now — comment moved
+         to the bottom toolbelt, close is a native traffic light): square icon
+         buttons that sit over the stream, away from the slim drag toolbar. */
       .float-controls {
         position: absolute;
         top: var(--footbar-bottom);
         right: var(--footbar-right);
+        display: flex;
+        gap: var(--gap-list);
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+      }
+      /* Bottom-centre toolbelt — floats below the stream. Today it carries the
+         comment toggle; it's shaped to grow into a Figma-style bottom tool tab,
+         so it's a horizontal row centred on the window. */
+      .float-toolbelt {
+        position: absolute;
+        bottom: var(--footbar-bottom);
+        left: 50%;
+        transform: translateX(-50%);
         display: flex;
         gap: var(--gap-list);
         z-index: var(--z-overlay);
@@ -726,14 +748,14 @@
       }
       .spot-hit {
         position: absolute;
-        cursor: crosshair;
+        cursor: var(--cursor-comment);
         z-index: var(--z-spot-hit);
         /* The spotlight root sets pointer-events:none; this capture layer must
            opt back in or hover/click never reaches it and nothing un-blurs. */
         pointer-events: auto;
       }
       .inspecting .stage img {
-        cursor: crosshair;
+        cursor: var(--cursor-comment);
       }
 
       /* Comment box bubble anchored next to the inspected element. */
@@ -1209,6 +1231,18 @@
         </div>
         <div class="float-controls" id="float-controls">
           <button
+            id="theme-btn"
+            class="float-btn"
+            type="button"
+            aria-label="Theme"
+            title="Theme"></button>
+        </div>
+        <!-- Bottom-centre toolbelt that floats below the stream. Holds the
+             comment toggle for now; this is the seed of a Figma-style bottom
+             tool tab we'll grow later. Window close/minimise live in the native
+             traffic lights, not a handcrafted button. -->
+        <div class="float-toolbelt" id="float-toolbelt">
+          <button
             id="comment-btn"
             class="float-btn"
             type="button"
@@ -1225,28 +1259,6 @@
               aria-hidden="true">
               <path
                 d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-            </svg>
-          </button>
-          <button
-            id="theme-btn"
-            class="float-btn"
-            type="button"
-            aria-label="Theme"
-            title="Theme"></button>
-          <button
-            id="close-btn"
-            class="float-btn"
-            type="button"
-            aria-label="Close preview window"
-            title="Close preview window">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              aria-hidden="true">
-              <path d="M6 6 18 18M18 6 6 18" />
             </svg>
           </button>
         </div>
@@ -2023,15 +2035,15 @@
       }
 
       // ── Events ──────────────────────────────────────────────────────────
-      // Close button: ask the tool-server to dismiss the Electron window (it
-      // owns the window lifecycle over stdin, so it plays the close animation
-      // and quits the host cleanly — more reliable than renderer window.close()
-      // under the sandboxed BrowserWindow).
-      const closeBtn = document.getElementById("close-btn");
-      closeBtn.addEventListener("click", () => {
-        closeBtn.blur();
-        fetch(`${TOOL_SERVER}/preview/close`, { method: "POST" }).catch(() => {});
-      });
+      // Window close/minimise are the native macOS traffic lights now (the host
+      // window uses titleBarStyle:"hidden"), so there's no handcrafted close
+      // button to wire up. Closing the native window quits the host; the
+      // tool-server re-opens it on the next round, exactly as the old button's
+      // dismiss did. In Electron, flag the document so the top-left chrome can
+      // sidestep the traffic lights (a browser tab has none).
+      if (/Electron/i.test(navigator.userAgent)) {
+        document.documentElement.classList.add("native-frame");
+      }
 
       // ── Theme (light / dark) ────────────────────────────────────────────
       // Colours are light-dark(LIGHT, DARK) tokens in theme.css; forcing
@@ -3192,6 +3204,37 @@
         else return home;
         return { x: nx, y: home.y };
       }
+      // Deterministic de-overlap of the spring HOMES (targets), run once per
+      // layoutCards pass — i.e. per describe poll, NOT per animation frame. That
+      // is the whole point: the damped bubble springs then glide to homes that
+      // already don't overlap, so there is no live correction force and thus
+      // none of the micro-jitter / wedge-wiggle a per-frame position fix causes.
+      // Stable top-down sweep: walking cards in y order, each one is dropped to
+      // sit just below every card above it that shares its vertical lane. Moving
+      // only ever downward makes it monotonic — it cannot oscillate. Pinned
+      // (user-dropped) cards are fixed anchors the others flow past.
+      function deOverlapHomes(items, cardW, gap, top, bottom) {
+        const sorted = items.slice().sort((a, b) => a.rec.home.y - b.rec.home.y);
+        for (let i = 1; i < sorted.length; i++) {
+          const cur = sorted[i];
+          if (cur.rec.pinned) continue;
+          let floor = top;
+          for (let j = 0; j < i; j++) {
+            const prev = sorted[j];
+            // Same vertical lane? (cards in different columns never constrain.)
+            const oX =
+              Math.min(cur.rec.home.x, prev.rec.home.x) +
+              cardW -
+              Math.max(cur.rec.home.x, prev.rec.home.x);
+            if (oX <= 0) continue;
+            const prevBottom = prev.rec.home.y + prev.ch + gap;
+            if (prevBottom > floor) floor = prevBottom;
+          }
+          // Drop to clear the cards above; clamp so it can't leave the window
+          // (true overflow piles at the bottom rather than vanishing off-screen).
+          if (cur.rec.home.y < floor) cur.rec.home.y = Math.min(floor, bottom - cur.ch);
+        }
+      }
       function layoutCards() {
         const now = Date.now();
         const mr = mainEl.getBoundingClientRect();
@@ -3305,7 +3348,7 @@
         //        • The final maxHeight write is diffed against the inline
         //          value so unchanged frames are no-ops — keeps scrollTop.
         const COL_PAD = 8;
-        const GAP = 12;
+        const GAP = 8;
         const want = vis.map((rec, i) => {
           const body = rec.el.querySelector(".vcard-body");
           if (body && rec.chromeH == null) {
@@ -3371,11 +3414,19 @@
         // the "ready" pop. offsetTop ignores the transform (offsetParent is the
         // position:relative #main), keeping the column height stable.
         const footTop = footEl && !footEl.hidden ? footEl.offsetTop - COL_PAD : mh;
-        const colBottom = Math.min(mh - COL_PAD, footTop);
-        const colH = colBottom - colTop;
+        // The footbar is anchored bottom-RIGHT, so only the column(s) that
+        // actually sit above it should surrender height for it. A column clear
+        // of the footbar's x-range gets the full window height — otherwise the
+        // left column was needlessly squeezed (and its cards clipped) by a
+        // footbar that only overlaps the right column.
+        const footLeft = footEl && !footEl.hidden ? footEl.offsetLeft : mw;
         for (const col of ["L", "R"]) {
           const cwant = want.filter((w) => w.side === col);
           if (cwant.length === 0) continue;
+          const colX = col === "L" ? leftX : rightX;
+          const colBottom =
+            colX + cardW > footLeft ? Math.min(mh - COL_PAD, footTop) : mh - COL_PAD;
+          const colH = colBottom - colTop;
           const naturalSum = cwant.reduce((s, w) => s + w.natural, 0) + (cwant.length - 1) * GAP;
           if (naturalSum <= colH) {
             cwant.sort((a, b) => a.anchor - b.anchor);
@@ -3468,6 +3519,9 @@
             w.rec.vel.y += Math.random() * 18 - 9;
           }
         }
+        // Guarantee no two resting homes overlap. Deterministic + once per pass,
+        // so the springs simply glide to clear targets (no live force, no jitter).
+        deOverlapHomes(want, cardW, GAP, COL_PAD, mh - COL_PAD);
       }
 
       // Reuses SVG nodes (no per-frame teardown) and draws to the *eased*
