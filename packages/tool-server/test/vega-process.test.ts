@@ -3,8 +3,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
   parseVvdConsolePorts,
+  parseVvdPids,
   listRunningVvdConsolePorts,
+  listRunningVvdPids,
   PS_ARGS,
+  PS_ARGS_WITH_PID,
 } from "../src/utils/vega-process";
 
 const execFileAsync = promisify(execFile);
@@ -67,6 +70,50 @@ describe("parseVvdConsolePorts", () => {
   });
 });
 
+// A `ps -o pid=,command=` line: a leading pid column, then the same argv.
+function vvdPidLine(pid: number, consolePort: number): string {
+  return `  ${pid} ${vvdLine(consolePort)}`;
+}
+
+describe("parseVvdPids", () => {
+  it("reads the pid of a running VVD emulator process", () => {
+    expect(parseVvdPids(vvdPidLine(75137, 5554))).toEqual([75137]);
+  });
+
+  it("ignores a co-running Android emulator, a crashpad sibling, and a branch ref", () => {
+    const ps = [
+      `  4242 ${ANDROID_EMULATOR}`,
+      `  4243 ${CRASHPAD}`,
+      `  4244 ${GIT_REF}`,
+      vvdPidLine(75137, 5556),
+    ].join("\n");
+    expect(parseVvdPids(ps)).toEqual([75137]);
+  });
+
+  it("returns empty when no VVD process is present", () => {
+    const ps = [`  1 /sbin/launchd`, `  4242 ${ANDROID_EMULATOR}`].join("\n");
+    expect(parseVvdPids(ps)).toEqual([]);
+  });
+
+  it("reports every pid when multiple VVDs run", () => {
+    const ps = [vvdPidLine(75137, 5554), vvdPidLine(80001, 5556)].join("\n");
+    expect(parseVvdPids(ps).sort((a, b) => a - b)).toEqual([75137, 80001]);
+  });
+
+  it("matches the legacy kepler-virtual-device process name", () => {
+    const line = vvdPidLine(75137, 5554).replace("vega-virtual-device", "kepler-virtual-device");
+    expect(parseVvdPids(line)).toEqual([75137]);
+  });
+
+  it("does not match a `…-virtual-device-wrapper` substring", () => {
+    const line = vvdPidLine(75137, 5554).replace(
+      "vega-virtual-device",
+      "vega-virtual-device-wrapper"
+    );
+    expect(parseVvdPids(line)).toEqual([]);
+  });
+});
+
 // Exercises the REAL `ps` invocation (not mocked) so a flag invalid on the host —
 // e.g. the BSD-only `-x` on the Linux CI runner — fails here, fast, instead of only
 // surfacing in the slow Vega e2e (where the catch would otherwise hide it).
@@ -80,5 +127,18 @@ describe("listRunningVvdConsolePorts (real ps)", () => {
     const ports = await listRunningVvdConsolePorts();
     expect(ports).toBeInstanceOf(Set);
     for (const p of ports) expect(Number.isInteger(p) && p > 0).toBe(true);
+  });
+
+  it("PS_ARGS_WITH_PID is accepted by the host `ps` (exit 0, non-empty output)", async () => {
+    const { stdout } = await execFileAsync("ps", [...PS_ARGS_WITH_PID], {
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    expect(stdout.split("\n").filter(Boolean).length).toBeGreaterThan(0);
+  });
+
+  it("resolves to positive integer pids without throwing", async () => {
+    const pids = await listRunningVvdPids();
+    expect(Array.isArray(pids)).toBe(true);
+    for (const p of pids) expect(Number.isInteger(p) && p > 0).toBe(true);
   });
 });

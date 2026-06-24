@@ -15,6 +15,12 @@ const execFileAsync = promisify(execFile);
 // (alias of `args` on procps) prints the full argv with no header.
 export const PS_ARGS = ["-A", "-ww", "-o", "command="] as const;
 
+// Same probe, with a leading PID column, for the stop/kill path: the `vega` CLI
+// can lose track of a running VVD and refuse to stop it (see `stopVvd`), so we
+// terminate the process directly. `pid=,command=` prints `<pid> <argv>` per line
+// with no header on both macOS/BSD `ps` and Linux procps.
+export const PS_ARGS_WITH_PID = ["-A", "-ww", "-o", "pid=,command="] as const;
+
 // The VVD's emulator binary, anchored to a path boundary + a following arg/EOL so
 // it can't match a substring like `…/vega-virtual-device-wrapper`.
 const VVD_PROCESS_RE = /(?:^|\/)(?:vega|kepler)-virtual-device(?:\s|$)/;
@@ -43,6 +49,29 @@ function consolePortFromVvdArgs(line: string): number | null {
 }
 
 /**
+ * PIDs of running VVD emulator processes from `ps -o pid=,command=` output
+ * (pure; unit-tested). Same VVD identity as `parseVvdConsolePorts` — only the
+ * pid (not the console port) is read, since the stop path kills by pid.
+ */
+export function parseVvdPids(psOutput: string): number[] {
+  const pids: number[] = [];
+  for (const line of psOutput.split("\n")) {
+    // `<leading spaces><pid> <argv...>`; split the pid off, then identity-match argv.
+    const m = line.match(/^\s*(\d+)\s+(.*)$/);
+    if (!m) continue;
+    const argv = m[2]!;
+    // Require BOTH the VVD binary name AND an emulator console-port signal
+    // (`-ports`/`-qmp`). The pid feeds SIGTERM/SIGKILL, so demand a positive
+    // emulator identity — otherwise a process that merely mentions a
+    // `…/vega-virtual-device` path in its argv (e.g. a git command on a branch
+    // of that name) could be mistaken for the device and signalled.
+    if (!VVD_PROCESS_RE.test(argv) || consolePortFromVvdArgs(argv) === null) continue;
+    pids.push(parseInt(m[1]!, 10));
+  }
+  return pids;
+}
+
+/**
  * Console ports of all running VVDs (empty if none / `ps` unavailable). `>1` ⇒
  * multiple VVDs — callers that target one surface `MultipleVegaDevicesError`.
  */
@@ -60,5 +89,21 @@ export async function listRunningVvdConsolePorts(): Promise<Set<number>> {
       `[vega-process] ps probe failed; assuming no running VVD: ${String(err)}\n`
     );
     return new Set();
+  }
+}
+
+/** PIDs of all running VVD emulator processes (empty if none / `ps` unavailable). */
+export async function listRunningVvdPids(): Promise<number[]> {
+  try {
+    const { stdout } = await execFileAsync("ps", [...PS_ARGS_WITH_PID], {
+      timeout: 5_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return parseVvdPids(stdout);
+  } catch (err) {
+    process.stderr.write(
+      `[vega-process] ps (pid) probe failed; cannot enumerate VVD pids: ${String(err)}\n`
+    );
+    return [];
   }
 }
