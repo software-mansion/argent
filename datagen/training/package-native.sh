@@ -48,7 +48,10 @@ test -f "fused/$WORK.f16.gguf"
 
 echo "=== 4) ollama import (q4_K_M, PARSER gemma4, no SYSTEM)  $(date +%T) ==="
 MF="$(mktemp)"
-printf 'FROM %s/fused/%s.f16.gguf\nTEMPLATE """{{ .Prompt }}"""\nRENDERER gemma4\nPARSER gemma4\nPARAMETER num_ctx 32768\nPARAMETER temperature 0\n' "$(pwd)" "$WORK" > "$MF"
+# num_ctx 65536: model is natively 128K (gemma3n E4B); 64K covers long multi-turn nav
+# sessions (seen up to ~37K tokens) with headroom, while sliding-window attention keeps
+# the KV cache cheap (+~0.2GB at 64K). Do NOT confuse with training --max-seq-length 4608.
+printf 'FROM %s/fused/%s.f16.gguf\nTEMPLATE """{{ .Prompt }}"""\nRENDERER gemma4\nPARSER gemma4\nPARAMETER num_ctx 65536\nPARAMETER temperature 0\n' "$(pwd)" "$WORK" > "$MF"
 ollama rm "$NAME" >/dev/null 2>&1 || true
 ollama create "$NAME" -q q4_K_M -f "$MF"
 echo "=== PACKAGED $NAME  $(date +%T) ==="
