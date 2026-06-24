@@ -194,9 +194,13 @@ describe("await-ui-element tool", () => {
   });
 
   it("`hidden` succeeds once the element disappears", async () => {
+    // Second poll is a real re-rendered screen WITHOUT the Spinner (other content
+    // remains) — a genuinely-hidden element leaves the rest of the screen behind.
+    // (A wholly-empty second tree is the ambiguous transient-blank case, covered
+    // separately below — it must NOT confirm `hidden`.)
     const { api } = makeSequencedAXService([
       axResponse([{ label: "Spinner", frame: FRAME, traits: [] }]),
-      axResponse([]),
+      axResponse([{ label: "Content", frame: FRAME, traits: [] }]),
     ]);
     const tool = createAwaitUiElementTool(iosRegistry(api));
 
@@ -214,6 +218,59 @@ describe("await-ui-element tool", () => {
     expect(result.success).toBe(true);
     // It actually matched before disappearing, so it must NOT carry the
     // "never matched" caveat.
+    expect(result.note ?? "").not.toMatch(/never matched/i);
+  });
+
+  it("does NOT confirm `hidden` on a transient empty tree after the element was seen", async () => {
+    // The element matched on the first poll; every later poll lands on a wholly
+    // empty tree (a blank frame mid-navigation). That emptiness must not read as
+    // "element hidden" — otherwise a gated tap fires against a screen that only
+    // briefly went blank. So the wait keeps polling and times out with the
+    // "could not confirm … empty or unreadable" note rather than a false success.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Spinner", frame: FRAME, traits: [] }]),
+      axResponse([]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "hidden",
+        selector: { text: "Spinner" },
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/empty or unreadable/i);
+  });
+
+  it("`hidden` resolves once a real (non-empty) screen without the element renders after a blank", async () => {
+    // Spinner → transient blank → a real screen without the Spinner. The blank
+    // must not confirm `hidden`, but the subsequent populated tree (Spinner gone)
+    // must. Proves the guard delays rather than blocks a legitimate disappearance.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Spinner", frame: FRAME, traits: [] }]),
+      axResponse([]),
+      axResponse([{ label: "Loaded", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "hidden",
+        selector: { text: "Spinner" },
+        timeoutMs: 2000,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(true);
     expect(result.note ?? "").not.toMatch(/never matched/i);
   });
 
@@ -380,6 +437,39 @@ describe("await-ui-element tool", () => {
     );
 
     expect(result.success).toBe(true);
+  });
+
+  it("does NOT confirm `hidden` on Android when a seen element is followed by an empty tree", async () => {
+    // Android never sets hint / should_restart, so before the everMatched guard a
+    // transient empty `uiautomator dump` after the element had appeared would let
+    // `hidden` resolve on a blank frame. Poll 1 shows the button; later polls
+    // return an empty hierarchy. The wait must keep polling and time out, not
+    // confirm hidden.
+    const withButton =
+      `<hierarchy rotation="0">` +
+      `<node text="Sign in" resource-id="com.demo:id/signin" class="android.widget.Button" clickable="true" bounds="[100,200][980,320]" />` +
+      `</hierarchy>`;
+    const empty = `<hierarchy rotation="0"></hierarchy>`;
+    let i = 0;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml: i++ === 0 ? withButton : empty }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const tool = createAwaitUiElementTool(makeMockRegistry({ android }));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: ANDROID_SERIAL,
+        condition: "hidden",
+        selector: { text: "Sign in" },
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/empty or unreadable/i);
   });
 
   // ── Chromium branch ──────────────────────────────────────────────────────
