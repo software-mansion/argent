@@ -107,4 +107,19 @@ describe("stopVvd", () => {
     expect(kill).toHaveBeenCalledWith(75137, "SIGTERM");
     expect(kill).toHaveBeenCalledWith(75137, "SIGKILL");
   });
+
+  it("swallows a throwing process.kill (ESRCH/EPERM) and still signals every pid", async () => {
+    // signalQuietly must absorb a kill that races the process exiting (ESRCH) or
+    // hits a pid we don't own (EPERM) — stopVvd must still resolve and must keep
+    // signalling the remaining pids rather than aborting on the first throw.
+    runVega.mockResolvedValue({ stdout: "", stderr: "" });
+    listRunningVvdPids.mockResolvedValue([75137, 80001]);
+    listRunningVvdConsolePorts.mockResolvedValue(new Set()); // gone after SIGTERM → no SIGKILL pass
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+    });
+    await expect(stopVvd({ killGraceMs: 50, verifyPollMs: 5 })).resolves.toBeUndefined();
+    expect(kill).toHaveBeenCalledWith(75137, "SIGTERM");
+    expect(kill).toHaveBeenCalledWith(80001, "SIGTERM");
+  });
 });
