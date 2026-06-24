@@ -56,6 +56,127 @@ describe("run-sequence", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("stops the sequence when an await-ui-element step reports an unmet condition", async () => {
+    const registry = mockRegistry((id: string) => {
+      if (id === "await-ui-element") {
+        return {
+          success: false,
+          elapsed: 5000,
+          note: "no element matched the selector before timeout",
+        };
+      }
+      return { tapped: true };
+    });
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { text: "Continue" } },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      }
+    );
+
+    // The trailing tap must NOT run.
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+    expect(result.steps).toHaveLength(2);
+    const last = result.steps[1] as { tool: string; error?: string };
+    expect(last.tool).toBe("await-ui-element");
+    expect(last.error).toMatch(/condition not met/i);
+    expect(last.error).toMatch(/no element matched/i);
+    expect(result.completed).toBe(1);
+    expect(result.total).toBe(3);
+  });
+
+  it("continues past an await-ui-element step whose condition is met", async () => {
+    const registry = mockRegistry((id: string) => {
+      if (id === "await-ui-element") return { success: true, elapsed: 120 };
+      return { tapped: true };
+    });
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { text: "Continue" } },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      }
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(3);
+    expect(result.completed).toBe(3);
+    expect(result.steps.every((s) => "result" in s)).toBe(true);
+  });
+
+  it("only the await-ui-element tool's success:false halts — other tools are unaffected", async () => {
+    // A non-wait step returning a success:false-shaped object must NOT stop the run.
+    const registry = mockRegistry(() => ({ success: false }));
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      }
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+    expect(result.completed).toBe(2);
+  });
+
+  it("forwards the request abort signal into each sub-tool invocation", async () => {
+    const registry = mockRegistry(() => ({ tapped: true }));
+    const tool = createRunSequenceTool(registry);
+    const controller = new AbortController();
+
+    await tool.execute(
+      {},
+      { udid: IOS, steps: [{ tool: "gesture-tap", args: { x: 0.5, y: 0.9 } }] },
+      { signal: controller.signal } as unknown as ToolContext
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    const opts = (registry.invokeTool as ReturnType<typeof vi.fn>).mock.calls[0][2];
+    expect(opts.signal).toBe(controller.signal);
+  });
+
+  it("does not run any step when the signal is already aborted", async () => {
+    const registry = mockRegistry(() => ({ tapped: true }));
+    const tool = createRunSequenceTool(registry);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [{ tool: "gesture-tap", args: { x: 0.5, y: 0.9 } }],
+      },
+      { signal: controller.signal } as unknown as ToolContext
+    );
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(result.completed).toBe(0);
+  });
+
   it("propagates the request's telemetry attribution to every sub-tool", async () => {
     const registry = mockRegistry();
     const tool = createRunSequenceTool(registry);
