@@ -9,15 +9,16 @@ import {
   axServiceBinaryPathTcp,
   bootstrapDylibPath,
   bootstrapDylibPathTcp,
+  tcpInjectionDylibs,
 } from "@argent/native-devtools-ios";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
   proxyStart as simRemoteProxyStart,
   proxyStop as simRemoteProxyStop,
-  setupAxService as simRemoteSetupAxService,
-  setupNativeDevtools as simRemoteSetupNativeDevtools,
-  setupRunningBundleIds as simRemoteRunningBundleIds,
+  simctlSpawn as simRemoteSpawn,
+  injectDylib as simRemoteInjectDylib,
+  setSimulatorEnv as simRemoteSetSimulatorEnv,
 } from "./sim-remote";
 
 const execFileAsync = promisify(execFile);
@@ -187,17 +188,6 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   await ensureAccessibilityEnabled(udid);
 }
 
-/**
- * Bare basename of the bootstrap dylib the orchestrator should inject. The
- * dylib lives on the orchestrator side (it's the TCP variant of the local
- * `libArgentInjectionBootstrap.dylib`) and `sim-remote setup native-devtools`
- * resolves it by basename against the orchestrator's own dylib directory —
- * we never need a local copy. Hardcoding the basename avoids a
- * `bootstrapDylibPathTcp()` lookup that would throw on dev machines that
- * don't ship the local TCP variant.
- */
-const REMOTE_BOOTSTRAP_DYLIB_BASENAME = "libArgentInjectionBootstrap.dylib";
-
 async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint): Promise<void> {
   if (endpoint.transport !== "tcp") {
     throw new Error("ios-remote native-devtools requires TCP transport");
@@ -205,25 +195,35 @@ async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint)
   if (endpoint.port === undefined) {
     throw new Error("native-devtools TCP endpoint reached host setup before its port was bound");
   }
-  await simRemoteSetupNativeDevtools(udid, {
-    libs: [REMOTE_BOOTSTRAP_DYLIB_BASENAME],
-    cdpPort: endpoint.port,
-  });
+  // Upload the TCP dylibs to the orchestrator (the bootstrap is inserted into
+  // DYLD_INSERT_LIBRARIES; siblings are co-located so the bootstrap can
+  // @loader_path-resolve them), then point the dylib at our reverse-tunneled
+  // CDP port. Stage the non-inserted siblings first so every referenced file
+  // exists before the bootstrap is inserted.
+  const dylibs = [...tcpInjectionDylibs()].sort((a, b) => Number(a.insert) - Number(b.insert));
+  for (const { path: filePath, insert } of dylibs) {
+    await simRemoteInjectDylib(udid, { filePath, insert });
+  }
+  await simRemoteSetSimulatorEnv(udid, "NATIVE_DEVTOOLS_IOS_CDP_PORT", String(endpoint.port));
+}
+
+/** Parse `launchctl list` output for `UIKitApplication:<bundle-id>` matches. */
+function parseUIKitApplicationBundleIds(stdout: string): Set<string> {
+  const bundleIds = new Set<string>();
+  for (const line of stdout.split("\n")) {
+    const match = line.match(/UIKitApplication:([^[]+)/);
+    if (match) {
+      bundleIds.add(match[1].trim());
+    }
+  }
+  return bundleIds;
 }
 
 async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
   const { stdout } = await execFileAsync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
     encoding: "utf8",
   });
-
-  const bundleIds = new Set<string>();
-  for (const line of stdout.split("\n")) {
-    const match = line.match(/UIKitApplication:([^\[]+)/);
-    if (match) {
-      bundleIds.add(match[1].trim());
-    }
-  }
-  return bundleIds;
+  return parseUIKitApplicationBundleIds(stdout);
 }
 
 function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
@@ -263,18 +263,21 @@ function spawnAxDaemonRemote(udid: string, endpoint: IosEndpoint): ChildProcess 
   if (endpoint.port === undefined) {
     throw new Error("ax-service TCP endpoint reached spawn before its port was bound");
   }
-  // ios-remote: the orchestrator-supplied daemon is started by
-  // `sim-remote setup ax-service`. There is no local child process to
-  // shepherd — return a no-op ChildProcess stub so the surrounding factory
-  // code (exit/error wiring, kill on dispose) still type-checks.
+  // ios-remote: upload the TCP-built ax-service binary and `simctl spawn` it
+  // detached on the orchestrator. There is no local child process to shepherd —
+  // return a no-op ChildProcess stub so the surrounding factory code (exit/error
+  // wiring, kill on dispose) still type-checks. The remote daemon self-exits
+  // after `--timeout`, so the unreachable `kill()` is acceptable.
   const noop = new EventEmitter() as unknown as ChildProcess;
   (noop as unknown as { kill: () => boolean }).kill = () => true;
-  void simRemoteSetupAxService(udid, { port: endpoint.port, timeoutSecs: 3600 }).catch(
-    (err: Error) => {
-      // Defer the emit so listeners attached after this call still see it.
-      setImmediate(() => noop.emit("error", err));
-    }
-  );
+  void simRemoteSpawn(udid, {
+    binPath: axServiceBinaryPathTcp(),
+    args: ["--port", String(endpoint.port), "--timeout", "3600"],
+    detach: true,
+  }).catch((err: Error) => {
+    // Defer the emit so listeners attached after this call still see it.
+    setImmediate(() => noop.emit("error", err));
+  });
   return noop;
 }
 
@@ -292,18 +295,31 @@ export const localIosHost: IosHost = {
   async stopProxy() {},
 };
 
+/** Accessibility `defaults` keys (all `-bool true`) that describe-driven tools need. */
+const ACCESSIBILITY_DEFAULT_FLAGS = [
+  "AutomationEnabled",
+  "AccessibilityEnabled",
+  "ApplicationAccessibilityEnabled",
+];
+
 export const remoteIosHost: IosHost = {
   kind: "remote",
   requiresTcp: true,
   setupNativeDevtoolsEnv: setupNativeDevtoolsEnvRemote,
   async listRunningBundleIds(udid) {
-    return new Set(await simRemoteRunningBundleIds(udid));
+    const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
+    return parseUIKitApplicationBundleIds(stdout);
   },
-  // sim-remote applies the accessibility defaults at boot via `setup
-  // accessibility-defaults`, and the entitlement-bypass plist is managed
-  // there too. Mark the service as non-degraded on the assumption sim-remote
-  // did the right thing; if not, describe will still surface useful errors.
-  async bootstrapAx() {
+  // Apply the accessibility defaults the tool-server needs (the local host does
+  // this via `defaults write`; here we run the same writes through the remote
+  // generic spawn). The entitlement-bypass plist is assumed active on cloud
+  // sims; if it isn't, describe will still surface a useful error.
+  async bootstrapAx(udid) {
+    for (const flag of ACCESSIBILITY_DEFAULT_FLAGS) {
+      await simRemoteSpawn(udid, {
+        args: ["defaults", "write", "com.apple.Accessibility", flag, "-bool", "true"],
+      });
+    }
     return { entitlementBypassActive: true };
   },
   spawnAxDaemon: spawnAxDaemonRemote,
