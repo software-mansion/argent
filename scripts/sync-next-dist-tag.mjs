@@ -120,10 +120,12 @@ function getDistTags(name) {
 function main() {
   const argv = processArgv.slice(2);
   const dryRun = argv.includes("--dry-run") || env.DRY_RUN === "1";
-  // First non-flag arg is the package name. Skip anything starting with "-"
-  // (not just "--") so a stray "-x" can't slip through and be handed to npm as
-  // a flag (npm package names never start with "-").
-  const pkg = argv.find((a) => !a.startsWith("-")) ?? "@swmansion/argent";
+  // First real package-name arg. Skip flags (anything starting with "-", so a
+  // stray "-x" isn't handed to npm as a flag) and blank tokens (an empty/
+  // whitespace arg must NOT become the package name — `npm view ""` silently
+  // resolves to the squatted "undefined" package rather than erroring). When no
+  // usable arg is present we fall back to the scoped default below.
+  const pkg = argv.find((a) => a.trim() !== "" && !a.startsWith("-")) ?? "@swmansion/argent";
 
   const versions = getVersions(pkg);
   if (versions.length === 0) {
