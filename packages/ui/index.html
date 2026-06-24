@@ -4296,24 +4296,14 @@
         const allChosen = vp.proposals.length > 0 && vp.proposals.every((p) => vp.staged[p.id]);
         footEl.classList.toggle("ready", allChosen && !vp.submitting);
 
-        // Off-screen proposals stay folded away (the "N hidden" badge) until the
-        // user opts in. Once every ON-screen choice is staged, offer to reveal
-        // the rest via a prompt above the footbar. Dismissing it collapses to a
-        // persistent pill — the hidden choices are always one click from visible.
+        // Whenever ANY proposal's element is off-screen, surface the reveal
+        // prompt above the footbar so the user can always bring the hidden
+        // choices into view. (Previously this was gated on every on-screen
+        // choice already being staged, which stranded the user with a "N hidden"
+        // count and no affordance to act on it.) `offscreenPromptCollapsed` only
+        // selects between the full card and the collapsed pill (see below).
         const offScreenCount = vp.proposals.filter((p) => !p._node).length;
-        // Every currently-on-screen choice is staged. `every` is vacuously true
-        // when NONE are on screen (e.g. all proposals target another screen), so
-        // the reveal prompt still appears in that case instead of stranding the
-        // user with inert "N hidden" cards and no way to surface them.
-        const onScreenStaged = vp.proposals.every((p) => !p._node || vp.staged[p.id]);
-        // Latch on `offscreenPromptCollapsed`: once dismissed to the pill, keep it
-        // shown even if an on-screen pick is later un-staged — the hidden choices
-        // must ALWAYS stay one click from visible (the pill never disappears).
-        const showPrompt =
-          offScreenCount > 0 &&
-          !vp.revealOffscreen &&
-          !vp.submitting &&
-          (onScreenStaged || vp.offscreenPromptCollapsed);
+        const showPrompt = offScreenCount > 0 && !vp.revealOffscreen && !vp.submitting;
         offscreenPrompt.hidden = !showPrompt;
         if (showPrompt) {
           offscreenPrompt.classList.toggle("collapsed", !!vp.offscreenPromptCollapsed);

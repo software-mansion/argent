@@ -9,6 +9,13 @@ export interface AndroidCpuHotspotRow {
   thread_name: string;
   is_main_thread: 0 | 1 | null;
   leaf_function: string | null;
+  /**
+   * Mapping (loaded object) the leaf frame lives in — `/kernel` for kernel
+   * frames, a real module path (`/system/lib64/libhwui.so`, …) for user space.
+   * Fed to classifyNativeFrame so kernel leaves with no recognisable name (e.g.
+   * `writel`) are still classed as system. From cpu-hotspots.sql's MIN(spm.name).
+   */
+  leaf_mapping: string | null;
   sample_count: number;
   first_ts_ns: number;
   last_ts_ns: number;

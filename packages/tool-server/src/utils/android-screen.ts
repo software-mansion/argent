@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { adbShell } from "./adb";
 
 export interface AndroidScreenSize {
@@ -25,12 +26,22 @@ export async function getAndroidScreenSize(serial: string): Promise<AndroidScree
   const physical = out.match(/Physical size:\s*(\d+)x(\d+)/);
   const match = override ?? physical;
   if (!match) {
-    throw new Error(`Could not parse screen size from: ${out.trim()}`);
+    throw new FailureError(`Could not parse screen size from: ${out.trim()}`, {
+      error_code: FAILURE_CODES.ANDROID_SCREEN_SIZE_PARSE_FAILED,
+      failure_stage: "android_screen_size_parse",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+    });
   }
   const width = parseInt(match[1]!, 10);
   const height = parseInt(match[2]!, 10);
   if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
-    throw new Error(`Got non-positive screen size from \`wm size\`: ${out.trim()}`);
+    throw new FailureError(`Got non-positive screen size from \`wm size\`: ${out.trim()}`, {
+      error_code: FAILURE_CODES.ANDROID_SCREEN_SIZE_NON_POSITIVE,
+      failure_stage: "android_screen_size_validate",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+    });
   }
   return { width, height };
 }

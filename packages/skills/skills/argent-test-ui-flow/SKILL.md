@@ -58,9 +58,9 @@ Steps:
 ```
 1. screenshot → see login screen
 2. gesture-tap { x: 0.5, y: 0.4 }  → tap email field
-3. paste { text: "user@example.com" }
+3. keyboard { text: "user@example.com" }
 4. gesture-tap { x: 0.5, y: 0.55 } → tap password field
-5. paste { text: "password123" }
+5. keyboard { text: "password123" }
 6. gesture-tap { x: 0.5, y: 0.7 }  → tap Login button
 7. screenshot → verify home screen appeared
 ```
@@ -101,7 +101,6 @@ Steps:
 
 ## Tips
 
-- **Use `paste` for text entry on iOS** — faster and more reliable than key-by-key `keyboard`. `paste` is iOS-only; on Android use `keyboard` instead.
 - **Use `gesture-custom` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Permission modals**: try `describe` first. Use `screenshot` only as fallback, tap one visible button at a time, and verify with the returned screenshot before continuing.

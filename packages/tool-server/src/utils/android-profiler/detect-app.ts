@@ -1,6 +1,58 @@
-import { adbShell } from "../adb";
+import { adbShell, shellQuote } from "../adb";
 
 const DETECT_TIMEOUT_MS = 10_000;
+
+/**
+ * Validate an explicitly-provided `app_process` before recording.
+ *
+ * Android Perfetto scopes the `linux.perf` data source to a cmdline, but it
+ * does NOT verify that cmdline exists — a typo or a not-installed package
+ * silently yields a trace with zero samples, whose failure only surfaces
+ * (misattributed to "non-debuggable / missing <profileable>") at analyze time,
+ * minutes later. Fail fast here instead, with the real reason.
+ *
+ * Accepts the target if it is either an installed package or a currently
+ * running process. adb/device errors propagate (they are not "not found").
+ */
+export async function validateAndroidAppProcess(serial: string, appProcess: string): Promise<void> {
+  let packagesOut: string;
+  try {
+    packagesOut = await adbShell(serial, "pm list packages", { timeoutMs: DETECT_TIMEOUT_MS });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not verify app_process \`${appProcess}\` on ${serial} (adb error: ${msg}). ` +
+        `Check the device is booted and responsive, then retry.`,
+      { cause: err }
+    );
+  }
+  if (parseUserPackages(packagesOut).has(appProcess)) return;
+
+  // Not an installed package — maybe a bare process name that is running.
+  // `pidof` exits non-zero when nothing matches; `|| true` makes that an empty
+  // stdout so a genuine adb/device failure still propagates (per this
+  // function's contract) instead of being misread as "process not running".
+  let pidOut: string;
+  try {
+    pidOut = await adbShell(serial, `pidof ${shellQuote(appProcess)} || true`, {
+      timeoutMs: DETECT_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not verify app_process \`${appProcess}\` on ${serial} (adb error: ${msg}). ` +
+        `Check the device is booted and responsive, then retry.`,
+      { cause: err }
+    );
+  }
+  if (pidOut.trim().length > 0) return;
+
+  throw new Error(
+    `app_process \`${appProcess}\` was not found on ${serial}: no installed package and no running ` +
+      `process matches that name. Pass an installed package (see \`adb shell pm list packages\`), ` +
+      `or omit app_process to auto-detect the foreground app.`
+  );
+}
 
 /**
  * Auto-detect the foreground app on an Android device. Mirrors the iOS
@@ -90,8 +142,11 @@ export function extractResumedPackages(output: string): Set<string> {
 }
 
 /**
- * Parse the `pm list packages -3` output into a Set. The output is one line
- * per user-installed package in the shape `package:com.example.app`.
+ * Parse `pm list packages` output into a Set of package names. Each line has
+ * the shape `package:com.example.app`. Caller-dependent scope: auto-detect
+ * passes `-3` (user-installed only, to reject system overlays) while explicit
+ * app_process validation passes the unfiltered list (an explicit target may
+ * legitimately be any installed package, including a system one).
  */
 export function parseUserPackages(output: string): Set<string> {
   const result = new Set<string>();

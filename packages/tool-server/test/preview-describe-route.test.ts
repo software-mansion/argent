@@ -142,3 +142,40 @@ describe("GET /preview/describe/:udid (describe-based; post-#197 text-contract r
     expect(mockedAndroid).not.toHaveBeenCalled();
   });
 });
+
+// Integration coverage for the two preview-UI route handlers PR #394 changed to
+// go through `serveUiFile` (the dot-path fix). preview-ui-dotfile.test.ts tests
+// the helper in isolation under a dot dir; this mounts the REAL router (as
+// http.ts does, at "/preview") and serves the actual packages/ui files, so the
+// route wiring — findUiFile resolution, content-type, no-store, the "/" → "/"
+// trailing-slash redirect, and the missing-file 404 branch — is guarded too.
+describe("preview UI routes (real router, real packages/ui)", () => {
+  function previewApp() {
+    const registry = { invokeTool: vi.fn() } as unknown as Registry;
+    const app = express();
+    app.use("/preview", createPreviewRouter(registry));
+    return app;
+  }
+
+  it("GET /preview/theme.css -> 200 text/css, no-store, real stylesheet", async () => {
+    const res = await request(previewApp()).get("/preview/theme.css");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/css/);
+    expect(res.headers["cache-control"]).toBe("no-store, must-revalidate");
+    expect(res.text).toContain("Argent Preview");
+  });
+
+  it("GET /preview/ -> 200 text/html, the real index.html", async () => {
+    const res = await request(previewApp()).get("/preview/");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/html/);
+    expect(res.headers["cache-control"]).toBe("no-store, must-revalidate");
+    expect(res.text).toContain("<!doctype html>");
+  });
+
+  it("GET /preview (no trailing slash) -> 301 to /preview/ so relative theme.css resolves", async () => {
+    const res = await request(previewApp()).get("/preview");
+    expect(res.status).toBe(301);
+    expect(res.headers["location"]).toBe("/preview/");
+  });
+});

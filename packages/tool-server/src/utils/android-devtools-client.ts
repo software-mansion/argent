@@ -1,5 +1,6 @@
 import * as net from "node:net";
 import * as readline from "node:readline";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 
 /**
  * Newline-delimited JSON socket client for the android-devtools helper.
@@ -51,7 +52,15 @@ export function connectAndroidDevtoolsClient(
       closed = true;
       for (const req of pending.values()) {
         clearTimeout(req.timer);
-        req.reject(error ?? new Error("AndroidDevtools client closed"));
+        req.reject(
+          error ??
+            new FailureError("AndroidDevtools client closed", {
+              error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_CLIENT_CLOSED,
+              failure_stage: "android_devtools_rpc_client",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+            })
+        );
       }
       pending.clear();
       try {
@@ -80,7 +89,14 @@ export function connectAndroidDevtoolsClient(
         if (parsed.error) {
           const message = parsed.error.message ?? "Unknown helper error";
           const type = parsed.error.type ?? "HelperError";
-          req.reject(new Error(`${type}: ${message}`));
+          req.reject(
+            new FailureError(`${type}: ${message}`, {
+              error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
+              failure_stage: "android_devtools_rpc_response",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+            })
+          );
         } else {
           req.resolve(parsed.result);
         }
@@ -90,7 +106,16 @@ export function connectAndroidDevtoolsClient(
       resolve({
         request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
           const send = (): Promise<T> => {
-            if (closed) return Promise.reject(new Error("AndroidDevtools client closed"));
+            if (closed) {
+              return Promise.reject(
+                new FailureError("AndroidDevtools client closed", {
+                  error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_CLIENT_CLOSED,
+                  failure_stage: "android_devtools_rpc_request",
+                  failure_area: "tool_server",
+                  error_kind: "subprocess",
+                })
+              );
+            }
             const id = nextId++;
             const timeoutMs =
               method === "getHierarchy" ? LONG_RPC_TIMEOUT_MS : DEFAULT_RPC_TIMEOUT_MS;
@@ -98,7 +123,12 @@ export function connectAndroidDevtoolsClient(
               const timer = setTimeout(() => {
                 pending.delete(id);
                 rejectReq(
-                  new Error(`AndroidDevtools RPC ${method} timed out after ${timeoutMs}ms`)
+                  new FailureError(`AndroidDevtools RPC ${method} timed out after ${timeoutMs}ms`, {
+                    error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT,
+                    failure_stage: "android_devtools_rpc_request",
+                    failure_area: "tool_server",
+                    error_kind: "timeout",
+                  })
                 );
               }, timeoutMs);
               pending.set(id, {
@@ -135,7 +165,16 @@ export function connectAndroidDevtoolsClient(
     });
 
     socket.once("close", () => {
-      if (!closed) cleanup(new Error("AndroidDevtools socket closed unexpectedly"));
+      if (!closed) {
+        cleanup(
+          new FailureError("AndroidDevtools socket closed unexpectedly", {
+            error_code: FAILURE_CODES.ANDROID_DEVTOOLS_SOCKET_CLOSED,
+            failure_stage: "android_devtools_socket",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          })
+        );
+      }
     });
   });
 }

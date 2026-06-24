@@ -1,7 +1,13 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  type Registry,
+  type ToolCapability,
+  type ToolDefinition,
+} from "@argent/registry";
 import {
   buildInitFailedResult,
   nativeDevtoolsRef,
@@ -24,11 +30,15 @@ import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { iosDeviceSetPath, simctlArgs } from "../../utils/simctl";
+import { listVvdImages } from "../../utils/vega-sdk";
+import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
+import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
 import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
 
 const execFileAsync = promisify(execFile);
 
-// NOTE on mutual exclusion: `udid` and `avdName` are exactly-one — but zod's
+// NOTE on mutual exclusion: `udid` / `avdName` / `vvdImage` / `electronAppPath`
+// are exactly-one — but zod's
 // `.refine()` returns a ZodEffects that our Registry ToolDefinition type does
 // not accept (it requires a ZodObject so the JSON Schema generator can walk
 // `.shape`). The exactly-one check therefore lives inside `execute` and
@@ -40,13 +50,19 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid` or `avdName`."
+      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
     ),
   avdName: z
     .string()
     .optional()
     .describe(
-      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid` or `avdName`."
+      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
+    ),
+  vvdImage: z
+    .string()
+    .optional()
+    .describe(
+      "Vega (Fire TV): VVD image to boot — the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`). Starts the single SDK-managed Vega Virtual Device. Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
     ),
   bootTimeoutMs: z
     .number()
@@ -55,7 +71,7 @@ const zodSchema = z.object({
     .max(900_000)
     .optional()
     .describe(
-      "Android-only: overall budget for the full boot sequence. Defaults to 480000 (8 min). Clamped to [30s, 15min]. Ignored on iOS."
+      "Android/Vega: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega. Clamped to [30s, 15min]. Ignored on iOS."
     ),
   force: z
     .boolean()
@@ -89,6 +105,7 @@ type BootDeviceParams = z.infer<typeof zodSchema>;
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
   | { platform: "android"; serial: string; avdName: string; booted: true }
+  | VegaBootResult
   | ElectronBootResult
   | NativeDevtoolsInitFailedResult;
 
@@ -172,9 +189,15 @@ function selectGpuMode(): string {
   if (override && override.trim()) {
     const value = override.trim();
     if (!VALID_GPU_MODES.has(value)) {
-      throw new Error(
+      throw new FailureError(
         `ARGENT_EMULATOR_GPU_MODE=${JSON.stringify(value)} is not a known emulator -gpu value. ` +
-          `Valid values: ${[...VALID_GPU_MODES].join(", ")}.`
+          `Valid values: ${[...VALID_GPU_MODES].join(", ")}.`,
+        {
+          error_code: FAILURE_CODES.BOOT_ANDROID_GPU_MODE_INVALID,
+          failure_stage: "boot_android_gpu_mode",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     return value;
@@ -320,9 +343,15 @@ async function assertScreencapAlive(
     await new Promise((r) => setTimeout(r, 1_500));
   }
   await killEmulatorQuietly(serial);
-  throw new Error(
+  throw new FailureError(
     `hot-boot composite did not restore within ${budgetMs / 1000}s — \`screencap\` last returned ` +
-      `${JSON.stringify(lastReading ?? "no probe response")}. Falling back to cold boot so screenshots are usable.`
+      `${JSON.stringify(lastReading ?? "no probe response")}. Falling back to cold boot so screenshots are usable.`,
+    {
+      error_code: FAILURE_CODES.BOOT_ANDROID_HOT_BOOT_FRAME_UNUSABLE,
+      failure_stage: "boot_android_hot_boot_frame",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
   );
 }
 
@@ -362,9 +391,15 @@ async function awaitFirstRealFrame(serial: string, timeoutMs: number): Promise<v
     }
     await new Promise((r) => setTimeout(r, 1_500));
   }
-  throw new Error(
+  throw new FailureError(
     `SurfaceFlinger did not composite a real frame within ${timeoutMs / 1000}s of boot_completed ` +
-      `(${lastError ?? "no probe response"}). The emulator booted but every screenshot would be all-black.`
+      `(${lastError ?? "no probe response"}). The emulator booted but every screenshot would be all-black.`,
+    {
+      error_code: FAILURE_CODES.BOOT_ANDROID_FIRST_FRAME_TIMEOUT,
+      failure_stage: "boot_android_first_real_frame",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
   );
 }
 
@@ -402,9 +437,15 @@ async function bootIos(
   // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
   // gets "iOS requires macOS" rather than a misleading "install xcode-select".
   if (process.platform !== "darwin") {
-    throw new Error(
+    throw new FailureError(
       `iOS Simulator is unavailable on ${process.platform}: it requires a macOS host. ` +
-        `Pass \`avdName\` (Android) instead of \`udid\` (iOS) to boot a device from this host.`
+        `Pass \`avdName\` (Android) instead of \`udid\` (iOS) to boot a device from this host.`,
+      {
+        error_code: FAILURE_CODES.BOOT_IOS_UNSUPPORTED_HOST,
+        failure_stage: "boot_ios_host_platform",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
     );
   }
   await ensureDep("xcrun");
@@ -578,9 +619,15 @@ async function attemptBoot(params: {
       throw launchError;
     }
     killDetachedEmulator(child);
-    throw new Error(
+    throw new FailureError(
       `Emulator "${params.avdName}" did not register within ${params.adbRegisterBudgetMs / 1000}s. ` +
-        `The emulator process has been terminated.`
+        `The emulator process has been terminated.`,
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_ADB_REGISTER_TIMEOUT,
+        failure_stage: "boot_android_adb_register",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+      }
     );
   }
 
@@ -667,9 +714,15 @@ async function attemptBoot(params: {
     // with nothing to fall back to.
     if (params.tearDownIfUnready) {
       await killEmulatorQuietly(serial, child);
-      throw new Error(
+      throw new FailureError(
         `PackageManager did not respond on ${serial} within ${Math.round(pmBudgetMs / 1000)}s ` +
-          `after boot_completed. Emulator has been terminated.`
+          `after boot_completed. Emulator has been terminated.`,
+        {
+          error_code: FAILURE_CODES.BOOT_ANDROID_PACKAGE_MANAGER_UNAVAILABLE,
+          failure_stage: "boot_android_package_manager",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        }
       );
     }
     process.stderr.write(
@@ -761,13 +814,25 @@ async function bootAndroidImpl(params: {
   // out the binary-missing case.
   const avds = await listAvds();
   if (avds.length === 0) {
-    throw new Error(
-      "`emulator -list-avds` returned no AVDs. Create one via Android Studio or `avdmanager create avd`."
+    throw new FailureError(
+      "`emulator -list-avds` returned no AVDs. Create one via Android Studio or `avdmanager create avd`.",
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_NO_AVDS,
+        failure_stage: "boot_android_avd_list",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
   if (!avds.some((a) => a.name === params.avdName)) {
-    throw new Error(
-      `AVD "${params.avdName}" not found. Available: ${avds.map((a) => a.name).join(", ")}.`
+    throw new FailureError(
+      `AVD "${params.avdName}" not found. Available: ${avds.map((a) => a.name).join(", ")}.`,
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_AVD_NOT_FOUND,
+        failure_stage: "boot_android_avd_lookup",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
 
@@ -776,11 +841,18 @@ async function bootAndroidImpl(params: {
   try {
     await runAdb(["version"], { timeoutMs: 5_000 });
   } catch (err) {
-    throw new Error(
+    throw new FailureError(
       `\`adb\` is not available on PATH (${
         err instanceof Error ? err.message : String(err)
       }). Install Android SDK Platform Tools before booting an emulator.`,
-      { cause: err }
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_ADB_UNAVAILABLE,
+        failure_stage: "boot_android_adb_version",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+        failure_command: "adb",
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   }
 
@@ -961,10 +1033,16 @@ async function bootAndroidImpl(params: {
     const suffix = hotBootFailureReason
       ? ` Hot-boot was not viable (${hotBootFailureReason}).`
       : "";
-    throw new Error(
+    throw new FailureError(
       `${base} Emulator has been terminated so the next boot starts clean.` +
         ` If this keeps happening, wipe the AVD with \`emulator -avd ${params.avdName} -wipe-data\`.${suffix}`,
-      { cause: err }
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_COLD_BOOT_FAILED,
+        failure_stage: "boot_android_cold_boot",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   }
 
@@ -1038,10 +1116,106 @@ function createEarlyExitRacer(getExit: () => Error | null): {
 // input). Capability is still declared so the HTTP gate rejects an iOS udid
 // on a host without xcrun, etc., and so `list-devices` consumers can rely on
 // uniform metadata.
+type VegaBootResult = { platform: "vega"; serial: string; vvdImage: string; booted: true };
+
+// Coalesce concurrent Vega boots (mirrors `inFlightBoots` for Android): two
+// callers must not both shell out `vega virtual-device start` for the same image.
+const inFlightVegaBoots = new Map<string, Promise<VegaBootResult>>();
+
+async function bootVegaImpl(params: {
+  vvdImage: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<VegaBootResult> {
+  await ensureDep("vega");
+
+  const images = await listVvdImages();
+  const image = images.find((i) => i.name === params.vvdImage);
+  if (!image) {
+    const available = images.map((i) => i.name).join(", ") || "(none found)";
+    throw new Error(
+      `Vega VVD image "${params.vvdImage}" not found. Available: ${available}. ` +
+        "Image names come from `list-devices` → the `vvdImage` field on a Vega device."
+    );
+  }
+
+  const running = await isVvdRunning();
+  if (running && !params.force) {
+    // Already up. v1 supports a single running VVD and can't boot a second, so
+    // don't pretend we honored the request: resolve the image that is *actually*
+    // running and label the payload with it. If the caller asked for a different
+    // image, surface that rather than returning the running device mislabeled.
+    const current = await listVegaDevices();
+    const runningVvd = current.find((d) => d.kind === "vvd" && d.state === "running" && d.serial);
+    const runningImage = runningVvd?.vvdImage ?? null;
+    // Only report the request as already-satisfied when we can POSITIVELY confirm
+    // the running image is the requested one. An unconfirmable running image
+    // (`null` — e.g. an unresolved profile with 2+ installed images, or 2+ running
+    // VVDs) must be treated as a mismatch, not a match: otherwise we'd return
+    // booted:true for `params.vvdImage` while a *different* VVD is actually running
+    // and every later tool would silently drive that other device.
+    if (runningImage !== params.vvdImage) {
+      const which = runningImage ? `("${runningImage}")` : "(its image could not be confirmed)";
+      throw new Error(
+        `A Vega VVD ${which} is already running; argent v1 supports a single running VVD. ` +
+          `To boot "${params.vvdImage}", re-run boot-device with force:true (stops the current ` +
+          "VVD first) or stop it via `vega virtual-device stop`."
+      );
+    }
+    return {
+      platform: "vega",
+      serial: runningVvd?.serial ?? (await resolveRunningVvdSerial()),
+      vvdImage: runningImage, // == params.vvdImage (positively confirmed above)
+      booted: true,
+    };
+  }
+  if (running && params.force) {
+    await stopVvd();
+  }
+
+  // One shared boot budget across both stages: startVvd consumes part of
+  // bootTimeoutMs, so waitForVvdRunning gets only the time remaining rather than
+  // the full value again. Otherwise the budget is spent twice and the worst-case
+  // wall-clock before a boot failure surfaces is ~2x the requested deadline.
+  const bootDeadline = Date.now() + params.bootTimeoutMs;
+  await startVvd({
+    timeoutSeconds: Math.ceil(params.bootTimeoutMs / 1_000),
+    imagePath: image.path,
+  });
+  await waitForVvdRunning(Math.max(0, bootDeadline - Date.now()));
+
+  return {
+    platform: "vega",
+    serial: await resolveRunningVvdSerial(),
+    vvdImage: params.vvdImage,
+    booted: true,
+  };
+}
+
+function bootVega(params: {
+  vvdImage: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<VegaBootResult> {
+  // Key the coalescing on `force` too: a `force:true` boot does a stop+start
+  // restart, so it must NOT join an in-flight non-force boot (which would skip
+  // the restart and hand back the stale device). Two same-mode boots of the same
+  // image still share one promise.
+  const key = `${params.vvdImage}\0${params.force ? "force" : "normal"}`;
+  const existing = inFlightVegaBoots.get(key);
+  if (existing) return existing;
+  const promise = bootVegaImpl(params).finally(() => {
+    inFlightVegaBoots.delete(key);
+  });
+  inFlightVegaBoots.set(key, promise);
+  return promise;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
 };
 
 export function createBootDeviceTool(
@@ -1049,24 +1223,32 @@ export function createBootDeviceTool(
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
   return {
     id: "boot-device",
-    description: `Start an iOS simulator, launch an Android emulator, or spawn an Electron app and wait until it is ready to accept interactions.
-Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
+    description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, or spawn an Electron app and wait until it is ready to accept interactions.
+Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
-Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. If any boot stage fails, the tool terminates the device it spawned so the next retry starts clean.`,
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'vega', serial, vvdImage, booted } or { platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
+Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.`,
     alwaysLoad: true,
-    searchHint: "boot start launch simulator emulator avd device session ios android cold hot",
+    searchHint:
+      "boot start launch simulator emulator avd device session ios android vega vvd firetv cold hot",
     zodSchema,
     capability,
     services: () => ({}),
     async execute(_services, params) {
       const hasUdid = Boolean(params.udid);
       const hasAvd = Boolean(params.avdName);
+      const hasVega = Boolean(params.vvdImage);
       const hasElectron = Boolean(params.electronAppPath);
-      const provided = [hasUdid, hasAvd, hasElectron].filter(Boolean).length;
+      const provided = [hasUdid, hasAvd, hasVega, hasElectron].filter(Boolean).length;
       if (provided !== 1) {
-        throw new Error(
-          "Provide exactly one of `udid` (iOS), `avdName` (Android), or `electronAppPath` (Electron)."
+        throw new FailureError(
+          "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), or `electronAppPath` (Electron).",
+          {
+            error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+            failure_stage: "boot_device_target_selection",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          }
         );
       }
       if (hasUdid) {
@@ -1076,6 +1258,13 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         return bootAndroid({
           avdName: params.avdName!,
           bootTimeoutMs: params.bootTimeoutMs ?? 480_000,
+          force: params.force,
+        });
+      }
+      if (hasVega) {
+        return bootVega({
+          vvdImage: params.vvdImage!,
+          bootTimeoutMs: params.bootTimeoutMs ?? 120_000,
           force: params.force,
         });
       }
