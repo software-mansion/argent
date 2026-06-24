@@ -102,3 +102,17 @@ jobs:
       - run: npm publish -w @swmansion/argent
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Keep `next` pointing at the highest published version (prerelease or
+      # stable). A stable `npm publish` only moves `latest`, so without this the
+      # `next` tag would freeze on the last prerelease. Idempotent + self-healing.
+      #
+      # continue-on-error: the publish above already succeeded and is
+      # irreversible, while this sync is idempotent — a transient registry blip
+      # here self-heals on the next publish (or the manual Sync workflow), so it
+      # must never fail an otherwise-successful release.
+      - name: Sync 'next' dist-tag to highest published version
+        continue-on-error: true
+        run: node scripts/sync-next-dist-tag.mjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

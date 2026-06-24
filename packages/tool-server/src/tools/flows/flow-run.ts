@@ -9,6 +9,7 @@ import {
   type FlowStep,
 } from "./flow-utils";
 import { sleep } from "../../utils/timing";
+import { invokeSubTool } from "../../utils/sub-invoke";
 
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
@@ -77,7 +78,7 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
     zodSchema,
     fileInputs,
     services: () => ({}),
-    async execute(_services, params) {
+    async execute(_services, params, ctx) {
       const filePath = resolveFlowFilePath(params);
       const fileContent = await fs.readFile(filePath, "utf8");
       const flow = parseFlow(fileContent);
@@ -107,7 +108,7 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
         const toolDef = registry.getTool(step.name);
 
         try {
-          const result = await registry.invokeTool(step.name, step.args);
+          const result = await invokeSubTool(registry, ctx, step.name, step.args);
           steps.push({
             kind: "tool",
             tool: step.name,

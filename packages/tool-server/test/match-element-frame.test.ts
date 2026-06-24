@@ -103,7 +103,14 @@ describe("captureElementFrame", () => {
       tree: { role: "AXGroup", frame: { x: 0, y: 0, width: 1, height: 1 }, children: [] },
       source: "ax-service",
     });
-    const f = await captureElementFrame(registry, "UDID-1", { by: "text", value: "Favourites" });
+    // attempts: 1 — skip the warm-up retry budget; here we only assert that a
+    // single describe with no match yields null.
+    const f = await captureElementFrame(
+      registry,
+      "UDID-1",
+      { by: "text", value: "Favourites" },
+      { attempts: 1 }
+    );
     expect(f).toBeNull();
   });
 });

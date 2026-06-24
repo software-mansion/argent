@@ -38,3 +38,6 @@ jobs:
 
       - name: Run tests
         run: npm test --workspaces --if-present
+
+      - name: Test root scripts
+        run: npm run test:scripts

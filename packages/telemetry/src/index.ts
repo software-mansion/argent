@@ -11,7 +11,7 @@ import {
 import { sanitize } from "./sanitize.js";
 import { getBaseProps, type Runtime } from "./base-props.js";
 import { readOrCreateAnonId, peekAnonId } from "./identity.js";
-import { isEnabled as consentIsEnabled, writeConsentFlag, getConsentState } from "./consent.js";
+import { isEnabled, writeConsentFlag, getConsentState } from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import { forget as forgetImpl, type ForgetOptions, type ForgetResult } from "./erasure.js";
 import type { EventName, EventPropertyMap } from "./events.js";
@@ -25,10 +25,10 @@ export { POSTHOG_HOST, resolveConfig } from "./posthog.js";
 export { _resetConsentCacheForTest } from "./consent.js";
 export { EVENT_NAMES } from "./events.js";
 export { isDebugEnabled } from "./debug.js";
-export { getConsentState } from "./consent.js";
-// Persists the consent flag without emitting a transition event — for recording
-// an initial first-run choice. Use markDisabled() (not this) for a live opt-out
-// that should send a final telemetry:opt_out before the pipe closes.
+export { getConsentState, isEnabled } from "./consent.js";
+// Persists the consent flag — for recording an initial first-run choice. Use
+// markDisabled() (not this) for a live opt-out that should also drain and reset
+// the running client.
 export { writeConsentFlag } from "./consent.js";
 // Applies a first-run choice to the current session only (in-process, not on
 // disk), so an interactive consent prompt can govern this run's events before
@@ -105,7 +105,7 @@ function buildPayload(
  */
 export function track<E extends EventName>(event: E, props: EventPropertyMap[E]): void {
   try {
-    if (!consentIsEnabled()) return;
+    if (!isEnabled()) return;
     // Resolve the client before buildPayload(): buildPayload creates/persists
     // the anon-id file, and there's no reason to provision a persistent
     // identifier on disk for an event that can never be transmitted (no usable
@@ -165,48 +165,19 @@ export async function shutdown(timeoutMs = SHORT_FLUSH_TIMEOUT_MS): Promise<void
   }
 }
 
-export function isEnabled(): boolean {
-  return consentIsEnabled();
-}
-
 /** Persist `enabled=true`. */
 export function markEnabled(): void {
   writeConsentFlag(true);
 }
 
-// Disable records one final opt-out event, persists the flag, then drains.
+// Disable persists the opt-out flag, then drains any already-queued events and
+// resets the running client.
 export async function markDisabled(): Promise<void> {
   try {
-    const wasEnabled = consentIsEnabled();
-    let client = getConstructedClient();
-    // Only announce the opt-out when a persistent id already exists on disk.
-    // buildPayload() goes through readOrCreateAnonId(), so emitting the event on
-    // a machine that has never sent anything would mint a durable identifier
-    // purely to transmit the opt-out — provisioning identity at the exact moment
-    // the user is opting out. peekAnonId() reads without creating.
-    if (wasEnabled && peekAnonId() !== null) {
-      const built = buildPayload("telemetry:opt_out", {});
-      if (built && isDebugEnabled()) {
-        emitDebugPayload({
-          event: "telemetry:opt_out",
-          distinctId: built.distinctId,
-          properties: built.properties,
-          ts: new Date().toISOString(),
-        });
-      }
-      client = getClient();
-      if (built && client) {
-        try {
-          client.capture({
-            distinctId: built.distinctId,
-            event: "telemetry:opt_out",
-            properties: built.properties,
-          });
-        } catch (err) {
-          emitDebugError("markDisabled: capture(telemetry:opt_out) failed", err);
-        }
-      }
-    }
+    // Drain only a client that already exists; opting out must never construct
+    // one (and thereby mint a durable anon-id) on a machine that has never sent
+    // anything.
+    const client = getConstructedClient();
     writeConsentFlag(false);
     if (client) {
       try {

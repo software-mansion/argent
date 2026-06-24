@@ -83,6 +83,25 @@ export interface InvokeToolOptions {
   fileInputs?: Record<string, ResolvedFileInput>;
   /** Optional caller-provided id used to correlate outer request metadata. */
   toolInvocationId?: string;
+  /**
+   * Registers a freshly-minted invocation id against the outer request's
+   * telemetry attribution, returning a release fn. Set by the tool-server's HTTP
+   * layer (bound to the request's metadata) and forwarded verbatim into
+   * {@link ToolContext}. Orchestrator tools (run-sequence, flow-execute,
+   * flow-add-step) call it for every sub-tool they dispatch through
+   * {@link Registry.invokeTool} so nested invocations inherit attribution
+   * instead of being recorded as anonymous; they also pass it back down here so
+   * propagation survives arbitrary nesting.
+   *
+   * The outer request's AI client is inherited unchanged. The platform is
+   * re-derived from each sub-tool's own `childArgs` (its `udid` / `device_id` /
+   * `avdName`), falling back to the outer request's platform when the sub-tool
+   * carries no device arg — an orchestrator like flow-execute has no platform of
+   * its own and a single flow can target several devices, so the child's device
+   * arg is the only correct platform source. Opaque to the registry — it neither
+   * reads nor validates the recorded metadata.
+   */
+  recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;
 }
 
 /**

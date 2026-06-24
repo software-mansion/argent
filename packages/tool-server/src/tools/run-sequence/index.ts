@@ -3,6 +3,7 @@ import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry"
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { invokeSubTool } from "../../utils/sub-invoke";
 
 const ALLOWED_TOOLS = new Set([
   "gesture-tap",
@@ -125,12 +126,16 @@ Stops on the first error and returns partial results.`,
     zodSchema,
     capability,
     // No eagerly-declared service: each step resolves its own services through
-    // `registry.invokeTool` below (simulator-server for iOS/Android, CDP for
-    // Chromium), so run-sequence itself needs none. Declaring simulator-server
-    // here would also spawn it for a tvOS udid (which it can't drive) and hang
-    // on the ready timeout before any tv-* step could run.
+    // `invokeSubTool` below (simulator-server for iOS/Android, CDP for
+    // Chromium), so run-sequence itself needs none. An eager resolver can't be
+    // used here because a tvOS udid shape-classifies as `ios` (there is no
+    // `tvos` platform) — declaring simulator-server for it would spawn a
+    // controller it can't drive and hang on the ready timeout before any tv-*
+    // step could run. The sub-tool invocations still pay only their own
+    // first-step spawn cost, and `ctx` is threaded through so nested steps keep
+    // the outer request's telemetry attribution.
     services: () => ({}),
-    async execute(_services, params) {
+    async execute(_services, params, ctx) {
       const { udid, steps } = params;
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
@@ -164,7 +169,7 @@ Stops on the first error and returns partial results.`,
 
         try {
           const toolArgs = { ...step.args, udid };
-          const result = await registry.invokeTool(step.tool, toolArgs);
+          const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
           results.push({ tool: step.tool, result });
         } catch (err) {
           results.push({
