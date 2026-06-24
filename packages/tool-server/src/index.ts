@@ -1,3 +1,6 @@
+import * as path from "node:path";
+import { homedir } from "node:os";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
 import {
   init as telemetryInit,
@@ -7,6 +10,7 @@ import {
   aiTelemetryFromMeta,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
+import { attachRegistryEventLogger, createToolServerEventLog } from "./event-log";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
@@ -121,6 +125,19 @@ export function start(): void {
   // ── Bootstrap ─────────────────────────────────────────────────────
   const registry = createRegistry();
   attachRegistryLogger(registry);
+  const eventLog = isFlagEnabled("tool-server-event-log")
+    ? createToolServerEventLog({
+        filePath:
+          process.env.ARGENT_EVENT_LOG ||
+          path.join(homedir(), ".argent", "tool-server-events.jsonl"),
+      })
+    : null;
+  if (eventLog) {
+    attachRegistryEventLogger(registry, eventLog);
+  }
+  if (eventLog) {
+    process.stderr.write(`[tool-server] Event log: ${eventLog.filePath}\n`);
+  }
 
   // Tool events use the queued client; shutdown gets a bounded final flush.
   telemetryInit("tool_server");
@@ -128,7 +145,6 @@ export function start(): void {
   const serverStartedAt = Date.now();
   let shutdownReason: "idle" | "signal" | "crash" = "signal";
   let shutdownFailureSignal: FailureSignal | null = null;
-
   const updateChecker = startUpdateChecker();
 
   const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
@@ -199,7 +215,11 @@ export function start(): void {
     if (exitCode > finalExitCode) finalExitCode = exitCode;
     if (shuttingDown) return;
     shuttingDown = true;
-
+    eventLog?.info({
+      type: "tool_server.stopping",
+      msg: "Tool server is stopping.",
+      exitCode: finalExitCode,
+    });
     variantProposalStore.events.off("awaitParked", onAwaitParked);
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
     variantProposalStore.events.off("closeRequested", onCloseRequested);
@@ -221,6 +241,7 @@ export function start(): void {
     } catch (err) {
       process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
     }
+    eventLog?.dispose();
 
     // Capture toolserver:stop, then drain — the final telemetry action, so the
     // reason/signal are as fresh as possible. (A crash during the drain below is
@@ -278,6 +299,13 @@ export function start(): void {
         process.stdout.write(`Tools server listening on ${origin}\n`);
         process.stderr.write(`  GET  ${origin}/tools\n`);
         process.stderr.write(`  POST ${origin}/tools/:name\n`);
+        eventLog?.info({
+          type: "tool_server.started",
+          msg: `Tool server started on ${origin}.`,
+          origin,
+          host: HOST,
+          port: boundPort,
+        });
         if (idleTimeoutMs > 0) {
           process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
         }
@@ -295,6 +323,14 @@ export function start(): void {
         process.stderr.write(
           `[tool-server] Failed to bind ${HOST}:${PORT} — ${code}${err.message}\n`
         );
+        eventLog?.error({
+          type: "tool_server.bind_failed",
+          msg: `Tool server failed to bind ${HOST}:${PORT}.`,
+          host: HOST,
+          port: PORT,
+          err,
+        });
+        eventLog?.dispose();
         process.exit(1);
       });
       // Bolt the per-Chromium-device WebSocket upgrade handler onto the live
@@ -307,6 +343,11 @@ export function start(): void {
         process.stderr.write(
           `[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`
         );
+        eventLog?.error({
+          type: "tool_server.start_failed",
+          msg: "Tool server failed to start.",
+          err: err instanceof Error ? err : new Error(String(err)),
+        });
         shutdownReason = "crash";
         await shutdown?.(1);
       })();

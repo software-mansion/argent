@@ -13,6 +13,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@argent/configuration-core": "file:../configuration-core",
     "@argent/native-devtools-ios": "file:../native-devtools-ios",
     "@argent/native-devtools-android": "file:../native-devtools-android",
     "@argent/preview-window": "file:../preview-window",
@@ -21,6 +22,7 @@
     "@argent/telemetry": "file:../telemetry",
     "@argent/update-core": "file:../update-core",
     "@clack/prompts": "^1.1.0",
+    "bunyan": "^1.8.15",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.2.5",
     "pngjs": "^7.0.0",
@@ -33,6 +35,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@types/bunyan": "^1.8.11",
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.0",
     "@types/pngjs": "^6.0.5",
