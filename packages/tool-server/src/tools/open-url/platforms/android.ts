@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell } from "../../../utils/adb";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
@@ -19,7 +20,12 @@ export const androidImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlRe
         out
       )
     ) {
-      throw new Error(`open-url failed: ${out.trim()}`);
+      throw new FailureError(`open-url failed: ${out.trim()}`, {
+        error_code: FAILURE_CODES.ANDROID_OPEN_URL_FAILED,
+        failure_stage: "android_open_url_am_start",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      });
     }
     return { opened: true, url: params.url };
   },

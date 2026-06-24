@@ -111,6 +111,7 @@ argent init
 | `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local) |
 | `argent disable`   | Disable a feature flag (`--scope project` for project-local)           |
 | `argent flags`     | List available feature flags and their state                           |
+| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`            |
 
 ## Supported Editors
 
@@ -130,12 +131,15 @@ argent init
 
 ## Privacy
 
-Argent does not collect or transmit any user data.
-No telemetry, no analytics, no crash reporting.
+Argent collects anonymous, opt-out usage and diagnostic telemetry to help us prioritise features and fix what breaks. It is minimal by design.
 
-- Argent integrates with your agent locally over MCP stdio.
-- Its internal tools are not reachable from outside your machine.
-- The only outbound network call we make is the version check against our public npm package, which sends no user data and fails gracefully if blocked.
+You can opt out at any time:
+
+```bash
+argent telemetry disable   # check status with: argent telemetry status
+```
+
+For the full details — see the [Argent Privacy Notice (Telemetry)](https://github.com/software-mansion/argent/blob/main/Telemetry.md).
 
 ## License
 

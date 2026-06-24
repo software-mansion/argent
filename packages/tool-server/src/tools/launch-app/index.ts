@@ -4,10 +4,16 @@ import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
-import type { LaunchAppAndroidServices, LaunchAppIosServices, LaunchAppResult } from "./types";
+import type {
+  LaunchAppAndroidServices,
+  LaunchAppIosServices,
+  LaunchAppResult,
+  LaunchAppVegaServices,
+} from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
+import { vegaImpl } from "./platforms/vega";
 
 // Android package grammar is `[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+`;
 // iOS bundle ids use the same reverse-DNS shape with dashes allowed. The union
@@ -47,6 +53,7 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
 };
 
 export const launchAppTool: ToolDefinition<Params, LaunchAppResult> = {
@@ -55,11 +62,12 @@ export const launchAppTool: ToolDefinition<Params, LaunchAppResult> = {
 Use when starting any app — prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection on iOS before the app starts.
 Returns { launched, bundleId }. Fails if the app is not installed on the target device (iOS / Android).
 For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
+On Vega (Fire TV), pass the interactive component app id from manifest.toml (e.g. com.example.app.main) as bundleId.
 
 Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.camera, com.apple.Photos, com.apple.mobilemail, com.apple.mobilenotes, com.apple.MobileAddressBook
 Common Android packages: com.android.settings, com.android.chrome, com.google.android.apps.maps, com.google.android.gm, com.android.vending, com.google.android.dialer, com.google.android.apps.messaging`,
   alwaysLoad: true,
-  searchHint: "open start app bundle id package simulator emulator chromium launch",
+  searchHint: "open start app bundle id package simulator emulator chromium vega launch fire tv",
   zodSchema,
   capability,
   // Only iOS needs the native-devtools service for launch-time injection. Chromium needs its CDP session.
@@ -74,12 +82,14 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
     LaunchAppAndroidServices,
     Params,
     LaunchAppResult,
-    LaunchAppChromiumServices
+    LaunchAppChromiumServices,
+    LaunchAppVegaServices
   >({
     toolId: "launch-app",
     capability,
     ios: iosImpl,
     android: androidImpl,
     chromium: chromiumImpl,
+    vega: vegaImpl,
   }),
 };

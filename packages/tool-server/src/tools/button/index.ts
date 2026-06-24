@@ -36,6 +36,10 @@ const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>> = {
   // Chromium apps have no hardware buttons; the capability gate already
   // excludes them, the empty set keeps the lookup total if one slips through.
   chromium: new Set([]),
+  // Vega is remote-driven: hardware buttons / D-pad go through the dedicated
+  // `tv-remote` tool, and this tool's capability omits `vega` so a Vega device is
+  // rejected before this map is consulted. Empty set keeps the record total.
+  vega: new Set(),
 };
 
 const capability: ToolCapability = {

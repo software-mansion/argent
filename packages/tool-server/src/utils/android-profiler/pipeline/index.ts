@@ -4,6 +4,10 @@ import {
   BURST_GAP_MS,
   type AggregatorInputRow,
 } from "../../profiler-shared/aggregate";
+import {
+  classifyNativeFrame,
+  summarizeHangBlocking,
+} from "../../profiler-shared/native-frame-class";
 import { ensureTraceProcessorReady } from "@argent/native-devtools-android";
 import { runTpQuery } from "./run-tp";
 import { foldHangAnnotations } from "./hang-fold";
@@ -129,6 +133,12 @@ export async function runAndroidProfilerPipeline(
   const cpuHotspots = aggregateCpuHotspots(cpuRowsToAggregatorRows(cpuRows, traceStartNs), {
     platform: "android",
   });
+  // Tag each hotspot as app code vs system/emulator overhead so the render
+  // layer can label goldfish/QEMU/kernel frames and avoid giving them
+  // app-flavoured advice.
+  for (const hotspot of cpuHotspots) {
+    hotspot.frameClass = classifyNativeFrame(hotspot.dominantFunction, hotspot.dominantMapping);
+  }
 
   const uiHangsBase = hangRowsToBottlenecks(hangRows, traceStartNs);
 
@@ -286,23 +296,67 @@ async function renderHangStacksAndroid(
     lines.push("");
   }
 
-  if (sampleRows.length > 0) {
+  const uniqueStacks = new Map<string, { stack: string; count: number }>();
+  for (const row of sampleRows) {
+    if (!row.callstack_text) continue;
+    // Demangle for display; identical demangled stacks fold together.
+    const demangled = demangleCallstackText(row.callstack_text);
+    const ex = uniqueStacks.get(demangled);
+    if (ex) ex.count++;
+    else uniqueStacks.set(demangled, { stack: demangled, count: 1 });
+  }
+
+  if (uniqueStacks.size > 0) {
     lines.push("### Main-thread Samples During Hang", "");
-    const uniqueStacks = new Map<string, { stack: string; count: number }>();
-    for (const row of sampleRows) {
-      if (!row.callstack_text) continue;
-      // Demangle for display; identical demangled stacks fold together.
-      const demangled = demangleCallstackText(row.callstack_text);
-      const ex = uniqueStacks.get(demangled);
-      if (ex) ex.count++;
-      else uniqueStacks.set(demangled, { stack: demangled, count: 1 });
-    }
     const sorted = [...uniqueStacks.values()].sort((a, b) => b.count - a.count).slice(0, opts.topN);
     for (const { stack, count } of sorted) {
       lines.push("```");
       lines.push(`(${count}×)`);
       lines.push(stack);
       lines.push("```");
+    }
+  } else {
+    // No on-CPU samples landed in the hang window. This is expected when the
+    // main thread was OFF the CPU (sleeping/blocked) for the stall: there is no
+    // CPU call stack to show, and the hang is a *wait*, not CPU-bound work.
+    // Spell that out so the empty result doesn't read as a tool failure, and
+    // point the reader at the state breakdown above (which says what it waited on).
+    const blocking = summarizeHangBlocking(
+      stateRows.map((r) => ({
+        state: r.state,
+        blockedFunction: r.blocked_function,
+        durationMs: Math.round(r.total_dur_ns / 1_000_000),
+      }))
+    );
+    lines.push("### Main-thread Samples During Hang", "");
+    if (blocking && blocking.kind === "blocked") {
+      lines.push(
+        `_No on-CPU stack samples were captured during this hang — the main thread was off-CPU ` +
+          `(state \`${blocking.dominantState}\`, sleeping/blocked) for the window. This stall is a ` +
+          `**wait**, not CPU-bound work: look at what it is blocked on (GPU/vsync, a lock, binder IPC, ` +
+          `or I/O) using the state breakdown above, not at a CPU call stack._`
+      );
+    } else if (blocking && blocking.kind === "executing") {
+      lines.push(
+        `_No usable on-CPU stack samples were captured during this hang, even though the main thread ` +
+          `was on-CPU (state \`${blocking.dominantState}\`, executing) for most of the window — the ` +
+          `sampler could not unwind a call stack (commonly stripped or missing frame symbols). This is ` +
+          `genuine main-thread CPU work, not a wait; see the state breakdown above._`
+      );
+    } else if (stateRows.length > 0) {
+      lines.push(
+        `_No on-CPU stack samples were captured during this hang. The main thread spent the window ` +
+          `off-CPU or runnable-but-not-scheduled, so there is no CPU call stack to show; see the state ` +
+          `breakdown above._`
+      );
+    } else {
+      // No samples *and* no state rows: there is no "breakdown above" to point
+      // at, so don't dangle a reference to it.
+      lines.push(
+        `_No on-CPU stack samples were captured during this hang, and no main-thread state was ` +
+          `captured for this window either. The main thread was likely off-CPU (sleeping/blocked) or ` +
+          `runnable-but-not-scheduled, so there is no CPU call stack to show._`
+      );
     }
   }
 
@@ -468,6 +522,9 @@ function cpuRowsToAggregatorRows(
     const thread = normaliseAndroidThread(row.thread_name, row.is_main_thread === 1);
     out.push({
       dominantFunction: dominant,
+      // Mapping of the leaf frame (from cpu-hotspots.sql's MIN(spm.name)) —
+      // threaded through so classifyNativeFrame can recognise `/kernel` leaves.
+      ...(row.leaf_mapping != null ? { dominantMapping: row.leaf_mapping } : {}),
       thread,
       weightNs: row.sample_count * SAMPLE_PERIOD_NS,
       // Android ships SQL-precomputed bursts, no raw timestamps. Empty array

@@ -49,6 +49,7 @@ export const updateArgentTool: ToolDefinition<void> = {
       const child = spawn("argent", ["update", "--yes", "--version", installableVersion], {
         detached: true,
         stdio: "ignore",
+        env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
       });
       child.unref();
     }, 2000);
