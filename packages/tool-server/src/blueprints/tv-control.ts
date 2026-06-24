@@ -279,11 +279,19 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     // Respawn only if the daemon process actually exited (rare — it normally
     // outlives the app). Stale-cache recovery goes through `recycleAx` instead.
     async function ensureAxAlive(): Promise<void> {
-      if (!axExited || disposed) return;
-      if (!axRespawn)
-        axRespawn = spawnFreshAx().finally(() => {
-          axRespawn = null;
-        });
+      if (disposed) return;
+      // A respawn already in flight (e.g. a concurrent `recycleAx`) means the
+      // socket has been unlinked and not yet rebound: `axExited` is false but
+      // the daemon is mid-rebuild, so connecting now would hit a missing socket.
+      // Wait it out before the liveness check rather than racing past it.
+      if (axRespawn) {
+        await axRespawn;
+        return;
+      }
+      if (!axExited) return;
+      axRespawn = spawnFreshAx().finally(() => {
+        axRespawn = null;
+      });
       await axRespawn;
     }
 
