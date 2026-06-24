@@ -44,7 +44,9 @@ describe("captureElementFrame — chromium guard", () => {
 
   it("still dispatches the Android adapter for a genuine Android serial", async () => {
     describeAndroidMock.mockResolvedValue({ tree: null });
-    const out = await captureElementFrame(fakeRegistry, "emulator-5554", match);
+    // attempts: 1 — this asserts the adapter is dispatched (vs the chromium
+    // guard); the warm-up retry would otherwise re-describe across the budget.
+    const out = await captureElementFrame(fakeRegistry, "emulator-5554", match, { attempts: 1 });
     expect(out).toBeNull(); // null tree → no match, but the adapter WAS consulted
     expect(describeAndroidMock).toHaveBeenCalledTimes(1);
     expect(describeIosMock).not.toHaveBeenCalled();

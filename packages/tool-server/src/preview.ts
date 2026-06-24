@@ -34,6 +34,18 @@ function findUiFile(name: string): string | null {
   return null;
 }
 
+// Serve a resolved preview-UI file. We go through `sendFile` with an explicit
+// `root` instead of passing the absolute path directly: Express 5's `send`
+// defaults to `dotfiles: "ignore"`, which 404s any path containing a dot-segment.
+// argent is routinely installed under one (nvm's `~/.nvm/...`, fnm, volta,
+// asdf), so `sendFile(absolutePath)` silently fails there and the Lens preview
+// window can't load. Scoping to `{ root: dir }` makes the request path just the
+// basename — no dot-segment — so the file is served regardless of install path.
+export function serveUiFile(res: Response, filePath: string, contentType: string): void {
+  res.set("Cache-Control", "no-store, must-revalidate");
+  res.type(contentType).sendFile(path.basename(filePath), { root: path.dirname(filePath) });
+}
+
 function wsUrlFromHttp(httpUrl: string): string {
   const u = new URL(httpUrl);
   const scheme = u.protocol === "https:" ? "wss:" : "ws:";
@@ -340,8 +352,7 @@ export function createPreviewRouter(registry: Registry): Router {
       res.status(404).type("text/plain").send("theme.css not found");
       return;
     }
-    res.set("Cache-Control", "no-store, must-revalidate");
-    res.type("text/css").sendFile(p);
+    serveUiFile(res, p, "text/css");
   });
 
   router.get("/", (req: Request, res: Response) => {
@@ -360,10 +371,7 @@ export function createPreviewRouter(registry: Registry): Router {
       res.status(404).type("text/plain").send("Preview UI not found");
       return;
     }
-    // Dev-style no-cache so edits to packages/ui/index.html are picked up on
-    // reload without the user having to hard-refresh.
-    res.set("Cache-Control", "no-store, must-revalidate");
-    res.type("text/html").sendFile(p);
+    serveUiFile(res, p, "text/html");
   });
 
   return router;
