@@ -58,6 +58,13 @@ command: "screenshot"
 args: "{\"udid\": \"<UDID>\"}"
 ```
 
+```
+command: "await-ui-element"
+args: "{\"udid\": \"<UDID>\", \"condition\": \"visible\", \"selector\": {\"text\": \"Continue\"}}"
+```
+
+Record an `await-ui-element` step to **gate** the next step on a screen transition — it blocks until the element is `visible`/`hidden` (or contains `text`), so the following step runs only once the screen has actually settled. If its condition is not met before the timeout, replay **stops at that step** (the steps after it assume the transition happened). Prefer this over a fixed `delayMs`. See the `await-ui-element` section of `argent-device-interact` for the full condition/selector reference.
+
 For tools with no arguments, omit `args` entirely.
 
 ## 5. Important Rules
@@ -99,7 +106,7 @@ flow-execute   { name: "open-settings", project_root: "/Users/dev/MyApp", prereq
 Flow files use YAML. The top-level is an object with `executionPrerequisite` (describes required state) and `steps` (array of actions):
 
 - `- echo: <message>` — a label
-- `- tool: <name>` with optional `args:` — a tool call. Add `delayMs: <ms>` to sleep that long before the step runs (use sparingly — only when the app needs a fixed wait between actions).
+- `- tool: <name>` with optional `args:` — a tool call. A tool step may also carry `delayMs: <ms>` to sleep that long before it runs. (`await-ui-element` is an ordinary tool step; see §4 and §10.5 for when to gate a transition with one.)
 
 Example `.yaml` file:
 
@@ -111,6 +118,13 @@ steps:
     args:
       udid: ABC
       bundleId: com.apple.Preferences
+  - echo: Wait for the Settings list to render
+  - tool: await-ui-element
+    args:
+      udid: ABC
+      condition: visible
+      selector:
+        text: General
   - echo: Tap General
   - tool: gesture-tap
     args:
@@ -207,6 +221,7 @@ After applying a correction, re-run `flow-execute` to verify.
 Apply these when recording new flows to reduce future breakage:
 
 - **Echo expected state, not just actions.** Write `"On Settings > General screen, about to tap About"` not `"Tap About"`. During diagnosis these tell you what the screen _should_ look like.
+- **Gate transitions with `await-ui-element`, not fixed delays.** After a tap that triggers a navigation, record an `await-ui-element` step that waits for the next screen's element to be `visible` (or a spinner to be `hidden`) before the following step. This removes the **Timing** failure mode in §10.2 (the element is in the tree but the tap fired before the screen settled) and is more reliable than `delayMs` or an extra `screenshot`. An unmet wait stops replay at that step, so a mistimed step can never run blind.
 - **Add screenshot steps after critical navigation.** Insert `screenshot` steps after screen transitions. These produce images in the flow result you can inspect during diagnosis.
 - **Write specific executionPrerequisites.** `"App on home tab, user logged in, simulator UDID is <X>"` — not `"App running"`. Verify with `screenshot` + `describe` before acknowledging.
 - **Prefer launch-app / open-url over navigation chains.** Deep links are more resilient to layout changes than tap sequences.
