@@ -11,6 +11,10 @@ describe("classifyDevice", () => {
     expect(classifyDevice("emulator-5554")).toBe("android");
     expect(classifyDevice("HT82A0203045")).toBe("android");
   });
+
+  it("classifies amazon-prefixed serials as vega", () => {
+    expect(classifyDevice("amazon-4a27df03c9777152")).toBe("vega");
+  });
 });
 
 describe("resolveDevice", () => {
@@ -37,6 +41,12 @@ describe("resolveDevice", () => {
     const d = resolveDevice("192.168.1.5:5555");
     expect(d.platform).toBe("android");
     expect(d.kind).toBe("device");
+  });
+
+  it("returns vega+vvd for an amazon- serial (v1 supports the Virtual Device only)", () => {
+    const d = resolveDevice("amazon-4a27df03c9777152");
+    expect(d.platform).toBe("vega");
+    expect(d.kind).toBe("vvd");
   });
 });
 

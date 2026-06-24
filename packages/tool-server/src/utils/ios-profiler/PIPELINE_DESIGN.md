@@ -53,20 +53,21 @@ App call chains are the non-system, non-hex-address frames from a stack, preserv
 
 ### Leaks can't correlate with CPU
 
-Leak data from xctrace is a static summary — total count and size by object type, with a responsible frame and library. Unlike hangs, leaks have no timestamps and no stack samples at specific points in time. There is no way to determine when allocations occurred, so time-window correlation with CPU samples is impossible. Leaks are reported independently with severity RED.
+Leak data from xctrace is a static summary — total count and size by object type, with a responsible frame and library. Unlike hangs, leaks have no timestamps and no stack samples at specific points in time. There is no way to determine when allocations occurred, so time-window correlation with CPU samples is impossible. Leaks are reported independently; severity depends on attribution (see below).
 
 ### Severity thresholds
 
-| Category    | Condition                               | Severity     |
-| ----------- | --------------------------------------- | ------------ |
-| CPU Hotspot | weight > 15% of total                   | RED          |
-| CPU Hotspot | weight 3–15%                            | YELLOW       |
-| CPU Hotspot | weight < 3%                             | filtered out |
-| UI Hang     | type contains "severe" or equals "hang" | RED          |
-| UI Hang     | type is "microhang"                     | YELLOW       |
-| Memory Leak | all                                     | RED          |
+| Category    | Condition                                                    | Severity     |
+| ----------- | ------------------------------------------------------------ | ------------ |
+| CPU Hotspot | weight > 15% of total                                        | RED          |
+| CPU Hotspot | weight 3–15%                                                 | YELLOW       |
+| CPU Hotspot | weight < 3%                                                  | filtered out |
+| UI Hang     | type contains "severe" or equals "hang"                      | RED          |
+| UI Hang     | type is "microhang"                                          | YELLOW       |
+| Memory Leak | attributed (resolved responsible frame)                      | RED          |
+| Memory Leak | unattributed (`<Call stack limit reached>` under `--attach`) | YELLOW       |
 
-The 3% minimum weight filter prevents noise — xctrace captures thousands of samples and most functions appear briefly. 15% RED threshold flags functions consuming significant wall time. All leaks are RED because any leak is a bug regardless of size.
+The 3% minimum weight filter prevents noise — xctrace captures thousands of samples and most functions appear briefly. 15% RED threshold flags functions consuming significant wall time. Leak severity follows attribution: a leak with a resolved responsible frame is a confident RED, but under `xctrace --attach` (what Argent does) most simulator leaks have no malloc-stack history and come back with the `<Call stack limit reached>` sentinel and an empty library — benign system noise, demoted to a low-confidence YELLOW rather than flagged as a confirmed app bug.
 
 ### Thread normalization
 

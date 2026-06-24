@@ -25,6 +25,12 @@ export const BURST_GAP_MS = 500;
 export interface AggregatorInputRow {
   /** Pre-picked dominant function. Caller is responsible for selecting it. */
   dominantFunction: string;
+  /**
+   * Android-only: the mapping (loaded object) the dominant leaf lives in
+   * (`/kernel`, `/system/lib64/*.so`, …). Carried through to the emitted
+   * CpuHotspot for classifyNativeFrame. iOS leaves this undefined.
+   */
+  dominantMapping?: string;
   /** Pre-normalised thread name (Main Thread / JS/Hermes / ...). */
   thread: string;
   /** CPU weight in nanoseconds. */
@@ -71,6 +77,12 @@ export function aggregateCpuHotspots(
     timestamps: number[];
     chainCounts: Map<string, { chain: string[]; count: number }>;
     thread: string;
+    /**
+     * Mapping of the group's dominant leaf (Android). Invariant per
+     * dominantFunction (which is part of the group key), so the first row's
+     * value is the group's value. Undefined on iOS.
+     */
+    dominantMapping?: string;
     /** True once any contributing row carried precomputed bursts (Android). */
     precomputed: boolean;
     precomputedBursts: { startMs: number; endMs: number; sampleCount: number }[];
@@ -117,6 +129,7 @@ export function aggregateCpuHotspots(
         timestamps: isPre ? [] : [...row.timestampsNs],
         chainCounts,
         thread: row.thread,
+        dominantMapping: row.dominantMapping,
         precomputed: isPre,
         precomputedBursts: isPre ? [...(row.precomputedBursts ?? [])] : [],
         firstMs: isPre ? (row.firstMs ?? 0) : 0,
@@ -203,6 +216,9 @@ export function aggregateCpuHotspots(
       duringHang,
       timeRangeMs: { first: firstMs, last: lastMs },
       burstWindows,
+      // Only emit when present (Android). Omitting the key on iOS keeps the iOS
+      // hotspot object shape byte-identical to before this change.
+      ...(acc.dominantMapping !== undefined ? { dominantMapping: acc.dominantMapping } : {}),
     });
   }
 

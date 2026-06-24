@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -13,9 +13,49 @@ import {
   getBundledSkillNames,
   removeBundledContent,
   removeBundledSkillInstalls,
+  uninstall,
 } from "../src/uninstall.js";
 
+const telemetryMock = vi.hoisted(() => ({
+  init: vi.fn(),
+  track: vi.fn(),
+  forget: vi.fn().mockResolvedValue({
+    localIdRemoved: true,
+    consentDisabled: false,
+  }),
+  shutdown: vi.fn().mockResolvedValue(undefined),
+}));
+
+const childProcessMock = vi.hoisted(() => ({
+  execSync: vi.fn(() => "/usr/local/bin/argent\n"),
+  execFileSync: vi.fn(),
+}));
+
+const toolsClientMock = vi.hoisted(() => ({
+  killToolServer: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@argent/telemetry", () => telemetryMock);
+vi.mock("node:child_process", () => childProcessMock);
+vi.mock("@argent/tools-client", () => toolsClientMock);
+vi.mock("@clack/prompts", () => ({
+  intro: vi.fn(),
+  outro: vi.fn(),
+  cancel: vi.fn(),
+  confirm: vi.fn(),
+  isCancel: vi.fn(() => false),
+  log: {
+    error: vi.fn(),
+    info: vi.fn(),
+    message: vi.fn(),
+    step: vi.fn(),
+    success: vi.fn(),
+  },
+  note: vi.fn(),
+}));
+
 let tmpDir: string;
+let originalCwd: string;
 
 function writeFile(filePath: string, contents = "test"): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -24,10 +64,143 @@ function writeFile(filePath: string, contents = "test"): void {
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-uninstall-test-"));
+  originalCwd = process.cwd();
+  vi.clearAllMocks();
+  childProcessMock.execSync.mockImplementation(() => "/usr/local/bin/argent\n");
+  childProcessMock.execFileSync.mockImplementation(() => undefined);
 });
 
 afterEach(() => {
+  process.chdir(originalCwd);
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe("uninstall — telemetry consent preservation", () => {
+  // The prune step resolves global skill/rule/agent targets from homedir(), so
+  // point HOME at the empty tmpDir: the prune then finds nothing to remove and
+  // has_pruned_content is deterministically false regardless of what the real
+  // home contains (these are telemetry-behavior tests, not real-home cleanup).
+  let savedHome: string | undefined;
+  let savedUserProfile: string | undefined;
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tmpDir;
+    process.env.USERPROFILE = tmpDir;
+  });
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+  });
+
+  it("does not reset uninstall telemetry identity when no global package was uninstalled", async () => {
+    childProcessMock.execSync.mockImplementationOnce(() => {
+      throw new Error("not found");
+    });
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(childProcessMock.execFileSync).not.toHaveBeenCalledWith(
+      "npm",
+      expect.arrayContaining(["uninstall", "-g"])
+    );
+    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
+      has_pruned_content: false,
+      has_uninstalled_package: false,
+    });
+    expect(telemetryMock.forget).not.toHaveBeenCalled();
+  });
+
+  it("resets uninstall telemetry identity without persisting a consent opt-out after global package uninstall", async () => {
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "npm",
+      expect.arrayContaining(["uninstall", "-g", "@swmansion/argent"]),
+      expect.any(Object)
+    );
+    expect(telemetryMock.forget).toHaveBeenCalledWith({ disableConsent: false });
+  });
+
+  it("drains queued uninstall telemetry before deleting the local telemetry id", async () => {
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
+      has_pruned_content: false,
+      has_uninstalled_package: true,
+    });
+
+    const shutdownOrder = telemetryMock.shutdown.mock.invocationCallOrder[0]!;
+    const forgetOrder = telemetryMock.forget.mock.invocationCallOrder[0]!;
+    expect(shutdownOrder).toBeLessThan(forgetOrder);
+  });
+
+  it("does not delete the local telemetry id when global package uninstall fails", async () => {
+    process.chdir(tmpDir);
+    childProcessMock.execFileSync.mockImplementation((bin: string) => {
+      if (bin === "npm") throw new Error("npm failed");
+      return undefined;
+    });
+
+    await uninstall(["--yes"]);
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
+        has_pruned_content: false,
+        has_uninstalled_package: false,
+      })
+    );
+    expect(telemetryMock.forget).not.toHaveBeenCalled();
+  });
+
+  it("drains uninstall telemetry when package shutdown throws before uninstalling", async () => {
+    process.chdir(tmpDir);
+    toolsClientMock.killToolServer.mockRejectedValueOnce(new Error("tool server busy"));
+
+    await expect(uninstall(["--yes"])).rejects.toThrow("tool server busy");
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_TOOLSERVER_STOP_FAILED",
+        has_pruned_content: false,
+        has_uninstalled_package: false,
+      })
+    );
+    expect(telemetryMock.shutdown).toHaveBeenCalledOnce();
+    expect(telemetryMock.forget).not.toHaveBeenCalled();
+  });
+
+  it("drains uninstall telemetry on an unclassified throw outside the classified paths", async () => {
+    process.chdir(tmpDir);
+    // An unexpected failure that no classified handler covers (e.g. a clack
+    // prompt or a cleanup step blowing up). The outer wrapper must still flush
+    // the buffered cli_uninstall_start with a terminal cli_uninstall_complete.
+    const clack = await import("@clack/prompts");
+    vi.mocked(clack.log.step).mockImplementationOnce(() => {
+      throw new Error("unexpected boom");
+    });
+
+    await expect(uninstall(["--yes"])).rejects.toThrow("unexpected boom");
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_UNCLASSIFIED_FAILED",
+      })
+    );
+    expect(telemetryMock.shutdown).toHaveBeenCalledOnce();
+    expect(telemetryMock.forget).not.toHaveBeenCalled();
+  });
 });
 
 // ── MCP entry removal across all adapters ─────────────────────────────────────

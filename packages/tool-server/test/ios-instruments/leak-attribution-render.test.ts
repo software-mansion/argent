@@ -3,9 +3,13 @@ import { renderNativeProfilerReport } from "../../src/utils/ios-profiler/render"
 import type { MemoryLeak, ProfilerPayload } from "../../src/utils/ios-profiler/types";
 
 // traceFile: null → no report file is written (pure, side-effect-free render),
-// so we can assert the markdown directly.
+// so we can assert the markdown directly. Attribution is driven by the leak's
+// `attributed` flag (set in the pipeline via isLeakAttributed): captures via
+// `xctrace --attach` have no malloc-stack history, so a leak with no resolved
+// responsible frame comes back unattributed and is demoted to a low-confidence
+// note rather than listed like a real app bug.
 
-function leak(frame: string, library = ""): MemoryLeak {
+function leak(attributed: boolean, frame: string, library = ""): MemoryLeak {
   return {
     type: "memory_leak",
     platform: "ios",
@@ -14,7 +18,8 @@ function leak(frame: string, library = ""): MemoryLeak {
     count: 1,
     responsibleFrame: frame,
     responsibleLibrary: library,
-    severity: "RED",
+    attributed,
+    severity: attributed ? "RED" : "YELLOW",
   };
 }
 
@@ -26,31 +31,31 @@ function payload(leaks: MemoryLeak[]): ProfilerPayload {
 }
 
 describe("leak attribution rendering", () => {
-  it("flags unattributable leaks and points at malloc_stack_logging", async () => {
+  it("collapses unattributed leaks into a low-confidence note pointing at malloc stack logging", async () => {
     const res = await renderNativeProfilerReport({
-      payload: payload([leak("<Call stack limit reached>")]),
+      payload: payload([leak(false, "<Call stack limit reached>")]),
       traceFile: null,
     });
-    expect(res.report).toContain("no allocation stack");
-    expect(res.report).toContain("malloc_stack_logging: true");
+    expect(res.report).toContain("unattributed leak group");
+    expect(res.report).toContain("malloc stack logging enabled at launch");
   });
 
-  it("treats (null) as unattributable too", async () => {
+  it("does not surface an unattributed leak as an attributed one", async () => {
     const res = await renderNativeProfilerReport({
-      payload: payload([leak("(null)", "(null)")]),
+      payload: payload([leak(false, "(null)", "(null)")]),
       traceFile: null,
     });
-    expect(res.report).toContain("no allocation stack");
+    expect(res.report).toContain("No attributed leaks");
   });
 
   it("shows the real frame + library for an attributed leak", async () => {
     const frame = "hermes::vm::JSTypedArrayBase::createBuffer(...)";
     const res = await renderNativeProfilerReport({
-      payload: payload([leak(frame, "hermes")]),
+      payload: payload([leak(true, frame, "hermes")]),
       traceFile: null,
     });
     expect(res.report).toContain(frame);
     expect(res.report).toContain("hermes");
-    expect(res.report).not.toContain("no allocation stack");
+    expect(res.report).not.toContain("unattributed leak group");
   });
 });

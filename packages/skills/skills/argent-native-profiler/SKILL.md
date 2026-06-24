@@ -87,14 +87,14 @@ To revisit a previous trace:
 
 Bottlenecks are categorized by severity:
 
-- **RED**: CPU functions taking >15% of total time, all UI hangs, all memory leaks. These require immediate attention.
-- **YELLOW**: CPU functions taking 5-15% of total time. Worth investigating but may be acceptable.
+- **RED**: CPU functions taking >15% of total time, all UI hangs, and **attributed** memory leaks (those with a resolved responsible frame). These require immediate attention.
+- **YELLOW**: CPU functions taking 3-15% of total time, and **unattributed** memory leaks (`<Call stack limit reached>`, no library — see the memory-leaks caveat below). Worth investigating but may be acceptable.
 
 Each bottleneck type indicates a different class of problem:
 
 - **CPU hotspots**: Native functions consuming excessive CPU time. Look for tight loops, expensive computations, or redundant work.
 - **UI hangs**: Main thread blocked long enough to cause visible jank or unresponsiveness. Often caused by synchronous I/O, heavy layout passes, or lock contention.
-- **Memory leaks**: Objects allocated but never freed. Common causes include retain cycles, unclosed resources, or forgotten observers.
+- **Memory leaks**: Objects allocated but never freed. Common causes include retain cycles, unclosed resources, or forgotten observers. Argent records via `xctrace --attach`, which has no malloc-stack history, so on the simulator most leaks come back **unattributed** (`<Call stack limit reached>`, no library) and are dominated by benign system allocations — these are reported as a low-confidence YELLOW summary, not confirmed RED leaks. For attributed stacks, capture with malloc stack logging enabled at launch.
 
 ---
 
