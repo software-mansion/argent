@@ -102,10 +102,24 @@ describe("android-tv-control — navigate maps to keyevents", () => {
 });
 
 describe("android-tv-control — type", () => {
-  it("encodes spaces as %s and quotes the token", async () => {
+  it("sends spaces as KEYCODE_SPACE keyevents, not %s", async () => {
     const api = await makeApi();
     await api.type("hello world");
-    expect(mockShell).toHaveBeenCalledWith(SERIAL, "input text 'hello%sworld'", expect.anything());
+    const calls = mockShell.mock.calls.filter((c: unknown[]) => c[0] === SERIAL).map((c) => c[1]);
+    expect(calls).toEqual(["input text 'hello'", "input keyevent 62", "input text 'world'"]);
+    // The fragile "%s" space encoding is gone.
+    expect(calls.some((c: string) => c.includes("%s"))).toBe(false);
+  });
+
+  it("preserves a literal %s in user text (round-trip safe)", async () => {
+    const api = await makeApi();
+    await api.type("50%save");
+    const calls = mockShell.mock.calls.filter((c: unknown[]) => c[0] === SERIAL).map((c) => c[1]);
+    // Split after the '%' so the device never collapses an adjacent "%s" into a
+    // space: "%" and "save" arrive in separate `input text` calls, verbatim.
+    expect(calls).toEqual(["input text '50%'", "input text 'save'"]);
+    // No keyevent — there is no real space in the input.
+    expect(calls.some((c: string) => c.includes("keyevent"))).toBe(false);
   });
 
   it("is a no-op for empty text", async () => {

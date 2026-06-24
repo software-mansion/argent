@@ -285,13 +285,30 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       },
 
       async type(text: string): Promise<void> {
-        // `input text` treats a literal space as an argument separator, so
-        // spaces must be sent as %s. Quoting the whole token keeps every other
-        // shell metacharacter inert (adb re-parses the command through the
-        // device shell). Empty input is a no-op.
+        // `input text` decodes the two-char sequence "%s" back into a space on
+        // the device — and a bare space is an argument separator — so the old
+        // `replace(/ /g, "%s")` was not round-trip safe: a user string that
+        // already contained "%s" came out with a stray space and no error.
+        //
+        // Instead, send real spaces as KEYCODE_SPACE keyevents (never emitting
+        // "%s" ourselves), and split each non-space run after every "%" so a
+        // user-supplied "%s" can never sit adjacent inside one `input text`
+        // call — `%` and `s` land in separate invocations and arrive verbatim.
+        // Quoting keeps all other shell metacharacters inert. Empty input is a
+        // no-op.
         if (text.length === 0) return;
-        const encoded = text.replace(/ /g, "%s");
-        await adbShell(serial, `input text ${shellQuote(encoded)}`, { timeoutMs: 15_000 });
+        const KEYCODE_SPACE = 62;
+        const words = text.split(" ");
+        for (let i = 0; i < words.length; i++) {
+          if (i > 0) {
+            await adbShell(serial, `input keyevent ${KEYCODE_SPACE}`, { timeoutMs: 10_000 });
+          }
+          for (const chunk of words[i]!.split(/(?<=%)/)) {
+            if (chunk) {
+              await adbShell(serial, `input text ${shellQuote(chunk)}`, { timeoutMs: 15_000 });
+            }
+          }
+        }
       },
 
       async setFocus(label: string): Promise<{ ok: boolean; message: string }> {
