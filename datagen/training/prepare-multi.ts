@@ -40,6 +40,21 @@ const NAV_SURFACE = [
 ];
 const NAV_SURFACE_SPECS: ToolSpec[] = NAV_SURFACE.map((n) => byName.get(n)!).filter(Boolean);
 
+// Rich mode (--rich): a WIDER surface that includes the tools the model confused/hallucinated in
+// prod (button→appSwitch, restart-app/open-url for recovery, boot-device for the opening sequence),
+// rendered WITH full descriptions (ARGENT_RICH_DESC) so the bundle-id/enum facts survive. Closes the
+// lean→fat gap within the 8K T4 budget. Lean mode keeps the 8-tool NAV_SURFACE.
+const RICH_SURFACE = [
+  "list-devices", "boot-device", "launch-app", "restart-app", "open-url", "describe",
+  "gesture-tap", "gesture-swipe", "gesture-scroll", "gesture-pinch", "button", "keyboard", "screenshot",
+];
+const RICH = process.argv.includes("--rich");                    // --rich = WIDE tool surface
+// verbose descriptions add ~4.4K tok/row → OOMs the 16GB T4 AND likely mismatches real harness
+// disclosure (harnesses compact/defer descriptions). So gate verbose behind a separate flag; --rich
+// alone now means wide surface + COMPACT descriptions (facts come from gym demonstrations).
+if (process.argv.includes("--verbose-desc")) process.env.ARGENT_RICH_DESC = "1";
+const SURFACE = RICH ? RICH_SURFACE : NAV_SURFACE;
+
 // Nav-style gym task kinds (drop profiling/flow/network — out of the nav surface).
 const NAV_KINDS = new Set([
   "navigate-tap", "toggle", "scroll-find", "deep-link", "hide-and-seek",
@@ -48,7 +63,7 @@ const NAV_KINDS = new Set([
 
 /** offered tools = NAV_SURFACE ∪ any tool actually used (kept in catalog order). */
 function offeredFor(used: string[]): ToolSpec[] {
-  const names = new Set(NAV_SURFACE);
+  const names = new Set(SURFACE);
   for (const u of used) if (catalogNames.has(u)) names.add(u);
   return catalog.filter((t) => names.has(t.name));
 }
@@ -148,7 +163,7 @@ function main() {
 
   // Cap long describe observations (grounding-aware), then drop the rare trajectory still over
   // the SEQ budget so nothing trains truncated. ~9000 chars ≈ p99 ~4250 tokens after rendering.
-  const MAX_RAW_CHARS = 9000;
+  const MAX_RAW_CHARS = RICH ? 100000 : 9000; // rich: no TS char-drop; Python token-filters to SEQ 8192
   let dropped = 0;
   const fan = (raws: RawTrajectory[]): NativeRecord[] => {
     const fit = raws

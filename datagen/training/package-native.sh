@@ -46,12 +46,20 @@ echo "=== 3) llama.cpp -> f16 GGUF  $(date +%T) ==="
 "$PY" "$LC/convert_hf_to_gguf.py" "fused/$WORK-causal" --outfile "fused/$WORK.f16.gguf" --outtype f16 >/dev/null
 test -f "fused/$WORK.f16.gguf"
 
-echo "=== 4) ollama import (q4_K_M, PARSER gemma4, no SYSTEM)  $(date +%T) ==="
+echo "=== 4) ollama import (q6_K, PARSER gemma4, no SYSTEM)  $(date +%T) ==="
 MF="$(mktemp)"
-# num_ctx 65536: model is natively 128K (gemma3n E4B); 64K covers long multi-turn nav
-# sessions (seen up to ~37K tokens) with headroom, while sliding-window attention keeps
-# the KV cache cheap (+~0.2GB at 64K). Do NOT confuse with training --max-seq-length 4608.
-printf 'FROM %s/fused/%s.f16.gguf\nTEMPLATE """{{ .Prompt }}"""\nRENDERER gemma4\nPARSER gemma4\nPARAMETER num_ctx 65536\nPARAMETER temperature 0\n' "$(pwd)" "$WORK" > "$MF"
+# num_ctx 131072: expose the model's FULL native 128K window — do not impose an artificial
+# ceiling on the user. We don't expect to OPERATE at 128K (good harnesses prune observations),
+# but a low cap starves headroom once you add other skills' tool defs plus accumulating
+# describe (~700 tok) / screenshot (~400 tok) outputs. Sliding-window attention keeps the KV
+# cache cheap even at 128K. Do NOT confuse this with training --max-seq-length 4608.
+# q6_K (not q4_K_M): q4 was degrading exact factual recall (wrong bundle ids, hallucinated
+# tool names under sampling); q6 buys that precision back at ~+1GB on-device.
+# ollama's own -q supports only Q4_K_*/Q8_0 — NOT Q6_K — so quantize with llama.cpp first,
+# then import the already-quantized GGUF (no -q).
+command -v llama-quantize >/dev/null 2>&1 || brew install llama.cpp
+llama-quantize "fused/$WORK.f16.gguf" "fused/$WORK.Q6_K.gguf" Q6_K
+printf 'FROM %s/fused/%s.Q6_K.gguf\nTEMPLATE """{{ .Prompt }}"""\nRENDERER gemma4\nPARSER gemma4\nPARAMETER num_ctx 131072\nPARAMETER temperature 0\n' "$(pwd)" "$WORK" > "$MF"
 ollama rm "$NAME" >/dev/null 2>&1 || true
-ollama create "$NAME" -q q4_K_M -f "$MF"
+ollama create "$NAME" -f "$MF"
 echo "=== PACKAGED $NAME  $(date +%T) ==="

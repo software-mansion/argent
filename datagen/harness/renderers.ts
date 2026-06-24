@@ -59,7 +59,13 @@ export function mapToolName(harness: HarnessName, canonical: string): string {
 // we send a compact first-line description (≤120 chars). Inference still works against verbose
 // real descriptions — extra context, not a contradiction.
 function compactDesc(desc: string): string {
-  const first = (desc ?? "").split("\n").map((l) => l.trim()).find((l) => l.length) ?? "";
+  const d = desc ?? "";
+  // Rich mode (ARGENT_RICH_DESC=1): keep the FULL description so the model sees the facts that
+  // compaction stripped (launch-app's bundle-id list incl. com.apple.Preferences, button's
+  // appSwitch enum, …). The Python token-filter drops any row that overflows SEQ. Lean mode:
+  // first non-empty line, ≤120 chars.
+  if (process.env.ARGENT_RICH_DESC === "1") return d.trim();
+  const first = d.split("\n").map((l) => l.trim()).find((l) => l.length) ?? "";
   return first.length > 120 ? first.slice(0, 117).trimEnd() + "…" : first;
 }
 
