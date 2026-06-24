@@ -827,6 +827,82 @@ const openCodeAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Kiro adapter ─────────────────────────────────────────────────────────────
+// MARK: Kiro
+// Format: { mcpServers: { argent: { command, args, env } } }
+// Project: <root>/.kiro/settings/mcp.json   Global: ~/.kiro/settings/mcp.json
+// Allowlist: autoApprove: ["*"] on the argent entry (Kiro's documented
+// auto-approve-all syntax). See https://kiro.dev/docs/mcp/configuration/
+
+const KIRO_AUTO_APPROVE_ALL = ["*"];
+
+const kiroAdapter: McpConfigAdapter = {
+  name: "Kiro",
+
+  detect(): boolean {
+    return dirExists(path.join(homedir(), ".kiro")) || dirExists(path.join(process.cwd(), ".kiro"));
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".kiro", "settings", "mcp.json");
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".kiro", "settings", "mcp.json");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
+    };
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJsonOrRemove(configPath, config);
+    return true;
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
+  },
+
+  addAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+    if (!configPath) return;
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
+    const entry = servers[MCP_SERVER_KEY];
+    if (!entry) return;
+    entry.autoApprove = [...KIRO_AUTO_APPROVE_ALL];
+    writeJson(configPath, config);
+  },
+
+  removeAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+    if (!configPath || !fs.existsSync(configPath)) return;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
+    const entry = servers?.[MCP_SERVER_KEY];
+    if (!entry?.autoApprove) return;
+    delete entry.autoApprove;
+    writeJsonOrRemove(configPath, config);
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 // MARK: Registry
 
@@ -840,6 +916,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   codexAdapter,
   hermesAdapter,
   openCodeAdapter,
+  kiroAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {
