@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry } from "@argent/registry";
+import type { Registry, ToolContext } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -248,6 +248,31 @@ describe("flow-add-step", () => {
     });
   });
 
+  it("propagates the request's telemetry attribution to the recorded sub-tool", async () => {
+    const registry = createMockRegistry({ tap: { result: { ok: true } } });
+    const tool = createFlowAddStepTool(registry);
+    const release = vi.fn();
+    const recordChildInvocation = vi.fn((_id: string, _args?: unknown) => release);
+    const ctx = { artifacts: {}, recordChildInvocation } as unknown as ToolContext;
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "tele-step", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await tool.execute({}, { command: "tap", args: '{"x":0.5}' }, ctx);
+
+    expect(recordChildInvocation).toHaveBeenCalledOnce();
+    const childId = recordChildInvocation.mock.calls[0]![0];
+    // The sub-tool's own args reach the recorder so it can derive the platform.
+    expect(recordChildInvocation).toHaveBeenCalledWith(childId, { x: 0.5 });
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "tap",
+      { x: 0.5 },
+      expect.objectContaining({ toolInvocationId: childId, recordChildInvocation })
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("does not record when tool fails", async () => {
     const registry = createMockRegistry({
       tap: { result: null, throws: true },
@@ -476,6 +501,55 @@ describe("flow-execute", () => {
     });
 
     expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates the request's telemetry attribution to each tool step", async () => {
+    const registry = createMockRegistry({
+      tap: { result: { ok: true } },
+      swipe: { result: { ok: true } },
+    });
+    const runFlow = createRunFlowTool(registry);
+
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "tele-run.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tool", name: "tap", args: { x: 0.5 } },
+          { kind: "echo", message: "between" },
+          { kind: "tool", name: "swipe", args: { direction: "up" } },
+        ],
+      })
+    );
+
+    const release = vi.fn();
+    const recordChildInvocation = vi.fn((_id: string, _args?: unknown) => release);
+    const ctx = { artifacts: {}, recordChildInvocation } as unknown as ToolContext;
+
+    await runFlow.execute({}, { name: "tele-run", project_root: tmpDir }, ctx);
+
+    // Only the two tool steps dispatch; the echo step records nothing.
+    expect(recordChildInvocation).toHaveBeenCalledTimes(2);
+    const ids = recordChildInvocation.mock.calls.map((c) => c[0]);
+    expect(new Set(ids).size).toBe(2);
+    // Each step's own args reach the recorder so per-step platform can be derived.
+    expect(recordChildInvocation).toHaveBeenNthCalledWith(1, ids[0], { x: 0.5 });
+    expect(recordChildInvocation).toHaveBeenNthCalledWith(2, ids[1], { direction: "up" });
+    expect(registry.invokeTool).toHaveBeenNthCalledWith(
+      1,
+      "tap",
+      { x: 0.5 },
+      expect.objectContaining({ toolInvocationId: ids[0], recordChildInvocation })
+    );
+    expect(registry.invokeTool).toHaveBeenNthCalledWith(
+      2,
+      "swipe",
+      { direction: "up" },
+      expect.objectContaining({ toolInvocationId: ids[1], recordChildInvocation })
+    );
+    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("stops on first error", async () => {

@@ -63,7 +63,7 @@ describe("telemetry public surface", () => {
     vi.restoreAllMocks();
   });
 
-  it("markDisabled queues opt-out, persists disabled state, and drains prior events", async () => {
+  it("markDisabled persists disabled state and drains prior events without emitting an opt-out event", async () => {
     track("toolserver:start", {});
     const client = posthogMock.instances[0]!;
 
@@ -74,10 +74,11 @@ describe("telemetry public surface", () => {
     await markDisabled();
 
     expect(posthogMock.instances).toHaveLength(1);
+    expect(client.capture).toHaveBeenCalledTimes(1);
     expect(client.capture).toHaveBeenCalledWith(
       expect.objectContaining({ event: "toolserver:start" })
     );
-    expect(client.capture).toHaveBeenCalledWith(
+    expect(client.capture).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "telemetry:opt_out" })
     );
     expect(client.flush).not.toHaveBeenCalled();
