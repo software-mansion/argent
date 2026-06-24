@@ -162,5 +162,17 @@ function main() {
 
 // Run only when invoked directly, not when imported by the test.
 if (processArgv[1] && import.meta.url === pathToFileURL(processArgv[1]).href) {
-  main();
+  try {
+    main();
+  } catch (err) {
+    // A registry read (`npm view`) or `npm dist-tag add` can fail (404 on a
+    // mistyped package, a transient registry blip, non-JSON output). Surface a
+    // concise diagnostic instead of an opaque execFileSync stack dump. The
+    // publish workflows mark this step continue-on-error (the publish already
+    // succeeded and is irreversible), so this never fails a release; the manual
+    // Sync workflow has no continue-on-error, so it still exits non-zero here —
+    // just with a readable reason rather than a Node crash dump.
+    console.error(`Failed to sync '${TAG}' dist-tag: ${err.message}`);
+    process.exitCode = 1;
+  }
 }
