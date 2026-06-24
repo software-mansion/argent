@@ -1,17 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// The Android TV backend drives the device entirely through `adb` helpers and
-// reads the screen size for `ping`. Mock both so the factory + api run without
-// a real device.
+// The Android TV backend drives the device entirely through `adb` helpers.
+// Mock them so the factory + api run without a real device.
 vi.mock("../src/utils/adb", () => ({
   adbShell: vi.fn(async () => ""),
   adbExecOutBinary: vi.fn(async () => Buffer.from("")),
   shellQuote: (v: string) => `'${v.replace(/'/g, "'\\''")}'`,
   getAndroidRuntimeKind: vi.fn(async () => "tv" as const),
-}));
-
-vi.mock("../src/utils/android-screen", () => ({
-  getAndroidScreenSize: vi.fn(async () => ({ width: 1920, height: 1080 })),
 }));
 
 import {
@@ -153,58 +148,6 @@ describe("android-tv-control — describe", () => {
     expect(res.focusable).toHaveLength(2);
     expect(res.focusable[1]?.label).toBe("Search");
     expect(res.focusable[1]?.traits).toContain("button");
-  });
-});
-
-describe("android-tv-control — setFocus D-pad walk", () => {
-  it("treats an already-focused target as success without pressing keys", async () => {
-    mockExecOut.mockResolvedValue(dump([{ label: "Home", bounds: "[0,0][100,50]" }], 0));
-    const api = await makeApi();
-    const r = await api.setFocus("Home");
-    expect(r.ok).toBe(true);
-    expect(r.message).toMatch(/already focused/i);
-    expect(mockShell).not.toHaveBeenCalledWith(
-      SERIAL,
-      expect.stringContaining("keyevent"),
-      expect.anything()
-    );
-  });
-
-  it("fails clearly when the label is not on screen", async () => {
-    mockExecOut.mockResolvedValue(dump([{ label: "Home", bounds: "[0,0][100,50]" }], 0));
-    const api = await makeApi();
-    const r = await api.setFocus("Settings");
-    expect(r.ok).toBe(false);
-    expect(r.message).toMatch(/not on screen|no focusable element/i);
-  });
-
-  it("walks right toward a target to the right and lands on it", async () => {
-    // Two cells: focus starts on the left (Home), target Search is to the right.
-    // First read → focused Home; after one right press → focused Search.
-    const before = dump(
-      [
-        { label: "Home", bounds: "[0,0][100,50]" },
-        { label: "Search", bounds: "[100,0][200,50]" },
-      ],
-      0
-    );
-    const after = dump(
-      [
-        { label: "Home", bounds: "[0,0][100,50]" },
-        { label: "Search", bounds: "[100,0][200,50]" },
-      ],
-      1
-    );
-    // read #1 = initial state (Home focused); after the right press,
-    // read #2 = Search focused → walk lands and returns ok.
-    mockExecOut
-      .mockResolvedValueOnce(before) // setFocus: initial state
-      .mockResolvedValue(after); // re-read after the right press → Search focused
-
-    const api = await makeApi();
-    const r = await api.setFocus("Search");
-    expect(r.ok).toBe(true);
-    expect(mockShell).toHaveBeenCalledWith(SERIAL, "input keyevent 22", expect.anything()); // DPAD_RIGHT
   });
 });
 

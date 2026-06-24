@@ -11,11 +11,8 @@ function makeApi(
   return {
     describe: describeFn,
     recycleAx,
-    hierarchy: vi.fn(),
-    setFocus: vi.fn(),
     navigate: vi.fn(),
     type: vi.fn(),
-    ping: vi.fn(),
   } as unknown as TvControlApi;
 }
 

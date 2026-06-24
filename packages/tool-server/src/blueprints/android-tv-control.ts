@@ -6,7 +6,6 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { adbExecOutBinary, adbShell, shellQuote, getAndroidRuntimeKind } from "../utils/adb";
-import { getAndroidScreenSize } from "../utils/android-screen";
 import {
   parseUiAutomatorXml,
   parseUiAutomatorBounds,
@@ -169,28 +168,6 @@ function toTvElement(n: TvNode): TvElement {
   };
 }
 
-function centre(r: PixelRect): { cx: number; cy: number } {
-  return { cx: r.x + r.w / 2, cy: r.y + r.h / 2 };
-}
-
-// First line, lowercased+trimmed — the label `setFocus` matches on (Android
-// labels are usually single-line, but content-desc can be compound).
-function normaliseLabel(label: string): string {
-  return (label.split("\n")[0] ?? "").toLowerCase().trim();
-}
-
-/** Case-insensitive match: exact first-line, then prefix, then substring. */
-function labelMatches(candidate: string, target: string): boolean {
-  const c = normaliseLabel(candidate);
-  const t = target;
-  return c === t || c.startsWith(t) || c.includes(t);
-}
-
-// Upper bound on D-pad hops for a set-focus walk. A TV grid is rarely deeper
-// than this; the loop also bails early when focus stops moving, so this is just
-// the backstop against a layout where focus cycles without ever landing.
-const MAX_FOCUS_STEPS = 25;
-
 export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
   namespace: ANDROID_TV_CONTROL_NAMESPACE,
 
@@ -276,10 +253,6 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
         };
       },
 
-      async hierarchy(): Promise<unknown> {
-        return parseUiAutomatorXml(await dumpHierarchy());
-      },
-
       async navigate(direction: TvDirection): Promise<void> {
         await pressKey(direction);
       },
@@ -308,89 +281,6 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
               await adbShell(serial, `input text ${shellQuote(chunk)}`, { timeoutMs: 15_000 });
             }
           }
-        }
-      },
-
-      async setFocus(label: string): Promise<{ ok: boolean; message: string }> {
-        const target = normaliseLabel(label);
-        if (!target) return { ok: false, message: "Empty label" };
-
-        let state = await read();
-        // Already focused? (focus engine treats a no-op move as a failure, so
-        // short-circuit like the tvOS backend does.)
-        if (state.focused && labelMatches(state.focused.label, target)) {
-          return { ok: true, message: "Already focused" };
-        }
-
-        // Confirm the target is actually on screen before walking — otherwise
-        // we'd burn the whole step budget chasing a label that isn't there.
-        const targetNode = state.focusable.find((n) => labelMatches(n.label, target));
-        if (!targetNode || !targetNode.rect) {
-          return {
-            ok: false,
-            message:
-              `No focusable element matching "${label}" is on screen. ` +
-              `Call describe to see the available labels, or press button step by step.`,
-          };
-        }
-
-        // Geometry-driven D-pad walk: each step move along whichever axis has
-        // the larger remaining gap between the focused element and the target,
-        // re-read, and stop when focus lands on the target. Android TV has no
-        // "jump to label" primitive (unlike tvOS's setNativeFocus), so this
-        // emulates it with directional presses — best-effort and bounded.
-        const seen = new Set<string>();
-        const tc = centre(targetNode.rect);
-        for (let step = 0; step < MAX_FOCUS_STEPS; step++) {
-          const cur = state.focused;
-          if (cur && labelMatches(cur.label, target)) {
-            return { ok: true, message: `Focused after ${step} step(s)` };
-          }
-          if (!cur || !cur.rect) {
-            // No focus anywhere — nudge once to give the engine a focused node.
-            await pressKey("down");
-            state = await read();
-            continue;
-          }
-          // Detect a loop: if we return to a focused element we've already
-          // visited, the walk can't reach the target (disjoint focus groups).
-          const fingerprint = `${normaliseLabel(cur.label)}@${cur.rect.x},${cur.rect.y}`;
-          if (seen.has(fingerprint)) {
-            return {
-              ok: false,
-              message:
-                `Could not reach "${label}" by D-pad navigation (focus looped without landing on it). ` +
-                `It may be in a separate focus group — use button (up/down/left/right) to cross over manually.`,
-            };
-          }
-          seen.add(fingerprint);
-
-          const cc = centre(cur.rect);
-          const dx = tc.cx - cc.cx;
-          const dy = tc.cy - cc.cy;
-          const direction: TvDirection =
-            Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : dy > 0 ? "down" : "up";
-          await pressKey(direction);
-          state = await read();
-        }
-
-        const landed = state.focused?.label ?? "(none)";
-        return {
-          ok: false,
-          message:
-            `Could not reach "${label}" within ${MAX_FOCUS_STEPS} D-pad steps (focus is on "${landed}"). ` +
-            `Use button (up/down/left/right) to step the remaining distance.`,
-        };
-      },
-
-      async ping(): Promise<boolean> {
-        try {
-          // `wm size` is a cheap, always-available shell command — a successful
-          // parse proves the adb shell to this serial is responsive.
-          await getAndroidScreenSize(serial);
-          return true;
-        } catch {
-          return false;
         }
       },
 

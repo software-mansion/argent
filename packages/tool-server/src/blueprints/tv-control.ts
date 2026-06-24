@@ -318,58 +318,12 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         };
       },
 
-      async hierarchy(): Promise<unknown> {
-        await ensureAxAlive();
-        return sendJson(axSock, "hierarchy", 15_000);
-      },
-
-      async setFocus(label: string): Promise<{ ok: boolean; message: string }> {
-        await ensureAxAlive();
-        const r = (await sendJson(axSock, `setfocus ${label}`)) as {
-          ok?: boolean;
-          message?: string;
-          matchedLabel?: string;
-        };
-        if (r.ok) return { ok: true, message: r.message ?? "Focus set successfully" };
-        // The native setNativeFocus returns NO when the element is already focused
-        // (the focus engine refuses a no-op move). Treat that as success so callers
-        // don't need to handle "already focused" as a special case.
-        const state = await api.describe();
-        const focused = state.focused;
-        const normalise = (s: string) => s.toLowerCase().trim();
-        const firstLine = (s: string) => normalise(s.split("\n")[0] ?? "");
-        // Compare against the element the native matcher actually chose
-        // (`matchedLabel`), not the raw query: a tiered match can resolve via an
-        // annotation substring (e.g. query "Lander" hitting "Home\n…Lander…"), in
-        // which case the focused first line is "Home" and would never equal the
-        // query. Falling back to the query keeps exact-name calls working when the
-        // daemon doesn't echo a matchedLabel.
-        const targetLabel = r.matchedLabel ? firstLine(r.matchedLabel) : normalise(label);
-        const focusedLabel = focused?.label ? firstLine(focused.label) : null;
-        if (focusedLabel === targetLabel) {
-          return { ok: true, message: "Already focused" };
-        }
-        return { ok: false, message: r.message ?? "" };
-      },
-
       async navigate(direction: TvDirection): Promise<void> {
         await sendJson(hidSock, `navigate ${direction}`);
       },
 
       async type(text: string): Promise<void> {
         await sendJson(hidSock, `type ${text}`);
-      },
-
-      async ping(): Promise<boolean> {
-        try {
-          const [ax, hid] = await Promise.all([
-            sendJson(axSock, "ping", 3000) as Promise<{ status?: string }>,
-            sendJson(hidSock, "ping", 3000) as Promise<{ ok?: boolean }>,
-          ]);
-          return ax.status === "ok" && hid.ok === true;
-        } catch {
-          return false;
-        }
       },
 
       async recycleAx(): Promise<void> {
