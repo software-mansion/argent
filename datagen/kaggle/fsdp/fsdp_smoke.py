@@ -56,20 +56,21 @@ model.config.use_cache = False
 from peft import get_peft_model
 for nm, p in model.named_parameters():
     p.requires_grad = False
-    # Upcast non-4bit params to fp32 for stable grads, EXCEPT the two big embedding tables (embed_tokens +
-    # embed_tokens_per_layer ~13GB combined fp32) — both are frozen lookups, fp16-safe; Liger upcasts the CE.
-    if p.dtype in (torch.float16, torch.bfloat16) and "embed_tokens" not in nm:
+    # fp32 SMALL params (norms <50M) only: on the SPLIT, all-fp16 degenerates the cross-device forward to
+    # loss 0; fp32 norms give a finite forward (v13). Big embeds stay fp16 (the fp32 upcast OOMs).
+    if p.dtype in (torch.float16, torch.bfloat16) and p.numel() < 50_000_000:
         p.data = p.data.to(torch.float32)
 model.enable_input_require_grads()
 model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 tok = AutoTokenizer.from_pretrained(MODEL); TKZ = getattr(tok, "tokenizer", tok)
 lora = LoraConfig(r=8, lora_alpha=8, lora_dropout=0, bias="none", task_type="CAUSAL_LM",
                   target_modules=r".*language_model.*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$")
-model = get_peft_model(model, lora)
-for p in model.parameters():  # LoRA adapters -> fp32: QLoRA needs the TRAINABLE params in fp32 or fp16 grads NaN
-    if p.requires_grad: p.data = p.data.to(torch.float32)
-model.print_trainable_parameters()
+model = get_peft_model(model, lora); model.print_trainable_parameters()  # LoRA stays fp16 (no upcast)
 _LCE = LigerFusedLinearCrossEntropyLoss()
+# fp16 GradScaler default init_scale=65536 overshoots gemma's grads -> skips ~8 steps; start low so it settles.
+import torch.amp as _amp
+_oinit = _amp.GradScaler.__init__
+_amp.GradScaler.__init__ = lambda self, *a, **k: _oinit(self, *a, **{**k, "init_scale": 2.0 ** 10})
 
 class LigerCETrainer(SFTTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -87,7 +88,10 @@ class LigerCETrainer(SFTTrainer):
         H = hidden.size(-1)
         sh = hidden[:, :-1, :].contiguous().view(-1, H).to(W.device).to(W.dtype)
         sl = labels[:, 1:].contiguous().view(-1).to(W.device)
-        loss = _LCE(W, sh, sl).to("cuda:0")  # HF Trainer asserts the loss sits on the primary device (cuda:0)
+        loss = _LCE(W, sh, sl)
+        print(f"[fwd] hidden finite={torch.isfinite(hidden).all().item()} loss={loss.item():.4f} "
+              f"hidden.dev={hidden.device} W.dev={W.device} W.dtype={W.dtype}", flush=True)
+        loss = loss.to("cuda:0")  # HF Trainer asserts the loss sits on the primary device (cuda:0)
         return (loss, out) if return_outputs else loss
 
 filler = "The quick brown fox jumps over the lazy dog. " * 900
@@ -97,7 +101,7 @@ print("dummy tokens ~", len(TKZ(text)["input_ids"]), flush=True)
 ds = datasets.Dataset.from_dict({"text": [text] * 16})
 trainer = LigerCETrainer(model=model, processing_class=TKZ, train_dataset=ds,  # NO peft_config (already peft) -> trl skips its fp32 upcast
     args=SFTConfig(dataset_text_field="text", max_length=6144, per_device_train_batch_size=1,
-        gradient_accumulation_steps=1, max_steps=3, warmup_steps=1, learning_rate=2e-4, logging_steps=1,
+        gradient_accumulation_steps=1, max_steps=10, warmup_steps=1, learning_rate=2e-4, logging_steps=1,
         optim="adamw_8bit", gradient_checkpointing=False,
         fp16=True, bf16=False, report_to="none", output_dir="/kaggle/working/out"))
 trainer.train()

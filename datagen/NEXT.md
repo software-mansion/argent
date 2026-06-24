@@ -187,18 +187,25 @@ single card fits 6-8K trivially, no device_map gymnastics. DECISION (quota vs $2
     meta under a split map). `use_reentrant=False` (reentrant forks RNG across devices → illegal access).
  6. **`loss.to("cuda:0")`** — HF Trainer asserts loss on the primary device.
 Single 16GB card (onegpu kernel) does NOT fit 6K → the split is genuinely needed; P100=16GB=one T4, no help.
-**❌ BLOCKER (diagnosed, 14 runs v6–v19): stable training unreachable on 2×T4 — persistent `grad_norm=nan`
-every step (GradScaler skips all → lr 0, loss frozen).** Chunked CE is CORRECT (cecheck: MY Liger CE
-1.9374 == model full-logits CE 1.9374, hidden finite). So NaN is the BACKWARD. RULED OUT as cause: eager
-vs SDPA attention, grad-ckpt on/off, seq 512→6144, CE dtype, LoRA dtype (fp16 LoRA→loss 13.06+nan; fp32
-LoRA→loss 0+nan), param upcast. Root = the gemma-4 + **T4-no-bf16 fp16 numerical bind** (fp16→NaN,
-fp32→OOM at 6144) — the exact thing Unsloth's custom kernels fix and vanilla transformers does NOT; made
-worse because the multimodal forward does cross-device ops on a split (native loss un-runnable → forced
-the custom inner-text-model CE path). **CONCLUSION: free STABLE 6K gemma-4 on 2×T4 is not readily
-achievable.** Options for the real run: (1) keep deployed silver-v5 (single-GPU Unsloth, 4608, bug FIXED) —
-works today; (2) ~$2 rented 24GB bf16 GPU → Unsloth does 6K trivially; (3) Kaggle TPU (free bf16, needs
-JAX/Keras port). The split memory-recipe is preserved in `kaggle/fsdp/fsdp_smoke.py` for the day a bf16
-multi-GPU box appears. Don't re-litigate the split — it's proven; the gap is fp16 stability, not memory.
+**✅✅ SOLVED (06-24 night, ~21 runs): free STABLE 6K gemma-4 QLoRA on ONE T4 — no split, no H100s.**
+Recipe = `kaggle/iso/iso.py` (silver-iso). The "persistent NaN" was 3 STACKED fp16 issues, pinpointed by
+`torch.autograd.set_detect_anomaly(True)` on a single-GPU isolation:
+ 1. **Attention SOFTMAX backward → NaN in fp16** (`SoftmaxBackward0`). Fix: `attn_implementation="sdpa"`
+    (fused softmax, fp32-internal, stable backward). Eager's manual fp16 softmax backward is the killer.
+ 2. **fp32/fp16 mixing → `ToCopyBackward0` NaN.** Fix: keep ALL params fp16 (NO fp32 upcast at all) — gemma
+    RMSNorm already computes in fp32 internally, so fp16 norm params are safe.
+ 3. **The "grad_norm=nan every step" was the fp16 GradScaler OVERSHOOTING** init_scale=65536 → scaled grads
+    overflow → skip every step → lr stuck 0. Fix: patch `torch.amp.GradScaler.__init__` to `init_scale=2**10`.
+    Grads were FINITE all along (post-train check: 0 NaN params).
+**MEMORY for 6144 on one 16GB T4:** offload the frozen 5.2GB PLE table `embed_tokens_per_layer` to CPU via
+`device_map={"model.language_model.embed_tokens_per_layer":"cpu", "":0}` (+ `llm_int8_enable_fp32_cpu_offload=True`).
+Only the gathered rows move to GPU each step (cheap). Attention stays single-GPU = stable.
+**PROVEN (iso v7):** single T4, 6144 seq, chunked CE (Liger fused-linear-CE on `embed_tokens.weight`),
+SDPA + all-fp16 + grad-ckpt(use_reentrant=False) + init_scale=2^10 → `hidden finite=True`, loss drops
+13.06→0.93 in 8 steps, grad_norm finite, **peak 10.65GB (≈5GB headroom → 8K+ seq likely fits).**
+**THE SPLIT (kaggle/fsdp) IS ABANDONED** — cross-device forward NaN with SDPA, softmax-backward NaN with
+eager; single-GPU sidesteps both. Deployed silver-v5 (4608) still works; this unblocks a 6K+ retrain for free.
+NEXT: build the real training kernel from iso.py (real data loader + ~200 steps + save adapter) → package → deploy.
 Gold standard = capture the LITERAL wire payload
 from each harness via a logging proxy in front of ollama, train on those. **Blocker: free T4 = 8K
 seq**; a real harness prompt (~8K) + conversation (~5K) overflows it → full fidelity needs 16–32K seq
