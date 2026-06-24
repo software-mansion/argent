@@ -12,6 +12,7 @@ import {
 } from "@argent/registry";
 import { bootstrapDylibPath, bootstrapDylibPathTcp } from "@argent/native-devtools-ios";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
+import { simctlArgs } from "../utils/simctl";
 
 export type NativeDevtoolsTransport = "unix" | "tcp";
 
@@ -248,8 +249,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
     flags.map((flag) =>
       execFileAsync(
         "xcrun",
-        [
-          "simctl",
+        simctlArgs([
           "spawn",
           udid,
           "defaults",
@@ -258,7 +258,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
           flag,
           "-bool",
           "true",
-        ],
+        ]),
         { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
       )
     )
@@ -278,7 +278,7 @@ async function ensureEnv(
   // accumulate on every ensureEnv() cycle.
   const result = await execFileAsync(
     "xcrun",
-    ["simctl", "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
+    simctlArgs(["spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"]),
     { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS }
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
@@ -288,7 +288,7 @@ async function ensureEnv(
   if (updated !== existing) {
     await execFileAsync(
       "xcrun",
-      ["simctl", "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
+      simctlArgs(["spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated]),
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
     );
   }
@@ -298,29 +298,27 @@ async function ensureEnv(
   if (endpoint.transport === "tcp") {
     await execFileAsync(
       "xcrun",
-      [
-        "simctl",
+      simctlArgs([
         "spawn",
         udid,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_PORT",
         String(endpoint.port),
-      ],
+      ]),
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
     );
   } else {
     await execFileAsync(
       "xcrun",
-      [
-        "simctl",
+      simctlArgs([
         "spawn",
         udid,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
         endpoint.socketPath,
-      ],
+      ]),
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
     );
   }
@@ -330,9 +328,13 @@ async function ensureEnv(
 }
 
 async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
-    encoding: "utf8",
-  });
+  const { stdout } = await execFileAsync(
+    "xcrun",
+    simctlArgs(["spawn", udid, "launchctl", "list"]),
+    {
+      encoding: "utf8",
+    }
+  );
 
   const bundleIds = new Set<string>();
   for (const line of stdout.split("\n")) {

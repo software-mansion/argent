@@ -1,4 +1,4 @@
-import { spawn, execSync, type ChildProcess } from "child_process";
+import { spawn, execFileSync, type ChildProcess } from "child_process";
 import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
 import * as path from "path";
@@ -16,6 +16,7 @@ import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
+import { simctlArgs } from "../../../../utils/simctl";
 
 // Two candidates because __dirname differs by runtime: bundled it's argent/dist/
 // (template in argent/assets/); in dev it's tool-server/dist/tools/profiler/
@@ -84,7 +85,7 @@ interface DetectedApp {
 function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
   let launchctlOutput: string;
   try {
-    launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
+    launchctlOutput = execFileSync("xcrun", simctlArgs(["spawn", udid, "launchctl", "list"]), {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
     });
@@ -115,7 +116,12 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
 
   let listAppsOutput: string;
   try {
-    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+    const listAppsPlist = execFileSync("xcrun", simctlArgs(["listapps", udid]), {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    });
+    listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "-"], {
+      input: listAppsPlist,
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
     });

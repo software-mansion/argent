@@ -1,7 +1,6 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
 import * as fsAsync from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { promisify } from "node:util";
@@ -15,6 +14,7 @@ import {
 } from "@argent/registry";
 import { axServiceBinaryPath, axServiceBinaryPathTcp } from "@argent/native-devtools-ios";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
+import { activeIosDeviceSetPath, simctlArgs } from "../utils/simctl";
 
 const execFileAsync = promisify(execFile);
 
@@ -86,8 +86,7 @@ interface PendingRpc {
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await execFileAsync(
     "xcrun",
-    [
-      "simctl",
+    simctlArgs([
       "spawn",
       udid,
       "defaults",
@@ -96,7 +95,7 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
       "AutomationEnabled",
       "-bool",
       "true",
-    ],
+    ]),
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
   );
 }
@@ -115,15 +114,14 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
 export async function isEntitlementBypassActive(udid: string): Promise<boolean> {
   return execFileAsync(
     "xcrun",
-    [
-      "simctl",
+    simctlArgs([
       "spawn",
       udid,
       "defaults",
       "read",
       "com.apple.Accessibility",
       "IgnoreAXServerEntitlements",
-    ],
+    ]),
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
   )
     .then(({ stdout }) => stdout.trim() === "1")
@@ -136,8 +134,7 @@ export async function isEntitlementBypassActive(udid: string): Promise<boolean> 
  */
 function accessibilityPlistPath(udid: string): string {
   return path.join(
-    os.homedir(),
-    "Library/Developer/CoreSimulator/Devices",
+    activeIosDeviceSetPath(),
     udid,
     "data/Library/Preferences/com.apple.Accessibility.plist"
   );
@@ -222,7 +219,7 @@ function spawnDaemon(udid: string, endpoint: AXEndpoint): ChildProcess {
 
   const proc = execFile(
     "xcrun",
-    ["simctl", "spawn", udid, binaryPath, ...endpointArgs, "--timeout", "3600"],
+    simctlArgs(["spawn", udid, binaryPath, ...endpointArgs, "--timeout", "3600"]),
     { encoding: "utf8" }
   ) as ChildProcess;
 

@@ -51,9 +51,11 @@ describe("boot-device — iOS path", () => {
   // duration of the suite — restored after each test to avoid leaking the
   // override into other test files run in the same vitest worker.
   const originalPlatform = process.platform;
+  const originalIosDeviceSetPath = process.env.ARGENT_IOS_DEVICE_SET_PATH;
 
   beforeEach(() => {
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    delete process.env.ARGENT_IOS_DEVICE_SET_PATH;
     vi.clearAllMocks();
     // Pre-warm the dep cache so `ensureDep('xcrun')` doesn't probe PATH and
     // add an extra first `command -v xcrun` call to mockExecFile.
@@ -77,6 +79,8 @@ describe("boot-device — iOS path", () => {
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    if (originalIosDeviceSetPath === undefined) delete process.env.ARGENT_IOS_DEVICE_SET_PATH;
+    else process.env.ARGENT_IOS_DEVICE_SET_PATH = originalIosDeviceSetPath;
   });
 
   it("pre-boots AX prefs on a Shutdown sim then waits for boot completion and native-devtools init", async () => {
@@ -145,6 +149,42 @@ describe("boot-device — iOS path", () => {
     // force a re-apply so a cached/latched native-devtools service can't leave
     // the env unset (which would make the next launch uninjected).
     expect(reverifyEnv).toHaveBeenCalledOnce();
+  });
+
+  it("uses a custom CoreSimulator device set for boot commands without touching global Simulator.app defaults", async () => {
+    process.env.ARGENT_IOS_DEVICE_SET_PATH = "/tmp/argent-ios-set";
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const registry = { resolveService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await expect(
+      tool.execute!({}, { udid: "11111111-1111-1111-1111-111111111111" })
+    ).resolves.toEqual({
+      platform: "ios",
+      udid: "11111111-1111-1111-1111-111111111111",
+      booted: true,
+    });
+
+    expect(mockExecFile.mock.calls.map(([file, args]) => [file, args])).toEqual([
+      [
+        "xcrun",
+        ["simctl", "--set", "/tmp/argent-ios-set", "boot", "11111111-1111-1111-1111-111111111111"],
+      ],
+      [
+        "xcrun",
+        [
+          "simctl",
+          "--set",
+          "/tmp/argent-ios-set",
+          "bootstatus",
+          "11111111-1111-1111-1111-111111111111",
+          "-b",
+        ],
+      ],
+    ]);
   });
 
   it("skips pre-boot plist write when the sim is already Booted and falls back to ensureAutomationEnabled", async () => {

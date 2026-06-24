@@ -13,6 +13,7 @@ import type { DeviceInfo } from "@argent/registry";
 
 const spawnMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
+const originalIosDeviceSetPath = process.env.ARGENT_IOS_DEVICE_SET_PATH;
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -75,6 +76,7 @@ function androidDevice(serial: string): DeviceInfo {
 
 describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInfo", () => {
   beforeEach(async () => {
+    delete process.env.ARGENT_IOS_DEVICE_SET_PATH;
     spawnMock.mockReset();
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     // Pre-warm the dep cache so the Android branch's `ensureDep('adb')` doesn't
@@ -89,6 +91,8 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
   });
 
   afterEach(() => {
+    if (originalIosDeviceSetPath === undefined) delete process.env.ARGENT_IOS_DEVICE_SET_PATH;
+    else process.env.ARGENT_IOS_DEVICE_SET_PATH = originalIosDeviceSetPath;
     vi.clearAllMocks();
   });
 
@@ -120,6 +124,29 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     await instance.dispose();
     expect(fakeProc.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the configured CoreSimulator device set to the iOS simulator-server", async () => {
+    process.env.ARGENT_IOS_DEVICE_SET_PATH = "/tmp/argent-ios-set";
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const udid = "11111111-2222-3333-4444-555555555555";
+    const device = iosDevice(udid);
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55560);
+    await factoryPromise;
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0]![1]).toEqual([
+      "ios",
+      "--id",
+      udid,
+      "--device-set",
+      "/tmp/argent-ios-set",
+    ]);
   });
 
   it("spawns the `android` subcommand for an Android device", async () => {

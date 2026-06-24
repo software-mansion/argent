@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { simctlArgs } from "./simctl";
 
 const execFileAsync = promisify(execFile);
 
@@ -29,7 +30,7 @@ interface SimctlOutput {
  */
 export async function listIosSimulators(): Promise<IosSimulator[]> {
   try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"], {
+    const { stdout } = await execFileAsync("xcrun", simctlArgs(["list", "devices", "--json"]), {
       timeout: 10_000,
     });
     const data: SimctlOutput = JSON.parse(stdout);

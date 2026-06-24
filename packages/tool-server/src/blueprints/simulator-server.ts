@@ -10,6 +10,7 @@ import {
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
+import { iosDeviceSetPath } from "../utils/simctl";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -85,6 +86,8 @@ function spawnSimulatorServerProcess(
   const { BINARY_PATH, BINARY_DIR } = getPaths();
   return new Promise((resolve, reject) => {
     const args = [subcommand, "--id", udid];
+    const deviceSet = subcommand === "ios" ? iosDeviceSetPath() : null;
+    if (deviceSet) args.push("--device-set", deviceSet);
 
     const proc = spawn(BINARY_PATH, args, {
       cwd: BINARY_DIR,

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import * as net from "node:net";
+import * as path from "node:path";
 import {
   buildToolsServerEnv,
   findFreePort,
   formatToolsServerUrl,
+  IOS_DEVICE_SET_ENV,
   isToolsServerHealthy,
   isToolsServerProcessAlive,
+  normalizeIosDeviceSetPath,
 } from "../src/launcher.js";
 
 const paths = {
@@ -39,6 +42,32 @@ describe("buildToolsServerEnv — host and idle options", () => {
     const env = buildToolsServerEnv(paths, 3001, { FOO: "bar", PATH: "/usr/bin" });
     expect(env.FOO).toBe("bar");
     expect(env.PATH).toBe("/usr/bin");
+  });
+
+  it("normalizes and propagates the iOS device set from options", () => {
+    const env = buildToolsServerEnv(paths, 3001, {}, { iosDeviceSetPath: "tmp/device-set" });
+    expect(env[IOS_DEVICE_SET_ENV]).toBe(path.resolve("tmp/device-set"));
+  });
+
+  it("falls back to the iOS device set from the base env", () => {
+    const env = buildToolsServerEnv(paths, 3001, { [IOS_DEVICE_SET_ENV]: "/tmp/argent-set" });
+    expect(env[IOS_DEVICE_SET_ENV]).toBe("/tmp/argent-set");
+  });
+
+  it("removes a blank iOS device set from the spawned env", () => {
+    const env = buildToolsServerEnv(paths, 3001, { [IOS_DEVICE_SET_ENV]: "   " });
+    expect(env[IOS_DEVICE_SET_ENV]).toBeUndefined();
+  });
+});
+
+describe("normalizeIosDeviceSetPath", () => {
+  it("returns null for empty values", () => {
+    expect(normalizeIosDeviceSetPath(undefined)).toBeNull();
+    expect(normalizeIosDeviceSetPath(" ")).toBeNull();
+  });
+
+  it("resolves relative paths", () => {
+    expect(normalizeIosDeviceSetPath("tmp/device-set")).toBe(path.resolve("tmp/device-set"));
   });
 });
 

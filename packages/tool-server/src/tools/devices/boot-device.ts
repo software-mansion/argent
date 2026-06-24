@@ -23,6 +23,7 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { iosDeviceSetPath, simctlArgs } from "../../utils/simctl";
 import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
 
 const execFileAsync = promisify(execFile);
@@ -414,7 +415,7 @@ async function bootIos(
 
   // force=true on a running sim: shut it down so we can pre-write AX prefs.
   if (force && simState === "Booted") {
-    await execFileAsync("xcrun", ["simctl", "shutdown", udid]);
+    await execFileAsync("xcrun", simctlArgs(["shutdown", udid]));
   }
 
   const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
@@ -428,13 +429,13 @@ async function bootIos(
     });
   }
 
-  await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
+  await execFileAsync("xcrun", simctlArgs(["boot", udid])).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-  await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
+  await execFileAsync("xcrun", simctlArgs(["bootstatus", udid, "-b"]));
 
   // Best-effort fallback: no-op on the happy path (pref already cached from
   // pre-boot write). When the sim was already Booted without force, writes
@@ -455,13 +456,15 @@ async function bootIos(
   if (initFailure?.givenUp) {
     return buildInitFailedResult(udid, initFailure);
   }
-  await execFileAsync("defaults", [
-    "write",
-    "com.apple.iphonesimulator",
-    "CurrentDeviceUDID",
-    udid,
-  ]);
-  await execFileAsync("open", ["-a", "Simulator.app"]);
+  if (!iosDeviceSetPath()) {
+    await execFileAsync("defaults", [
+      "write",
+      "com.apple.iphonesimulator",
+      "CurrentDeviceUDID",
+      udid,
+    ]);
+    await execFileAsync("open", ["-a", "Simulator.app"]);
+  }
   return { platform: "ios", udid, booted: true };
 }
 
