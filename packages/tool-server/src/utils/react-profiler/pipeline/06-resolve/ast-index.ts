@@ -23,6 +23,12 @@ interface ParserInstance {
 
 type ParserCtor = new () => ParserInstance;
 
+export interface ComponentMatch {
+  file: string;
+  line: number; // 1-based
+  col: number; // 0-based
+}
+
 export interface ComponentIndexEntry {
   file: string;
   line: number; // 1-based
@@ -30,6 +36,14 @@ export interface ComponentIndexEntry {
   isMemoized: boolean;
   hasUseCallback: boolean;
   hasUseMemo: boolean;
+  // Other components found under the same name elsewhere in the project — most
+  // commonly platform variants (List.tsx vs List.web.tsx). The lookup key is
+  // just the name, so without surfacing these a caller asking for "List" would
+  // be silently handed whichever file happened to be walked first. The fields
+  // above hold the primary match (chosen deterministically — see pickPrimary);
+  // these are the remaining candidates, exposed so callers can tell an
+  // ambiguous name apart instead of trusting a single arbitrary location.
+  otherMatches?: ComponentMatch[];
 }
 
 export type ComponentIndex = Map<string, ComponentIndexEntry>;
@@ -183,6 +197,42 @@ function collectMemoizedNames(root: TreeSitterNode): Set<string> {
   return names;
 }
 
+// React Native / Metro resolves platform-specific extensions (.ios / .android /
+// .native, plus web's .web) over the base file only when bundling for that
+// platform; the base file (no platform segment) is the general default. So when
+// the same component name exists in several files, prefer the base as primary.
+const PLATFORM_SUFFIX = /\.(web|ios|android|native)\.[jt]sx?$/;
+
+function isPlatformVariant(file: string): boolean {
+  return PLATFORM_SUFFIX.test(file);
+}
+
+/**
+ * Order same-named component candidates deterministically and split into the
+ * primary match plus the rest. Previously the first file the directory walk
+ * happened to reach won, so "which List survives" was effectively arbitrary and
+ * a lookup could return the wrong platform variant's source. Base files sort
+ * ahead of platform variants; ties break on path, then line, then column — all
+ * walk-order independent.
+ */
+function pickPrimary(entries: ComponentIndexEntry[]): {
+  primary: ComponentIndexEntry;
+  others: ComponentMatch[];
+} {
+  const sorted = entries.slice().sort((a, b) => {
+    const variantDelta = Number(isPlatformVariant(a.file)) - Number(isPlatformVariant(b.file));
+    if (variantDelta !== 0) return variantDelta;
+    if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+    if (a.line !== b.line) return a.line - b.line;
+    return a.col - b.col;
+  });
+  const [primary, ...rest] = sorted;
+  return {
+    primary,
+    others: rest.map((e) => ({ file: e.file, line: e.line, col: e.col })),
+  };
+}
+
 /**
  * Build an in-memory index of all React components in the project.
  * Returns the index plus diagnostics (treeSitterAvailable, indexedFiles).
@@ -197,6 +247,16 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
   const { ParserClass, ts: tsLang, tsx: tsxLang } = ts;
 
   const files = await findSourceFiles(projectRoot);
+
+  // Collect every match per name first, then resolve a deterministic primary
+  // once all files are walked — picking eagerly during the walk would re-tie
+  // the result to directory-walk order.
+  const candidates = new Map<string, ComponentIndexEntry[]>();
+  function addCandidate(name: string, entry: ComponentIndexEntry): void {
+    const existing = candidates.get(name);
+    if (existing) existing.push(entry);
+    else candidates.set(name, [entry]);
+  }
 
   for (const file of files) {
     let source: string;
@@ -226,16 +286,14 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
         const nameNode = node.children.find((c) => c.type === "identifier");
         if (nameNode && isCapitalized(nameNode.text)) {
           const componentName = nameNode.text;
-          if (!index.has(componentName)) {
-            index.set(componentName, {
-              file,
-              line: nameNode.startPosition.row + 1,
-              col: nameNode.startPosition.column,
-              isMemoized: memoizedNames.has(componentName),
-              hasUseCallback: nodeContainsCall(node, "useCallback"),
-              hasUseMemo: nodeContainsCall(node, "useMemo"),
-            });
-          }
+          addCandidate(componentName, {
+            file,
+            line: nameNode.startPosition.row + 1,
+            col: nameNode.startPosition.column,
+            isMemoized: memoizedNames.has(componentName),
+            hasUseCallback: nodeContainsCall(node, "useCallback"),
+            hasUseMemo: nodeContainsCall(node, "useMemo"),
+          });
         }
       } else if (node.type === "variable_declarator") {
         const nameNode = node.children[0];
@@ -251,16 +309,14 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
             wrapper.isWrapper)
         ) {
           const componentName = nameNode.text;
-          if (!index.has(componentName)) {
-            index.set(componentName, {
-              file,
-              line: nameNode.startPosition.row + 1,
-              col: nameNode.startPosition.column,
-              isMemoized: memoizedNames.has(componentName) || wrapper.isMemo,
-              hasUseCallback: nodeContainsCall(node, "useCallback"),
-              hasUseMemo: nodeContainsCall(node, "useMemo"),
-            });
-          }
+          addCandidate(componentName, {
+            file,
+            line: nameNode.startPosition.row + 1,
+            col: nameNode.startPosition.column,
+            isMemoized: memoizedNames.has(componentName) || wrapper.isMemo,
+            hasUseCallback: nodeContainsCall(node, "useCallback"),
+            hasUseMemo: nodeContainsCall(node, "useMemo"),
+          });
         }
       }
 
@@ -274,6 +330,11 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
     } catch {
       // ignore parse errors for individual files
     }
+  }
+
+  for (const [name, entries] of candidates) {
+    const { primary, others } = pickPrimary(entries);
+    index.set(name, others.length > 0 ? { ...primary, otherMatches: others } : primary);
   }
 
   return { index, treeSitterAvailable: true, indexedFiles: files.length };
