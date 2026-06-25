@@ -95,11 +95,13 @@ export async function detectRunningAppOnDevice(udid: string): Promise<string> {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("ENOENT") || msg.includes("not found")) {
         throw new Error(
-          "Physical device profiling requires Xcode 15+ (devicectl not found). Update Xcode or use a simulator."
+          "Physical device profiling requires Xcode 15+ (devicectl not found). Update Xcode or use a simulator.",
+          { cause: err }
         );
       }
       throw new Error(
-        `Could not query apps on device. Ensure it is unlocked, connected via USB, and trusted. (${msg})`
+        `Could not query apps on device. Ensure it is unlocked, connected via USB, and trusted. (${msg})`,
+        { cause: err }
       );
     }
 
@@ -122,7 +124,8 @@ export async function detectRunningAppOnDevice(udid: string): Promise<string> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `Could not query running processes on device. Ensure it is unlocked and connected. (${msg})`
+        `Could not query running processes on device. Ensure it is unlocked and connected. (${msg})`,
+        { cause: err }
       );
     }
 
