@@ -5,9 +5,9 @@ from transformers import AutoModelForImageTextToText, AutoTokenizer
 from peft import PeftModel
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ADAPTER = os.path.join(HERE, "kaggle/train/out/gemma4_lora")
+ADAPTER = os.path.join(HERE, "kaggle/realtrain/out/adapter")
 BASE = "unsloth/gemma-4-E4B-it"
-MERGED = os.path.join(HERE, "fused/silver-nav-merged")
+MERGED = os.path.join(HERE, "fused/silver-v6-merged")
 
 print("=== loading base fp16 (downloads ~15GB first time) ===", flush=True)
 base = AutoModelForImageTextToText.from_pretrained(BASE, torch_dtype=torch.float16, low_cpu_mem_usage=True)

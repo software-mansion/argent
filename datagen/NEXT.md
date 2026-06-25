@@ -205,7 +205,17 @@ SDPA + all-fp16 + grad-ckpt(use_reentrant=False) + init_scale=2^10 → `hidden f
 13.06→0.93 in 8 steps, grad_norm finite, **peak 10.65GB (≈5GB headroom → 8K+ seq likely fits).**
 **THE SPLIT (kaggle/fsdp) IS ABANDONED** — cross-device forward NaN with SDPA, softmax-backward NaN with
 eager; single-GPU sidesteps both. Deployed silver-v5 (4608) still works; this unblocks a 6K+ retrain for free.
-NEXT: build the real training kernel from iso.py (real data loader + ~200 steps + save adapter) → package → deploy.
+**REAL RETRAIN DONE (06-25): `silver-v6:e4b-text-Q6-K` trained + deployed via the free substrate.**
+Kernel `kaggle/realtrain` on the verbose 16-tool data (silver-nav-verbose dataset, kept 6921/9272 rows
+≤6144 — vs the deployed v5's 3584 which got far fewer), r=16, 150 steps ga4, loss 56→0.19. Packaged
+locally (local_merge.py peft-merge → convert_hf_to_gguf → llama-quantize Q6_K → ollama; `package-v6.sh`).
+**EVAL (curl vs ollama, temp 0): v6 is CORRECT in its real distribution but brittle out of it.**
+ - Verbose tools (the format OpenCode/Codex/Hermes actually send): v6 emits `argent_launch-app{com.apple.Preferences}` ✅ (== v5).
+ - Compact tools (lean verify; the desc strips the bundle-id example): v6 → wrong `com.apple.mobile.settings` / derails to text; v5 stays robust.
+Root: v6 trained ONLY on verbose + only ~600/6921 rows seen (150 steps <1 epoch). **v6 is NOT a strict
+improvement over v5 — keep v5 as the robust default.** NEXT for a deployable v6: (a) MIX lean+verbose data
+(robust to both formats), (b) more steps (≥1 epoch), (c) maybe r=8 like v5. The substrate is the win; the
+data-mix + step count are tuning. Throwaway eval scripts: /tmp/verify_v6.py, /tmp/verify_clean.py.
 Gold standard = capture the LITERAL wire payload
 from each harness via a logging proxy in front of ollama, train on those. **Blocker: free T4 = 8K
 seq**; a real harness prompt (~8K) + conversation (~5K) overflows it → full fidelity needs 16–32K seq
