@@ -63,6 +63,14 @@ const SURFACE = RICH ? RICH_SURFACE : NAV_SURFACE;
 const LONGCTX = process.argv.includes("--longctx");
 if (LONGCTX) process.env.ARGENT_RICH_DESC = "1";
 const padRng = new RNG(7);
+// Real OpenCode provider system prompts (2-4K tok each) vendored under harness/prompts/. In --longctx we
+// swap the small ARGENT_SYSTEM_PROMPT for one of these per row -> realistic large prompts + length + the
+// variety that makes the model robust to ANY harness's big prompt (the gap that broke it at 55K).
+const PROMPT_POOL: string[] = LONGCTX
+  ? readdirSync(join(HERE, "..", "harness", "prompts"))
+      .filter((f) => f.endsWith(".txt"))
+      .map((f) => readFileSync(join(HERE, "..", "harness", "prompts", f), "utf8"))
+  : [];
 function padSurface(offered: ToolSpec[], rng: RNG): ToolSpec[] {
   const targetN = rng.range(30, catalog.length);
   if (offered.length >= targetN) return offered;
@@ -106,6 +114,7 @@ function genGymRaw(seed: number): RawTrajectory | null {
   if (!validator.validate(traj).ok) return null;
   const raw = trajectoryToRaw(traj);
   raw.tools = offered; // ensure full nav surface offered
+  if (LONGCTX && PROMPT_POOL.length) raw.policy = rng.pick(PROMPT_POOL);
   return raw;
 }
 
@@ -136,7 +145,7 @@ function loadReal(): RawTrajectory[] {
     }
     if (!Array.isArray(arr)) arr = [arr];
     for (const raw of arr) {
-      raw.policy = raw.policy || ARGENT_SYSTEM_PROMPT;
+      raw.policy = LONGCTX && PROMPT_POOL.length ? padRng.pick(PROMPT_POOL) : (raw.policy || ARGENT_SYSTEM_PROMPT);
       const used = (raw.steps || []).map((s) => s.call?.name).filter(Boolean) as string[];
       raw.tools = LONGCTX ? padSurface(offeredFor(used), padRng) : offeredFor(used);
       const errs = validateRaw(raw, catalogNames);
@@ -181,7 +190,8 @@ function main() {
 
   // Cap long describe observations (grounding-aware), then drop the rare trajectory still over
   // the SEQ budget so nothing trains truncated. ~9000 chars ≈ p99 ~4250 tokens after rendering.
-  const MAX_RAW_CHARS = RICH ? 100000 : 9000; // rich: no TS char-drop; Python token-filters to SEQ 8192
+  // longctx: rows are 10-20K tok (~40-80K chars) by design; let the Python kernel token-filter precisely.
+  const MAX_RAW_CHARS = LONGCTX ? 240000 : RICH ? 100000 : 9000;
   let dropped = 0;
   const fan = (raws: RawTrajectory[]): NativeRecord[] => {
     const fit = raws
