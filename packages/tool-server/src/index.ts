@@ -176,13 +176,29 @@ export function start(): void {
   };
   const onSelectionSubmitted = (): void => {
     cancelPendingClose();
+    // A CLI-driven Lens session (`argent lens`) keeps the window open across
+    // rounds — the user iterates and their feedback is piped into the spawned
+    // terminal, so a submit must never animate-close the window.
+    if (variantProposalStore.isCliSession()) return;
     pendingCloseTimer = setTimeout(() => {
       pendingCloseTimer = null;
       previewWindow.requestClose();
     }, PREVIEW_CLOSE_DELAY_MS);
   };
+  // `argent lens` toggles a CLI session: begin ⇒ open the window now (no await
+  // needed — the agent proposes without blocking), end ⇒ close it.
+  const onCliSessionChanged = (active: boolean): void => {
+    cancelPendingClose();
+    if (active) {
+      const url = previewWindowBaseUrl();
+      if (url) previewWindow.ensureOpen(url);
+    } else {
+      previewWindow.requestClose();
+    }
+  };
   variantProposalStore.events.on("awaitParked", onAwaitParked);
   variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
+  variantProposalStore.events.on("cliSessionChanged", onCliSessionChanged);
 
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
@@ -195,6 +211,7 @@ export function start(): void {
 
     variantProposalStore.events.off("awaitParked", onAwaitParked);
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
+    variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
     cancelPendingClose();
     previewWindow.dispose();
     updateChecker.dispose();

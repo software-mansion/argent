@@ -173,6 +173,28 @@ export function createPreviewRouter(registry: Registry): Router {
     res.json(variantProposalStore.snapshot());
   });
 
+  // ── CLI-driven Lens session (`argent lens`) ──────────────────────────
+  // `argent lens` toggles this when it opens/closes. begin ⇒ the window
+  // manager opens the preview window up front (no await needed) and stops
+  // auto-closing it on submit; the UI relabels its submit action. Tokenless
+  // like the rest of /preview (localhost-only) and state-changing exactly as
+  // /variants/selection already is — the spawned window URL is computed server
+  // side, never caller-supplied.
+  router.post("/cli-session", (req: Request, res: Response) => {
+    const active = Boolean(req.body?.active);
+    variantProposalStore.setCliSession(active);
+    res.json({ ok: true, cliSession: active });
+  });
+
+  // The frozen outcome of the last submitted round (selections + comments +
+  // annotations + globalComment), or null since the last reset. The `argent
+  // lens` watcher polls this and, on each new `completedAt`, types a flattened
+  // summary of the feedback into the bound `claude` terminal.
+  router.get("/outcome", (_req: Request, res: Response) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ outcome: variantProposalStore.getLastOutcome() });
+  });
+
   // Human pressed "Complete selection" in the UI — unblocks await_user_selection.
   router.post("/variants/selection", (req: Request, res: Response) => {
     const body = req.body ?? {};

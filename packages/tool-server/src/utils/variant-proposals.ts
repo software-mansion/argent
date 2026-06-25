@@ -133,6 +133,15 @@ export interface StoreSnapshot {
   device: string | null;
   /** Whether at least one `await_user_selection` call is currently parked. */
   agentWaiting: boolean;
+  /**
+   * Whether a CLI-driven Lens session (`argent lens`) currently owns the window.
+   * When true the window is opened up front (not on an await) and is NOT
+   * auto-closed when the user submits — the human keeps iterating and their
+   * feedback is piped into the spawned `claude` terminal instead. The UI reads
+   * this to relabel its submit action ("Request changes" rather than the
+   * await-and-close phrasing).
+   */
+  cliSession: boolean;
 }
 
 type StoreEvents = {
@@ -147,6 +156,12 @@ type StoreEvents = {
   awaitParked: () => void;
   /** Emitted after a successful `submitSelection` — the round is done. */
   selectionSubmitted: () => void;
+  /**
+   * Emitted when a CLI-driven Lens session is begun or ended (`argent lens`).
+   * The tool-server's window manager listens: begin ⇒ open the window now, end
+   * ⇒ close it. Carries the new active state so listeners need not re-snapshot.
+   */
+  cliSessionChanged: (active: boolean) => void;
 };
 
 /** A parked `await_user_selection` call, bound to the round it is waiting on. */
@@ -186,6 +201,12 @@ export class VariantProposalStore {
    * — so it is intentionally NOT cleared by `reset()`.
    */
   private device: string | null = null;
+  /**
+   * True while an `argent lens` CLI session owns the window. Set via
+   * `setCliSession`; deliberately NOT cleared by `reset()` — a CLI session spans
+   * many propose→submit rounds, like `device`.
+   */
+  private cliSession = false;
   private submitted: SubmittedSelection[] = [];
   private submittedAnnotations: ElementAnnotation[] = [];
   private variantSeq = 0;
@@ -346,7 +367,35 @@ export class VariantProposalStore {
       })),
       device: this.device,
       agentWaiting: this.waitersList.some((w) => !w.settled),
+      cliSession: this.cliSession,
     };
+  }
+
+  /**
+   * Begin or end a CLI-driven Lens session (`argent lens`). Idempotent: a
+   * no-change call does nothing. Emits `cliSessionChanged` (and `changed`) so
+   * the window manager can open/close the window and the UI can relabel.
+   */
+  setCliSession(active: boolean): void {
+    if (this.cliSession === active) return;
+    this.cliSession = active;
+    this.events.emit("cliSessionChanged", active);
+    this.events.emit("changed");
+  }
+
+  /** Whether a CLI-driven Lens session currently owns the window. */
+  isCliSession(): boolean {
+    return this.cliSession;
+  }
+
+  /**
+   * The frozen outcome of the last submitted round, or null if nothing has been
+   * submitted since the last reset. Read by `GET /preview/outcome` so the
+   * `argent lens` watcher can format the user's feedback and type it into the
+   * spawned `claude` terminal. Cleared (to null) when a new round begins.
+   */
+  getLastOutcome(): Extract<AwaitOutcome, { status: "completed" }> | null {
+    return this.lastOutcome;
   }
 
   /** Called by the preview UI when the human presses "Complete selection". */

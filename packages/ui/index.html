@@ -2692,6 +2692,12 @@
               }
             }
             vp.proposals = Array.isArray(snap.proposals) ? snap.proposals : [];
+            // In a CLI-driven Lens session (`argent lens`) the window stays open
+            // and submissions are piped to the bound agent terminal rather than
+            // resolving an await — so the action reads "Request changes".
+            vp.cliSession = !!snap.cliSession;
+            const label = vp.cliSession ? "Request changes" : "Complete";
+            if (completeBtn && completeBtn.textContent !== label) completeBtn.textContent = label;
           }
         } catch {
           /* keep last state */
