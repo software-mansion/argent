@@ -181,15 +181,8 @@ export function start(): void {
       previewWindow.requestClose();
     }, PREVIEW_CLOSE_DELAY_MS);
   };
-  // User clicked "Close" in the preview window — dismiss it immediately (the
-  // animated close), leaving any parked await still waiting.
-  const onCloseRequested = (): void => {
-    cancelPendingClose();
-    previewWindow.requestClose();
-  };
   variantProposalStore.events.on("awaitParked", onAwaitParked);
   variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
-  variantProposalStore.events.on("closeRequested", onCloseRequested);
 
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
@@ -202,7 +195,6 @@ export function start(): void {
 
     variantProposalStore.events.off("awaitParked", onAwaitParked);
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
-    variantProposalStore.events.off("closeRequested", onCloseRequested);
     cancelPendingClose();
     previewWindow.dispose();
     updateChecker.dispose();
