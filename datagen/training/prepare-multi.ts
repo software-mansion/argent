@@ -55,6 +55,23 @@ const RICH = process.argv.includes("--rich");                    // --rich = WID
 if (process.argv.includes("--verbose-desc")) process.env.ARGENT_RICH_DESC = "1";
 const SURFACE = RICH ? RICH_SURFACE : NAV_SURFACE;
 
+// --longctx: produce LONG (10-20K tok) rows so the model trains on real-harness-scale context.
+// Lever = the tool surface: full 67-tool catalog verbose ≈ 17K tok. Pad each trajectory's offered
+// surface to a per-row target sampled in [30, catalog] -> a fair spread across the 10-20K band.
+// (Verbose descs ON; the actual harness system prompts aren't available as text, so the catalog is
+// the legitimate length source — and it mirrors the real harnesses, which DO disclose the full catalog.)
+const LONGCTX = process.argv.includes("--longctx");
+if (LONGCTX) process.env.ARGENT_RICH_DESC = "1";
+const padRng = new RNG(7);
+function padSurface(offered: ToolSpec[], rng: RNG): ToolSpec[] {
+  const targetN = rng.range(30, catalog.length);
+  if (offered.length >= targetN) return offered;
+  const have = new Set(offered.map((t) => t.name));
+  const pool = rng.shuffle(catalog.filter((t) => !have.has(t.name)));
+  const add = new Set(pool.slice(0, targetN - offered.length).map((t) => t.name));
+  return catalog.filter((t) => have.has(t.name) || add.has(t.name)); // keep catalog order
+}
+
 // Nav-style gym task kinds (drop profiling/flow/network — out of the nav surface).
 const NAV_KINDS = new Set([
   "navigate-tap", "toggle", "scroll-find", "deep-link", "hide-and-seek",
@@ -82,7 +99,8 @@ function genGymRaw(seed: number): RawTrajectory | null {
     field: task.field,
   });
   const sr = solve(task, rng, prompt);
-  const offered = offeredFor(sr.toolsUsed);
+  let offered = offeredFor(sr.toolsUsed);
+  if (LONGCTX) offered = padSurface(offered, rng);
   if (!sr.toolsUsed.every((n) => catalogNames.has(n))) return null;
   const traj = assemble(sr, task, seed, offered, persona);
   if (!validator.validate(traj).ok) return null;
@@ -120,7 +138,7 @@ function loadReal(): RawTrajectory[] {
     for (const raw of arr) {
       raw.policy = raw.policy || ARGENT_SYSTEM_PROMPT;
       const used = (raw.steps || []).map((s) => s.call?.name).filter(Boolean) as string[];
-      raw.tools = offeredFor(used);
+      raw.tools = LONGCTX ? padSurface(offeredFor(used), padRng) : offeredFor(used);
       const errs = validateRaw(raw, catalogNames);
       if (errs.length) {
         console.error(`drop real ${raw.meta?.id || f}: ${errs.slice(0, 3).join("; ")}`);
