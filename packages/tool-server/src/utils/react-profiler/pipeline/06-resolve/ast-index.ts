@@ -238,7 +238,7 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
 
   // Collect every match per name first, then resolve a deterministic primary
   // once all files are walked — picking eagerly during the walk would re-tie
-  // the result to directory-walk order (the bug we're fixing).
+  // the result to directory-walk order.
   const candidates = new Map<string, ComponentIndexEntry[]>();
   function addCandidate(name: string, entry: ComponentIndexEntry): void {
     const existing = candidates.get(name);
