@@ -27,7 +27,7 @@ Then `describe` again to confirm. On a miss, run the loop again.
 
 - `list-devices` → Vega devices appear with a `serial` (use as `udid`) and a `vvdImage`. Start here to get both.
 - `boot-device {vvdImage}` — starts the single SDK-managed VVD (e.g. `vvdImage:"tv"`) and returns its `serial`. Skip if `list-devices` already shows a running device.
-- **Stopping the VVD** — run `vega virtual-device stop` in your shell. Caveat: the CLI tracks only VVDs it started in the foreground, so it often reports "virtual device not running" for a VVD that `boot-device` booted and stops nothing. To restart in that case use `boot-device {vvdImage, force:true}`, which stops the running VVD by process before re-booting.
+- **Stopping the VVD** — run `vega virtual-device stop` in your shell. Caveat: the CLI only tracks VVDs it starts in the foreground. As a result, it may report "virtual device not running" for a VVD started with `boot-device`, and won't stop it. To restart that VVD, run `boot-device {vvdImage, force: true}`. This stops the running VVD process before booting it again.
 
 ### App lifecycle
 

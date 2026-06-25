@@ -108,7 +108,11 @@ export async function stopVvd(
   // in this state, so a throwing stop must not abort the caller (e.g. a force reboot
   // in boot-device, which would otherwise fail outright and leave the VVD running).
   await runVega(["virtual-device", "stop"], { timeoutMs: options.timeoutMs ?? 60_000 }).catch(
-    () => {}
+    (err) => {
+      // Tolerated (the ps probe below tears the device down regardless), but logged so a
+      // genuine stop failure for a VVD the CLI *was* tracking is diagnosable, not silent.
+      process.stderr.write(`[vega-vvd] \`vega virtual-device stop\` failed: ${String(err)}\n`);
+    }
   );
   // Detection already trusts the OS process table over the CLI (see `isVvdRunning`);
   // make stop symmetric. Terminate any VVD emulator process the ps probe still
@@ -125,20 +129,34 @@ async function terminateStrayVvdProcesses(graceMs: number, pollMs: number): Prom
   if (pids.length === 0) return;
   for (const pid of pids) signalQuietly(pid, "SIGTERM");
   // Give SIGTERM a chance to bring the emulator down cleanly, then escalate.
+  if (await waitForVvdGone(graceMs, pollMs)) return;
+  for (const pid of await listRunningVvdPids()) signalQuietly(pid, "SIGKILL");
+  // Mirror the post-SIGTERM grace poll: don't return while a just-killed qemu could still
+  // be in the ps probe, or the next force-reboot's start would read it as a second VVD and
+  // trip `MultipleVegaDevicesError`. (Orphaned qemu reparents to launchd and reaps fast.)
+  await waitForVvdGone(graceMs, pollMs);
+}
+
+// Poll the ps probe until no VVD process is left, up to `graceMs`. Returns whether the VVD
+// went away within the window.
+async function waitForVvdGone(graceMs: number, pollMs: number): Promise<boolean> {
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline) {
-    if (!(await isVvdRunning())) return;
+    if (!(await isVvdRunning())) return true;
     await new Promise((r) => setTimeout(r, pollMs));
   }
-  for (const pid of await listRunningVvdPids()) signalQuietly(pid, "SIGKILL");
+  return !(await isVvdRunning());
 }
 
 // `process.kill` throws ESRCH if the pid already exited and EPERM if it isn't ours;
-// either way there's nothing left to do for that pid, so swallow it.
+// either way there's nothing left to do for that pid, so swallow just those. Anything
+// else (e.g. EINVAL from a bad signal) is a real bug — let it surface.
 function signalQuietly(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(pid, signal);
-  } catch {
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && code !== "EPERM") throw err;
     /* already gone or not ours */
   }
 }
