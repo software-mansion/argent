@@ -71,8 +71,23 @@ const PROMPT_POOL: string[] = LONGCTX
       .filter((f) => f.endsWith(".txt"))
       .map((f) => readFileSync(join(HERE, "..", "harness", "prompts", f), "utf8"))
   : [];
+// The real harness system prompt is NOT just the provider prompt — it bundles the built-in tool catalog,
+// the skills list, the project/global instructions (CLAUDE.md/AGENTS.md), and the persistent memory. That
+// bulk (the "see-and-ignore" noise the model must navigate to still pick the argent tool) is what makes a
+// real session 40-58K. Assemble all of it per row so rows reach real-harness scale.
+const CTX_BLOCKS: string[] = LONGCTX
+  ? [join(HERE, "..", "harness", "skills.txt"),
+     ...readdirSync(join(HERE, "..", "harness", "context"))
+         .filter((f) => f.endsWith(".txt"))
+         .map((f) => join(HERE, "..", "harness", "context", f))]
+      .filter(existsSync)
+      .map((f) => readFileSync(f, "utf8"))
+  : [];
+function assembleContext(rng: RNG): string {
+  return [rng.pick(PROMPT_POOL), ...rng.shuffle(CTX_BLOCKS)].join("\n\n---\n\n");
+}
 function padSurface(offered: ToolSpec[], rng: RNG): ToolSpec[] {
-  const targetN = rng.range(30, catalog.length);
+  const targetN = rng.range(55, catalog.length);
   if (offered.length >= targetN) return offered;
   const have = new Set(offered.map((t) => t.name));
   const pool = rng.shuffle(catalog.filter((t) => !have.has(t.name)));
@@ -114,7 +129,7 @@ function genGymRaw(seed: number): RawTrajectory | null {
   if (!validator.validate(traj).ok) return null;
   const raw = trajectoryToRaw(traj);
   raw.tools = offered; // ensure full nav surface offered
-  if (LONGCTX && PROMPT_POOL.length) raw.policy = rng.pick(PROMPT_POOL);
+  if (LONGCTX) raw.policy = assembleContext(rng);
   return raw;
 }
 
@@ -145,7 +160,7 @@ function loadReal(): RawTrajectory[] {
     }
     if (!Array.isArray(arr)) arr = [arr];
     for (const raw of arr) {
-      raw.policy = LONGCTX && PROMPT_POOL.length ? padRng.pick(PROMPT_POOL) : (raw.policy || ARGENT_SYSTEM_PROMPT);
+      raw.policy = LONGCTX ? assembleContext(padRng) : (raw.policy || ARGENT_SYSTEM_PROMPT);
       const used = (raw.steps || []).map((s) => s.call?.name).filter(Boolean) as string[];
       raw.tools = LONGCTX ? padSurface(offeredFor(used), padRng) : offeredFor(used);
       const errs = validateRaw(raw, catalogNames);

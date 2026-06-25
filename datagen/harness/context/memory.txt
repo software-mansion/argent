@@ -1,0 +1,53 @@
+# Memory Index
+
+- [User GitHub handle is latekvo](user_github_handle.md) — gh CLI posts as `latekvo`; their own prior PR review threads aren't "someone else's"
+- [Project environment](project_environment.md) — argent is a TypeScript monorepo (CLI/MCP/tool-server tooling), NOT a React Native app
+- [Shell grep is shadowed](shell_grep_shadowed.md) — Bash-tool `grep` silently swallows output; use /usr/bin/grep; zsh doesn't word-split unquoted vars
+- [E2E pokemon fixture](e2e_pokemon_fixture.md) — the live RN test app (com.latekvo.pokemon); its Metro is on 8082 NOT 8081; native injection needs real restart+5s
+- [E2E dev tool-server setup](e2e_dev_tool_server_setup.md) — run origin/main tool-server reusing global binaries; android needs trace-processor WASM copied; keep alive via launchd (harness reaps Bash procs ~30s)
+- [Injected debugger scripts are template literals](injected_debugger_scripts_template_literals.md) — backticks in component-tree.ts/inspect-at-point.ts bodies break the .ts parse; verify with vitest after editing
+- [Always branch sub-agents from main, not from HEAD](feedback_worktree_isolation.md) — parallel agent swarms must use `git checkout -b <branch> main` to avoid stacked branches
+- [Parallel verify agents need isolation](feedback_parallel_verify_agents_shared_worktree.md) — don't point multiple git-capable agents at one shared worktree; they race and contaminate it
+- [Verify agents see origin/main, not your branch](feedback_verify_agents_worktree_wrong_base.md) — isolation:"worktree" verify agents branch from origin/main → false "work discarded" alarms; reprove against the master worktree
+- [Generalized, minimal, no hardcoding](feedback_generalized_minimal_no_hardcoding.md) — preview UI: general mechanism over special-casing, consider alternatives, tokenize feel constants in theme.css
+- [Never work on main worktree](feedback_worktree_strict.md) — all feature work in separate worktrees; main directory stays on `main` always
+- [Never merge to main directly](feedback_no_merge_to_main.md) — always push branch and open a PR instead
+- [Iterate autonomously](feedback_autonomous_iteration.md) — push/wait/check/fix loop without asking after each CI failure
+- [Decide, don't ask](feedback_decide_dont_ask.md) — review findings are either critical (fix) or not important (drop); never ask "should I fix X?"
+- [Tool descriptions stay above implementation details](feedback_tool_descriptions.md) — cut references to the driving binary/protocol; keep descriptions about what/when/why/returns
+- [Compact bug-report format](feedback_compact_bug_report_format.md) — review findings as `**H1./M2. Title**` under severity headings, file:line + Repro + Fix only, drop framing prose
+- [ESLint gate + follow-ups](eslint_gate_and_followups.md) — type-aware ESLint live on main (PR #349); parked rules to ratchet; biggest follow-up is no-misused-promises void-return (22 server sites)
+- [Dependency vuln triage](dep_vuln_triage.md) — npm audit on main: which advisories are shipped vs SDK-transitive vs dev-only
+- [Dependabot batch constraints](dependabot_batch_constraints.md) — tree-sitter 0.25 breaks `npm ci` on Node 22+/24 (compiles on 20→half-green CI); now held at 0.21.1 + dependabot ignore; express 5 migrated; which recurring bumps are safe
+- [iOS system-modal describe behavior](ios_system_modal_describe.md) — alertVisible/systemElements wire contract; Apple Account sheet is alertVisible:false; dropped-systemElements bug + fix branch
+- [Streaming simulator-server](streaming_simserver.md) — bundled binary is non-streaming; build from ~/dev/radon with --features streaming + ARGENT_SIMULATOR_SERVER_DIR override
+- [MCP bundle build step](mcp_bundle_build_step.md) — root `npm run build` is tsc-only; MCP-stdio E2E needs `npm run build -w @swmansion/argent` to emit dist/mcp-server.mjs
+- [agent-browser pauses rAF](agent_browser_raf_paused.md) — headless CDP tabs don't fire requestAnimationFrame; rAF-driven UI animations look stuck even though DOM/events work
+- [iOS icon-only pressables are AX-invisible](icon_only_pressables_ax_invisible.md) — stars/icons inside `accessibilityElement` rows don't appear in `describe`; not a client bug — needs app-side a11y wrapping or native-devtools path
+- [Benchmark counter (Opus vs GPT)](project_benchmark_counter.md) — local throwaway Argent usage-counter: tool-server SSE `/calls/stream` + Electron panel on branch worktree-argent-benchmark-counter; run via ARGENT_TOOLS_URL
+- [Preview-window electron bundling](preview_window_electron_bundling.md) — tool-server bundle MUST externalize `electron` or the variant-selection window silently fails in prod (window missing + agent guesses URL + await hangs = one packaging bug)
+- [Standard solution, no overbuild](feedback_standard_solution_no_overbuild.md) — use the conventional fix for standard problems; check git history for a regression first; scale verification to fix size
+- [Feature-flags system](feature_flags_system.md) — `isFlagEnabled` from `@argent/cli` + `~/.argent/flags.json` + `argent enable/disable/flags`; how to gate a tool-server feature (FLAG_REGISTRY entry + registration guard)
+- [Skill delivery vs flags gap](skill_delivery_flag_gap.md) — `argent init` installs skills from a GitHub `#v<version>` tag; unreleased/flag-gated skills (argent-propose-variants) don't reach users; `enable` never installs skills
+- [≥2 variants per element](feedback_min_two_variants.md) — every propose-variants element must have at least two variants; a single variant is not a choice
+- [E2E device = iPhone 16 Pro Max](feedback_e2e_device_pro_max.md) — use udid 6DBF83B4-... for all Argent E2E; not the iPhone 16
+- [Physical iOS via CoreDevice HID](physical_ios_coredevice_hid.md) — app-free real-iPhone control via pmd3 CoreDevice; HW-verified: screenshot works iOS 18+, but TOUCH/keyboard needs iOS 27+ (CoreDeviceError 9021); hardware buttons work on 18
+- [Lockfile CI uses Node 20](lockfile_ci_npm_version.md) — npm 10 vs 11 produce divergent locks (peer:true); repo pins no toolchain; PR #362 reconciled an electron optionalDependency mis-filing
+- [Android emulator can't run on hosted macOS CI](android_emulator_no_hosted_macos_ci.md) — HV_UNSUPPORTED (no nested virt); use Linux+KVM; device-E2E smoke matrix in PR #371 + drive-device.sh; tool-server CI start needs TS_NODE_TRANSPILE_ONLY=1
+- [Hand-rolled parser swaps](hand_rolled_parser_swaps.md) — PR #373 replaced ini/.env/frontmatter/version/regex-escape/stack parsers with packages; which parsers were deliberately KEPT (uiautomator + xctrace XML) and why — don't re-flag them
+- [Fine-tune datagen project](project_finetune_datagen.md) — Argent training-data generator (gym+expert+validator), branch argent-finetune-data / PR #375; how it works + which repo-wide CI jobs (prettier+eslint) gate top-level dirs
+- [Finetune branch — NO PR](finetune_branch_no_pr.md) — argent-finetune-data is internal experimentation; never open/advance a PR or aim at main (≥1 month); pushing to remote is fine
+- [Security worktree branch audit](security_worktree_branch_audit.md) — which stale security branches are already in main (5 + pr-194 rollup) vs the one live gap: iOS profiler device_id shell-injection, lost in a refactor, re-fixed in draft PR #378
+- [iOS describe AX warm-up timing](ios_describe_ax_warmup.md) — AX tree empty ~1.25s after navigation then fills incrementally (nav chrome before content); broke Lens propose-time matching; fixed in PR #392 (retry + exact-match hold-out)
+- [Lens preview UI 404 on dot-path installs](lens_preview_sendfile_dotfiles.md) — express 5 send@1 dotfiles:ignore 404s sendFile under ~/.nvm etc; regressed by #354, fixed in PR #390
+- [Vega VVD navigation recipe](vega_vvd_navigation_recipe.md) — drive a Fire TV Virtual Device with main's vega tools via a dev tool-server + curl; build/install the rn-multi-tv-app-sample vpkg; restart-app to attach toolkit
+- [Vega CLI loses track of argent-booted VVD](vega_cli_loses_track_of_argent_booted_vvd.md) — `vega virtual-device status/stop` fail on a VVD argent booted; detection uses ps probe; stopVvd no-op broke `boot-device force:true` → fixed in draft PR #402
+- [Metro logicalDeviceId ≠ iOS UDID](metro_logicaldeviceid_not_udid.md) — selectTarget matches device_id only on Metro's logicalDeviceId (an internal hash); passing a UDID only works via single-device fallback; multi-device collapse fixed in PR #397
+- [Screenshot first-frame race](screenshot_first_frame_race.md) — issue #391: "no image to export" with >1 booted sim is a fresh-spawn race (streaming screenshot before first frame), not device misselection; fixed in PR #399 by polling past the transient
+- [Hyper-real training data](hyperreal_training_data.md) — silver retraining on real apps + 4 RE'd harness formats + real navigation; RawTrajectory→4 renderers, tonight's 23:55 launchd dispatch, device substrate, token-fit gotcha
+- [Model naming convention](model_naming_convention.md) — ollama-idiomatic `silver-v<N>:<size>-<variant>-<QUANT>` (e.g. silver-v5:e4b-text-Q6-K); descriptors in the tag, no final/really-final
+- [Lens Electron app name](lens_electron_app_name_limitation.md) — bold menu-bar/Cmd-Tab name IS fixable: symlink wrapper .app (CFBundleName "Argent Lens") + --no-sandbox, no 270MB copy (PR #409 ensureLensAppBundle); runtime setName/productName/dir-spawn/custom-menu all FAIL; window title separate
+- [Kiro CLI integration](kiro_cli_integration.md) — PR #410: Kiro CLI = rebranded Amazon Q CLI, shares ~/.kiro/settings/mcp.json with the IDE, autoApprove is IDE-only (CLI ignores, no deny_unknown_fields), all kiro-cli mcp/chat subcommands need login
+- [Lens card layout & repel](lens_card_layout_repel.md) — de-overlap card spring HOMES per-poll (deterministic sweep), NEVER a live per-frame force (jitters/wedge-wiggle — user rejected); per-column footbar bound for card height; --thumb-size is inert (applyThumbCrop overrides); PR #409
+- [Chromium describe fails on React Native Web](chromium_describe_rnw_display_contents.md) — cdp-dom walker returned empty tree on Expo-web; display:contents wrappers (0×0 box) pruned whole subtree + MAX_DEPTH 24 too shallow; fixed PR #414; includes RNGH expo-web repro recipe (~/dev/rngh-expo-example + CDP Chrome on 9222)
+- [`argent lens` CLI session](lens_cli_session_argent_lens.md) — Lens spawns+owns one claude terminal (solves no-per-agent-identity); osascript `write text`/`do script` injects feedback into the running TUI's stdin (tty-write CAN'T, needs TIOCSTI); PR #416, cli-session flag + /preview/outcome

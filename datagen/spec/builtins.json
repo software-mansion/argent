@@ -1,0 +1,326 @@
+[
+ {
+  "name": "apply-patch",
+  "description": "Use the `apply_patch` tool to edit files. Your patch language is a stripped\u2011down, file\u2011oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high\u2011level envelope:\n\n*** Begin Patch\n[ one or more file sections ]\n*** End Patch\n\nWithin that envelope, you get a sequence of file operations.\nYou MUST include a header to specify the action you are taking.\nEach operation starts with one of three headers:\n\n*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).\n*** Delete File: <path> - remove an existing file. Nothing follows.\n*** Update File: <path> - patch an existing file in place (optionally with a rename).\n\nExample patch:\n\n```\n*** Begin Patch\n*** Add File: hello.txt\n+Hello world\n*** Update File: src/app.py\n*** Move to: src/main.py\n@@ def greet():\n-print(\"Hi\")\n+print(\"Hello, world!\")\n*** Delete File: obsolete.txt\n*** End Patch\n```\n\nIt is important to remember:\n\n- You must include a header with your intended action (Add/Delete/Update)\n- You must prefix new lines with `+` even when creating a new file",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "input": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "input"
+   ]
+  }
+ },
+ {
+  "name": "edit",
+  "description": "Performs exact string replacements in files. \n\nUsage:\n- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. \n- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + colon + space (e.g., `1: `). Everything after that space is the actual file content to match. Never include any part of the line number prefix in the oldString or newString.\n- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n- The edit will FAIL if `oldString` is not found in the file with an error \"oldString not found in content\".\n- The edit will FAIL if `oldString` is found multiple times in the file with an error \"Found multiple matches for oldString. Provide more surrounding lines in oldString to identify the correct match.\" Either provide a larger string with more surrounding context to make it unique or use `replaceAll` to change every instance of `oldString`. \n- Use `replaceAll` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "filePath": {
+     "type": "string"
+    },
+    "oldString": {
+     "type": "string"
+    },
+    "newString": {
+     "type": "string"
+    },
+    "replaceAll": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "filePath"
+   ]
+  }
+ },
+ {
+  "name": "glob",
+  "description": "- Fast file pattern matching tool that works with any codebase size\n- Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\"\n- Returns matching file paths\n- Use this tool when you need to find files by name patterns\n- When you are doing an open-ended search that may require multiple rounds of globbing and grepping, use the Task tool instead\n- You have the capability to call multiple tools in a single response. It is always better to speculatively perform multiple searches as a batch that are potentially useful.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "pattern": {
+     "type": "string"
+    },
+    "path": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "pattern"
+   ]
+  }
+ },
+ {
+  "name": "grep",
+  "description": "- Fast content search tool that works with any codebase size\n- Searches file contents using regular expressions\n- Supports full regex syntax (eg. \"log.*Error\", \"function\\s+\\w+\", etc.)\n- Filter files by pattern with the include parameter (eg. \"*.js\", \"*.{ts,tsx}\")\n- Returns file paths and line numbers with matching lines\n- Use this tool when you need to find files containing specific patterns\n- If you need to identify/count the number of matches within files, use the Bash tool with `rg` (ripgrep) directly. Do NOT use `grep`.\n- When you are doing an open-ended search that may require multiple rounds of globbing and grepping, use the Task tool instead",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "pattern": {
+     "type": "string"
+    },
+    "path": {
+     "type": "string"
+    },
+    "include": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "pattern"
+   ]
+  }
+ },
+ {
+  "name": "lsp",
+  "description": "Interact with Language Server Protocol (LSP) servers to get code intelligence features.\n\nSupported operations:\n- goToDefinition: Find where a symbol is defined\n- findReferences: Find all references to a symbol\n- hover: Get hover information (documentation, type info) for a symbol\n- documentSymbol: Get all symbols (functions, classes, variables) in a document\n- workspaceSymbol: List project-wide symbols matching a query string\n- goToImplementation: Find implementations of an interface or abstract method\n- prepareCallHierarchy: Get call hierarchy item at a position (functions/methods)\n- incomingCalls: Find all functions/methods that call the function at a position\n- outgoingCalls: Find all functions/methods called by the function at a position\n\nAll operations require:\n- filePath: The file to operate on\n- line: The line number (1-based, as shown in editors)\n- character: The character offset (1-based, as shown in editors)\n\nworkspaceSymbol also accepts:\n- query: A query string to filter symbols by. Empty string requests all symbols.\n\nFor workspaceSymbol, filePath is not sent in the LSP workspace/symbol request. It is used by opencode to select and start the matching LSP server.\n\nNote: LSP servers must be configured for the file type. If no server is available, an error will be returned.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "input": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "input"
+   ]
+  }
+ },
+ {
+  "name": "plan-enter",
+  "description": "Use this tool to suggest switching to plan agent when the user's request would benefit from planning before implementation.\n\nIf they explicitly mention wanting to create a plan ALWAYS call this tool first.\n\nThis tool will ask the user if they want to switch to plan agent.\n\nCall this tool when:\n- The user's request is complex and would benefit from planning first\n- You want to research and design before making changes\n- The task involves multiple files or significant architectural decisions\n\nDo NOT call this tool:\n- For simple, straightforward tasks\n- When the user explicitly wants immediate implementation",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "input": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "input"
+   ]
+  }
+ },
+ {
+  "name": "plan-exit",
+  "description": "Use this tool when you have completed the planning phase and are ready to exit plan agent.\n\nThis tool will ask the user if they want to switch to build agent to start implementing the plan.\n\nCall this tool:\n- After you have written a complete plan to the plan file\n- After you have clarified any questions with the user\n- When you are confident the plan is ready for implementation\n\nDo NOT call this tool:\n- Before you have created or finalized the plan\n- If you still have unanswered questions about the implementation\n- If the user has indicated they want to continue planning",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "input": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "input"
+   ]
+  }
+ },
+ {
+  "name": "question",
+  "description": "Use this tool when you need to ask the user questions during execution. This allows you to:\n1. Gather user preferences or requirements\n2. Clarify ambiguous instructions\n3. Get decisions on implementation choices as you work\n4. Offer choices to the user about what direction to take.\n\nUsage notes:\n- When `custom` is enabled (default), a \"Type your own answer\" option is added automatically; don't include \"Other\" or catch-all options\n- Answers are returned as arrays of labels; set `multiple: true` to allow selecting more than one\n- If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "input": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "input"
+   ]
+  }
+ },
+ {
+  "name": "read",
+  "description": "Read a file or directory from the local filesystem. If the path does not exist, an error is returned.\n\nUsage:\n- The filePath parameter should be an absolute path.\n- By default, this tool returns up to 2000 lines from the start of the file.\n- The offset parameter is the line number to start from (1-indexed).\n- To read later sections, call this tool again with a larger offset.\n- Use the grep tool to find specific content in large files or files with long lines.\n- If you are unsure of the correct file path, use the glob tool to look up filenames by glob pattern.\n- Contents are returned with each line prefixed by its line number as `<line>: <content>`. For example, if a file has contents \"foo\\n\", you will receive \"1: foo\\n\". For directories, entries are returned one per line (without line numbers) with a trailing `/` for subdirectories.\n- Any line longer than 2000 characters is truncated.\n- Call this tool in parallel when you know there are multiple files you want to read.\n- Avoid tiny repeated slices (30 line chunks). If you need more context, read a larger window.\n- This tool can read image files and PDFs and return them as file attachments.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "filePath": {
+     "type": "string"
+    },
+    "offset": {
+     "type": "number"
+    },
+    "limit": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "filePath"
+   ]
+  }
+ },
+ {
+  "name": "skill",
+  "description": "Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.\n\nUse this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.\n\nThe skill name must match one of the skills listed in your system prompt.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "input": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "input"
+   ]
+  }
+ },
+ {
+  "name": "task",
+  "description": "Launch a new agent to handle complex, multistep tasks autonomously.\n\nWhen using the Task tool, you must specify a subagent_type parameter to select which agent type to use.\n\nWhen NOT to use the Task tool:\n- If you want to read a specific file path, use the Read or Glob tool instead of the Task tool, to find the match more quickly\n- If you are searching for a specific class definition like \"class Foo\", use the Grep tool instead, to find the match more quickly\n- If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Task tool, to find the match more quickly\n- If no available agent is a good fit for the task, use other tools directly\n\n\nUsage notes:\n1. Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses\n2. Once you have delegated work to an agent, do not duplicate that work yourself. Continue with non-overlapping tasks, or wait for the result. For background tasks, you will be notified automatically when the result is ready.\n3. When the agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result. The output includes a task_id you can reuse later to continue the same subagent session.\n4. Each agent invocation starts with a fresh context unless you provide task_id to resume the same subagent session (which continues with its previous messages and tool outputs). When starting fresh, your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final and only message to you.\n5. The agent's outputs should generally be trusted\n6. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent. Tell it how to verify its work if possible (e.g., relevant test commands).\n7. If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "description": {
+     "type": "string"
+    },
+    "prompt": {
+     "type": "string"
+    },
+    "subagent_type": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "description"
+   ]
+  }
+ },
+ {
+  "name": "todowrite",
+  "description": "Create and maintain a structured task list for the current coding session. Tracks progress, organizes multi-step work, and surfaces status to the user.\n\n## When to use\nUse proactively when:\n- The task requires 3+ distinct steps or actions (not just 3 tool calls for a single conceptual step)\n- The work is non-trivial and benefits from planning\n- The user provides multiple tasks (numbered or comma-separated) or explicitly asks for a todo list\n- New instructions arrive - capture them as todos\n- You start a task - mark it `in_progress` (only one at a time) before working\n- You finish a task - mark it `completed` and add any follow-ups discovered during the work\n\n## When NOT to use\nSkip when:\n- The work is a single, straightforward task (or <3 trivial steps)\n- The request is purely informational or conversational\n- Tracking adds no organizational value\n\n## States\n- `pending` - not started\n- `in_progress` - actively working (exactly ONE at a time)\n- `completed` - finished successfully\n- `cancelled` - no longer needed\n\n## Rules\n- Update status in real time; don't batch completions\n- Mark `completed` only after the required work is actually done, including any required verification. Never based on intent.\n- Keep exactly one `in_progress` while work remains\n- If blocked or partial, keep it `in_progress` and add a follow-up todo describing the blocker\n- Preserve user-provided commands verbatim (flags, args, order)\n- Items should be specific and actionable; break large work into smaller steps\n\n## Examples\n\nUse it:\n- \"Add a dark mode toggle and run the tests\" -> multi-step feature + explicit verification\n- \"Rename getCwd -> getCurrentWorkingDirectory across the repo\" -> grep reveals 15 occurrences in 8 files\n- \"Implement registration, catalog, cart, checkout\" -> multiple complex features\n\nSkip it:\n- \"How do I print Hello World in Python?\" -> informational\n- \"Add a comment to calculateTotal\" -> single edit\n- \"Run npm install and tell me what happened\" -> one command\n\nWhen in doubt, use it.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "input": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "input"
+   ]
+  }
+ },
+ {
+  "name": "webfetch",
+  "description": "- Fetches content from a specified URL\n- Takes a URL and optional format as input\n- Fetches the URL content, converts to requested format (markdown by default)\n- Returns the content in the specified format\n- Use this tool when you need to retrieve and analyze web content\n\nUsage notes:\n  - IMPORTANT: if another tool is present that offers better web fetching capabilities, is more targeted to the task, or has fewer restrictions, prefer using that tool instead of this one.\n  - The URL must be a fully-formed valid URL\n  - HTTP URLs will be automatically upgraded to HTTPS\n  - Format options: \"markdown\" (default), \"text\", or \"html\"\n  - This tool is read-only and does not modify any files\n  - Results may be summarized if the content is very large",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "input": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "input"
+   ]
+  }
+ },
+ {
+  "name": "websearch",
+  "description": "- Search the web using the session's web search provider - performs real-time web searches and can scrape content from specific URLs\n- Provides up-to-date information for current events and recent data\n- Supports configurable result counts and returns the content from the most relevant websites\n- Use this tool for accessing information beyond knowledge cutoff\n- Searches are performed automatically within a single API call\n\nUsage notes:\n  - Supports live crawling modes when available: 'fallback' (backup if cached unavailable) or 'preferred' (prioritize live crawling)\n  - Search types when available: 'auto' (balanced), 'fast' (quick results), 'deep' (comprehensive search)\n  - Configurable context length for optimal LLM integration\n  - Domain filtering and advanced search options available\n\nThe current year is {{year}}. You MUST use this year when searching for recent information or current events\n- Example: If the current year is 2026 and the user asks for \"latest AI news\", search for \"AI news 2026\", NOT \"AI news 2025\"",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "input": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "input"
+   ]
+  }
+ },
+ {
+  "name": "write",
+  "description": "Writes a file to the local filesystem.\n\nUsage:\n- This tool will overwrite the existing file if there is one at the provided path.\n- If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.\n- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n- NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.\n- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "filePath": {
+     "type": "string"
+    },
+    "content": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "filePath"
+   ]
+  }
+ },
+ {
+  "name": "bash",
+  "description": "Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures. Before executing, you must determine the directory and verify it exists. Avoid using find/grep/cat/head/tail \u2014 prefer the dedicated Grep, Glob, and Read tools. Use ; or && to chain; avoid newlines except in quoted strings. State persists across calls. VERY IMPORTANT: do not use interactive flags.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "command": {
+     "type": "string"
+    },
+    "timeout": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "command"
+   ]
+  }
+ },
+ {
+  "name": "webfetch",
+  "description": "Fetches content from a specified URL and processes it according to instructions. Takes a URL and a prompt, fetches the URL content, converts HTML to markdown, and returns a model-processed result. Use when you need to retrieve and analyze web content. The URL must be fully-formed. HTTP URLs are upgraded to HTTPS. Results may be summarized if very large.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "url": {
+     "type": "string"
+    },
+    "prompt": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ]
+  }
+ },
+ {
+  "name": "websearch",
+  "description": "Search the web and use the results to inform responses. Provides up-to-date information for current events and recent data. Returns search result blocks. Useful for questions about recent events, library updates, or anything beyond the knowledge cutoff. Supports domain filtering.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "query": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ]
+  }
+ },
+ {
+  "name": "todowrite",
+  "description": "Use this tool to create and manage a structured task list for the current coding session. This helps track progress, organize complex tasks, and demonstrate thoroughness. Mark todos as in_progress before starting and completed immediately after finishing. Only have one task in_progress at a time.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "todos": {
+     "type": "array"
+    }
+   },
+   "required": [
+    "todos"
+   ]
+  }
+ }
+]

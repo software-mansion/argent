@@ -21,7 +21,7 @@ import trl.models.utils as _tmu
 _tmu.prepare_model_for_kbit_training = lambda m, *a, **k: m
 from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
 import datasets
-MAXLEN = 20480
+MAXLEN = 40960
 MODEL = "unsloth/gemma-4-E4B-it"
 bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True,
                          bnb_4bit_compute_dtype=torch.bfloat16)
@@ -57,14 +57,13 @@ def _find(split):
     if not c: raise FileNotFoundError(f"{split}.jsonl not under /kaggle/input")
     return c[0]
 def to_text(split):
-    out = []; skipped = 0
+    out = []
     for line in open(_find(split)):
         d = json.loads(line)
         t = tok.apply_chat_template(d["messages"], tools=d.get("tools"), tokenize=False)
         if t.startswith("<bos>"): t = t[5:]
-        if len(TKZ(t, add_special_tokens=False)["input_ids"]) > MAXLEN: skipped += 1; continue
-        out.append(t)
-    print(f"{split}: kept {len(out)} skipped {skipped} (>{MAXLEN} tok)", flush=True)
+        out.append(t)  # rows are <=38K <= MAXLEN by construction; SFTTrainer truncates any rare over -> skip the costly pre-filter tokenize
+    print(f"{split}: {len(out)} rows", flush=True)
     return datasets.Dataset.from_dict({"text": out})
 
 train_ds = to_text("train")
