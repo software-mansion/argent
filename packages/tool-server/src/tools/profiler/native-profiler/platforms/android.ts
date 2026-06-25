@@ -2,9 +2,13 @@ import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import { startPerfetto, stopPerfetto } from "../../../../utils/android-profiler/capture";
-import { detectAndroidRunningApp } from "../../../../utils/android-profiler/detect-app";
+import {
+  detectAndroidRunningApp,
+  validateAndroidAppProcess,
+} from "../../../../utils/android-profiler/detect-app";
 import { runAndroidProfilerPipeline } from "../../../../utils/android-profiler/pipeline/index";
 import { writeAndroidNativeProfilerMetadata } from "../../../../utils/android-profiler/session-metadata";
+import { formatTraceFreshness } from "../../../../utils/profiler-shared/freshness";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import {
   renderNativeProfilerReport,
@@ -26,7 +30,16 @@ export async function startNativeProfilerAndroid(
     throw new Error(`A native profiling session is already running (PID: ${api.capturePid}).`);
   }
 
-  const appPackage = params.app_process ?? (await detectAndroidRunningApp(params.device_id));
+  // An explicit app_process is validated up front (Perfetto won't tell us it's
+  // bogus); auto-detection already only returns a real foreground user app.
+  const explicit = params.app_process?.trim();
+  let appPackage: string;
+  if (explicit) {
+    await validateAndroidAppProcess(params.device_id, explicit);
+    appPackage = explicit;
+  } else {
+    appPackage = await detectAndroidRunningApp(params.device_id);
+  }
 
   const debugDir = await getDebugDir();
   const timestamp = new Date()
@@ -193,5 +206,9 @@ export async function analyzeNativeProfilerAndroid(
     payload,
     traceFile: hostTracePath,
     exportErrors: pipelineResult.exportErrors,
+    // wallClockStartMs is the recording's start time (set at start, persisted in
+    // the metadata sidecar, restored by profiler-load). A large gap to "now"
+    // means we're analyzing a trace from an earlier session, not a fresh capture.
+    freshnessNote: formatTraceFreshness(api.wallClockStartMs, Date.now()) ?? undefined,
   });
 }

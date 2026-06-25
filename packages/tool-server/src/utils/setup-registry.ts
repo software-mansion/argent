@@ -33,6 +33,7 @@ import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { keyboardTool } from "../tools/keyboard";
 import { rotateTool } from "../tools/rotate";
+import { tvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { debuggerStatusTool } from "../tools/debugger/debugger-status";
@@ -44,6 +45,7 @@ import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
 import { createDescribeTool } from "../tools/describe";
+import { createAwaitUiElementTool } from "../tools/await-ui-element";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
 import { createReactProfilerStatusTool } from "../tools/profiler/react/react-profiler-status";
@@ -119,6 +121,7 @@ export function createRegistry(): Registry {
   registry.registerTool(buttonTool);
   registry.registerTool(keyboardTool);
   registry.registerTool(rotateTool);
+  registry.registerTool(tvRemoteTool);
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(debuggerStatusTool);
@@ -130,6 +133,7 @@ export function createRegistry(): Registry {
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
   registry.registerTool(createDescribeTool(registry));
+  registry.registerTool(createAwaitUiElementTool(registry));
   registry.registerTool(createReactProfilerStartTool(registry));
   registry.registerTool(createReactProfilerStopTool(registry));
   registry.registerTool(createReactProfilerStatusTool(registry));

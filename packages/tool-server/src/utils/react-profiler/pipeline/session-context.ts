@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import { join } from "path";
+import { coerce } from "semver";
 import type { RawProfilingInput } from "../types/input";
 import type { SessionContext } from "../types/pipeline";
 
@@ -66,7 +67,9 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
     rnArchitecture = input.sessionMeta.detectedArchitecture;
   } else {
     const rnVersionStr = input.sessionMeta.rnVersion ?? "";
-    const rnMinor = parseInt(rnVersionStr.split(".")[1] ?? "0", 10);
+    // coerce tolerates partial / prefixed / pre-release version strings
+    // ("0.81", "v0.81.0", "0.76.0-rc.1") that a bare split(".")[1] mishandles.
+    const rnMinor = coerce(rnVersionStr)?.minor ?? 0;
     const newArchDefault = rnMinor >= 76;
     rnArchitecture = newArchDefault ? "bridgeless" : "bridge";
 

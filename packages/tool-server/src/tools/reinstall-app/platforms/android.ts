@@ -1,4 +1,5 @@
 import { resolve as resolvePath } from "node:path";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { runAdb } from "../../../utils/adb";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
@@ -29,7 +30,12 @@ export const androidImpl: PlatformImpl<
     const { stdout, stderr } = await runAdb(args, { timeoutMs: 180_000 });
     const output = `${stdout}\n${stderr}`;
     if (!/Success/i.test(output)) {
-      throw new Error(`adb install failed: ${output.trim()}`);
+      throw new FailureError(`adb install failed: ${output.trim()}`, {
+        error_code: FAILURE_CODES.ANDROID_REINSTALL_INSTALL_FAILED,
+        failure_stage: "android_reinstall_adb_install",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      });
     }
     return { reinstalled: true, bundleId };
   },

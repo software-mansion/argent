@@ -1,11 +1,13 @@
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
 import type { ServiceRef } from "@argent/registry";
 import { simulatorServerRef } from "../../blueprints/simulator-server";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
-import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { invokeSubTool } from "../../utils/sub-invoke";
+import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
 const ALLOWED_TOOLS = new Set([
   "gesture-tap",
@@ -18,6 +20,7 @@ const ALLOWED_TOOLS = new Set([
   "button",
   "keyboard",
   "rotate",
+  AWAIT_UI_ELEMENT_TOOL_ID,
 ]);
 
 const zodSchema = z.object({
@@ -32,7 +35,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate"
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate, await-ui-element"
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -97,6 +100,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
   keyboard:       { text?: string, key?: string, delayMs?: number }                                                     [ios/android/chromium]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
+  await-ui-element: { condition: "exists"|"visible"|"hidden"|"text", selector: {text?,identifier?,role?}, expectedText?, timeoutMs?, pollIntervalMs? }  [ios/android/chromium]
 
 Example — scroll down three times (use gesture-scroll with positive deltaY on Chromium):
   { "udid": "<UDID>", "steps": [
@@ -111,7 +115,16 @@ Example — type text and submit:
     { "tool": "keyboard", "args": { "key": "enter" } }
   ]}
 
-Stops on the first error and returns partial results.`,
+Example — tap, wait for the next screen's element, then tap it:
+  { "udid": "<UDID>", "steps": [
+    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.9 } },
+    { "tool": "await-ui-element", "args": { "condition": "visible", "selector": { "text": "Continue" } } },
+    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.5 } }
+  ]}
+If the await-ui-element condition is not met before its timeout, the sequence stops there and the
+following steps do NOT run — so the tap above only fires once "Continue" is actually on screen.
+
+Stops on the first error (or unmet await-ui-element condition) and returns partial results.`,
     alwaysLoad: true,
     longRunning: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
@@ -127,12 +140,19 @@ Stops on the first error and returns partial results.`,
       }
       return { simulatorServer: simulatorServerRef(device) };
     },
-    async execute(_services, params) {
+    async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;
+      const signal = ctx?.signal;
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
 
       for (const step of steps) {
+        // The HTTP layer aborts `signal` when the client disconnects. Honour it
+        // between steps and forward it into each sub-tool below, so a long step
+        // (e.g. an await-ui-element blocking on a UI condition) is cancelled
+        // promptly instead of the server polling on until its own timeout.
+        if (signal?.aborted) break;
+
         if (!ALLOWED_TOOLS.has(step.tool)) {
           results.push({
             tool: step.tool,
@@ -161,7 +181,15 @@ Stops on the first error and returns partial results.`,
 
         try {
           const toolArgs = { ...step.args, udid };
-          const result = await registry.invokeTool(step.tool, toolArgs);
+          const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
+          if (isUnmetUiWaitResult(step.tool, result)) {
+            const note = (result as { note?: string }).note;
+            results.push({
+              tool: step.tool,
+              error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+            });
+            break;
+          }
           results.push({ tool: step.tool, result });
         } catch (err) {
           results.push({
@@ -172,7 +200,9 @@ Stops on the first error and returns partial results.`,
         }
 
         const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;
-        if (delay > 0) await sleep(delay);
+        // Abortable so a client disconnect during the inter-step pause stops the
+        // sequence promptly rather than after the full delay.
+        if (delay > 0 && !(await sleepOrAbort(delay, signal))) break;
       }
 
       return {

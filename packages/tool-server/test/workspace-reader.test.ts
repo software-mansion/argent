@@ -122,6 +122,22 @@ SECRET=value`;
     expect(keys).toEqual(["SECRET"]);
     expect(keys.join("")).not.toContain("super_secret_value_123");
   });
+
+  it("strips an `export ` prefix", () => {
+    // The previous split-on-`=` parser produced the key "export API_URL",
+    // which failed the identifier filter and was silently dropped.
+    expect(extractEnvKeys("export API_URL=https://example.com\nPLAIN=1")).toEqual([
+      "API_URL",
+      "PLAIN",
+    ]);
+  });
+
+  it("does not leak continuation lines of a multi-line quoted value as keys", () => {
+    // The line-by-line parser saw `FAKE=...` inside the quoted value as its
+    // own key=value pair; dotenv treats the quoted block as one value.
+    const content = `KEY="line1\nFAKE=not_a_real_key"\nREAL=2`;
+    expect(extractEnvKeys(content)).toEqual(["KEY", "REAL"]);
+  });
 });
 
 describe("extractMakefileTargets", () => {
