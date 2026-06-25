@@ -30,7 +30,10 @@ import type { DescribeNode, DescribeTreeData } from "../contract";
  *    (React Native Web, navigator/provider stacks) routinely nest 25+ levels
  *    before reaching leaf text, so a shallower cap silently clips real content.
  */
-const DESCRIBE_DOM_SCRIPT = `(() => {
+// Exported for test/describe-chromium-script.test.ts, which evals it against a mock
+// DOM to lock in the visibility/pruning rules (the script runs in the renderer, so
+// the rest of the suite can only mock its CDP response).
+export const DESCRIBE_DOM_SCRIPT = `(() => {
   const MAX_DEPTH = 60;
   const MAX_NODES = 5000;
   let nodeBudget = MAX_NODES;
@@ -64,7 +67,10 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
       if (el.value) return el.value.slice(0, 200);
     }
     if (el instanceof HTMLImageElement && el.alt) return el.alt.slice(0, 200);
-    const t = el.title;
+    // getAttribute, not el.title: a <form> with a control named "title" clobbers the
+    // .title property to return that element (not a string), and .slice() then throws,
+    // aborting the whole describe. getAttribute always yields string | null.
+    const t = el.getAttribute("title");
     if (t) return t.slice(0, 200);
     return null;
   }
@@ -120,13 +126,33 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
     return false;
   }
 
-  function frame(el) {
-    const r = el.getBoundingClientRect();
+  function normRect(r) {
     const x = Math.max(0, Math.min(1, r.left / w));
     const y = Math.max(0, Math.min(1, r.top / h));
     const right = Math.max(0, Math.min(1, r.right / w));
     const bottom = Math.max(0, Math.min(1, r.bottom / h));
     return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
+  }
+
+  function frame(el) {
+    return normRect(el.getBoundingClientRect());
+  }
+
+  // Painted extent of an element's own inline content. A box-less element
+  // (display:contents, or a zero-width box whose text overflows) has a 0x0 border box
+  // yet its text still paints; a Range measures that. Crucially it returns 0x0 when an
+  // ancestor transform (e.g. scale(0)) collapses the paint, which is how we tell
+  // genuinely-invisible content apart from merely box-less content.
+  function contentFrame(el) {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const r = range.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return null;
+      return normRect(r);
+    } catch (e) {
+      return null;
+    }
   }
 
   function overflowClips(style) {
@@ -225,14 +251,31 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
     const clickable = isInteractive(el);
     const role = nodeRole(el);
     const bl = boxless(el, style);
-    // A box-less wrapper carries no information of its own: promote its single child
-    // or drop it when empty, so the tree mirrors what renders rather than emitting a
-    // 0x0 placeholder. (A box-less node that is itself clickable or named falls
-    // through and is emitted with a child-spanning frame.)
-    if (bl && !clickable && !name && !text) {
-      if (childResults.length === 0) return null;
-      if (childResults.length === 1) return childResults[0];
+
+    // A box-less element has no rect of its own. Its visible extent is whatever its
+    // children span; with no surviving child, fall back to the painted extent of its
+    // own inline content. If that is still zero-area it paints nothing — e.g. a
+    // transform: scale(0) subtree, whose descendants all collapse — so it is invisible
+    // and dropped. A box-less wrapper with one child and nothing of its own is just a
+    // layer, so promote the child. (Clickable / named box-less nodes fall through and
+    // are emitted with this child- or content-spanning frame.)
+    let selfFrame;
+    if (bl) {
+      selfFrame = unionFrame(childResults);
+      if (selfFrame.width <= 0 && selfFrame.height <= 0) {
+        const cf = contentFrame(el);
+        if (cf) selfFrame = cf;
+      }
+      if (childResults.length === 0 && selfFrame.width <= 0 && selfFrame.height <= 0) {
+        return null;
+      }
+      if (!clickable && !name && !text && childResults.length === 1) {
+        return childResults[0];
+      }
+    } else {
+      selfFrame = frame(el);
     }
+
     // Prune structural wrappers with no info that just add a layer.
     // Keep them if they're roots/clickable/named/have text.
     if (
@@ -247,12 +290,17 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
     }
     const node = {
       role,
-      frame: bl ? unionFrame(childResults) : frame(el),
+      frame: selfFrame,
       children: childResults,
     };
     if (name) node.label = name;
     if (text && text !== name) node.value = text.slice(0, 200);
-    const id = el.id || el.getAttribute("data-testid") || el.getAttribute("data-test-id");
+    // getAttribute, not el.id: like .title, a named form control can clobber the .id
+    // property to a DOM node, which would then break JSON.stringify of the tree.
+    const id =
+      el.getAttribute("id") ||
+      el.getAttribute("data-testid") ||
+      el.getAttribute("data-test-id");
     if (id) node.identifier = id;
     if (clickable) node.clickable = true;
     if (isDisabled(el)) node.disabled = true;
