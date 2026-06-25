@@ -40,7 +40,7 @@ BOOT_RESP=$(curl -sS -m "$BOOT_CURL_TIMEOUT" -X POST "${BASE_URL}/boot-device" \
 T1=$(date +%s)
 echo "boot-device ($((T1 - T0))s): $BOOT_RESP"
 echo "::endgroup::"
-echo "$BOOT_RESP" | grep -q '"booted":true' || {
+echo "$BOOT_RESP" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('data',{}).get('booted') is True else 1)" || {
   echo "::error::boot-device did not report booted:true"
   exit 1
 }
@@ -52,12 +52,38 @@ fi
 
 echo "::group::screenshot"
 SHOT_JSON="$ARTIFACT_DIR/smoke-shot.json"
-curl -sS -m 60 -X POST "${BASE_URL}/screenshot" \
-  -H 'Content-Type: application/json' \
-  -d "{\"udid\":\"${DEVICE_ID}\"}" >"$SHOT_JSON"
-# The screenshot tool returns an ArtifactHandle ({ image: { hostPath, ... } });
-# the job runs co-located with the tool-server so hostPath is readable here.
-HOST_PATH=$(python3 -c "import json;print(json.load(open('$SHOT_JSON'))['data']['image']['hostPath'])")
+# Retry a few times: a fresh-spawn streaming-screenshot race (issue #391) can
+# briefly return an error envelope before the first frame is available. A tiny
+# loop is cheap belt-and-suspenders for this one-shot smoke.
+HOST_PATH=""
+for attempt in 1 2 3; do
+  curl -sS -m 60 -X POST "${BASE_URL}/screenshot" \
+    -H 'Content-Type: application/json' \
+    -d "{\"udid\":\"${DEVICE_ID}\"}" >"$SHOT_JSON" || true
+  # Surface a tool-side error as a clean annotation instead of letting the
+  # hostPath extraction blow up with a raw python KeyError traceback.
+  ERR=$(python3 -c "import json,sys;
+try:
+    d=json.load(open('$SHOT_JSON'))
+except Exception as e:
+    print('unparseable screenshot response: %s' % e); sys.exit(0)
+print(d.get('error','') if isinstance(d,dict) else '')")
+  if [ -n "$ERR" ]; then
+    echo "screenshot attempt ${attempt}/3 failed: ${ERR}"
+    sleep 2
+    continue
+  fi
+  # The screenshot tool returns an ArtifactHandle ({ image: { hostPath, ... } });
+  # the job runs co-located with the tool-server so hostPath is readable here.
+  HOST_PATH=$(python3 -c "import json;print(json.load(open('$SHOT_JSON')).get('data',{}).get('image',{}).get('hostPath',''))")
+  [ -n "$HOST_PATH" ] && break
+  echo "screenshot attempt ${attempt}/3 returned no hostPath"
+  sleep 2
+done
+if [ -z "$HOST_PATH" ]; then
+  echo "::error::screenshot did not return a readable hostPath after 3 attempts (last response: $(cat "$SHOT_JSON"))"
+  exit 1
+fi
 SHOT_PNG="$ARTIFACT_DIR/smoke-shot.png"
 cp "$HOST_PATH" "$SHOT_PNG"
 # `wc -c` instead of `stat` so the script is identical on macOS and Linux
@@ -79,7 +105,7 @@ TAP_RESP=$(curl -sS -m 30 -X POST "${BASE_URL}/gesture-tap" \
   -d "{\"udid\":\"${DEVICE_ID}\",\"x\":0.5,\"y\":0.5}")
 echo "gesture-tap: $TAP_RESP"
 echo "::endgroup::"
-echo "$TAP_RESP" | grep -q '"tapped":true' || {
+echo "$TAP_RESP" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('data',{}).get('tapped') is True else 1)" || {
   echo "::error::gesture-tap did not report tapped:true"
   exit 1
 }

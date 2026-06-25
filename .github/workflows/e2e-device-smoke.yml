@@ -38,6 +38,12 @@ on:
       - "packages/tool-server/src/tools/devices/**"
       - "packages/tool-server/src/tools/gesture-tap/**"
       - "packages/tool-server/src/tools/screenshot/**"
+      # Transport layer that drives screenshot/gesture-tap for each platform —
+      # where the #391 screenshot regression lived, so changes here must re-run
+      # these smoke jobs too.
+      - "packages/tool-server/src/blueprints/simulator-server.ts"
+      - "packages/tool-server/src/blueprints/chromium-cdp.ts"
+      - "packages/tool-server/src/utils/simulator-client.ts"
       - "packages/tool-server/test/fixtures/electron-smoke-app/**"
       - "scripts/e2e/drive-device.sh"
       - ".github/workflows/e2e-device-smoke.yml"
