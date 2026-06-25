@@ -37,19 +37,22 @@ export function selectTarget(
       // distinct devices connected, refuse to guess and report the valid ids so
       // the caller can re-target (the logicalDeviceId is what debugger-connect
       // returns and what subsequent debugger-* calls must pass).
-      const distinctDeviceIds = [
-        ...new Set(
-          targets
-            .map((t) => t.reactNative?.logicalDeviceId)
-            .filter((id): id is string => id !== undefined && id !== "")
-        ),
-      ];
-      if (distinctDeviceIds.length > 1) {
+      const distinctDevices = new Map<string, string | undefined>();
+      for (const t of targets) {
+        const id = t.reactNative?.logicalDeviceId;
+        if (id !== undefined && id !== "" && !distinctDevices.has(id)) {
+          distinctDevices.set(id, t.deviceName);
+        }
+      }
+      if (distinctDevices.size > 1) {
+        const listed = [...distinctDevices.entries()]
+          .map(([id, name]) => (name ? `${name} (${id})` : id))
+          .join(", ");
         throw new Error(
           `No debugger target matches device_id "${deviceId}". ` +
-            `${distinctDeviceIds.length} devices are connected to Metro on port ${port}: ` +
-            `${distinctDeviceIds.join(", ")}. Pass one of these as device_id ` +
-            `(the logicalDeviceId returned by debugger-connect).`
+            `${distinctDevices.size} devices are connected to Metro on port ${port}: ` +
+            `${listed}. Pass the logicalDeviceId (in parentheses) of the desired ` +
+            `device as device_id (the logicalDeviceId returned by debugger-connect).`
         );
       }
     }

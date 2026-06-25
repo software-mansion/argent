@@ -120,6 +120,37 @@ describe("selectTarget", () => {
     expect(() => selectTarget([dev1, dev2], 8081, { deviceId: "unmatched" })).toThrow(/aaa.*bbb/);
   });
 
+  it("surfaces deviceName alongside logicalDeviceId so the caller can map ids to devices", () => {
+    const ipad = makeTarget({
+      id: "dev1",
+      deviceName: "iPad Pro",
+      reactNative: { logicalDeviceId: "9e7844f7" },
+    });
+    const iphone = makeTarget({
+      id: "dev2",
+      deviceName: "iPhone 16",
+      reactNative: { logicalDeviceId: "8a44101d" },
+    });
+
+    // Each listed device shows its human-readable name next to the hash.
+    expect(() => selectTarget([ipad, iphone], 8081, { deviceId: "some-udid" })).toThrow(
+      /iPad Pro \(9e7844f7\).*iPhone 16 \(8a44101d\)/
+    );
+  });
+
+  it("falls back to the bare logicalDeviceId when a device has no deviceName", () => {
+    const named = makeTarget({
+      id: "dev1",
+      deviceName: "iPhone 16",
+      reactNative: { logicalDeviceId: "aaa" },
+    });
+    const unnamed = makeTarget({ id: "dev2", reactNative: { logicalDeviceId: "bbb" } });
+
+    expect(() => selectTarget([named, unnamed], 8081, { deviceId: "unmatched" })).toThrow(
+      /iPhone 16 \(aaa\).*bbb/
+    );
+  });
+
   it("still falls back to the only device when a single device is connected", () => {
     // Single-device convenience: callers may pass an id Metro never echoes (e.g.
     // an iOS simulator UDID, which is not the logicalDeviceId). With one device
