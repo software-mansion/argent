@@ -16,11 +16,14 @@ import type { DescribeNode, DescribeTreeData } from "../contract";
  *    tree stays small.
  *  - Treat anchors, buttons, inputs, [role=button], [onclick], [tabindex]≥0
  *    as `clickable: true` so the agent knows which nodes to tap.
- *  - Use rect.width/rect.height === 0 to prune invisible nodes (display:none
- *    yields a zero-sized rect; visibility:hidden does not, so we also
- *    short-circuit on computed `visibility: hidden`). display:contents is the
- *    exception — it reports a zero-sized rect but still renders its children, so
- *    we traverse it and promote its content (React Native Web nests under it).
+ *  - Prune a node only when it is truly invisible (display:none, visibility:hidden,
+ *    opacity:0) or its border box is zero-area AND it clips overflow. A zero-area
+ *    box with the default overflow:visible still paints its descendants — so we
+ *    traverse it and promote them instead of cutting the subtree. This covers
+ *    display:contents wrappers (React Native Web nests content under them), the
+ *    zero-height anchor of an absolutely-positioned dropdown/popover/portal, and
+ *    float/overflow wrappers that collapse to a zero-height box. A collapsed
+ *    overflow:hidden container genuinely hides its content, so it stays pruned.
  *  - Cap node count at 5000 — that, not depth, bounds the payload a runaway SPA
  *    would otherwise serialize past CDP's single Runtime.evaluate reply limit
  *    (~50MB). Cap depth at 60 purely to bound recursion: modern React DOMs
@@ -126,29 +129,36 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
     return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
   }
 
-  // display:contents elements render their children but generate no box of their
-  // own, so getBoundingClientRect() reports 0x0. React Native Web (and CSS
-  // grid/subgrid layouts) nest real content under such wrappers, so they must be
-  // traversed rather than pruned as zero-sized.
-  function isContents(el) {
-    return window.getComputedStyle(el).display === "contents";
+  function overflowClips(style) {
+    return style.overflowX !== "visible" || style.overflowY !== "visible";
   }
 
-  function hidden(el) {
-    const style = window.getComputedStyle(el);
-    if (style.visibility === "hidden" || style.display === "none" || style.opacity === "0") {
-      return true;
-    }
-    // A zero-area box with nothing in it is an empty spacer worth pruning — but a
-    // display:contents wrapper is zero-area by design while its children render, so
-    // never prune those here; walk() descends and promotes their content.
-    if (isContents(el)) return false;
+  // An element has no box of its own when it is display:contents (renders children
+  // but generates no box) or its border box is zero-area. We give such elements a
+  // frame spanning their children rather than their own 0x0 rect.
+  function boxless(el, style) {
+    if (style.display === "contents") return true;
     const r = el.getBoundingClientRect();
     return r.width <= 0 || r.height <= 0;
   }
 
+  function hidden(el, style) {
+    if (style.visibility === "hidden" || style.display === "none" || style.opacity === "0") {
+      return true;
+    }
+    // display:contents has no box but lays its children out normally — never prune it.
+    if (style.display === "contents") return false;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) return false;
+    // Zero-area box: prune it only when it clips its overflow (a collapsed
+    // overflow:hidden container genuinely hides its content). With the default
+    // overflow:visible, abs-positioned / overflowing / floated descendants still
+    // paint, so walk() must descend and promote them instead of cutting the subtree.
+    return overflowClips(style);
+  }
+
   // Smallest normalized box covering every surviving child frame — the frame we give
-  // a display:contents wrapper we still emit, since it has no rect of its own.
+  // a box-less wrapper we still emit, since it has no rect of its own.
   function unionFrame(children) {
     let minX = 1;
     let minY = 1;
@@ -170,7 +180,8 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
     if (truncated) return null;
     if (depth > MAX_DEPTH) return null;
     if (!(el instanceof Element)) return null;
-    if (hidden(el)) return null;
+    const style = window.getComputedStyle(el);
+    if (hidden(el, style)) return null;
     if (nodeBudget <= 0) {
       truncated = true;
       return null;
@@ -213,12 +224,12 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
     const name = accessibleName(el);
     const clickable = isInteractive(el);
     const role = nodeRole(el);
-    const contents = isContents(el);
-    // A box-less display:contents wrapper carries no information of its own: promote
-    // its single child or drop it when empty, so the tree mirrors what renders rather
-    // than emitting a 0x0 placeholder. (A display:contents node that is itself
-    // clickable or named falls through and is emitted with a child-spanning frame.)
-    if (contents && !clickable && !name && !text) {
+    const bl = boxless(el, style);
+    // A box-less wrapper carries no information of its own: promote its single child
+    // or drop it when empty, so the tree mirrors what renders rather than emitting a
+    // 0x0 placeholder. (A box-less node that is itself clickable or named falls
+    // through and is emitted with a child-spanning frame.)
+    if (bl && !clickable && !name && !text) {
       if (childResults.length === 0) return null;
       if (childResults.length === 1) return childResults[0];
     }
@@ -236,7 +247,7 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
     }
     const node = {
       role,
-      frame: contents ? unionFrame(childResults) : frame(el),
+      frame: bl ? unionFrame(childResults) : frame(el),
       children: childResults,
     };
     if (name) node.label = name;
