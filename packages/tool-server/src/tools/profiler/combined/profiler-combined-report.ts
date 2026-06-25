@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import {
   nativeProfilerSessionRef,
@@ -9,19 +9,23 @@ import { resolveDevice } from "../../../utils/device-info";
 import {
   buildReactAnchor,
   buildIosAnchor,
+  buildPerfettoAnchor,
   reactTimeToWallClock,
   instrumentsNsToWallClock,
   windowsOverlap,
+  type TimeAnchor,
 } from "../../../utils/profiler-shared/time-align";
 import type { HotCommitSummary } from "../../../utils/react-profiler/types/output";
-import type { UiHang, MemoryLeak } from "../../../utils/ios-profiler/types";
+import type { UiHang, MemoryLeak } from "../../../utils/profiler-shared/types";
+import { formatBytes } from "../../../utils/profiler-shared/format";
+import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipeline/index";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
 import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator or device UDID"),
+  device_id: z.string().describe("iOS Simulator/device UDID or Android serial"),
 });
 
 interface HangCommitCorrelation {
@@ -44,27 +48,76 @@ Call this tool when both profilers were run in parallel on the same session.
 Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
 Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
   zodSchema,
+  // Combines React (Hermes) + native traces. iOS reads xctrace output;
+  // Android re-queries the Perfetto .pftrace via loadAndroidCombinedData. The
+  // capture half exists on neither platform's Chromium.
+  capability: {
+    apple: { simulator: true, device: true },
+    android: { emulator: true, device: true, unknown: true },
+  },
   services: (params) => ({
     nativeSession: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
   async execute(services, params) {
     const nativeApi = services.nativeSession as NativeProfilerSessionApi;
 
-    // Validate prerequisites
-    if (!nativeApi.parsedData) {
-      throw new Error("No native profiler data. Run native-profiler-analyze first.");
+    // For iOS, the analyze step cached uiHangs + memoryLeaks in parsedData.
+    // For Android, drill-down re-queries the .pftrace, so we load the same
+    // shape on demand here.
+    let uiHangs: UiHang[];
+    let memoryLeaks: MemoryLeak[];
+    if (nativeApi.platform === "android") {
+      // Gate on the exported .pftrace (set at stop), not just traceFile (set at
+      // start) -- otherwise a session that started native profiling but never ran
+      // stop/analyze would silently render an empty "0 hangs" report instead of
+      // this clear error. Mirrors profiler-stack-query's Android gate.
+      if (!nativeApi.exportedFiles?.pftrace || !nativeApi.traceFile) {
+        throw new FailureError(
+          "No Android trace loaded. Run native-profiler-stop → native-profiler-analyze first.",
+          {
+            error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+            failure_stage: "profiler_combined_report_load_native_data",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          }
+        );
+      }
+      const data = await loadAndroidCombinedData(nativeApi.traceFile, nativeApi.appProcess ?? "");
+      uiHangs = data.uiHangs;
+      memoryLeaks = [];
+    } else {
+      if (!nativeApi.parsedData) {
+        throw new FailureError("No native profiler data. Run native-profiler-analyze first.", {
+          error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+          failure_stage: "profiler_combined_report_load_native_data",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
+      }
+      uiHangs = nativeApi.parsedData.uiHangs;
+      memoryLeaks = nativeApi.parsedData.memoryLeaks;
     }
 
     // Read-only: resolve react paths from cache only — no live CDP connection needed.
     const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
     if (!sessionPaths?.commitsPath) {
-      throw new Error("No React commit data. Run react-profiler-analyze first.");
+      throw new FailureError("No React commit data. Run react-profiler-analyze first.", {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_combined_report_load_react_data",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
 
     const onDisk = await readCommitTree(sessionPaths.commitsPath);
     const commitTree = { commits: onDisk.commits, hookNames: new Map() };
     if (commitTree.commits.length === 0) {
-      throw new Error("No React commit data. Run react-profiler-analyze first.");
+      throw new FailureError("No React commit data. Run react-profiler-analyze first.", {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_combined_report_load_react_data",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
 
     let cpuProfile = null;
@@ -76,34 +129,53 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     const nativeWallStart = nativeApi.wallClockStartMs;
 
     if (!reactWallStart && !nativeWallStart) {
-      throw new Error(
+      throw new FailureError(
         "Missing wall-clock anchor from both profilers. Re-run the full profiling session " +
-          "(native-profiler-start + react-profiler-start)."
+          "(native-profiler-start + react-profiler-start).",
+        {
+          error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+          failure_stage: "profiler_combined_report_time_anchor",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     } else if (!reactWallStart) {
-      throw new Error(
+      throw new FailureError(
         "Missing wall-clock anchor from React Profiler (profileStartWallMs not found). " +
-          "Re-run the profiling session starting with react-profiler-start."
+          "Re-run the profiling session starting with react-profiler-start.",
+        {
+          error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+          failure_stage: "profiler_combined_report_time_anchor",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     } else if (!nativeWallStart) {
-      throw new Error(
+      throw new FailureError(
         "Missing wall-clock anchor from native profiler (wallClockStartMs not found). " +
-          "Re-run the profiling session starting with native-profiler-start."
+          "Re-run the profiling session starting with native-profiler-start.",
+        {
+          error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+          failure_stage: "profiler_combined_report_time_anchor",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 
     // Build time anchors
     const cpuStartUs = cpuProfile?.startTime ?? 0;
     const reactAnchor = buildReactAnchor(reactWallStart, cpuStartUs);
-    const nativeAnchor = buildIosAnchor(nativeWallStart);
+    const nativeAnchor: TimeAnchor =
+      nativeApi.platform === "android"
+        ? buildPerfettoAnchor(nativeWallStart)
+        : buildIosAnchor(nativeWallStart);
 
     // Build hot commit summaries from raw data
     const preprocessed = preprocess(commitTree.commits);
     const hotIndices = sessionPaths.hotCommitIndices ?? [];
     const hotCommits = buildHotCommitSummaries(preprocessed, hotIndices);
     const nonMarginCommits = hotCommits.filter((c) => !c.isMargin);
-
-    const { uiHangs, memoryLeaks } = nativeApi.parsedData;
 
     // Tolerance for time alignment: wall clock jitter + the fact that
     // instruments hang detection and React commit timing may not perfectly align
@@ -113,10 +185,8 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     const correlations: HangCommitCorrelation[] = [];
 
     for (const hang of uiHangs) {
-      const hangStartNs = parseHangStartNs(hang.startTimeFormatted);
-      const hangDurationNs = hang.durationMs * 1_000_000;
-      const hangWallStartMs = instrumentsNsToWallClock(hangStartNs, nativeAnchor);
-      const hangWallEndMs = instrumentsNsToWallClock(hangStartNs + hangDurationNs, nativeAnchor);
+      const hangWallStartMs = instrumentsNsToWallClock(hang.startNs, nativeAnchor);
+      const hangWallEndMs = instrumentsNsToWallClock(hang.endNs, nativeAnchor);
 
       const overlapping = nonMarginCommits
         .map((commit) => {
@@ -253,10 +323,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
 
     // Memory leaks section
     if (memoryLeaks.length > 0) {
-      lines.push("---");
-      lines.push("## Memory Leaks (from Instruments)");
-      lines.push("");
-
       // Try to correlate with React mount/unmount patterns
       const mountComponents = new Set(
         commitTree.commits
@@ -264,19 +330,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
           .map((c) => c.componentName)
       );
 
-      for (const leak of memoryLeaks.slice(0, 10)) {
-        const possibleComponent = [...mountComponents].find(
-          (name) =>
-            leak.objectType.toLowerCase().includes(name.toLowerCase()) ||
-            leak.responsibleFrame.toLowerCase().includes(name.toLowerCase())
-        );
-
-        lines.push(
-          `- **\`${leak.objectType}\`** ${formatBytes(leak.totalSizeBytes)} (${leak.count}×) — \`${leak.responsibleFrame}\`` +
-            (possibleComponent ? ` — may relate to \`${possibleComponent}\` mount/unmount` : "")
-        );
-      }
-      lines.push("");
+      lines.push(...renderCombinedMemoryLeaks(memoryLeaks, mountComponents));
     }
 
     // Summary of opportunities
@@ -311,19 +365,55 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
 };
 
 /**
- * Parse "MM:SS.mmm" formatted hang start time back to nanoseconds.
+ * Render the combined report's Memory Leaks section, mirroring the attribution
+ * split used by the iOS analyze report (`utils/ios-profiler/render.ts`).
+ * Attributed leaks (a resolved responsible frame) are listed individually and
+ * heuristically tied to recently-mounted React components; unattributed leaks
+ * (`<Call stack limit reached>` under `xctrace --attach`) are collapsed into one
+ * low-confidence YELLOW caveat so the simulator's benign system-allocation noise
+ * can't masquerade as a wall of confirmed leaks. Exported for unit testing.
  */
-function parseHangStartNs(formatted: string): number {
-  const match = formatted.match(/^(\d+):(\d+)\.(\d+)$/);
-  if (!match) return 0;
-  const minutes = parseInt(match[1]!, 10);
-  const seconds = parseInt(match[2]!, 10);
-  const ms = parseInt(match[3]!, 10);
-  return (minutes * 60_000 + seconds * 1000 + ms) * 1_000_000;
-}
+export function renderCombinedMemoryLeaks(
+  memoryLeaks: MemoryLeak[],
+  mountComponents: Set<string>
+): string[] {
+  if (memoryLeaks.length === 0) return [];
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  const attributedLeaks = memoryLeaks.filter((leak) => leak.attributed);
+  const unattributedLeaks = memoryLeaks.filter((leak) => !leak.attributed);
+
+  const lines: string[] = ["---", "## Memory Leaks (from Instruments)", ""];
+
+  if (attributedLeaks.length > 0) {
+    for (const leak of attributedLeaks) {
+      const possibleComponent = [...mountComponents].find(
+        (name) =>
+          leak.objectType.toLowerCase().includes(name.toLowerCase()) ||
+          leak.responsibleFrame.toLowerCase().includes(name.toLowerCase())
+      );
+
+      lines.push(
+        `- **\`${leak.objectType}\`** ${formatBytes(leak.totalSizeBytes)} (${leak.count}×) — \`${leak.responsibleFrame}\`` +
+          (possibleComponent ? ` — may relate to \`${possibleComponent}\` mount/unmount` : "")
+      );
+    }
+  } else {
+    lines.push("_No attributed leaks — nothing with a resolved responsible frame._");
+  }
+
+  if (unattributedLeaks.length > 0) {
+    const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
+    const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+    lines.push(
+      ``,
+      `> 🟡 **${unattributedLeaks.length} unattributed leak group(s)** ` +
+        `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
+        `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
+        `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
+        `stack logging enabled at launch.`
+    );
+  }
+
+  lines.push("");
+  return lines;
 }

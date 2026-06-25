@@ -86,10 +86,15 @@ describe("refreshArgentSkills", () => {
       { scope: "project", synced: 2, syncError: null, pruned: [], pruneError: null },
     ]);
     expect(execFileSyncMock).toHaveBeenCalledTimes(1);
-    const [bin, args] = execFileSyncMock.mock.calls[0]!;
+    const [bin, args] = execFileSyncMock.mock.calls[0]! as [string, string[]];
     expect(bin).toBe("npx");
     expect(args).toContain("add");
     expect(args).not.toContain("-g");
+    // The host project's npm engine gate (engines/devEngines) must be softened
+    // via `--force` so re-sync never aborts with EBADDEVENGINES (#298). The
+    // flag has to precede the `skills` command for npm to consume it.
+    expect(args.indexOf("--force")).toBe(0);
+    expect(args.indexOf("--force")).toBeLessThan(args.indexOf("skills"));
   });
 
   it("resyncs a tracked global scope with the -g flag", () => {

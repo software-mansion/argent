@@ -5,8 +5,14 @@
  * (testID, accessibilityLabel, visible text).
  *
  * Supports both Fabric (new architecture) and Paper (old architecture).
- * On Fabric, uses nativeFabricUIManager.measure with the shadow node.
- * On Paper, falls back to UIManager.measureInWindow with native tags.
+ * On Fabric, measures via the public host instance (ReactNativeElement)
+ * measureInWindow, falling back to nativeFabricUIManager.measure with the
+ * shadow node. On Paper, falls back to UIManager.measureInWindow with native tags.
+ *
+ * Renderer selection is renderer-agnostic: apps that use a secondary reconciler
+ * (react-native-skia, react-native-svg, etc.) register their own renderer, so we
+ * enumerate every renderer and walk the mounted root with the largest fiber
+ * subtree rather than assuming the React Native renderer is id 1.
  *
  * Measurement is async-safe: on Paper (where measureInWindow is async),
  * the script collects all candidates first, then batch-measures them via
@@ -26,9 +32,38 @@ export function makeComponentTreeScript(opts: {
   var TRACK_SKIPPED = ${trackSkipped};
   var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) return JSON.stringify({ error: 'No DevTools hook' });
-  var roots = hook.getFiberRoots(1);
-  if (!roots || roots.size === 0) return JSON.stringify({ error: 'No fiber roots' });
-  var root = Array.from(roots)[0];
+  // Collect fiber roots across ALL renderers. A single React renderer id is not
+  // safe to assume: secondary reconcilers (e.g. react-native-skia) frequently
+  // register first and own renderer id 1, whose roots contain only that library's
+  // nodes (Skia shapes, etc.) and none of the tappable app UI.
+  var _allRoots = [];
+  if (hook.renderers && typeof hook.renderers.forEach === 'function') {
+    hook.renderers.forEach(function(_r, _rendererId) {
+      try {
+        var _rs = hook.getFiberRoots(_rendererId);
+        if (_rs) _rs.forEach(function(_rt) { _allRoots.push(_rt); });
+      } catch (e) {}
+    });
+  }
+  if (_allRoots.length === 0) {
+    var _legacy = hook.getFiberRoots(1);
+    if (_legacy) _legacy.forEach(function(_rt) { _allRoots.push(_rt); });
+  }
+  if (_allRoots.length === 0) return JSON.stringify({ error: 'No fiber roots' });
+  // Pick the mounted root with the largest fiber subtree — i.e. the real app UI.
+  var root = _allRoots[0];
+  var _bestSize = -1;
+  for (var _ri = 0; _ri < _allRoots.length; _ri++) {
+    var _sz = 0, _stk = [_allRoots[_ri].current];
+    while (_stk.length > 0 && _sz < 20000) {
+      var _nd = _stk.pop();
+      if (!_nd) continue;
+      _sz++;
+      if (_nd.child) _stk.push(_nd.child);
+      if (_nd.sibling) _stk.push(_nd.sibling);
+    }
+    if (_sz > _bestSize) { _bestSize = _sz; root = _allRoots[_ri]; }
+  }
 
   var useFabric = typeof nativeFabricUIManager !== 'undefined';
   var UIManagerMod;
@@ -122,14 +157,55 @@ export function makeComponentTreeScript(opts: {
     return t.displayName || t.name || null;
   }
 
+  // Per-host dedup/measure cache key. MUST be a primitive: on Fabric the host
+  // "node" is a shadow-node OBJECT, so the old key ('f' + hi.n) stringified it
+  // to "f[object Object]" for EVERY node — collapsing all hosts to one entry and
+  // giving every component the first (root) view's full-screen rect, i.e. a
+  // (0.5, 0.5) tap for everything. Key by the numeric nativeTag instead, with a
+  // WeakMap-by-identity fallback so distinct nodes never share a key.
+  var _hostKeySeq = 0;
+  var _fabricKeyMap = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
+  // Prefer the numeric nativeTag; when it is unavailable, assign a stable
+  // WeakMap-by-identity id so distinct shadow nodes never collide.
+  function fabricKey(nativeTag, node) {
+    if (typeof nativeTag === 'number') return 'f' + nativeTag;
+    if (_fabricKeyMap && node) {
+      var k = _fabricKeyMap.get(node);
+      if (k === undefined) { k = 'fo' + (++_hostKeySeq); _fabricKeyMap.set(node, k); }
+      return k;
+    }
+    return 'fo' + (++_hostKeySeq);
+  }
+
   function getHostInfo(fiber) {
     if (typeof fiber.type !== 'string' || !fiber.stateNode) return null;
-    if (useFabric && fiber.stateNode.node) return { f: true, n: fiber.stateNode.node };
+    if (useFabric && fiber.stateNode.canonical) {
+      // New-arch Fabric host instance: stateNode = { node, canonical }. Carry the
+      // public instance (ReactNativeElement, exposes measureInWindow) and the shadow
+      // node for the legacy nativeFabricUIManager.measure fallback; key the host by
+      // a primitive id (numeric nativeTag, WeakMap-by-identity fallback) per above.
+      var _canon = fiber.stateNode.canonical;
+      var _sn = fiber.stateNode.node || null;
+      return {
+        f: true,
+        n: typeof _canon.nativeTag === 'number' ? _canon.nativeTag : _sn,
+        key: fabricKey(_canon.nativeTag, _sn),
+        pi: _canon.publicInstance || null,
+        sn: _sn
+      };
+    }
+    if (useFabric && fiber.stateNode.node) {
+      // Older Fabric host without a canonical instance: only the shadow node
+      // is available. Still needs a primitive key.
+      var _sn2 = fiber.stateNode.node;
+      return { f: true, n: _sn2, key: fabricKey(null, _sn2), sn: _sn2 };
+    }
     if (!useFabric) {
       if (fiber.stateNode.canonical && typeof fiber.stateNode.canonical.nativeTag === 'number')
-        return { f: false, n: fiber.stateNode.canonical.nativeTag };
+        return { f: false, n: fiber.stateNode.canonical.nativeTag, key: 'p' + fiber.stateNode.canonical.nativeTag };
       if (typeof fiber.stateNode._nativeTag === 'number')
-        return { f: false, n: fiber.stateNode._nativeTag };
+        return { f: false, n: fiber.stateNode._nativeTag, key: 'p' + fiber.stateNode._nativeTag };
     }
     return null;
   }
@@ -249,7 +325,7 @@ export function makeComponentTreeScript(opts: {
   for (var ci = 0; ci < candidates.length; ci++) {
     var hi = candidates[ci].hostInfo;
     if (!hi) continue;
-    var key = (hi.f ? 'f' : 'p') + hi.n;
+    var key = hi.key;
     if (!(key in hostKeyMap)) {
       hostKeyMap[key] = uniqueHosts.length;
       uniqueHosts.push(hi);
@@ -257,13 +333,29 @@ export function makeComponentTreeScript(opts: {
   }
 
   function measureOne(info) {
-    return new Promise(function(resolve) {
+    return new Promise(function(_resolve) {
+      // Guard against measure callbacks that never fire (detached / off-screen
+      // shadow nodes) so the Promise.all below cannot hang indefinitely.
+      var _settled = false;
+      function resolve(v) { if (_settled) return; _settled = true; _resolve(v); }
+      setTimeout(function() { resolve(null); }, 1200);
       try {
         if (info.f) {
-          nativeFabricUIManager.measure(info.n, function(x, y, w, h, px, py) {
-            if (w > 0 && h > 0) resolve({ x: Math.round(px), y: Math.round(py), w: Math.round(w), h: Math.round(h) });
-            else resolve(null);
-          });
+          if (info.pi && typeof info.pi.measureInWindow === 'function') {
+            // Preferred path: works on bridgeless, where the global
+            // nativeFabricUIManager is an empty object with no measure().
+            info.pi.measureInWindow(function(x, y, w, h) {
+              if (w > 0 && h > 0) resolve({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
+              else resolve(null);
+            });
+          } else if (typeof nativeFabricUIManager !== 'undefined' && typeof nativeFabricUIManager.measure === 'function') {
+            nativeFabricUIManager.measure(info.sn || info.n, function(x, y, w, h, px, py) {
+              if (w > 0 && h > 0) resolve({ x: Math.round(px), y: Math.round(py), w: Math.round(w), h: Math.round(h) });
+              else resolve(null);
+            });
+          } else {
+            resolve(null);
+          }
         } else {
           UIManagerMod.measureInWindow(info.n, function(x, y, w, h) {
             if (w > 0 && h > 0) resolve({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
@@ -277,7 +369,7 @@ export function makeComponentTreeScript(opts: {
   var rects = await Promise.all(uniqueHosts.map(measureOne));
 
   for (var ri = 0; ri < uniqueHosts.length; ri++) {
-    var rKey = (uniqueHosts[ri].f ? 'f' : 'p') + uniqueHosts[ri].n;
+    var rKey = uniqueHosts[ri].key;
     rectCache[rKey] = rects[ri];
   }
 
@@ -285,7 +377,7 @@ export function makeComponentTreeScript(opts: {
   for (var ai = 0; ai < candidates.length; ai++) {
     var h = candidates[ai].hostInfo;
     if (h) {
-      var rk = (h.f ? 'f' : 'p') + h.n;
+      var rk = h.key;
       candidates[ai].rect = rectCache[rk] || null;
     }
   }

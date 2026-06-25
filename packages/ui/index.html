@@ -3,19 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Argent Preview</title>
+    <title>Argent Lens</title>
+    <link rel="stylesheet" href="theme.css" />
+    <script>
+      // Seed `color-scheme` BEFORE first paint. theme.css tokens are
+      // light-dark(); until JS forces a side, they resolve to the OS theme. If
+      // the user previously toggled to the non-OS theme, that left a one-frame
+      // flash of the OS theme on load. This runs during head parse (pre-paint);
+      // the end-of-body theme script re-derives the same value idempotently and
+      // wires the toggle.
+      (function () {
+        try {
+          var s = localStorage.getItem("argent-preview-theme");
+          var mode =
+            s === "light" || s === "dark"
+              ? s
+              : window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          document.documentElement.style.colorScheme = mode;
+        } catch (e) {}
+      })();
+    </script>
     <style>
-      :root {
-        color-scheme: light dark;
-        --bg: #0e0e10;
-        --fg: #eaeaea;
-        --muted: #8a8a90;
-        --accent: #6aa6ff;
-        --border: #2a2a2e;
-        --surface: #16161a;
-        --error: #ff8080;
-        --ok: #5cdc8b;
-      }
       * {
         box-sizing: border-box;
       }
@@ -24,91 +34,80 @@
         margin: 0;
         padding: 0;
         height: 100%;
-        background: var(--bg);
-        color: var(--fg);
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        font-size: 13px;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        font-family: var(--font-sans);
+        font-size: var(--fs-body);
       }
       #root {
         display: flex;
         flex-direction: column;
         height: 100%;
       }
-      .toolbar {
+      /* Frameless window, no title bar / toolbar. Dragging is done by a
+         full-bleed drag LAYER rather than #main itself: -webkit-app-region is
+         "union of drag boxes minus no-drag boxes", so a full-cover no-drag layer
+         (.cards) would cancel the entire region. The drag layer is:
+           • inset a few px so the window's resize edges keep working (the top
+             edge resizes, it does NOT drag),
+           • pointer-events:none so clicks fall through to the stream/cards.
+         Every interactive surface subtracts itself with no-drag. Crucially the
+         .cards POSITIONING layer is NOT no-drag — only the real .vcard chips are,
+         so the empty background between/around them stays draggable. Harmless in
+         a browser, where the property is simply ignored. */
+      .drag-region {
+        position: absolute;
+        inset: var(--resize-edge);
+        pointer-events: none;
+        -webkit-app-region: drag;
+      }
+      .stage,
+      .vcard,
+      .float-controls,
+      .float-status,
+      .footbar,
+      .comment-pop,
+      .ann-pop,
+      .modal,
+      .dev-picker {
+        -webkit-app-region: no-drag;
+      }
+      /* Floating status pill (top-left). Hidden while idle; surfaces loading /
+         error / disconnect messages without a permanent bar. */
+      .float-status {
+        position: absolute;
+        top: var(--footbar-bottom);
+        left: var(--footbar-right);
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border);
-        background: var(--surface);
-        flex-shrink: 0;
+        gap: var(--gap-list);
+        z-index: var(--z-overlay);
       }
-      .toolbar label {
-        color: var(--muted);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+      .status {
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-pill);
+        padding: var(--pad-pill);
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+        box-shadow: var(--shadow-card);
       }
-      .toolbar select,
-      .toolbar button {
-        background: var(--bg);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        padding: 4px 10px;
-        border-radius: 4px;
-        font-size: 13px;
-      }
-      .toolbar select {
-        min-width: 240px;
-      }
-      .toolbar button {
-        cursor: pointer;
-      }
-      .toolbar .status {
-        margin-left: auto;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .toolbar .debug {
-        color: var(--muted);
-        font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
-        font-size: 11px;
-        min-width: 220px;
-        text-align: right;
-      }
-      .status.live::before,
       .status.error::before {
         content: "";
         display: inline-block;
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        margin-right: 6px;
+        width: var(--dot-size);
+        height: var(--dot-size);
+        border-radius: var(--radius-round);
+        margin-right: var(--gap-inline);
         vertical-align: middle;
-      }
-      .status.live::before {
-        background: var(--ok);
-        animation: pulse 1.6s ease-in-out infinite;
-      }
-      .status.error::before {
-        background: var(--error);
-      }
-      @keyframes pulse {
-        0%,
-        100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.4;
-        }
+        background: var(--color-error);
       }
       .viewport {
         flex: 1;
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 12px;
+        padding: var(--pad-view);
         min-height: 0;
         position: relative;
       }
@@ -118,12 +117,17 @@
         max-height: 100%;
         display: flex;
       }
+      /* While a card/chip is being dragged (#root.drag-muting, set by vpTick),
+         the stream is inert so the drag never taps the device. */
+      .drag-muting .stage {
+        pointer-events: none;
+      }
       .stage img {
         max-width: 100%;
-        max-height: 80vh;
+        max-height: var(--stream-max-h);
         object-fit: contain;
-        border-radius: 10px;
-        box-shadow: 0 10px 48px #0008;
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-stream);
         user-select: none;
         -webkit-user-drag: none;
         -webkit-user-select: none;
@@ -139,52 +143,1188 @@
         width: var(--size);
         height: var(--size);
         transform: translate(-50%, -50%);
-        border-radius: 50%;
-        background: rgba(106, 166, 255, 0.25);
-        border: 2px solid rgba(106, 166, 255, 0.9);
+        border-radius: var(--radius-round);
+        background: var(--touch-fill);
+        border: var(--border-strong) solid var(--touch-stroke);
         pointer-events: none;
-        box-shadow: 0 0 12px rgba(106, 166, 255, 0.5);
+        box-shadow: var(--touch-glow);
       }
       .touch-dot.pressed {
-        background: rgba(106, 166, 255, 0.55);
+        background: var(--touch-fill-pressed);
       }
       .touch-dot.anchor {
-        background: rgba(255, 200, 80, 0.9);
-        border-color: rgba(255, 200, 80, 1);
+        background: var(--touch-anchor-fill);
+        border-color: var(--touch-anchor-stroke);
       }
       .empty,
       .error-box {
-        color: var(--muted);
+        color: var(--color-muted);
         text-align: center;
-        padding: 32px;
-        max-width: 480px;
-        line-height: 1.5;
+        padding: var(--pad-empty);
+        max-width: var(--empty-max-width);
+        line-height: var(--lh-normal);
       }
       .error-box {
-        color: var(--error);
+        color: var(--color-error);
+      }
+      .dev-picker {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-stack);
+        width: 100%;
+        max-width: var(--picker-max-width);
+        padding: var(--pad-picker);
+      }
+      .dev-picker h2 {
+        margin: 0;
+        font-size: var(--fs-title);
+        font-weight: var(--fw-semibold);
+        color: var(--color-fg);
+        text-align: center;
+      }
+      .dev-picker .sub {
+        margin: var(--sub-margin);
+        font-size: var(--fs-note);
+        color: var(--color-muted);
+        text-align: center;
+      }
+      .dev-list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+      }
+      .dev-item {
+        display: flex;
+        align-items: center;
+        gap: var(--gap-bar);
+        width: 100%;
+        text-align: left;
+        background: var(--color-surface);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-item);
+        padding: var(--pad-item);
+        font-size: var(--fs-body);
+        cursor: pointer;
+        transition:
+          border-color var(--dur-hover) ease,
+          background var(--dur-hover) ease,
+          transform var(--dur-press) ease;
+      }
+      .dev-item:hover {
+        border-color: var(--color-accent);
+        background: var(--color-surface-hover);
+      }
+      .dev-item:active {
+        transform: translateY(var(--press-shift));
+      }
+      .dev-item:disabled {
+        cursor: not-allowed;
+        opacity: var(--opacity-disabled);
+      }
+      .dev-item:disabled:hover {
+        border-color: var(--color-border);
+        background: var(--color-surface);
+      }
+      .dev-item .dot {
+        width: var(--dot-size);
+        height: var(--dot-size);
+        border-radius: var(--radius-round);
+        flex: none;
+        background: var(--color-ok);
+        box-shadow: var(--dot-glow);
+      }
+      .dev-item:disabled .dot {
+        background: var(--color-muted);
+        box-shadow: none;
+      }
+      .dev-item .nm {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .dev-item .rt {
+        flex: none;
+        color: var(--color-muted);
+        font-size: var(--fs-label);
+      }
+      .dev-picker .refresh-row {
+        display: flex;
+        justify-content: center;
+      }
+      .dev-picker .refresh-row button {
+        background: var(--color-bg);
+        color: var(--color-muted);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-control);
+        padding: var(--pad-refresh);
+        font-size: var(--fs-note);
+        cursor: pointer;
+      }
+      .dev-picker .refresh-row button:hover {
+        color: var(--color-fg);
+        border-color: var(--color-accent);
       }
       code {
-        background: var(--surface);
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-size: 12px;
+        background: var(--color-surface);
+        padding: var(--pad-code);
+        border-radius: var(--radius-chip);
+        font-size: var(--fs-note);
+      }
+
+      /* ── Variant proposals + inspector ─────────────────────────────── */
+      [hidden] {
+        display: none !important;
+      }
+      .main {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+        position: relative;
+        overflow: hidden;
+      }
+      /* `.hidden-badge` surfaces proposals whose element isn't on screen and
+         whose location is unknown (never matched). A floating accent pill so it
+         reads as a signal (the user has things they can't see), not metadata. */
+      .hidden-badge {
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-accent);
+        border-radius: var(--radius-pill);
+        padding: var(--pad-pill);
+        color: var(--color-accent);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+        box-shadow: var(--shadow-card);
+      }
+      /* Floating top-right controls (theme, comment, close): a row of square
+         icon buttons that sit over the stream, away from the slim drag toolbar. */
+      .float-controls {
+        position: absolute;
+        top: var(--footbar-bottom);
+        right: var(--footbar-right);
+        display: flex;
+        gap: var(--gap-list);
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+      }
+      /* Icon-only controls: a uniform square button so theme / comment / close
+         read as one consistent cluster (no mismatched text pills). The glyph is
+         inline SVG drawn in currentColor, so it themes for free and the hover /
+         active states just shift the text colour. */
+      .float-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--icon-btn-size);
+        height: var(--icon-btn-size);
+        padding: 0;
+        background: var(--color-surface);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-control);
+        cursor: pointer;
+        box-shadow: var(--shadow-card);
+        transition:
+          border-color var(--dur-hover) var(--ease-out),
+          background var(--dur-hover) var(--ease-out),
+          color var(--dur-hover) var(--ease-out);
+      }
+      .float-btn svg {
+        width: var(--icon-size);
+        height: var(--icon-size);
+        display: block;
+      }
+      .float-btn:hover {
+        border-color: var(--color-accent);
+        color: var(--color-accent);
+      }
+      .float-btn:focus-visible {
+        outline: var(--border-strong) solid var(--color-accent);
+        outline-offset: var(--border-strong);
+      }
+      .float-btn:active {
+        transform: translateY(var(--press-shift));
+      }
+      .float-btn.active,
+      .float-btn.active:hover {
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        border-color: var(--color-accent);
+      }
+
+      /* Single-pass dithered theme transition (View Transitions + a Houdini
+         paint worklet). The OLD snapshot is held still underneath; the NEW one
+         is revealed over it by paint(dither-reveal), which draws a FIXED-size
+         Bayer dither whose reveal threshold grows radially from the theme
+         button. Animating --dr-progress repaints the worklet each frame, so the
+         dither pixels stay crisp (no texture scaling) while the wavefront
+         ripples out — a true single pass with no flat in-between. */
+      @property --dr-progress {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 0;
+      }
+      @property --dr-ox {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 0;
+      }
+      @property --dr-oy {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 0;
+      }
+      @property --dr-maxr {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 1000;
+      }
+      @property --dr-cell {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 4;
+      }
+      @property --dr-band {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 0.3;
+      }
+      :root.theme-dithering::view-transition-old(root),
+      :root.theme-dithering::view-transition-new(root) {
+        mix-blend-mode: normal;
+      }
+      :root.theme-dithering::view-transition-old(root) {
+        animation: none;
+      }
+      :root.theme-dithering::view-transition-new(root) {
+        animation: dr-progress var(--dither-dur) linear forwards;
+        mask-image: paint(dither-reveal);
+        mask-mode: alpha;
+      }
+      @keyframes dr-progress {
+        from {
+          --dr-progress: 0;
+        }
+        to {
+          --dr-progress: 1;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        :root.theme-dithering::view-transition-new(root) {
+          animation: none;
+        }
+        /* Honor the preference everywhere, not just the dither: collapse every
+           spring/pop transition and animation to instant so nothing visibly
+           moves. The static states (e.g. the footbar's "ready" emphasis) remain
+           — reduced-motion suppresses motion, not emphasis. Users with no
+           preference are unaffected (the rules live entirely inside this query). */
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+
+      /* SVG layer for thin connector lines between cards and elements. */
+      .connectors {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: var(--z-connectors);
+      }
+      .connectors path {
+        fill: none;
+        stroke: var(--color-accent);
+        stroke-width: var(--connector-width);
+        opacity: var(--opacity-connector);
+      }
+      .connectors circle {
+        fill: var(--color-accent);
+      }
+
+      /* Floating variant cards, absolutely placed around the stream. */
+      .cards {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: var(--z-cards);
+      }
+
+      /* Minimal off-screen reminder: when a variant element scrolls out of
+         the device viewport its card fades away; these tiny non-interactive
+         pills stay docked at the stream's top/bottom edge so the user keeps
+         seeing that N choices still exist and which way to scroll. */
+      .os-pill {
+        position: absolute;
+        z-index: var(--z-pop);
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: var(--gap-tight);
+        padding: var(--pad-pill);
+        font-size: var(--fs-label);
+        font-weight: var(--fw-bold);
+        color: var(--color-on-accent);
+        background: var(--color-accent);
+        border-radius: var(--radius-pill);
+        box-shadow: var(--shadow-pill);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity var(--dur-pill) ease;
+        white-space: nowrap;
+      }
+      .os-pill.show {
+        opacity: var(--opacity-pill);
+      }
+      .vcard {
+        position: absolute;
+        width: var(--card-width);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
+        pointer-events: auto;
+        overflow: hidden;
+        transform-origin: center center;
+        /* left/top are JS spring-driven; scale+opacity pop via CSS. */
+        transition:
+          opacity var(--dur-card-in) ease,
+          transform var(--dur-card-move) var(--ease-pop);
+      }
+      .vcard.gone {
+        opacity: 0;
+        transform: scale(var(--card-gone-scale));
+        pointer-events: none;
+      }
+      .vcard-head {
+        display: flex;
+        align-items: center;
+        gap: var(--gap-inline);
+        padding: var(--pad-card-head);
+        border-bottom: var(--border-hairline) solid var(--color-border);
+        cursor: move;
+        background: var(--color-surface-raised);
+      }
+      .vcard-head .dot {
+        width: var(--card-dot-size);
+        height: var(--card-dot-size);
+        border-radius: var(--radius-round);
+        background: var(--color-accent);
+        flex-shrink: 0;
+      }
+      .vcard-head .nm {
+        font-weight: var(--fw-semibold);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .vcard-head .where {
+        margin-left: auto;
+        font-size: var(--fs-tag);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-where);
+        color: var(--color-muted);
+        flex-shrink: 0;
+      }
+      .vcard-head .where.on {
+        color: var(--color-ok);
+      }
+      .vcard-body {
+        max-height: var(--vcard-body-max-h);
+        overflow-y: auto;
+        /* Hide the scrollbar so its appearance NEVER changes the body's content
+           width. A space-taking scrollbar caused a perpetual resize loop: a
+           preview sized to the full width pushes the body past max-height → the
+           scrollbar appears → content width shrinks ~15px → applyThumbCrop (its
+           cache key includes that width) re-fits the preview smaller → content
+           fits → scrollbar disappears → width grows → re-fit bigger → … forever.
+           Hidden = constant width = no loop, and no un-highlighted gutter strip
+           on hovered rows. The body still scrolls by wheel/trackpad. */
+        scrollbar-width: none;
+      }
+      .vcard-body::-webkit-scrollbar {
+        display: none;
+      }
+      .vrow {
+        display: flex;
+        gap: var(--gap-list);
+        padding: var(--pad-row);
+        border-bottom: var(--border-hairline) solid var(--color-border);
+        cursor: grab;
+        user-select: none;
+        /* Padding/gap/font/color animate together when a sibling gets
+           staged (the :has() rule below collapses non-picked variants to
+           a one-line summary). Without this transition the rows jumped
+           into the tight layout instantly. */
+        transition:
+          padding var(--dur-card-move) var(--ease-out),
+          gap var(--dur-card-move) var(--ease-out),
+          font-size var(--dur-card-move) var(--ease-out),
+          color var(--dur-card-move) var(--ease-out);
+      }
+      .vrow:last-child {
+        border-bottom: 0;
+      }
+      .vrow:hover {
+        background: var(--color-row-hover);
+      }
+      .vrow:active {
+        cursor: grabbing;
+      }
+      .vrow.dragging {
+        opacity: var(--opacity-disabled);
+      }
+      .vrow.staged {
+        background: var(--color-row-staged);
+      }
+      /* Collapse-on-stage: once a variant is picked, every OTHER variant in the
+         same card collapses to a compact row — forced side-by-side (image beside
+         name) regardless of its resting direction, with the preview shrunk to
+         ~3 lines of text tall (applyThumbCrop sizes the thumb; this just sets the
+         direction). The thumb's width/height transition animates the shrink, and
+         the shorter rows let layoutCards spring the card to its new height. The
+         `:has()` keeps it pure-CSS and reactive to the .staged class toggle. */
+      .vcard:has(.vrow.staged) .vrow:not(.staged) {
+        flex-direction: row;
+        align-items: flex-start;
+      }
+      .vcard:has(.vrow.staged) .vrow:not(.staged) .meta {
+        opacity: var(--opacity-disabled);
+      }
+      /* Wide/square previews read better stacked (image above text); only
+         clearly-portrait previews keep the side-by-side row. */
+      .vrow.col {
+        flex-direction: column;
+      }
+      .vrow.col .thumb {
+        align-self: center;
+      }
+      .vrow .thumb {
+        position: relative;
+        width: var(--thumb-size);
+        height: var(--thumb-size);
+        flex-shrink: 0;
+        border-radius: var(--radius-control);
+        border: var(--border-hairline) solid var(--color-border);
+        overflow: hidden;
+        background: var(--color-thumb-bg);
+        transition:
+          width var(--dur-card-move) var(--ease-out),
+          height var(--dur-card-move) var(--ease-out),
+          border-width var(--dur-card-move) var(--ease-out),
+          opacity var(--dur-fade) ease;
+      }
+      .vrow .thumb-img {
+        position: absolute;
+        top: 0;
+        left: 0;
+        max-width: none;
+        user-select: none;
+        -webkit-user-drag: none;
+        pointer-events: none;
+      }
+      .vrow .thumb.placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-muted);
+        font-size: var(--fs-mini);
+        text-align: center;
+      }
+      .vrow .meta {
+        min-width: 0;
+        flex: 1;
+      }
+      .vrow .vn {
+        font-weight: var(--fw-semibold);
+        display: flex;
+        align-items: center;
+        gap: var(--gap-inline);
+      }
+      .vrow .vn .tag {
+        font-size: var(--fs-tag);
+        color: var(--color-ok);
+      }
+      .vcard-cmt {
+        width: 100%;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: 0;
+        border-top: var(--border-hairline) solid var(--color-border);
+        padding: var(--pad-cmt);
+        font: inherit;
+        font-size: var(--fs-label);
+        /* No manual resize: card height is column-packed in layoutCards.
+           Dragging this resize handle used to grow the card and force
+           neighbouring cards in the same column to compress to make room. */
+        resize: none;
+        min-height: var(--cmt-min-h);
+      }
+
+      /* Soft nudge when an element was proposed with a single variant — a
+         lone variant isn't a real choice. Block-level, in normal card flow
+         (between body and comment), so it never overlaps the floating layout. */
+      .vcard-hint {
+        padding: var(--pad-cmt);
+        border-top: var(--border-hairline) solid var(--color-border);
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+      }
+
+      /* Element-inspector spotlight: ONE blur+dim layer over the stream with
+         a rectangular hole punched by clip-path (even-odd). A single element
+         (not 4 strips) → zero overlap, so no compounding dark/bright shapes
+         flicker as the cutout moves. The donut path keeps a constant segment
+         structure so the clip-path transition interpolates smoothly. */
+      .spot {
+        position: absolute;
+        background: var(--spotlight-scrim);
+        backdrop-filter: blur(var(--backdrop-blur));
+        -webkit-backdrop-filter: blur(var(--backdrop-blur));
+        pointer-events: none;
+        will-change: clip-path;
+        transition:
+          clip-path var(--dur-spot) var(--ease-out),
+          opacity var(--dur-fade) ease;
+      }
+      .spot-ring {
+        position: absolute;
+        border: var(--border-strong) solid var(--color-accent);
+        border-radius: var(--radius-control);
+        box-shadow: var(--ring-outline);
+        pointer-events: none;
+        /* Match .spot's clip-path transition exactly (same duration + same
+           easing) so the ring and the no-blur hole move in perfect lockstep.
+           A different curve/duration here makes the ring overshoot and bounce
+           while the hole glides, which reads as the ring lagging the hole. */
+        transition:
+          left var(--dur-spot) var(--ease-out),
+          top var(--dur-spot) var(--ease-out),
+          width var(--dur-spot) var(--ease-out),
+          height var(--dur-spot) var(--ease-out);
+      }
+      .spot-ring .lab {
+        position: absolute;
+        top: var(--lab-top);
+        left: 0;
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        font-size: var(--fs-label);
+        font-weight: var(--fw-bold);
+        padding: var(--pad-lab);
+        border-radius: var(--radius-control);
+        white-space: nowrap;
+        max-width: var(--lab-max-width);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .spot-hit {
+        position: absolute;
+        cursor: crosshair;
+        z-index: var(--z-spot-hit);
+        /* The spotlight root sets pointer-events:none; this capture layer must
+           opt back in or hover/click never reaches it and nothing un-blurs. */
+        pointer-events: auto;
+      }
+      .inspecting .stage img {
+        cursor: crosshair;
+      }
+
+      /* Comment box bubble anchored next to the inspected element. */
+      .comment-pop {
+        position: absolute;
+        z-index: var(--z-pop);
+        width: var(--comment-pop-width);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-pop);
+        padding: var(--pad-pop);
+      }
+      .comment-pop h3 {
+        margin: 0 0 var(--comment-title-gap);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+      }
+      .comment-pop h3 span {
+        color: var(--color-accent);
+      }
+      .comment-pop textarea {
+        width: 100%;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-input);
+        padding: var(--pad-input);
+        font: inherit;
+        font-size: var(--fs-note);
+        resize: vertical;
+        min-height: var(--textarea-min-h);
+      }
+      .comment-pop .row {
+        display: flex;
+        gap: var(--gap-inline);
+        margin-top: var(--gap-list);
+      }
+      .comment-pop button {
+        flex: 1;
+        border: 0;
+        border-radius: var(--radius-input);
+        padding: var(--pad-btn);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+        cursor: pointer;
+      }
+      .comment-pop .save {
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+      }
+      .comment-pop .cancel {
+        background: var(--color-border);
+        color: var(--color-fg);
+      }
+
+      /* Saved-annotation pin shown on its element. */
+      .ann-pin {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        width: var(--pin-size);
+        height: var(--pin-size);
+        border-radius: var(--radius-round) var(--radius-round) var(--radius-round)
+          var(--radius-pin-tail);
+        background: var(--color-pin-bg);
+        color: var(--color-pin-fg);
+        font-size: var(--fs-label);
+        font-weight: var(--fw-extrabold);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: var(--shadow-pin);
+        pointer-events: auto;
+        cursor: help;
+        z-index: var(--z-pin);
+      }
+
+      /* Review popover for a saved annotation — fades/slides in right above
+         its pin (replaces the old native confirm()). */
+      .ann-pop {
+        position: absolute;
+        z-index: var(--z-overlay);
+        width: var(--annpop-width);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-pop);
+        padding: var(--pad-pop);
+        transform-origin: 50% 100%;
+        transform: translate(-50%, calc(-100% - var(--annpop-gap)));
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity var(--dur-fade) ease,
+          transform var(--dur-fade) var(--ease-out);
+      }
+      .ann-pop.show {
+        transform: translate(-50%, calc(-100% - var(--annpop-gap-show)));
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .ann-pop h4 {
+        margin: 0 0 var(--gap-inline);
+        font-size: var(--fs-label);
+        font-weight: var(--fw-bold);
+        color: var(--color-accent);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-label);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .ann-pop .txt {
+        font-size: var(--fs-read);
+        line-height: var(--lh-snug);
+        color: var(--color-fg);
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: var(--annpop-txt-max-h);
+        overflow: auto;
+      }
+      .ann-pop textarea {
+        width: 100%;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-input);
+        padding: var(--pad-input);
+        font: inherit;
+        font-size: var(--fs-note);
+        resize: vertical;
+        min-height: var(--textarea-min-h);
+      }
+      .ann-pop .row {
+        display: flex;
+        gap: var(--gap-inline);
+        margin-top: var(--annrow-mt);
+      }
+      .ann-pop button {
+        flex: 1;
+        border: 0;
+        border-radius: var(--radius-input);
+        padding: var(--pad-btn);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+        cursor: pointer;
+      }
+      .ann-pop .edit {
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+      }
+      .ann-pop .del,
+      .clear-btn {
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+      }
+      .ann-pop .del:hover,
+      .clear-btn:hover {
+        border-color: var(--color-error);
+        color: var(--color-error);
+      }
+      .ann-pop .cancel {
+        background: var(--color-border);
+        color: var(--color-fg);
+      }
+
+      /* Bottom-right action stack: comment textarea on top, complete button beneath. */
+      .footbar {
+        position: absolute;
+        right: var(--footbar-right);
+        bottom: var(--footbar-bottom);
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--gap-list);
+        background: var(--footbar-bg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        padding: var(--pad-footbar);
+        box-shadow: var(--shadow-card);
+        z-index: var(--z-overlay);
+        max-width: var(--footbar-max-width);
+        /* Grows from its pinned corner when every element is chosen (.ready). */
+        transform-origin: bottom right;
+        transition:
+          transform var(--dur-card-in) var(--ease-pop),
+          border-color var(--dur-fade) var(--ease-out),
+          box-shadow var(--dur-fade) var(--ease-out);
+      }
+      /* All elements chosen → lift the panel so "submit" is the obvious next step. */
+      .footbar.ready {
+        transform: scale(var(--footbar-ready-scale));
+        border-color: var(--color-accent);
+        box-shadow: var(--glow-accent);
+      }
+      .ready-label {
+        display: none;
+        align-items: center;
+        gap: var(--gap-inline);
+        color: var(--color-accent);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-bold);
+      }
+      .footbar.ready .ready-label {
+        display: flex;
+      }
+      .ready-label svg {
+        width: var(--icon-size);
+        height: var(--icon-size);
+        flex: none;
+      }
+
+      /* Off-screen reveal prompt — a CTA that rides just above the footbar
+         (its `bottom` is set by the layout pass) offering to surface proposals
+         whose element is on another screen. Collapsing folds it to a persistent
+         pill — never dismissed — so the hidden choices stay one tap from view. */
+      .offscreen-prompt {
+        position: absolute;
+        right: var(--footbar-right);
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+        /* `width` is set by the layout pass to match the footbar directly below
+           it; the column right-aligns the collapsed pill within that width. */
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+      }
+      .offscreen-prompt[hidden] {
+        display: none;
+      }
+      .op-card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        width: 100%;
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-accent);
+        border-radius: var(--radius-card);
+        padding: var(--pad-footbar);
+        box-shadow: var(--glow-accent);
+      }
+      .op-msg {
+        margin: 0;
+        color: var(--color-fg);
+        font-size: var(--fs-note);
+        line-height: var(--lh-snug);
+      }
+      .op-row {
+        display: flex;
+        align-items: center;
+        gap: var(--gap-list);
+      }
+      .op-show {
+        flex: 1;
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        border: 0;
+        border-radius: var(--radius-button);
+        padding: var(--pad-complete);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-bold);
+        cursor: pointer;
+      }
+      .op-collapse {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--icon-btn-size);
+        height: var(--icon-btn-size);
+        flex: none;
+        padding: 0;
+        background: transparent;
+        color: var(--color-muted);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-control);
+        cursor: pointer;
+      }
+      .op-collapse:hover {
+        color: var(--color-fg);
+        border-color: var(--color-muted);
+      }
+      .op-collapse svg {
+        width: var(--icon-size);
+        height: var(--icon-size);
+      }
+      .op-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--gap-inline);
+        background: var(--color-surface);
+        color: var(--color-accent);
+        border: var(--border-hairline) solid var(--color-accent);
+        border-radius: var(--radius-pill);
+        padding: var(--pad-refresh);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+        cursor: pointer;
+        box-shadow: var(--shadow-card);
+      }
+      .op-pill svg {
+        width: var(--fs-body);
+        height: var(--fs-body);
+        flex: none;
+      }
+      .offscreen-prompt.collapsed .op-card {
+        display: none;
+      }
+      .offscreen-prompt:not(.collapsed) .op-pill {
+        display: none;
+      }
+      .footbar textarea {
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-input);
+        padding: var(--pad-footbar-input);
+        font: inherit;
+        font-size: var(--fs-note);
+        resize: none;
+        width: var(--footbar-input-width);
+      }
+      .footbar .btn-row {
+        display: flex;
+        gap: var(--gap-list);
+      }
+      .footbar .btn-row > button {
+        flex: 1;
+      }
+      .complete-btn,
+      .clear-btn {
+        border-radius: var(--radius-button);
+        padding: var(--pad-complete);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-bold);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .complete-btn {
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        border: 0;
+      }
+      .complete-btn:disabled {
+        background: var(--color-border);
+        color: var(--color-muted);
+        cursor: not-allowed;
+      }
+      .complete-note {
+        color: var(--color-muted);
+        font-size: var(--fs-label);
+        max-width: var(--complete-note-max-width);
+      }
+      .complete-note.ok {
+        color: var(--color-ok);
+      }
+      .complete-note.err {
+        color: var(--color-error);
+      }
+
+      /* Confirm modal — shared backstop for destructive actions (Remove, Clear). */
+      .modal {
+        position: fixed;
+        inset: 0;
+        background: var(--spotlight-scrim);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: var(--z-modal);
+      }
+      .modal[hidden] {
+        display: none;
+      }
+      .modal-card {
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        padding: var(--pad-modal);
+        max-width: var(--modal-max-width);
+        box-shadow: var(--shadow-pop);
+      }
+      .modal-msg {
+        margin: 0 0 var(--gap-stack);
+        color: var(--color-fg);
+        font-size: var(--fs-body);
+        line-height: var(--lh-snug);
+      }
+      .modal .row {
+        display: flex;
+        gap: var(--gap-list);
+        justify-content: flex-end;
+      }
+      .modal button {
+        border: 0;
+        border-radius: var(--radius-button);
+        padding: var(--pad-btn);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-semibold);
+        cursor: pointer;
+      }
+      .modal .cancel {
+        background: var(--color-border);
+        color: var(--color-fg);
+      }
+      .modal .confirm {
+        background: var(--color-danger-bg);
+        color: var(--color-danger-fg);
+      }
+
+      /* Post-submit confirmation card — centred above everything, fades and
+         pops in via --ease-pop, then either auto-dismisses (browser mode) or
+         is overrun by the Electron window's close-squeeze. */
+      .success-toast {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        z-index: var(--z-modal);
+      }
+      .success-toast[hidden] {
+        display: none;
+      }
+      .success-toast .success-card {
+        background: var(--color-ok);
+        color: var(--color-on-accent);
+        padding: var(--pad-modal) calc(var(--pad-modal) * 1.6);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-pop);
+        display: flex;
+        align-items: center;
+        gap: var(--gap-stack);
+        opacity: 0;
+        transform: scale(0.82);
+        transition:
+          opacity var(--dur-fade) ease,
+          transform var(--dur-card-in) var(--ease-pop);
+      }
+      .success-toast.show .success-card {
+        opacity: 1;
+        transform: scale(1);
+      }
+      .success-toast .success-icon {
+        font-size: 26px;
+        font-weight: var(--fw-extrabold);
+        line-height: 1;
+      }
+      .success-toast .success-text {
+        font-size: var(--fs-title);
+        font-weight: var(--fw-bold);
       }
     </style>
   </head>
   <body>
     <div id="root">
-      <div class="toolbar">
-        <label for="sim-select">Simulator</label>
-        <select id="sim-select">
-          <option>Loading…</option>
-        </select>
-        <button id="refresh-btn" title="Refresh simulator list">⟳</button>
-        <span id="hint" class="debug" style="min-width: auto"></span>
-        <span id="debug" class="debug"></span>
-        <span id="status" class="status">idle</span>
-      </div>
-      <div class="viewport" id="viewport">
-        <div class="empty">Select a booted simulator to start streaming.</div>
+      <div class="main" id="main">
+        <!-- Window drag handle: a full-bleed, click-through layer behind the
+             content. See .drag-region in the stylesheet. -->
+        <div class="drag-region"></div>
+        <div class="viewport" id="viewport">
+          <div class="empty">Loading simulators…</div>
+        </div>
+        <svg class="connectors" id="connectors" aria-hidden="true"></svg>
+        <div class="cards" id="cards"></div>
+        <div class="os-pill" id="os-top"></div>
+        <div class="os-pill" id="os-bot"></div>
+        <div class="comment-pop" id="comment-pop" hidden></div>
+        <div class="ann-pop" id="ann-pop" hidden></div>
+        <div class="float-status" id="float-status">
+          <span id="status" class="status" hidden></span>
+          <span id="hidden-badge" class="hidden-badge" hidden></span>
+        </div>
+        <div class="float-controls" id="float-controls">
+          <button
+            id="comment-btn"
+            class="float-btn"
+            type="button"
+            hidden
+            aria-label="Add comment"
+            title="Add comment">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true">
+              <path
+                d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            </svg>
+          </button>
+          <button
+            id="theme-btn"
+            class="float-btn"
+            type="button"
+            aria-label="Theme"
+            title="Theme"></button>
+          <button
+            id="close-btn"
+            class="float-btn"
+            type="button"
+            aria-label="Close preview window"
+            title="Close preview window">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              aria-hidden="true">
+              <path d="M6 6 18 18M18 6 6 18" />
+            </svg>
+          </button>
+        </div>
+        <div class="offscreen-prompt" id="offscreen-prompt" hidden>
+          <div class="op-card">
+            <p class="op-msg">
+              <b id="op-count">0</b> <span id="op-noun">choices are</span> hidden on another screen.
+            </p>
+            <div class="op-row">
+              <button class="op-show" id="op-show" type="button">Show them</button>
+              <button class="op-collapse" id="op-collapse" type="button" aria-label="Collapse">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <button class="op-pill" id="op-pill" type="button" aria-label="Show hidden choices">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            <span><b id="op-pill-count">0</b> hidden — show</span>
+          </button>
+        </div>
+        <div class="footbar" id="footbar" hidden>
+          <div class="ready-label">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true">
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+            <span>All choices made — ready to submit</span>
+          </div>
+          <textarea
+            id="global-comment"
+            rows="4"
+            placeholder="Overall comment for the agent (optional)…"></textarea>
+          <div class="btn-row">
+            <button class="complete-btn" id="complete-btn">Complete</button>
+            <button class="clear-btn" id="clear-btn">Clear</button>
+          </div>
+          <span class="complete-note" id="complete-note"></span>
+        </div>
+        <div class="modal" id="confirm-modal" hidden>
+          <div class="modal-card">
+            <p class="modal-msg" id="confirm-msg"></p>
+            <div class="row">
+              <button class="cancel" id="confirm-cancel">Cancel</button>
+              <button class="confirm" id="confirm-yes">Confirm</button>
+            </div>
+          </div>
+        </div>
+        <div class="success-toast" id="success-toast" hidden>
+          <div class="success-card">
+            <span class="success-icon" aria-hidden="true">✓</span>
+            <span class="success-text" id="success-text">Selection sent</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -201,6 +1341,39 @@
         (window.location.origin.startsWith("http")
           ? window.location.origin
           : "http://127.0.0.1:3001");
+
+      // ── Theme bridge ───────────────────────────────────────────────────
+      // Visual + motion *feel* lives in theme.css (the single source). The few
+      // values the physics/timing JS needs are read from there once at boot,
+      // so there is still no hardcoded look/feel in this script. Fallbacks
+      // equal the prior literals, so a missing/unloaded theme.css cannot
+      // change behaviour.
+      const cssNum = (name, fallback) => {
+        const raw = getComputedStyle(document.documentElement).getPropertyValue(name);
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const THEME = {
+        bubbleOmega: cssNum("--spring-bubble-omega", 4.2),
+        bubbleZeta: cssNum("--spring-bubble-zeta", 0.9),
+        tightOmega: cssNum("--spring-tight-omega", 26),
+        tightZeta: cssNum("--spring-tight-zeta", 1),
+        goneGraceMs: cssNum("--card-gone-grace-ms", 550),
+        pollMs: cssNum("--poll-interval-ms", 1200),
+        treeStaleMs: cssNum("--tree-stale-ms", 6000),
+        flickMaxVel: cssNum("--flick-max-vel", 1500),
+        cardWidth: cssNum("--card-width", 232),
+        spotIdleMs: cssNum("--spot-idle-dismiss-ms", 150),
+        spotTrajWindowMs: cssNum("--spot-traj-window-ms", 80),
+        spotTrajStoppedSpeed: cssNum("--spot-traj-stopped-speed", 0.05),
+        spotTrajReach: cssNum("--spot-traj-reach", 0.5),
+        spotTrajHitboxMargin: cssNum("--spot-traj-hitbox-margin", 0.2),
+        spotMaxFrameArea: cssNum("--spot-max-frame-area", 0.85),
+        spotRingRadius: cssNum("--radius-control", 6), // round the blur-mask hole to match .spot-ring
+        collapsedThumbH: cssNum("--collapsed-thumb-h", 58),
+        annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
+        successToastShowMs: cssNum("--success-toast-show-ms", 1200),
+      };
 
       // Browser KeyboardEvent.code → USB HID Keyboard Usage Page (0x07) keycode.
       // sim-server's `key` command expects these raw HID codes — shift/modifier
@@ -311,13 +1484,12 @@
         : new Set(["ControlLeft", "ControlRight"]);
 
       // ── DOM ─────────────────────────────────────────────────────────────
-      const select = document.getElementById("sim-select");
       const status = document.getElementById("status");
       const viewport = document.getElementById("viewport");
-      const refreshBtn = document.getElementById("refresh-btn");
-      const debugEl = document.getElementById("debug");
-      const hintEl = document.getElementById("hint");
-      hintEl.textContent = `Hold ${IS_MAC ? "Option" : "Ctrl"} for pinch · +Shift to move anchor`;
+      // Device the window was opened for (?udid=…), set by the tool-server from
+      // the agent's propose_variant. When present we connect straight to it and
+      // never show a simulator chooser.
+      const initialUdid = urlParams.get("udid");
 
       // ── State ───────────────────────────────────────────────────────────
       /** @type {WebSocket | null} */
@@ -326,6 +1498,10 @@
       let currentUdid = null;
       let img = null;
       let stage = null;
+      // Auto-reconnect bookkeeping (see scheduleReconnect): the simulator-server
+      // port is ephemeral, so a restart strands the pinned stream/WS.
+      let reconnectTimer = null;
+      let reconnectAttempts = 0;
       /** Elements for the three multi-touch indicators (primary / mirror / anchor). */
       let touchDots = { primary: null, mirror: null, anchor: null };
       let activePointerId = null;
@@ -341,11 +1517,19 @@
       /** Last known CapsLock state to resync iOS if it drifts. */
       let lastCapsLockState = false;
       let cmdCounter = 0;
+      /** Trailing-debounce state for wheel scrolling (see attachInputHandlers). */
+      let wheelTimer = null;
+      let wheelPt = null;
+      let wheelDX = 0;
+      let wheelDY = 0;
 
       // ── Helpers ─────────────────────────────────────────────────────────
       function setStatus(text, kind = "") {
         status.textContent = text;
         status.className = "status" + (kind ? " " + kind : "");
+        // The status is a floating pill now — keep it out of the way unless
+        // there is something worth showing (loading / error / disconnect).
+        status.hidden = !text || text === "idle";
       }
 
       function nextCmdId() {
@@ -353,24 +1537,17 @@
       }
 
       function sendCmd(obj) {
-        if (!ws || !wsOpen) {
-          debugEl.textContent = `ws not open — dropped ${obj.cmd}`;
-          return;
-        }
+        if (!ws || !wsOpen) return;
+        // While the element-comment inspector is active the stream is a
+        // read-only annotation surface — never drive the device.
+        if (typeof vp !== "undefined" && vp.inspect) return;
         ws.send(JSON.stringify({ id: nextCmdId(), ...obj }));
-        if (obj.cmd === "touch") {
-          const tail =
-            obj.second_x != null
-              ? ` / (${obj.second_x.toFixed(3)}, ${obj.second_y.toFixed(3)})`
-              : "";
-          debugEl.textContent = `${obj.type} (${obj.x.toFixed(3)}, ${obj.y.toFixed(3)})${tail}`;
-        } else if (obj.cmd === "key") {
-          debugEl.textContent = `key ${obj.direction} ${obj.code}`;
-        } else if (obj.cmd === "wheel") {
-          debugEl.textContent = `wheel dx=${obj.dx} dy=${obj.dy}`;
-        } else {
-          debugEl.textContent = `${obj.cmd}`;
-        }
+        // Every command (touch/scroll/key) likely moved the screen — wake the
+        // describe loop *now* so connectors/pins track interaction, not just
+        // the fixed cadence. Only when something is actually anchored to the
+        // stream, else it would needlessly collapse the idle wait.
+        // kickDescribe() is hoisted + self-throttled.
+        if (vp.proposals.length || vp.annotations.length) kickDescribe();
       }
 
       /**
@@ -460,34 +1637,105 @@
       }
 
       // ── Simulator list ─────────────────────────────────────────────────
+      // Device chooser rendered into the main viewport when there are multiple
+      // booted simulators (or none) and nothing is connected yet. Replaces the
+      // old static "Connecting…" placeholder, which looked stuck because the
+      // only way to pick was a small toolbar dropdown that was easy to miss.
+      function renderDevicePicker(sims) {
+        const booted = sims.filter((s) => s.state === "Booted");
+        const others = sims.filter((s) => s.state !== "Booted");
+
+        const wrap = document.createElement("div");
+        wrap.className = "dev-picker";
+
+        const h = document.createElement("h2");
+        h.textContent = booted.length ? "Choose a simulator" : "No booted simulators";
+        wrap.appendChild(h);
+
+        const sub = document.createElement("div");
+        sub.className = "sub";
+        sub.textContent = booted.length
+          ? `${booted.length} booted device${booted.length === 1 ? "" : "s"} available`
+          : "Boot a simulator, then refresh.";
+        wrap.appendChild(sub);
+
+        const addList = (items, disabled) => {
+          if (!items.length) return;
+          const list = document.createElement("div");
+          list.className = "dev-list";
+          for (const s of items) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "dev-item";
+            b.disabled = disabled;
+            if (disabled) b.title = "Not booted — boot it first";
+            const dot = document.createElement("span");
+            dot.className = "dot";
+            const nm = document.createElement("span");
+            nm.className = "nm";
+            nm.textContent = s.name;
+            const rt = document.createElement("span");
+            rt.className = "rt";
+            rt.textContent = disabled ? s.state || "" : s.runtime || "";
+            b.append(dot, nm, rt);
+            if (!disabled) {
+              b.addEventListener("click", () => {
+                b.blur();
+                connect(s.udid).catch((err) => setStatus(String(err.message || err), "error"));
+              });
+            }
+            list.appendChild(b);
+          }
+          wrap.appendChild(list);
+        };
+        addList(booted, false);
+        addList(others, true);
+
+        const row = document.createElement("div");
+        row.className = "refresh-row";
+        const rb = document.createElement("button");
+        rb.type = "button";
+        rb.textContent = "⟳ Refresh";
+        rb.addEventListener("click", () => {
+          rb.blur();
+          refreshSimulators();
+        });
+        row.appendChild(rb);
+        wrap.appendChild(row);
+
+        viewport.innerHTML = "";
+        viewport.appendChild(wrap);
+      }
+
       async function refreshSimulators() {
         setStatus("loading simulators…");
         try {
           const res = await fetch(`${TOOL_SERVER}/preview/simulators`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const { simulators } = await res.json();
-          select.innerHTML = "";
-          if (!simulators || simulators.length === 0) {
-            const opt = document.createElement("option");
-            opt.textContent = "(no simulators found)";
-            select.appendChild(opt);
-            select.disabled = true;
-            setStatus("no simulators", "error");
+          const all = simulators || [];
+          const booted = all.filter((s) => s.state === "Booted");
+
+          // Exactly one usable simulator → connect to it directly.
+          if (booted.length === 1) {
+            setStatus("idle");
+            if (currentUdid !== booted[0].udid) {
+              connect(booted[0].udid).catch((err) =>
+                setStatus(String(err.message || err), "error")
+              );
+            }
             return;
           }
-          select.disabled = false;
-          const placeholder = document.createElement("option");
-          placeholder.value = "";
-          placeholder.textContent = "— choose simulator —";
-          select.appendChild(placeholder);
-          for (const s of simulators) {
-            const opt = document.createElement("option");
-            opt.value = s.udid;
-            opt.textContent = `${s.state === "Booted" ? "● " : "○ "}${s.name}`;
-            opt.disabled = s.state !== "Booted";
-            select.appendChild(opt);
-          }
-          setStatus("idle");
+
+          // Zero or multiple booted and nothing live yet → in-viewport device
+          // picker. This is only a fallback: normally the window is opened for a
+          // specific ?udid and connects without ever reaching here. Don't
+          // clobber an active stream when ⟳ is pressed while connected.
+          setStatus(
+            booted.length ? "choose a device" : "no booted simulators",
+            booted.length ? "" : "error"
+          );
+          if (!currentUdid) renderDevicePicker(all);
         } catch (err) {
           setStatus(`failed: ${err.message || err}`, "error");
         }
@@ -496,17 +1744,30 @@
       // ── Stream + WS wiring ─────────────────────────────────────────────
       function teardownStream() {
         releaseAllInput();
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
         if (ws) {
+          // Detach handlers before closing so this intentional teardown doesn't
+          // trip the auto-reconnect (otherwise the close we trigger here, or a
+          // reconnect that reuses the same udid, would schedule a spurious one).
+          ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
           try {
             ws.close();
           } catch {}
           ws = null;
         }
         wsOpen = false;
+        // No live stream → no current device. Prevents the describe loop from
+        // firing one stale GET /preview/describe/<oldUdid> after teardown.
+        currentUdid = null;
+        describeWarmupPending = false;
         // Explicitly clear the img src — otherwise the browser keeps the MJPEG
         // HTTP connection open after the element is detached, and re-selecting
         // a simulator leaks more connections. Same trick radon-ide uses.
         if (img) {
+          img.onerror = null;
           img.src = "";
           img.removeAttribute("src");
         }
@@ -514,11 +1775,47 @@
         stage = null;
         touchDots = { primary: null, mirror: null, anchor: null };
         viewport.innerHTML = "";
+        // Overlay DOM lived inside `stage` (just wiped) — drop detached refs.
+        vpResetOverlay();
       }
 
-      async function connect(udid) {
+      // The simulator-server's port is ephemeral: scraped from the binary's
+      // stdout, not pinned by us. If it restarts (a crash, an explicit
+      // stop-simulator-server, a profiling run that bounces it), the <img> and
+      // WebSocket we pinned in connect() point at a dead port and the stream
+      // goes permanently blank — the recurring "the stream disappeared". The
+      // server route re-resolves the live port on each request, so a
+      // capped-backoff reconnect (re-running connect, which re-fetches that
+      // route) heals it instead of stranding the user on a refresh. The
+      // reconnectTimer guard collapses the simultaneous img.onerror + ws.onclose
+      // into a single attempt; backoff resets on a successful ws.onopen.
+      function scheduleReconnect(udid) {
+        if (currentUdid !== udid || reconnectTimer) return;
+        const delay = Math.min(1000 * 2 ** reconnectAttempts, 8000);
+        reconnectAttempts++;
+        setStatus("reconnecting…");
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          if (currentUdid === udid) {
+            connect(udid, true).catch((err) => setStatus(String(err.message || err), "error"));
+          }
+        }, delay);
+      }
+
+      async function connect(udid, isReconnect = false) {
         teardownStream();
+        // A fresh user-initiated connect resets the backoff; a reconnect keeps
+        // it growing across consecutive failures.
+        if (!isReconnect) reconnectAttempts = 0;
         currentUdid = udid;
+        // Warm the describe pipeline in the background: the first /describe on
+        // iOS AX or Android uiautomator cold-starts the platform service and
+        // can take several seconds, which the user would otherwise pay on
+        // their first right-click. Triggering it now lets it run in parallel
+        // with stream setup, so the tree is usually already in vp.tree by the
+        // time the user reaches for an element.
+        describeWarmupPending = true;
+        describeOnce();
         setStatus("starting simulator-server…");
         viewport.innerHTML = '<div class="empty">Starting simulator-server…</div>';
         let info;
@@ -540,7 +1837,7 @@
         if (!info.streamUrl) {
           setStatus("no stream URL", "error");
           viewport.innerHTML =
-            '<div class="error-box">Simulator-server is running but did not advertise a stream URL.<br/>Rebuild with the <code>argent</code> cargo feature (which enables <code>streaming</code>).</div>';
+            '<div class="error-box">Simulator-server is running but did not advertise a stream URL.<br/>Rebuild it with the <code>streaming</code> cargo feature enabled.</div>';
           return;
         }
 
@@ -552,7 +1849,10 @@
         img.draggable = false;
         // Append a cache-buster so re-connects don't reuse a stale MJPEG stream.
         img.src = `${info.streamUrl}?t=${Date.now()}`;
-        img.onerror = () => setStatus("stream error", "error");
+        img.onerror = () => {
+          setStatus("stream error", "error");
+          scheduleReconnect(udid);
+        };
         stage.appendChild(img);
         viewport.innerHTML = "";
         viewport.appendChild(stage);
@@ -563,14 +1863,19 @@
         ws = new WebSocket(info.wsUrl);
         ws.onopen = () => {
           wsOpen = true;
-          setStatus("live", "live");
+          reconnectAttempts = 0;
+          setStatus("");
         };
         ws.onclose = () => {
           wsOpen = false;
-          if (currentUdid === udid) setStatus("disconnected", "error");
+          if (currentUdid === udid) {
+            setStatus("disconnected", "error");
+            scheduleReconnect(udid);
+          }
         };
         ws.onerror = () => {
           setStatus("ws error", "error");
+          scheduleReconnect(udid);
         };
       }
 
@@ -592,12 +1897,27 @@
         }
         pressedKeys.clear();
         activePointerId = null;
+        // Drop any pending trailing wheel flush so a scroll can't fire into a
+        // torn-down / blurred stream after the fact.
+        if (wheelTimer) {
+          clearTimeout(wheelTimer);
+          wheelTimer = null;
+        }
       }
 
       function attachInputHandlers(target) {
         target.addEventListener("dragstart", (ev) => ev.preventDefault());
 
         target.addEventListener("pointerdown", (ev) => {
+          // Mute the device while a floating card (or a variant chip) is being
+          // dragged: a drag that crosses or is released over the stream must
+          // never register as a tap on the simulator. Blocking the Down here is
+          // enough — Move/Up only fire once a Down has armed `isPressing`.
+          if (vp.cardDragging || vp.dragging) return;
+          // Only the primary button drives the device. Right-click (button 2)
+          // is reserved for the comment-popover shortcut handled in the
+          // window-level `contextmenu` listener; middle-click is ignored too.
+          if (ev.button !== 0) return;
           if (activePointerId !== null) return;
           const pt = toDeviceCoords(ev);
           if (!pt) return;
@@ -667,19 +1987,29 @@
           }
         });
 
+        // A single trackpad scrub emits a long flood of wheel events (incl. a
+        // ~1–2s macOS momentum tail). sim-server turns *each* wheel command into
+        // a ~400ms swipe driven to the screen edge, so forwarding the whole
+        // flood makes one flick scroll "forever". Mirror radon-ide: swallow the
+        // burst and emit ONE wheel command 100ms after it settles.
         target.addEventListener(
           "wheel",
           (ev) => {
+            ev.preventDefault();
             const pt = toDeviceCoords(ev);
             if (!pt) return;
-            const dx = normalizeWheel(ev.deltaX);
-            const dy = normalizeWheel(ev.deltaY);
-            if (dx === 0 && dy === 0) {
-              ev.preventDefault();
-              return;
-            }
-            sendCmd({ cmd: "wheel", x: pt.x, y: pt.y, dx, dy });
-            ev.preventDefault();
+            wheelPt = pt;
+            wheelDX = ev.deltaX;
+            wheelDY = ev.deltaY;
+            if (wheelTimer) clearTimeout(wheelTimer);
+            wheelTimer = setTimeout(() => {
+              wheelTimer = null;
+              const dx = normalizeWheel(wheelDX);
+              const dy = normalizeWheel(wheelDY);
+              if ((dx !== 0 || dy !== 0) && wheelPt) {
+                sendCmd({ cmd: "wheel", x: wheelPt.x, y: wheelPt.y, dx, dy });
+              }
+            }, 100);
           },
           { passive: false }
         );
@@ -693,19 +2023,157 @@
       }
 
       // ── Events ──────────────────────────────────────────────────────────
-      select.addEventListener("change", () => {
-        const udid = select.value;
-        if (!udid) return;
-        // Blur the select so keys (including the multi-touch Option/Ctrl modifier)
-        // route to our window-level handler instead of being swallowed by the
-        // dropdown's built-in keyboard handling.
-        select.blur();
-        connect(udid).catch((err) => setStatus(String(err.message || err), "error"));
+      // Close button: ask the tool-server to dismiss the Electron window (it
+      // owns the window lifecycle over stdin, so it plays the close animation
+      // and quits the host cleanly — more reliable than renderer window.close()
+      // under the sandboxed BrowserWindow).
+      const closeBtn = document.getElementById("close-btn");
+      closeBtn.addEventListener("click", () => {
+        closeBtn.blur();
+        fetch(`${TOOL_SERVER}/preview/close`, { method: "POST" }).catch(() => {});
       });
-      refreshBtn.addEventListener("click", () => {
-        refreshBtn.blur();
-        refreshSimulators();
+
+      // ── Theme (light / dark) ────────────────────────────────────────────
+      // Colours are light-dark(LIGHT, DARK) tokens in theme.css; forcing
+      // `color-scheme` on the document resolves every token to the chosen side.
+      // Two explicit modes only — light and dark — seeded from the OS on first
+      // run, then remembered per tool-server origin.
+      const THEME_ICON = {
+        light:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.2M12 19.8V22M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2 12h2.2M19.8 12H22M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"/></svg>',
+        dark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+      };
+      const THEME_LABEL = { light: "Light", dark: "Dark" };
+      const themeBtn = document.getElementById("theme-btn");
+      let themeMode;
+      try {
+        const stored = localStorage.getItem("argent-preview-theme");
+        themeMode = stored === "light" || stored === "dark" ? stored : null;
+      } catch {
+        themeMode = null;
+      }
+      if (!themeMode) {
+        // First run: match the OS, then stay put until the user toggles.
+        themeMode = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      function applyTheme() {
+        document.documentElement.style.colorScheme = themeMode; // "light" | "dark"
+        const next = themeMode === "light" ? "dark" : "light";
+        themeBtn.innerHTML = THEME_ICON[themeMode];
+        themeBtn.title = `Theme: ${THEME_LABEL[themeMode]} — tap for ${THEME_LABEL[next]}`;
+        themeBtn.setAttribute("aria-label", themeBtn.title);
+      }
+      // The toggle animates as a SINGLE-PASS dithered wave. The View Transitions
+      // API snapshots the old and new themes; the old one is held still
+      // underneath while the new one is revealed over it by a Houdini paint
+      // worklet (paint(dither-reveal)) that draws a FIXED-size Bayer dither whose
+      // reveal threshold grows radially from the theme button. Animating
+      // --dr-progress repaints the worklet each frame, so the dither pixels stay
+      // crisp while the wavefront ripples out — no flat in-between. Falls back to
+      // an instant flip when View Transitions / paint worklets are unavailable or
+      // reduced-motion is set.
+      const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      // Worklet source (runs in its own context): paints white where the radial
+      // wavefront has dithered through, transparent elsewhere — used as an alpha
+      // mask on the new view-transition layer.
+      const DITHER_PAINT_SRC = `
+        registerPaint("dither-reveal", class {
+          static get inputProperties() {
+            return ["--dr-progress", "--dr-ox", "--dr-oy", "--dr-maxr", "--dr-cell", "--dr-band"];
+          }
+          paint(ctx, size, props) {
+            const p = parseFloat(props.get("--dr-progress")) || 0;
+            const ox = parseFloat(props.get("--dr-ox")) || 0;
+            const oy = parseFloat(props.get("--dr-oy")) || 0;
+            const maxr = parseFloat(props.get("--dr-maxr")) || Math.hypot(size.width, size.height);
+            const cell = Math.max(2, parseFloat(props.get("--dr-cell")) || 4);
+            const band = parseFloat(props.get("--dr-band")) || 0.3;
+            const M = [
+              [0,32,8,40,2,34,10,42],[48,16,56,24,50,18,58,26],[12,44,4,36,14,46,6,38],[60,28,52,20,62,30,54,22],
+              [3,35,11,43,1,33,9,41],[51,19,59,27,49,17,57,25],[15,47,7,39,13,45,5,37],[63,31,55,23,61,29,53,21]
+            ];
+            const front = p * (1 + band);  // reveal front (0 .. 1+band), normalized
+            const innerN = front - band;   // radius fully revealed (normalized)
+            ctx.fillStyle = "white";
+            if (innerN > 0) { ctx.beginPath(); ctx.arc(ox, oy, innerN * maxr, 0, 6.2831853); ctx.fill(); }
+            if (front <= 0) return;
+            const outer = front * maxr;    // only the ring between innerN..front needs dithering
+            const x0 = Math.max(0, Math.floor((ox - outer) / cell) * cell);
+            const y0 = Math.max(0, Math.floor((oy - outer) / cell) * cell);
+            const x1 = Math.min(size.width, ox + outer);
+            const y1 = Math.min(size.height, oy + outer);
+            for (let y = y0; y < y1; y += cell) {
+              for (let x = x0; x < x1; x += cell) {
+                const dx = x + cell / 2 - ox, dy = y + cell / 2 - oy;
+                const dN = Math.sqrt(dx * dx + dy * dy) / maxr;
+                if (dN <= innerN || dN > front) continue;
+                let t = (front - dN) / band;
+                if (t > 1) t = 1; else if (t < 0) continue;
+                const bx = ((x / cell) | 0) & 7, by = ((y / cell) | 0) & 7;
+                if ((M[by][bx] + 0.5) / 64 < t) ctx.fillRect(x, y, cell, cell);
+              }
+            }
+          }
+        });`;
+      let ditherPaintReady = false;
+      function ensureDitherPaint() {
+        if (ditherPaintReady || !("paintWorklet" in CSS)) return;
+        ditherPaintReady = true;
+        CSS.paintWorklet
+          .addModule(URL.createObjectURL(new Blob([DITHER_PAINT_SRC], { type: "text/javascript" })))
+          .catch(() => {});
+      }
+      function changeTheme() {
+        const canAnimate =
+          !prefersReducedMotion.matches &&
+          typeof document.startViewTransition === "function" &&
+          "paintWorklet" in CSS;
+        if (!canAnimate) {
+          applyTheme();
+          return;
+        }
+        ensureDitherPaint();
+        // Origin = the theme button; radius reaches the farthest corner so the
+        // wavefront sweeps the whole screen.
+        const r = themeBtn.getBoundingClientRect();
+        const bx = r.left + r.width / 2;
+        const by = r.top + r.height / 2;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const maxR =
+          Math.max(
+            Math.hypot(bx, by),
+            Math.hypot(vw - bx, by),
+            Math.hypot(bx, vh - by),
+            Math.hypot(vw - bx, vh - by)
+          ) || 1;
+        const s = document.documentElement.style;
+        s.setProperty("--dr-ox", String(bx));
+        s.setProperty("--dr-oy", String(by));
+        s.setProperty("--dr-maxr", String(maxR));
+        s.setProperty("--dr-cell", "4");
+        s.setProperty("--dr-band", "0.3");
+        const root = document.documentElement;
+        root.classList.add("theme-dithering");
+        try {
+          const vt = document.startViewTransition(applyTheme);
+          vt.finished.finally(() => root.classList.remove("theme-dithering"));
+        } catch {
+          root.classList.remove("theme-dithering");
+          applyTheme();
+        }
+      }
+      themeBtn.addEventListener("click", () => {
+        themeMode = themeMode === "light" ? "dark" : "light";
+        try {
+          localStorage.setItem("argent-preview-theme", themeMode);
+        } catch {}
+        themeBtn.blur();
+        changeTheme();
       });
+      applyTheme();
+      // Register the paint worklet up front so the first toggle has it ready.
+      ensureDitherPaint();
 
       // Global keyboard forwarding — active whenever a simulator is connected
       // and focus is not on a toolbar control. We forward raw keydown/keyup so
@@ -713,7 +2181,14 @@
       function shouldForwardKey(ev) {
         if (!wsOpen) return false;
         const ae = document.activeElement;
-        if (ae && (ae.tagName === "SELECT" || ae.tagName === "BUTTON" || ae.tagName === "INPUT")) {
+        if (
+          ae &&
+          (ae.tagName === "SELECT" ||
+            ae.tagName === "BUTTON" ||
+            ae.tagName === "INPUT" ||
+            ae.tagName === "TEXTAREA" ||
+            ae.isContentEditable)
+        ) {
           return false;
         }
         // Let the browser keep its own shortcuts (Cmd+R, Cmd+T, Cmd+W, Cmd+L, …).
@@ -781,10 +2256,38 @@
       window.addEventListener("keydown", handleKeyEvent);
       window.addEventListener("keyup", handleKeyEvent);
 
-      // Disable the right-click context menu over the stage so right-button
-      // drags (if the user tries) don't pop up a menu on top of the stream.
+      // Right-click over the stream is the "add comment" shortcut: same
+      // outcome as left-clicking with inspect mode on, but works regardless
+      // of whether inspect is currently active. Suppresses the native menu
+      // either way so users can rely on it across the surface.
       window.addEventListener("contextmenu", (ev) => {
-        if (stage && stage.contains(ev.target)) ev.preventDefault();
+        const overStage = stage && stage.contains(ev.target);
+        const overSpot = vp.spot && vp.spot.hit && vp.spot.hit.contains(ev.target);
+        if (!overStage && !overSpot) return;
+        ev.preventDefault();
+        const r = streamRect();
+        if (!r) return;
+        const mr = mainEl.getBoundingClientRect();
+        const x = (ev.clientX - mr.left - r.x) / r.w;
+        const y = (ev.clientY - mr.top - r.y) / r.h;
+        // Activate inspect mode so the spotlight is visible and the describe
+        // loop keeps the tree fresh while the user composes a comment.
+        if (!vp.inspect) setInspect(true);
+        const tryPick = () => {
+          if (!vp.tree) return false;
+          const node = vpNodeAtPoint(vp.tree, x, y);
+          if (!node) return false;
+          vp.focus = node;
+          vp.commentFor = node;
+          paintSpot();
+          openCommentPop(node);
+          return true;
+        };
+        if (tryPick()) return;
+        // Tree not loaded yet (inspect just turned on / cached tree expired) —
+        // queue the click; describeOnce will resolve it once the tree lands.
+        vp.pendingComment = { x, y };
+        kickDescribe();
       });
 
       // On focus loss, release any active touches/keys so the device doesn't
@@ -793,7 +2296,2349 @@
 
       window.addEventListener("beforeunload", teardownStream);
 
-      refreshSimulators();
+      // ── Variant proposals + element-comment inspector ───────────────────
+      // Polls /preview/variants and /preview/describe, renders each proposed
+      // element as a floating card connected by a thin line to its live
+      // on-screen position, and provides an "Add comment" element inspector
+      // (spotlight: blur+dim everything except the hovered element, click to
+      // attach a comment). Picks + comments + annotations are pushed back to
+      // the agent's await_user_selection via "Complete selection".
+      const mainEl = document.getElementById("main");
+      const cardsEl = document.getElementById("cards");
+      const rootEl = document.getElementById("root");
+      const connEl = document.getElementById("connectors");
+      const popEl = document.getElementById("comment-pop");
+      const annPop = document.getElementById("ann-pop");
+      const osTop = document.getElementById("os-top");
+      const osBot = document.getElementById("os-bot");
+      const footEl = document.getElementById("footbar");
+      const commentBtn = document.getElementById("comment-btn");
+      const hiddenBadge = document.getElementById("hidden-badge");
+      const completeBtn = document.getElementById("complete-btn");
+      const clearBtn = document.getElementById("clear-btn");
+      const completeNote = document.getElementById("complete-note");
+      const globalCommentEl = document.getElementById("global-comment");
+      // Off-screen reveal prompt (sits above the footbar).
+      const offscreenPrompt = document.getElementById("offscreen-prompt");
+      const opCount = document.getElementById("op-count");
+      const opNoun = document.getElementById("op-noun");
+      const opShow = document.getElementById("op-show");
+      const opCollapse = document.getElementById("op-collapse");
+      const opPill = document.getElementById("op-pill");
+      const opPillCount = document.getElementById("op-pill-count");
+      const revealOffscreenChoices = () => {
+        vp.revealOffscreen = true;
+        vpRender();
+      };
+      opShow.addEventListener("click", () => {
+        opShow.blur();
+        revealOffscreenChoices();
+      });
+      // Collapsing never dismisses the prompt — it folds to a pill so the hidden
+      // choices stay one tap from visible.
+      opPill.addEventListener("click", () => {
+        opPill.blur();
+        revealOffscreenChoices();
+      });
+      opCollapse.addEventListener("click", () => {
+        vp.offscreenPromptCollapsed = true;
+        opCollapse.blur();
+        vpRender();
+      });
+      const confirmModal = document.getElementById("confirm-modal");
+      const confirmMsg = document.getElementById("confirm-msg");
+      const confirmCancel = document.getElementById("confirm-cancel");
+      const confirmYes = document.getElementById("confirm-yes");
+      const successToast = document.getElementById("success-toast");
+      const successText = document.getElementById("success-text");
+      const SVGNS = "http://www.w3.org/2000/svg";
+
+      const vp = {
+        round: -1,
+        proposals: [],
+        staged: {}, // elementId -> variantId
+        comments: {}, // elementId -> string
+        annotations: [], // [{ id, target, match, comment }]
+        tree: null,
+        treeAt: 0,
+        cards: new Map(), // id -> { el, sig, target, anim, animVel, home, pos, vel, pinned, gone, spawned, dragging }
+        thumbFrames: {}, // id -> frozen frame for the static preview crop
+        anchors: {}, // id -> last-matched element frame {x,y,width,height} (disambiguates shared labels by size)
+        conn: new Map(), // id -> { path, dot } reused SVG nodes
+        pinEls: new Map(), // annId -> reused pin element
+        annId: 0,
+        submitting: false,
+        dragging: false,
+        cardDragging: false,
+        justCompletedRound: -1,
+        inspect: false,
+        focus: null, // describe node currently spotlighted
+        commentFor: null, // describe node a comment-pop is open for
+        spot: null, // spotlight layer root (child of mainEl)
+        pinAnim: new Map(), // annId -> { p:{x,y}, v:{x,y} } spring-eased pin
+        annPopFor: null, // annotation id whose review popover is open
+        pendingComment: null, // { x, y } right-click awaiting tree-load to resolve
+        trajSamples: [], // recent off-element pointer samples {x,y,t} in normalized stream coords
+      };
+
+      // iOS AX labels for elements that embed SF Symbol glyphs (tab bar
+      // buttons, many toolbar items) include the glyph as a BMP private-use
+      // code point. After stripping the unrenderable glyph, the leftover
+      // commas (which separate the symbol from the human text) leak into
+      // headers like `Comment on , , Favourites (6)`. cleanLabel removes
+      // the private-use chars and collapses comma/space runs while
+      // preserving case for display.
+      function cleanLabel(s) {
+        return (s || "")
+          .replace(/[-]/g, "")
+          .replace(/[,\s]+/g, " ")
+          .trim();
+      }
+      // Display-friendly element name for the spotlight label, the
+      // "Comment on …" header, and the annotation target. Prefers the
+      // screen-reader-visible label/value over the developer-facing
+      // identifier — on Android `identifier` is the raw resource-id
+      // ("com.google.android.apps.nexuslauncher:id/search_container_hotseat")
+      // which is hostile in a UI header. nodeMatch keeps the identifier
+      // priority since that's still the most reliable matching key.
+      function humanizeIdentifier(raw) {
+        const s = (raw || "").trim();
+        if (!s) return "";
+        // Android resource-id shape: "<pkg>:id/<name>". iOS identifiers don't
+        // carry the package prefix; pass them through unchanged after the
+        // separator-to-space normalization below.
+        const m = s.match(/^[\w.]+:id\/(.+)$/);
+        const tail = m ? m[1] : s;
+        return tail
+          .replace(/[_\-.]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+      function nodeDesc(n) {
+        if (!n) return "element";
+        const lab = cleanLabel(n.label);
+        if (lab) return lab;
+        const val = cleanLabel(n.value);
+        if (val) return val;
+        const id = humanizeIdentifier(n.identifier);
+        if (id) return id;
+        const role = (n.role || "").trim();
+        return role || "element";
+      }
+      function nodeMatch(n) {
+        if (n.identifier) return { by: "identifier", value: n.identifier };
+        if (n.label) return { by: "label", value: n.label };
+        if (n.value) return { by: "text", value: n.value };
+        return { by: "role", value: n.role || "" };
+      }
+
+      // Smallest on-screen describe node matching a proposal's matcher.
+      // iOS AX labels for elements that use SF Symbols (tab-bar buttons,
+      // many toolbar items) embed the glyph as a BMP private-use code point.
+      // The Map tab's raw label is `, , Map`, but the proposer
+      // (LLM, doc snippet, human) sees and writes `Map`. Strict equality
+      // `, , Map` !== `Map` silently failed. Strip BMP private-use
+      // (U+E000-U+F8FF) and collapse the resulting comma/space runs so both
+      // forms normalise to `map`; substring is then allowed on `by:"label"`
+      // so a clean needle still hits a wrapped element.
+      function vpNormLabel(s) {
+        return (s || "")
+          .toLowerCase()
+          .replace(/[-]/g, "")
+          .replace(/[\s,]+/g, " ")
+          .trim();
+      }
+      // Does candidate `n` carry the SAME identity as the locked descriptor
+      // (`anchor`)? The agent's `match` is a loose net (a label `includes` test)
+      // that deliberately catches every element sharing the text — a "Favourites"
+      // header AND a "Favourites (5)" tab both pass. `descMatches` is the precise
+      // identity check that tells them apart, captured once from the first good
+      // match and then required forever after. Priority of evidence:
+      //   • identifier (testID / a11y id) — definitive when present;
+      //   • role — a header is AXStaticText, a tab is AXButton, so role alone
+      //     separates the classic collision;
+      //   • label — must stay consistent, but leniently (one containing the
+      //     other) so a live counter suffix like "(5)"→"(6)" doesn't break it.
+      // This is what gives CERTAINTY: when the real target leaves the screen the
+      // surviving same-text element fails this check, so the bubble goes
+      // off-screen instead of silently re-homing onto the wrong element.
+      // Label with its dynamic tail stripped — drop parenthetical groups and
+      // standalone numbers ("Favourites (5)" → "favourites", "Item 7" → "item")
+      // so a live counter or index doesn't read as a different element.
+      function vpCoreLabel(s) {
+        return vpNormLabel(s)
+          .replace(/\s*\([^)]*\)\s*/g, " ")
+          .replace(/\b\d+\b/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+      function vpDescMatches(n, desc) {
+        if (desc.identifier) return vpNormLabel(n.identifier) === desc.identifier;
+        if (desc.role && (n.role || "").toLowerCase() !== desc.role) return false;
+        const lbl = vpNormLabel(n.label);
+        if (!desc.label || !lbl || desc.label === lbl) return true;
+        if (lbl.includes(desc.label) || desc.label.includes(lbl)) return true;
+        // Compare with dynamic tails removed so a changing count still matches.
+        const cl = vpCoreLabel(lbl),
+          cd = vpCoreLabel(desc.label);
+        return !!cl && !!cd && (cl === cd || cl.includes(cd) || cd.includes(cl));
+      }
+      function vpMatchNode(node, match, anchor) {
+        const needle = vpNormLabel(match.value);
+        const out = [];
+        const walk = (n) => {
+          if (!n || typeof n !== "object") return;
+          const label = vpNormLabel(n.label);
+          const ident = vpNormLabel(n.identifier);
+          const value = vpNormLabel(n.value);
+          const role = (n.role || "").toLowerCase();
+          let hit;
+          if (!needle) hit = false;
+          else if (match.by === "label") hit = label === needle || label.includes(needle);
+          else if (match.by === "identifier") hit = ident === needle;
+          else if (match.by === "role") hit = role === needle;
+          else hit = label.includes(needle) || ident.includes(needle) || value.includes(needle);
+          // Drop near-full-screen / off-screen / zero-size hits up front so every
+          // later stage sees only sane, visible candidates. Same area filter
+          // `vpNodeAtPoint` uses, so a proposal that resolves to a container root
+          // never paints a screen-spanning bubble.
+          if (hit && n.frame && n.frame.width > 0 && n.frame.height > 0) {
+            const f = n.frame;
+            const cx = f.x + f.width / 2,
+              cy = f.y + f.height / 2;
+            if (
+              cx >= 0 &&
+              cx <= 1 &&
+              cy >= 0 &&
+              cy <= 1 &&
+              f.width * f.height <= THEME.spotMaxFrameArea
+            )
+              out.push(n);
+          }
+          if (Array.isArray(n.children)) n.children.forEach(walk);
+        };
+        walk(node);
+        if (!out.length) return null;
+
+        // Identity FIRST. Once a descriptor is locked on the anchor, a candidate
+        // must prove it is that same element (`vpDescMatches`). If none do, the
+        // target is genuinely gone → return null rather than re-homing onto a
+        // same-text impostor (the "the other one takes over" bug). Size/position
+        // only break a tie BETWEEN elements that are identity-indistinguishable
+        // (e.g. two identical list rows), never to *choose* an identity.
+        const hasDesc = anchor && (anchor.role || anchor.label || anchor.identifier);
+        let pool = out;
+        if (hasDesc) {
+          pool = out.filter((n) => vpDescMatches(n, anchor));
+          if (!pool.length) return null; // certainty: this element is off-screen
+          if (pool.length === 1) return pool[0];
+        }
+
+        // Tie-break. Among identity-equal (or, with no descriptor yet, all loose)
+        // candidates, SIZE is the stable signal — an element keeps its width/
+        // height as it scrolls (it can teleport across the screen in one frame on
+        // a fast scroll/refresh and still be itself), so gate by size and let
+        // position settle the rest. Without an anchor (annotations, older
+        // proposals) fall back to the smallest sane box.
+        const MAX_SIZE_RATIO = 2.5;
+        const sizeMatches = (f) =>
+          Math.max(f.width, anchor.width) / Math.max(1e-6, Math.min(f.width, anchor.width)) <=
+            MAX_SIZE_RATIO &&
+          Math.max(f.height, anchor.height) / Math.max(1e-6, Math.min(f.height, anchor.height)) <=
+            MAX_SIZE_RATIO;
+        const dist = (f) =>
+          Math.hypot(
+            f.x + f.width / 2 - (anchor.x + anchor.width / 2),
+            f.y + f.height / 2 - (anchor.y + anchor.height / 2)
+          );
+        let best = null,
+          bestScore = Infinity;
+        for (const n of pool) {
+          const f = n.frame;
+          const score = anchor ? dist(f) : f.width * f.height;
+          if (anchor && !hasDesc && !sizeMatches(f)) continue; // size gate only bootstraps identity
+          if (score < bestScore) {
+            bestScore = score;
+            best = n;
+          }
+        }
+        // A locked identity must never be dropped over a size wobble: if the size
+        // gate isn't in play (hasDesc) `best` is simply the nearest identity match.
+        return best;
+      }
+
+      // Topmost on-screen node whose frame contains a normalized point
+      // (inspector pick). Precedence is PAINT ORDER, not smallest area: a tree
+      // is walked depth-first parent-before-children and earlier-sibling-before-
+      // later, which is exactly the order the platform paints, so the LAST
+      // containing node visited is the one drawn on top. Overwriting `best` on
+      // every hit therefore returns the topmost element — a labelled child still
+      // beats its container (children paint after the parent), AND when two
+      // siblings overlap the visually-on-top one wins instead of whichever
+      // happens to be smaller (the old smallest-area rule silently picked the
+      // element *underneath*, so anything sitting on top of it was un-selectable).
+      //
+      // Not gated on element text: an icon-only pressable (a star button, a bare
+      // <Pressable>, an image button) has no label/value/identifier, so a text
+      // gate would make it un-hoverable. The on-screen guard — positive size +
+      // centre within the viewport — keeps scrolled-away / zero-size tree nodes
+      // from being selected.
+      //
+      // The describe ROOT node (an "AXGroup" that spans the whole stream) is
+      // skipped: it contains every point, so otherwise a gap (or any click)
+      // would resolve to the whole screen. We also drop any node whose frame
+      // covers more than spotMaxFrameArea of the screen — a generic filter for
+      // near-root container Views (Android exposes several) that would otherwise,
+      // as the last-painted ancestor, swallow the real element on top of them.
+      function vpNodeAtPoint(node, x, y) {
+        let best = null;
+        const walk = (n, isRoot) => {
+          if (!n || typeof n !== "object") return;
+          const f = n.frame;
+          if (
+            !isRoot &&
+            f &&
+            f.width > 0 &&
+            f.height > 0 &&
+            x >= f.x &&
+            x <= f.x + f.width &&
+            y >= f.y &&
+            y <= f.y + f.height
+          ) {
+            const cx = f.x + f.width / 2,
+              cy = f.y + f.height / 2;
+            const onScreen = cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1;
+            const a = f.width * f.height;
+            // Last hit in paint order wins → topmost element gets priority.
+            if (onScreen && a <= THEME.spotMaxFrameArea) best = n;
+          }
+          if (Array.isArray(n.children)) n.children.forEach((c) => walk(c, false));
+        };
+        walk(node, true);
+        return best;
+      }
+
+      // Stream image rect, in coordinates relative to #main.
+      function streamRect() {
+        if (!img) return null;
+        const ir = img.getBoundingClientRect();
+        const mr = mainEl.getBoundingClientRect();
+        if (!ir.width || !ir.height) return null;
+        return { x: ir.left - mr.left, y: ir.top - mr.top, w: ir.width, h: ir.height };
+      }
+      function elementPoint(frame) {
+        const r = streamRect();
+        if (!r) return null;
+        return {
+          x: r.x + (frame.x + frame.width / 2) * r.w,
+          y: r.y + (frame.y + frame.height / 2) * r.h,
+        };
+      }
+
+      // Proposals change rarely → poll on a relaxed interval.
+      async function pollVariants() {
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/variants`, { cache: "no-store" });
+          if (res.ok) {
+            const snap = await res.json();
+            if (snap.round !== vp.round) {
+              if (!vp.submitting && !vp.dragging) {
+                const hadWork =
+                  Object.keys(vp.staged).length > 0 ||
+                  vp.annotations.length > 0 ||
+                  (globalCommentEl && globalCommentEl.value);
+                const prev = vp.round;
+                vp.round = snap.round;
+                vp.staged = {};
+                vp.comments = {};
+                vp.annotations = [];
+                vp.thumbFrames = {};
+                vp.anchors = {};
+                vp.revealOffscreen = false;
+                vp.offscreenPromptCollapsed = false;
+                if (globalCommentEl) globalCommentEl.value = "";
+                if (vp.justCompletedRound === snap.round) {
+                  /* keep our own success note */
+                } else if (prev >= 0 && hadWork) {
+                  setNote("Agent started a new round — previous selections cleared.");
+                } else setNote("");
+              }
+            }
+            vp.proposals = Array.isArray(snap.proposals) ? snap.proposals : [];
+          }
+        } catch {
+          /* keep last state */
+        }
+        vpRender();
+      }
+
+      // Element geometry changes continuously as the user scrolls the device,
+      // so poll describe as fast as it can answer (self-scheduling, never
+      // overlapping) — combined with vpTick easing, the lines track the stream.
+      let describeInFlight = false;
+      // Set once when a new simulator connects so the first describe fires
+      // even before any inspect-mode interaction, warming the platform's
+      // accessibility service. The flag self-clears the first time we land a
+      // tree, so steady-state polling is unaffected.
+      let describeWarmupPending = false;
+      async function describeOnce() {
+        const need =
+          currentUdid && (vp.proposals.length > 0 || vp.inspect || describeWarmupPending);
+        if (need && !describeInFlight) {
+          describeInFlight = true;
+          // Bound each request — describe is polled ~3×/s now, so a single
+          // stuck socket must not latch describeInFlight and stall the loop.
+          const ac = new AbortController();
+          const killer = setTimeout(() => ac.abort(), 4000);
+          try {
+            const d = await fetch(
+              `${TOOL_SERVER}/preview/describe/${encodeURIComponent(currentUdid)}`,
+              { cache: "no-store", signal: ac.signal }
+            );
+            if (d.ok) {
+              const j = await d.json();
+              if (j && j.tree) {
+                vp.tree = j.tree;
+                vp.treeAt = Date.now();
+                describeWarmupPending = false;
+                // A right-click that landed before the tree was loaded waits
+                // here; the first successful describe completes the pick.
+                const pc = vp.pendingComment;
+                if (pc) {
+                  const node = vpNodeAtPoint(vp.tree, pc.x, pc.y);
+                  if (node) {
+                    vp.pendingComment = null;
+                    vp.focus = node;
+                    vp.commentFor = node;
+                    paintSpot();
+                    openCommentPop(node);
+                  }
+                }
+              }
+            }
+          } catch {
+            /* describe best-effort (incl. abort/timeout) */
+          } finally {
+            clearTimeout(killer);
+            describeInFlight = false;
+          }
+        }
+        if (Date.now() - vp.treeAt > THEME.treeStaleMs) vp.tree = null;
+        vpRender();
+      }
+      // Interruptible delay: an un-skippable floor (rate ceiling), then a
+      // remainder that a kick (device interaction) can cut short. A kick that
+      // lands during the floor is remembered so a single tap still re-describes
+      // promptly. Reset per wait so only kicks during *this* wait count.
+      let describeWaker = null;
+      let describeKicked = false;
+      function kickDescribe() {
+        describeKicked = true;
+        const w = describeWaker;
+        if (w) {
+          describeWaker = null;
+          w();
+        }
+      }
+      function describeDelay(ms, floorMs) {
+        return new Promise((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            describeWaker = null;
+            resolve();
+          };
+          const floor = Math.max(0, Math.min(floorMs || 0, ms));
+          describeKicked = false;
+          setTimeout(() => {
+            if (done) return;
+            const rest = ms - floor;
+            if (rest <= 0 || describeKicked) return finish();
+            const t = setTimeout(finish, rest);
+            describeWaker = () => {
+              clearTimeout(t);
+              finish();
+            };
+          }, floor);
+        });
+      }
+      // Single loop (started once, never twice). Background cadence ~300ms
+      // while work is on screen; a kick from sendCmd() collapses the wait to
+      // the floor so connectors chase live drags/scrolls, then it idles at
+      // 900ms when there is nothing to track.
+      let describeLoopArmed = false;
+      async function pollDescribe() {
+        if (describeLoopArmed) return;
+        describeLoopArmed = true;
+        for (;;) {
+          const t0 = Date.now();
+          await describeOnce();
+          const need = currentUdid && (vp.proposals.length > 0 || vp.inspect);
+          const base = need ? Math.max(160, 300 - (Date.now() - t0)) : 900;
+          await describeDelay(base, need ? 130 : 0);
+        }
+      }
+
+      function setNote(text, kind) {
+        completeNote.textContent = text || "";
+        completeNote.className = "complete-note" + (kind ? " " + kind : "");
+      }
+      function vpStage(elementId, variantId) {
+        // Re-clicking the already-staged variant unstages — this is how the
+        // user re-expands the card to see every variant again after picking
+        // one. Clicking a different variant simply swaps the selection.
+        if (vp.staged[elementId] === variantId) {
+          delete vp.staged[elementId];
+        } else {
+          vp.staged[elementId] = variantId;
+        }
+        setNote("");
+        vpRender();
+      }
+
+      // ── Floating cards + connectors ─────────────────────────────────────
+      function previewSrc(p, v) {
+        if (!v.previewImage) return null;
+        if (/^(https?:|data:)/i.test(v.previewImage)) return v.previewImage;
+        return `${TOOL_SERVER}/preview/variant-image/${encodeURIComponent(
+          p.id
+        )}/${encodeURIComponent(v.id)}`;
+      }
+
+      // Crop the variant screenshot down to just the target element's box so
+      // the thumbnail shows the element — not the whole device screen squeezed
+      // into a chip. Letterboxed (no distortion). Falls back to the full,
+      // contained image when the element isn't matched on-screen or the agent
+      // supplied a data: URI (treated as author-made art, shown whole).
+      function applyThumbCrop(tw, frame) {
+        const im = tw.querySelector(".thumb-img");
+        if (!im || !im.naturalWidth || !im.naturalHeight) return;
+        // Prefer the per-variant frame stashed on the thumb (each variant's
+        // layout differs); the passed `frame` is the per-element fallback.
+        if (tw._variantFrame) frame = tw._variantFrame;
+        const NW = im.naturalWidth,
+          NH = im.naturalHeight;
+        let fx = 0,
+          fy = 0,
+          fw = 1,
+          fh = 1;
+        const finite = (n) => typeof n === "number" && isFinite(n);
+        if (
+          frame &&
+          !tw._noCrop &&
+          finite(frame.x) &&
+          finite(frame.y) &&
+          finite(frame.width) &&
+          finite(frame.height)
+        ) {
+          fx = Math.max(0, Math.min(1, frame.x));
+          fy = Math.max(0, Math.min(1, frame.y));
+          fw = Math.max(0.02, Math.min(1 - fx, frame.width));
+          fh = Math.max(0.02, Math.min(1 - fy, frame.height));
+        }
+        // Arrangement follows the *shown* (cropped) image aspect: stack the
+        // image above the text (column) unless the preview is clearly
+        // portrait — at least 1.2× taller than wide — where a side-by-side
+        // row reads better. rw=fw*NW, rh=fh*NH (cropped region, px).
+        const _vr = tw.closest(".vrow");
+        // Collapsed = some OTHER variant in this card is staged and this row is
+        // not. Then it shrinks to a compact side-by-side row (see the `:has()`
+        // CSS); force row layout (drop `.col`) and a fixed 3-line-tall preview
+        // below, overriding the aspect-based column/row choice.
+        const _card = _vr && _vr.closest(".vcard");
+        const collapsed = !!(
+          _card &&
+          !_vr.classList.contains("staged") &&
+          _card.querySelector(".vrow.staged")
+        );
+        if (_vr) {
+          if (collapsed) _vr.classList.remove("col");
+          else _vr.classList.toggle("col", !(fh * NH >= 1.2 * (fw * NW)));
+        }
+        // Width AND collapsed state are part of the cache key: a scrollbar
+        // appearing/disappearing (no stable gutter) or a selection collapsing
+        // the row must bust the cache so the preview re-fits to its new box.
+        const _vrW = _vr ? _vr.clientWidth : 0;
+        const key = `${NW}x${NH}:${fx.toFixed(4)},${fy.toFixed(4)},${fw.toFixed(4)},${fh.toFixed(4)}:${_vrW}:${collapsed ? "c" : ""}`;
+        if (tw._cropKey === key) return; // unchanged — avoid layout thrash
+        tw._cropKey = key;
+        const rw = fw * NW,
+          rh = fh * NH,
+          rx = fx * NW,
+          ry = fy * NH;
+        const ar = rw / rh; // shown (cropped) aspect, width / height
+        // Fill the space the bubble actually gives the preview instead of a
+        // fixed 96px chip: the full row content width when stacked (column),
+        // a generous height when side-by-side (row). The card width is fixed
+        // but the row's content box shrinks when a scrollbar appears, so the
+        // cache key above includes the row's clientWidth — the cache then
+        // misses on scrollbar toggle and the preview re-fits to the new
+        // width instead of overhanging.
+        const colMode = collapsed ? false : _vr ? _vr.classList.contains("col") : false;
+        const availW = Math.max(120, (_vr ? _vr.clientWidth : 212) - 20);
+        let W, H;
+        if (collapsed) {
+          // Picked-away rows: fit the SAME crop into a max box — at most 3 lines
+          // of text tall AND at most half the row wide — keeping its aspect ratio
+          // exactly, so the collapsed preview is the expanded crop shrunk, never
+          // re-cropped or letterboxed. Whichever cap binds first wins: a wide
+          // element caps at 50% width (and ends up shorter than 3 lines), a tall
+          // one caps at 3 lines (and narrower than 50%). Sizing the box to `ar`
+          // means the image fills it exactly (s below has no slack).
+          const maxH = THEME.collapsedThumbH;
+          const maxW = availW * 0.5;
+          W = Math.min(maxW, maxH * ar);
+          H = W / ar;
+        } else if (colMode) {
+          W = availW;
+          H = Math.round(W / ar);
+          H = Math.max(56, Math.min(H, Math.round(W * 1.25)));
+        } else {
+          H = 160;
+          W = Math.round(H * ar);
+          W = Math.max(56, Math.min(W, Math.round(availW * 0.46)));
+        }
+        tw.style.width = W + "px";
+        tw.style.height = H + "px";
+        const s = Math.min(W / rw, H / rh); // contain element region (letterbox)
+        im.style.width = NW * s + "px";
+        im.style.height = NH * s + "px";
+        im.style.left = (W - rw * s) / 2 - rx * s + "px";
+        im.style.top = (H - rh * s) / 2 - ry * s + "px";
+      }
+
+      function buildCard(p) {
+        const el = document.createElement("div");
+        el.className = "vcard";
+
+        const head = document.createElement("div");
+        head.className = "vcard-head";
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        const nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = p.element;
+        const where = document.createElement("span");
+        where.className = "where";
+        head.append(dot, nm, where);
+        el.appendChild(head);
+
+        // Drag the card by its header to reposition it.
+        head.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const mr = mainEl.getBoundingClientRect();
+          vp.cardDragging = true;
+          // Grab the card where the pointer landed, not by its top-centre.
+          // Without this offset the card would jump so the pointer sits at
+          // (width/2, 12) on the first move event.
+          const startRec = vp.cards.get(p.id);
+          const startEl = startRec ? startRec.el : el;
+          const cr0 = startEl.getBoundingClientRect();
+          const grabX = ev.clientX - cr0.left;
+          const grabY = ev.clientY - cr0.top;
+          // Release-velocity tracking so a flick "throws" the bubble.
+          let lcx = ev.clientX,
+            lcy = ev.clientY,
+            lt = performance.now(),
+            vx = 0,
+            vy = 0;
+          const move = (m) => {
+            // Resolve the live rec/el each move so a poll-driven rebuild
+            // (rare while dragging — guarded) can't strand the drag.
+            const rec = vp.cards.get(p.id);
+            const node = rec ? rec.el : el;
+            const x = m.clientX - mr.left - grabX;
+            const y = m.clientY - mr.top - grabY;
+            // EMA of pointer velocity in px/s (smooths the last-sample spike).
+            const now = performance.now();
+            const dt = Math.max(8, now - lt);
+            vx = ((m.clientX - lcx) / dt) * 1000 * 0.6 + vx * 0.4;
+            vy = ((m.clientY - lcy) / dt) * 1000 * 0.6 + vy * 0.4;
+            lcx = m.clientX;
+            lcy = m.clientY;
+            lt = now;
+            if (rec) {
+              // Pin where the user drops it; freeze the spring so it doesn't
+              // fight the pointer (the rAF tick reads pos/home).
+              rec.dragging = true;
+              rec.pinned = true;
+              rec.pos = { x, y };
+              rec.home = { x, y };
+              rec.vel = { x: 0, y: 0 };
+            }
+            node.style.left = x + "px";
+            node.style.top = y + "px";
+          };
+          const up = () => {
+            vp.cardDragging = false;
+            const rec = vp.cards.get(p.id);
+            if (rec) {
+              rec.dragging = false;
+              // Throw: hand the release velocity to the BUB spring, which
+              // carries it briefly then damps it back to rest — the same
+              // toss feel as a bubble spawning in. Clamp so a hard flick
+              // can't fling it across the screen.
+              const cap = THEME.flickMaxVel;
+              const cl = (v) => (v < -cap ? -cap : v > cap ? cap : v);
+              let releaseVx = 0;
+              let releaseVy = 0;
+              if (Math.abs(vx) > 40 || Math.abs(vy) > 40) {
+                releaseVx = cl(vx);
+                releaseVy = cl(vy);
+              }
+              // Out-of-bounds recovery: when the user drops the bubble
+              // past a viewport edge, bias home back to the nearest
+              // in-bounds point and add inward velocity so the spring
+              // pulls the bubble back with momentum (not a snap). The pos
+              // stays at the drop point — the bubble flies in smoothly.
+              const elW = rec.el.offsetWidth || 0;
+              const elH = rec.el.offsetHeight || 0;
+              const mr2 = mainEl.getBoundingClientRect();
+              const PAD = 8;
+              const minXb = PAD,
+                maxXb = mr2.width - elW - PAD;
+              const minYb = PAD,
+                maxYb = mr2.height - elH - PAD;
+              const hx = Math.max(minXb, Math.min(maxXb, rec.pos.x));
+              const hy = Math.max(minYb, Math.min(maxYb, rec.pos.y));
+              let kx = 0;
+              let ky = 0;
+              const KICK = 700; // px/s — strong enough to feel decisive
+              if (rec.pos.x < minXb) kx = +KICK;
+              else if (rec.pos.x > maxXb) kx = -KICK;
+              if (rec.pos.y < minYb) ky = +KICK;
+              else if (rec.pos.y > maxYb) ky = -KICK;
+              rec.home = { x: hx, y: hy };
+              rec.vel = { x: cl(releaseVx + kx), y: cl(releaseVy + ky) };
+            }
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+            window.removeEventListener("pointercancel", up);
+          };
+          window.addEventListener("pointermove", move);
+          window.addEventListener("pointerup", up);
+          window.addEventListener("pointercancel", up);
+        });
+
+        const body = document.createElement("div");
+        body.className = "vcard-body";
+        for (const v of p.variants || []) {
+          const row = document.createElement("div");
+          row.className = "vrow" + (vp.staged[p.id] === v.id ? " staged" : "");
+          row.dataset.vid = v.id;
+          row.draggable = true;
+          row.addEventListener("dragstart", (ev) => {
+            row.classList.add("dragging");
+            vp.dragging = true;
+            ev.dataTransfer.setData(
+              "application/json",
+              JSON.stringify({ elementId: p.id, variantId: v.id })
+            );
+            ev.dataTransfer.effectAllowed = "copy";
+          });
+          row.addEventListener("dragend", () => {
+            row.classList.remove("dragging");
+            vp.dragging = false;
+          });
+          row.addEventListener("click", () => vpStage(p.id, v.id));
+
+          const src = previewSrc(p, v);
+          if (src) {
+            const tw = document.createElement("div");
+            tw.className = "thumb";
+            // data: previews are author-supplied art — show whole, don't crop.
+            tw._noCrop = /^data:/i.test(src);
+            // Per-variant crop frame: the element's bounds WHEN THIS VARIANT was
+            // captured (supplied by propose_variant). The layout differs between
+            // variants, so each thumbnail must crop to its own bounds. Falls back
+            // to the per-element frozen frame (vp.thumbFrames[p.id]) when absent.
+            tw._variantFrame = v.frame || null;
+            const im = document.createElement("img");
+            im.className = "thumb-img";
+            im.draggable = false;
+            im.alt = v.name;
+            im.onload = () => applyThumbCrop(tw, vp.thumbFrames[p.id]);
+            im.onerror = () => {
+              tw.replaceWith(placeholderThumb());
+            };
+            im.src = src;
+            tw.appendChild(im);
+            row.appendChild(tw);
+          } else {
+            row.appendChild(placeholderThumb());
+          }
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          const vn = document.createElement("div");
+          vn.className = "vn";
+          const vnt = document.createElement("span");
+          vnt.textContent = v.name;
+          vn.appendChild(vnt);
+          if (vp.staged[p.id] === v.id) {
+            const tag = document.createElement("span");
+            tag.className = "tag";
+            tag.textContent = "✓ staged";
+            vn.appendChild(tag);
+          }
+          meta.append(vn);
+          // Intentionally NOT rendering v.summary / v.code / v.filePath: the
+          // human is picking a look from the preview + name, not reading a
+          // spec. The agent still keeps that metadata in the proposal for
+          // when it applies the choice.
+          row.appendChild(meta);
+          body.appendChild(row);
+        }
+        el.appendChild(body);
+
+        // A choice needs at least two options — flag a lone-variant element so
+        // the human (and the watching agent) sees it isn't actually a choice.
+        if ((p.variants || []).length < 2) {
+          const hint = document.createElement("div");
+          hint.className = "vcard-hint";
+          hint.textContent = "Only one variant — a choice needs at least two.";
+          el.appendChild(hint);
+        }
+
+        const cmt = document.createElement("textarea");
+        cmt.className = "vcard-cmt";
+        cmt.placeholder = `Comment on "${cleanLabel(p.element) || p.element}" (optional)…`;
+        cmt.value = vp.comments[p.id] || "";
+        cmt.addEventListener("input", () => {
+          vp.comments[p.id] = cmt.value;
+        });
+        cmt.addEventListener("pointerdown", (e) => e.stopPropagation());
+        el.appendChild(cmt);
+        return el;
+      }
+      function placeholderThumb() {
+        const d = document.createElement("div");
+        d.className = "thumb placeholder";
+        d.textContent = "no preview";
+        return d;
+      }
+
+      // Structural signature — a card is only torn down & rebuilt when the
+      // agent actually changed its variants, never on a routine poll (so the
+      // per-card comment box keeps focus and the variant list keeps its
+      // scroll position).
+      function cardSig(p) {
+        return JSON.stringify([p.element, p.variants.map((v) => [v.id, v.name, v.previewImage])]);
+      }
+      // In-place refresh of the mutable bits (staged highlight, on/off-screen
+      // badge) without rebuilding the card DOM.
+      function refreshCardState(el, p) {
+        el.querySelectorAll(".vrow").forEach((row) => {
+          const staged = vp.staged[p.id] === row.dataset.vid;
+          row.classList.toggle("staged", staged);
+          const vn = row.querySelector(".vn");
+          if (!vn) return;
+          const tag = vn.querySelector(".tag");
+          if (staged && !tag) {
+            const t = document.createElement("span");
+            t.className = "tag";
+            t.textContent = "✓ staged";
+            vn.appendChild(t);
+          } else if (!staged && tag) {
+            tag.remove();
+          }
+        });
+        // The preview screenshot is a static artifact — crop it at the frame
+        // the element had when first matched (frozen per id), so the thumbnail
+        // does NOT shift when the live screen scrolls.
+        el.querySelectorAll(".thumb").forEach((tw) => {
+          if (tw.querySelector(".thumb-img")) applyThumbCrop(tw, vp.thumbFrames[p.id]);
+        });
+        const w = el.querySelector(".where");
+        if (w) {
+          w.textContent = p._node ? "on screen" : "off screen";
+          w.className = "where" + (p._node ? " on" : "");
+        }
+      }
+      function cardHasFocus(el) {
+        return el.contains(document.activeElement);
+      }
+
+      // Structural pass only. Card *positions* are integrated by the rAF
+      // physics tick (vpTick); here we just (re)build DOM, toggle the
+      // off-screen fade, and compute each visible card's spring "home"
+      // anchored to its element (vertical de-overlap) — not a rigid column.
+      const GONE_GRACE_MS = THEME.goneGraceMs; // ride out brief edge drop-outs before fading
+      // Keep a card's HOME out of the streamed-phone rect: if it would overlap,
+      // slide it horizontally to just past the nearer side of the stream. The
+      // bubble spring then glides the card off the phone — the same way homes
+      // are inset from the window edges. Priority: staying IN BOUNDS beats
+      // avoiding the stream — when there's no room beside the phone, the card
+      // overlaps the phone rather than spilling out of the window.
+      function homeOffStream(home, cardW, cardH, sr, mw) {
+        if (!sr) return home;
+        const PAD = 14;
+        const overlapX = home.x < sr.x + sr.w && home.x + cardW > sr.x;
+        const overlapY = home.y < sr.y + sr.h && home.y + cardH > sr.y;
+        if (!overlapX || !overlapY) return home;
+        const leftSide = sr.x - cardW - PAD;
+        const rightSide = sr.x + sr.w + PAD;
+        const leftFits = leftSide >= 2;
+        const rightFits = rightSide + cardW <= mw - 2;
+        const nearerLeft = home.x + cardW / 2 < sr.x + sr.w / 2;
+        let nx;
+        if (leftFits && (nearerLeft || !rightFits)) nx = leftSide;
+        else if (rightFits) nx = rightSide;
+        // Neither side fits in bounds: keep the in-bounds home and let the card
+        // overlap the stream. Border-avoidance beats stream-avoidance — going
+        // out of bounds is the worse of the two evils.
+        else return home;
+        return { x: nx, y: home.y };
+      }
+      function layoutCards() {
+        const now = Date.now();
+        const mr = mainEl.getBoundingClientRect();
+        const r = streamRect();
+        const cardW = THEME.cardWidth;
+        const live = new Set();
+        for (const p of vp.proposals) {
+          live.add(p.id);
+          let rec = vp.cards.get(p.id);
+          const sig = cardSig(p);
+          if (!rec) {
+            rec = {
+              el: buildCard(p),
+              sig,
+              pinned: false,
+              pos: null,
+              vel: { x: 0, y: 0 },
+              naturalBodyH: null,
+              chromeH: null,
+            };
+            vp.cards.set(p.id, rec);
+          } else if (rec.sig !== sig && !vp.dragging && !vp.cardDragging && !cardHasFocus(rec.el)) {
+            const fresh = buildCard(p);
+            rec.el.replaceWith(fresh);
+            rec.el = fresh;
+            rec.sig = sig;
+            // Card structure changed (variants added/removed/swapped) — drop
+            // the cached natural-height so layoutCards re-measures the new
+            // body once. Without this, a freshly-added variant doesn't
+            // expand the card.
+            rec.naturalBodyH = null;
+            rec.chromeH = null;
+          }
+          if (rec.el.parentElement !== cardsEl) cardsEl.appendChild(rec.el);
+          refreshCardState(rec.el, p);
+          const matched = !!p._node;
+          if (matched) {
+            rec.everMatched = true;
+            rec.lostAt = 0;
+            rec.target = p._node.frame;
+            rec.lastCY = p._node.frame.y + p._node.frame.height / 2;
+          } else if (rec.everMatched && !rec.lostAt) {
+            rec.lostAt = now;
+          }
+          // Hysteresis: an element grazing the screen edge between describe
+          // polls must NOT fade+teleport the card. Fade only after it's been
+          // gone for GONE_GRACE_MS; never show a phantom card for an element
+          // that has never been on screen. Keep the last frame during the
+          // grace window so the connector holds steady instead of blinking.
+          const lost =
+            !matched && (!rec.everMatched || (rec.lostAt && now - rec.lostAt > GONE_GRACE_MS));
+          const wasGone = rec.gone;
+          // Keep it visible if the user is mid-typing in its comment box, or once
+          // every on-screen choice is made (vp.revealOffscreen) — then the
+          // off-screen proposals surface so the user can finish the rest.
+          rec.gone = lost && !cardHasFocus(rec.el) && !vp.revealOffscreen;
+          rec.el.classList.toggle("gone", rec.gone);
+          // No connector for an element that isn't on screen — whether the card
+          // is hidden (gone) or surfaced by the off-screen reveal.
+          if (rec.gone || (lost && vp.revealOffscreen)) rec.target = null;
+          if (wasGone && !rec.gone) {
+            rec.spawned = false; // genuine re-entry → pop back in
+            rec.pos = null;
+          }
+        }
+        for (const [id, rec] of vp.cards) {
+          if (!live.has(id)) {
+            rec.el.remove();
+            const cn = vp.conn.get(id);
+            if (cn) {
+              cn.path.remove();
+              cn.dot.remove();
+              vp.conn.delete(id);
+            }
+            vp.cards.delete(id);
+          }
+        }
+        // Dynamic homes: distribute cards on BOTH sides of the central
+        // stream so they surround the simulator instead of stacking in one
+        // column. Each card aligns vertically with its element when matched;
+        // otherwise it falls back to an even spread. When the video stream
+        // isn't up yet (streamRect null) we arrange around the main area's
+        // centre — a card must NEVER be left unpositioned at the (0,0)
+        // origin (that was the "everything piles into the top-left" bug,
+        // which appeared whenever describe matched but no stream existed).
+        const mw = mr.width,
+          mh = mr.height;
+        const cx = r ? r.x + r.w / 2 : mw / 2;
+        const rightX = Math.min(mw - cardW - 14, (r ? r.x + r.w : cx) + 26);
+        const leftX = Math.max(14, (r ? r.x : cx) - cardW - 26);
+        const vis = [];
+        for (const p of vp.proposals) {
+          const rec = vp.cards.get(p.id);
+          if (rec && !rec.gone) vis.push(rec);
+        }
+        // Card sizing — design constraints driving the implementation:
+        //   1. Each card fits its variant count when there's room (no fixed
+        //      --vcard-body-max-h cap).
+        //   2. If a column's natural stack overflows the viewport, compress
+        //      that column proportionally and engage internal scroll on the
+        //      cards that had to shrink.
+        //   3. layoutCards runs every describe poll. The previous version
+        //      cleared body.style.maxHeight to remeasure, then re-set it —
+        //      that mangles scrollTop and flickers the scrollbar. So:
+        //        • body.scrollHeight reflects the *natural* content height
+        //          regardless of an active max-height — read it directly,
+        //          never clear the cap.
+        //        • chrome (head + inline comment + border, anything that's
+        //          not the body) is invariant once the card is built, so it
+        //          is cached on rec.chromeH and refreshed only on rebuild.
+        //        • The final maxHeight write is diffed against the inline
+        //          value so unchanged frames are no-ops — keeps scrollTop.
+        const COL_PAD = 8;
+        const GAP = 12;
+        const want = vis.map((rec, i) => {
+          const body = rec.el.querySelector(".vcard-body");
+          if (body && rec.chromeH == null) {
+            rec.chromeH = rec.el.offsetHeight - body.offsetHeight;
+          }
+          const chrome = rec.chromeH || 0;
+          const bodyH = body ? body.scrollHeight : 0;
+          const natural = bodyH + chrome || rec.el.offsetHeight || 132;
+          const ecx = rec.target && r ? r.x + (rec.target.x + rec.target.width / 2) * r.w : null;
+          // Initial preferred side: follow the element's own half of the
+          // stream when matched; alternate for unmatched. A second pass
+          // below rebalances if the elements cluster on one side.
+          const side = ecx != null ? (ecx < cx ? "L" : "R") : i % 2 ? "L" : "R";
+          const cy =
+            rec.target && r
+              ? r.y + (rec.target.y + rec.target.height / 2) * r.h
+              : 24 + ((i + 0.5) / Math.max(1, vis.length)) * (mh - 48);
+          // sideBias captures *how strongly* the card prefers its side
+          // (signed distance from stream centre when matched; 0 when not).
+          // When |L−R| exceeds 1 below, the rebalancer moves whichever card
+          // has the smallest |sideBias| — i.e. its position least cares —
+          // so a card pinned dead-centre flips before one near the edge.
+          const sideBias = ecx != null ? ecx - cx : 0;
+          return { rec, body, chrome, natural, ch: natural, side, anchor: cy, sideBias };
+        });
+        // Rebalance L/R so the two columns stay within one of each other.
+        // Without this, a screen where every matched element sits on the
+        // right half (e.g. a tab bar item on the right) stacked every
+        // single card on the right and left the left column empty.
+        while (true) {
+          let lCount = 0;
+          let rCount = 0;
+          for (const w of want) w.side === "L" ? (lCount += 1) : (rCount += 1);
+          if (Math.abs(lCount - rCount) <= 1) break;
+          const fromSide = lCount > rCount ? "L" : "R";
+          const toSide = fromSide === "L" ? "R" : "L";
+          // Move the card on `fromSide` whose own bias points least into
+          // that side — least violence to the per-element anchoring.
+          let pick = null;
+          let pickScore = Infinity;
+          for (const w of want) {
+            if (w.side !== fromSide) continue;
+            // Cards on L want bias < 0; on R want bias > 0. The further
+            // their actual bias is in the *opposite* direction (or near 0),
+            // the cheaper they are to move.
+            const into = fromSide === "L" ? -w.sideBias : w.sideBias;
+            if (into < pickScore) {
+              pickScore = into;
+              pick = w;
+            }
+          }
+          if (!pick) break;
+          pick.side = toSide;
+        }
+        const colTop = COL_PAD;
+        // The footbar (Complete selection + comment) floats above #main's
+        // bottom edge. Without this clamp the column extends behind it and
+        // hides the bottom of any card whose comment box lands down low.
+        // offsetTop (layout), not getBoundingClientRect (visual): the footbar's
+        // `.ready` state applies a scale() whose bottom-right origin lifts its
+        // visual top ~10px and overshoots mid-spring. Reading the rect here fed
+        // that transient back into card layout, so cards visibly re-settled on
+        // the "ready" pop. offsetTop ignores the transform (offsetParent is the
+        // position:relative #main), keeping the column height stable.
+        const footTop = footEl && !footEl.hidden ? footEl.offsetTop - COL_PAD : mh;
+        const colBottom = Math.min(mh - COL_PAD, footTop);
+        const colH = colBottom - colTop;
+        for (const col of ["L", "R"]) {
+          const cwant = want.filter((w) => w.side === col);
+          if (cwant.length === 0) continue;
+          const naturalSum = cwant.reduce((s, w) => s + w.natural, 0) + (cwant.length - 1) * GAP;
+          if (naturalSum <= colH) {
+            cwant.sort((a, b) => a.anchor - b.anchor);
+            for (const w of cwant) {
+              w.y = Math.max(colTop, Math.min(colBottom - w.ch, w.anchor - w.ch / 2));
+            }
+            let prevBottom = -Infinity;
+            for (const w of cwant) {
+              if (w.y < prevBottom + GAP) w.y = prevBottom + GAP;
+              prevBottom = w.y + w.ch;
+            }
+            const overshoot = prevBottom - colBottom;
+            if (overshoot > 0) {
+              for (const w of cwant) w.y -= overshoot;
+              let prev = colTop - GAP;
+              for (const w of cwant) {
+                if (w.y < prev + GAP) w.y = prev + GAP;
+                prev = w.y + w.ch;
+              }
+            }
+          } else {
+            const MIN_CH = 96;
+            const availH = colH - (cwant.length - 1) * GAP;
+            const scale = availH / cwant.reduce((s, w) => s + w.natural, 0);
+            cwant.sort((a, b) => a.anchor - b.anchor);
+            let y = colTop;
+            for (const w of cwant) {
+              w.ch = Math.max(MIN_CH, Math.floor(w.natural * scale));
+              w.y = y;
+              y += w.ch + GAP;
+            }
+            const overshoot = y - GAP - colBottom;
+            if (overshoot > 0) {
+              const trim = Math.ceil(overshoot / cwant.length);
+              y = colTop;
+              for (const w of cwant) {
+                w.ch = Math.max(MIN_CH, w.ch - trim);
+                w.y = y;
+                y += w.ch + GAP;
+              }
+            }
+          }
+        }
+        // Diffed maxHeight write: pin each body to the natural height when it
+        // fits, or to the compressed cap otherwise. Only write when the
+        // target px differs from what's already inline — guards scrollTop
+        // and prevents the every-frame thrash that caused scrollbar
+        // flicker.
+        for (const w of want) {
+          if (!w.body) continue;
+          const chrome = w.rec.chromeH || 0;
+          const targetBodyH = Math.max(40, w.ch - chrome);
+          const px = targetBodyH + "px";
+          if (w.body.style.maxHeight !== px) w.body.style.maxHeight = px;
+        }
+        for (const w of want) {
+          const hx = w.side === "L" ? leftX : rightX;
+          // Pinned cards keep the user's drop position as home, BUT clamp it
+          // to the viewport — otherwise a card dragged off-screen would rest
+          // off-screen with no way to bring it back.
+          let pinHome = null;
+          if (w.rec.pinned && w.rec.pos) {
+            const elW = w.rec.el.offsetWidth || cardW;
+            const elH = w.rec.el.offsetHeight || w.ch;
+            pinHome = {
+              x: Math.max(COL_PAD, Math.min(mw - elW - COL_PAD, w.rec.pos.x)),
+              y: Math.max(COL_PAD, Math.min(mh - elH - COL_PAD, w.rec.pos.y)),
+            };
+          }
+          w.rec.home = homeOffStream(pinHome || { x: hx, y: w.y }, cardW, w.ch, r, mw);
+          if (!w.rec.pos) {
+            // First appearance: drift in from just outside its own side
+            // toward home so it floats into place like a cloud (px/s — the
+            // spring tick is time-based, not per-frame).
+            const off = w.side === "L" ? -28 : 28;
+            w.rec.pos = { x: w.rec.home.x + off, y: w.rec.home.y + 18 };
+            w.rec.vel = {
+              x: (w.side === "L" ? 1 : -1) * (12 + Math.random() * 16),
+              y: -(24 + Math.random() * 30),
+            };
+            // Place immediately so it doesn't flash at (0,0) before vpTick.
+            w.rec.el.style.left = w.rec.pos.x + "px";
+            w.rec.el.style.top = w.rec.pos.y + "px";
+          }
+          if (!w.rec.spawned) {
+            w.rec.spawned = true;
+            // A whisper of extra drift so multiple bubbles don't move in
+            // lockstep — soft enough to stay cloud-like.
+            w.rec.vel.x += Math.random() * 22 - 11;
+            w.rec.vel.y += Math.random() * 18 - 9;
+          }
+        }
+      }
+
+      // Reuses SVG nodes (no per-frame teardown) and draws to the *eased*
+      // element frame (rec.anim) + live card rect, so the line tracks the
+      // stream smoothly every animation frame. Off-screen → no line at all.
+      function drawConnectors() {
+        const mr = mainEl.getBoundingClientRect();
+        connEl.setAttribute("width", mr.width);
+        connEl.setAttribute("height", mr.height);
+        const r = streamRect();
+        const live = new Set();
+        for (const p of vp.proposals) {
+          const rec = vp.cards.get(p.id);
+          if (!rec || rec.gone || !rec.anim || !r) continue;
+          live.add(p.id);
+          let cn = vp.conn.get(p.id);
+          if (!cn) {
+            const path = document.createElementNS(SVGNS, "path");
+            const dot = document.createElementNS(SVGNS, "circle");
+            dot.setAttribute("r", "4");
+            connEl.append(path, dot);
+            cn = { path, dot };
+            vp.conn.set(p.id, cn);
+          }
+          const cr = rec.el.getBoundingClientRect();
+          const cardLeft = cr.left - mr.left;
+          const from = {
+            x: cardLeft > r.x + r.w ? cardLeft : cardLeft + cr.width,
+            y: cr.top - mr.top + cr.height / 2,
+          };
+          const to = {
+            x: r.x + (rec.anim.x + rec.anim.width / 2) * r.w,
+            y: r.y + (rec.anim.y + rec.anim.height / 2) * r.h,
+          };
+          const mx = (from.x + to.x) / 2;
+          cn.path.setAttribute(
+            "d",
+            `M ${from.x} ${from.y} C ${mx} ${from.y} ${mx} ${to.y} ${to.x} ${to.y}`
+          );
+          cn.dot.setAttribute("cx", to.x);
+          cn.dot.setAttribute("cy", to.y);
+        }
+        for (const [id, cn] of vp.conn) {
+          if (!live.has(id)) {
+            cn.path.remove();
+            cn.dot.remove();
+            vp.conn.delete(id);
+          }
+        }
+      }
+
+      // ── Element-comment inspector (spotlight) ───────────────────────────
+      // Spotlight dismissal has two deliberately different rules:
+      //   • pointer LEAVES the stream rect    → reset immediately (the user
+      //     has clearly stopped inspecting; pointerleave handler).
+      //   • a hovered element is lost while still on the stream (a gap or a
+      //     non-hoverable region) → trajectory-based release: only arm the
+      //     spotIdleMs timer when the pointer is either stopped or aimed at
+      //     nothing reachable. While the pointer is travelling toward another
+      //     highlightable, the timer is cancelled regardless of how long the
+      //     trip takes. Brief gap crossings stay covered for free.
+      // clearSpotIdle cancels any pending release; evaluateSpotIdle re-checks
+      // trajectory each off-element sample and arms/cancels accordingly. A
+      // locked comment target (vp.commentFor) is never auto-dismissed.
+      function clearSpotIdle() {
+        if (vp._spotIdle) {
+          clearTimeout(vp._spotIdle);
+          vp._spotIdle = null;
+        }
+        if (vp._spotTrajCheck) {
+          clearTimeout(vp._spotTrajCheck);
+          vp._spotTrajCheck = null;
+        }
+        vp.trajSamples.length = 0;
+      }
+      function pushTrajSample(x, y) {
+        const t = performance.now();
+        vp.trajSamples.push({ x, y, t });
+        // Keep just enough history to span the velocity window. We need at
+        // least one sample older than window so the velocity estimate has a
+        // baseline; everything beyond that is dead weight.
+        const cutoff = t - THEME.spotTrajWindowMs * 2;
+        while (vp.trajSamples.length > 2 && vp.trajSamples[0].t < cutoff) {
+          vp.trajSamples.shift();
+        }
+      }
+      function spotTrajVelocity() {
+        // Normalized units per second between the latest sample and the
+        // OLDEST sample still within spotTrajWindowMs. With <2 samples or a
+        // zero-time delta we can't infer direction — treat as stopped.
+        // If the latest sample itself is older than the window, the pointer
+        // has been idle for at least a window's worth — also treat as stopped,
+        // so a flick that ends mid-air decays into "stopped" without needing
+        // a fresh pointermove to push the state along.
+        const s = vp.trajSamples;
+        if (s.length < 2) return null;
+        const last = s[s.length - 1];
+        if (performance.now() - last.t > THEME.spotTrajWindowMs) return null;
+        // Walk oldest → newest and pick the first sample whose age is within
+        // the window. That is the oldest in-window sample and gives the
+        // smoothest velocity estimate without dragging in a stale baseline.
+        let early = null;
+        for (let i = 0; i < s.length - 1; i++) {
+          if (last.t - s[i].t <= THEME.spotTrajWindowMs) {
+            early = s[i];
+            break;
+          }
+        }
+        if (!early) return null;
+        const dt = (last.t - early.t) / 1000;
+        if (dt <= 0) return null;
+        const vx = (last.x - early.x) / dt;
+        const vy = (last.y - early.y) / dt;
+        return { x: last.x, y: last.y, vx, vy, speed: Math.hypot(vx, vy) };
+      }
+      // True if (x,y) is inside `frame` after inflating each side by
+      // `margin * dim`. Used to make hover focus *sticky*: once an element
+      // is focused, the cursor can drift this far outside its real frame
+      // before the spotlight is released. The same `margin` token feeds the
+      // trajectory predictor below, so both forgiveness behaviours move
+      // together when the token is tuned.
+      function pointInPaddedFrame(f, x, y, margin) {
+        if (!f || f.width <= 0 || f.height <= 0) return false;
+        const mw = f.width * (margin || 0);
+        const mh = f.height * (margin || 0);
+        return (
+          x >= f.x - mw && x <= f.x + f.width + mw && y >= f.y - mh && y <= f.y + f.height + mh
+        );
+      }
+      // Slab-method ray/AABB test in normalized coords. Returns true if the
+      // forward ray from (x,y) in unit direction (ux,uy) enters `frame` within
+      // `reach` normalized units. Points already inside the frame count as
+      // hits (the cursor is *on* the target). `margin` (fraction of the
+      // element's own width/height) inflates the AABB on each side, which
+      // makes the trajectory hitbox more forgiving without affecting which
+      // element vpNodeAtPoint considers actually hovered.
+      function rayHitsFrame(x, y, ux, uy, frame, reach, margin) {
+        const mw = frame.width * (margin || 0);
+        const mh = frame.height * (margin || 0);
+        const minX = frame.x - mw,
+          maxX = frame.x + frame.width + mw;
+        const minY = frame.y - mh,
+          maxY = frame.y + frame.height + mh;
+        if (x >= minX && x <= maxX && y >= minY && y <= maxY) return true;
+        let tmin = -Infinity,
+          tmax = Infinity;
+        const EPS = 1e-9;
+        if (Math.abs(ux) > EPS) {
+          const t1 = (minX - x) / ux,
+            t2 = (maxX - x) / ux;
+          tmin = Math.max(tmin, Math.min(t1, t2));
+          tmax = Math.min(tmax, Math.max(t1, t2));
+        } else if (x < minX || x > maxX) {
+          return false;
+        }
+        if (Math.abs(uy) > EPS) {
+          const t1 = (minY - y) / uy,
+            t2 = (maxY - y) / uy;
+          tmin = Math.max(tmin, Math.min(t1, t2));
+          tmax = Math.min(tmax, Math.max(t1, t2));
+        } else if (y < minY || y > maxY) {
+          return false;
+        }
+        if (tmax < 0) return false; // rect entirely behind the ray
+        if (tmin > tmax) return false; // miss
+        return Math.max(tmin, 0) <= reach;
+      }
+      // True if the recent trajectory points forward (within reach) at any
+      // highlightable other than the current focus. Walks the same node set
+      // vpNodeAtPoint considers — non-degenerate on-screen frame, area no
+      // larger than spotMaxFrameArea (so screen-spanning Android containers
+      // don't count as aim targets).
+      function trajAimsAtTarget(v) {
+        if (!v || !vp.tree) return false;
+        const len = v.speed;
+        if (len <= 0) return false;
+        const ux = v.vx / len,
+          uy = v.vy / len;
+        const focus = vp.focus;
+        let hit = false;
+        const visit = (n) => {
+          if (hit || !n || typeof n !== "object") return;
+          if (n !== focus) {
+            const f = n.frame;
+            if (f && f.width > 0 && f.height > 0) {
+              const cx = f.x + f.width / 2,
+                cy = f.y + f.height / 2;
+              if (
+                cx >= 0 &&
+                cx <= 1 &&
+                cy >= 0 &&
+                cy <= 1 &&
+                f.width * f.height <= THEME.spotMaxFrameArea
+              ) {
+                if (
+                  rayHitsFrame(v.x, v.y, ux, uy, f, THEME.spotTrajReach, THEME.spotTrajHitboxMargin)
+                ) {
+                  hit = true;
+                  return;
+                }
+              }
+            }
+          }
+          if (Array.isArray(n.children)) n.children.forEach(visit);
+        };
+        if (Array.isArray(vp.tree.children)) vp.tree.children.forEach(visit);
+        return hit;
+      }
+      function evaluateSpotIdle() {
+        // Decide every off-element sample whether we want a release pending.
+        // Cancel if a locked comment is up, no focus to lose, or the cursor
+        // is on its way toward a *different* highlightable. Arm if it's
+        // stopped or drifting aimlessly. A watchdog re-runs this once the
+        // current velocity sample has aged out, so a flick that ends
+        // mid-flight (no follow-up pointermove) still transitions to the
+        // stopped branch and arms the dismissal timer.
+        if (vp.commentFor || !vp.focus) {
+          clearSpotIdle();
+          return;
+        }
+        const v = spotTrajVelocity();
+        const moving = v && v.speed >= THEME.spotTrajStoppedSpeed;
+        if (moving && trajAimsAtTarget(v)) {
+          if (vp._spotIdle) {
+            clearTimeout(vp._spotIdle);
+            vp._spotIdle = null;
+          }
+          if (vp._spotTrajCheck) clearTimeout(vp._spotTrajCheck);
+          vp._spotTrajCheck = setTimeout(() => {
+            vp._spotTrajCheck = null;
+            evaluateSpotIdle();
+          }, THEME.spotTrajWindowMs + 20);
+          return;
+        }
+        if (vp._spotTrajCheck) {
+          clearTimeout(vp._spotTrajCheck);
+          vp._spotTrajCheck = null;
+        }
+        if (vp._spotIdle) return;
+        vp._spotIdle = setTimeout(() => {
+          vp._spotIdle = null;
+          if (vp.commentFor) return;
+          vp.focus = null;
+          paintSpot();
+        }, THEME.spotIdleMs);
+      }
+      function ensureSpot() {
+        if (vp.spot) return vp.spot;
+        const root = document.createElement("div");
+        root.style.position = "absolute";
+        root.style.inset = "0";
+        root.style.zIndex = "8";
+        root.style.pointerEvents = "none";
+        const mask = document.createElement("div");
+        mask.className = "spot";
+        root.appendChild(mask);
+        const ring = document.createElement("div");
+        ring.className = "spot-ring";
+        const lab = document.createElement("span");
+        lab.className = "lab";
+        ring.appendChild(lab);
+        root.appendChild(ring);
+        const hit = document.createElement("div");
+        hit.className = "spot-hit";
+        root.appendChild(hit);
+        hit.addEventListener("pointermove", (ev) => {
+          const r = streamRect();
+          if (!r || !vp.tree || vp.commentFor) return;
+          const x = (ev.clientX - mainEl.getBoundingClientRect().left - r.x) / r.w;
+          const y = (ev.clientY - mainEl.getBoundingClientRect().top - r.y) / r.h;
+          pushTrajSample(x, y);
+          let node = vpNodeAtPoint(vp.tree, x, y);
+          // Sticky focus: if strict containment finds nothing but the cursor
+          // is still in the previously-focused element's padded zone, keep
+          // it. Strict containment ALWAYS wins (so entering another element
+          // takes precedence), which preserves the "don't let margins steal
+          // focus from an obviously hovered element" rule.
+          if (!node && vp.focus) {
+            const ff = vp.focus.frame;
+            if (pointInPaddedFrame(ff, x, y, THEME.spotTrajHitboxMargin)) {
+              node = vp.focus;
+            }
+          }
+          if (node) {
+            // Over an element (strictly, or in the previous focus's padded
+            // zone) → cancel any pending idle release and move the spotlight
+            // there. Trajectory history is reset so a fresh exit measures
+            // the *new* element's departure, not stale samples.
+            clearSpotIdle();
+            pushTrajSample(x, y);
+            if (node !== vp.focus) {
+              vp.focus = node;
+              paintSpot();
+            }
+            return;
+          }
+          // No element under the pointer — a thin gap between elements, or a
+          // genuinely non-hoverable region. Hold the last element and let
+          // evaluateSpotIdle decide: arm only if stopped or aimed at nothing
+          // reachable; cancel as soon as the trajectory points to a new
+          // highlightable, regardless of how long the trip takes.
+          evaluateSpotIdle();
+        });
+        hit.addEventListener("pointerleave", () => {
+          // Left the stream rect entirely → reset immediately, by design.
+          // The trajectory-based release is ONLY for losing a hovered element
+          // while the pointer is still on the stream. Locked comment stays.
+          clearSpotIdle();
+          if (vp.commentFor) return;
+          vp.focus = null;
+          paintSpot();
+        });
+        hit.addEventListener("click", (ev) => {
+          if (!vp.focus) return;
+          vp.commentFor = vp.focus;
+          openCommentPop(vp.focus);
+        });
+        mainEl.appendChild(root);
+        vp.spot = { root, mask, ring, lab, hit };
+        return vp.spot;
+      }
+      function paintSpot() {
+        if (!vp.inspect) return;
+        const s = ensureSpot();
+        const r = streamRect();
+        if (!r) {
+          s.root.style.display = "none";
+          return;
+        }
+        s.root.style.display = "";
+        s.hit.style.left = r.x + "px";
+        s.hit.style.top = r.y + "px";
+        s.hit.style.width = r.w + "px";
+        s.hit.style.height = r.h + "px";
+        // One dim+blur layer over exactly the stream rect; the cutout is a
+        // clip-path hole in element-local coords.
+        s.mask.style.left = r.x + "px";
+        s.mask.style.top = r.y + "px";
+        s.mask.style.width = r.w + "px";
+        s.mask.style.height = r.h + "px";
+        const W = r.w,
+          H = r.h;
+        const q = (v) => Math.round(v * 10) / 10;
+        const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+        const n = vp.commentFor || vp.focus;
+        const f = n && n.frame;
+        // No focus (or a frame the describe tree somehow didn't validate) →
+        // expand the hole to the WHOLE stream so nothing is blurred until the
+        // user actually hovers an element (the even-odd inner rect then equals
+        // the outer rect and cancels the entire dim layer). Keeps the SAME
+        // path segment structure so the clip-path transition still
+        // interpolates. Mirrors applyThumbCrop's finite guard so a non-finite
+        // frame can never emit NaN CSS.
+        const validFrame =
+          f && [f.x, f.y, f.width, f.height].every((v) => typeof v === "number" && isFinite(v));
+        let hx, hy, hx2, hy2;
+        if (!validFrame) {
+          hx = 0;
+          hy = 0;
+          hx2 = W;
+          hy2 = H;
+          s.ring.style.display = "none";
+        } else {
+          const ex = f.x * W,
+            ey = f.y * H,
+            ew = f.width * W,
+            eh = f.height * H;
+          hx = clamp(ex, 0, W);
+          hy = clamp(ey, 0, H);
+          hx2 = clamp(ex + ew, hx, W);
+          hy2 = clamp(ey + eh, hy, H);
+          s.ring.style.display = "";
+          s.ring.style.left = r.x + ex + "px";
+          s.ring.style.top = r.y + ey + "px";
+          s.ring.style.width = ew + "px";
+          s.ring.style.height = eh + "px";
+          s.lab.textContent = nodeDesc(n);
+        }
+        // Round the hole's corners to match .spot-ring's border-radius (square
+        // hole + rounded ring left ugly corner artifacts). Keep the SAME segment
+        // structure in both the focused and no-focus branches so the clip-path
+        // transition still interpolates frame to frame.
+        const rad = Math.max(0.01, Math.min(THEME.spotRingRadius, (hx2 - hx) / 2, (hy2 - hy) / 2));
+        const roundRect = (x0, y0, x1, y1, rd) =>
+          `M${q(x0 + rd)} ${q(y0)}H${q(x1 - rd)}A${q(rd)} ${q(rd)} 0 0 1 ${q(x1)} ${q(y0 + rd)}` +
+          `V${q(y1 - rd)}A${q(rd)} ${q(rd)} 0 0 1 ${q(x1 - rd)} ${q(y1)}` +
+          `H${q(x0 + rd)}A${q(rd)} ${q(rd)} 0 0 1 ${q(x0)} ${q(y1 - rd)}` +
+          `V${q(y0 + rd)}A${q(rd)} ${q(rd)} 0 0 1 ${q(x0 + rd)} ${q(y0)}Z`;
+        const path = `path(evenodd, "M0 0H${q(W)}V${q(H)}H0Z ${roundRect(hx, hy, hx2, hy2, rad)}")`;
+        s.mask.style.clipPath = path;
+        s.mask.style.webkitClipPath = path;
+      }
+      function setInspect(on) {
+        vp.inspect = on;
+        commentBtn.classList.toggle("active", on);
+        const commentLabel = on ? "Done commenting" : "Add comment";
+        commentBtn.title = commentLabel;
+        commentBtn.setAttribute("aria-label", commentLabel);
+        document.getElementById("root").classList.toggle("inspecting", on);
+        if (!on) {
+          clearSpotIdle();
+          vp.focus = null;
+          vp.commentFor = null;
+          vp.pendingComment = null;
+          popEl.hidden = true;
+          if (vp.spot) {
+            vp.spot.root.remove();
+            vp.spot = null;
+          }
+        } else {
+          // Annotate mode is read-only w.r.t. the device — drop any held
+          // touch/keys; sendCmd() also no-ops while inspecting.
+          releaseAllInput();
+          ensureSpot();
+          paintSpot();
+          describeOnce(); // immediate tree for the spotlight; loop continues
+        }
+      }
+      function openCommentPop(node) {
+        const r = streamRect();
+        if (!r) return;
+        const f = node.frame;
+        const ex = r.x + f.x * r.w,
+          ey = r.y + f.y * r.h,
+          ew = f.width * r.w;
+        popEl.innerHTML = "";
+        const h = document.createElement("h3");
+        h.textContent = "Comment on ";
+        const sp = document.createElement("span");
+        sp.textContent = nodeDesc(node);
+        h.appendChild(sp);
+        const ta = document.createElement("textarea");
+        ta.placeholder = "What should change about this element?";
+        const rowd = document.createElement("div");
+        rowd.className = "row";
+        const save = document.createElement("button");
+        save.className = "save";
+        save.textContent = "Save comment";
+        const cancel = document.createElement("button");
+        cancel.className = "cancel";
+        cancel.textContent = "Cancel";
+        rowd.append(save, cancel);
+        popEl.append(h, ta, rowd);
+        popEl.hidden = false;
+        // place to the right of the element, or left if no room
+        const mr = mainEl.getBoundingClientRect();
+        let px = ex + ew + 14;
+        if (px + 260 > mr.width) px = Math.max(8, ex - 262);
+        // Clamp below the footbar so its lower portion isn't covered by the
+        // floating Complete-selection bar. Measure popH after it's visible
+        // (we already set hidden=false above) — falls back to a sane minimum.
+        const safeBottom =
+          footEl && !footEl.hidden
+            ? footEl.getBoundingClientRect().top - mr.top - 8
+            : mr.height - 8;
+        const popH = popEl.offsetHeight || 180;
+        let py = Math.min(Math.max(8, ey - 10), Math.max(8, safeBottom - popH));
+        popEl.style.left = px + "px";
+        popEl.style.top = py + "px";
+        ta.focus();
+        ta.addEventListener("keydown", (ev) => {
+          // ⌘/Ctrl+Enter submits; plain Enter keeps inserting newlines.
+          // !isComposing so an IME commit-Enter never submits.
+          if (!ev.isComposing && (ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
+            ev.preventDefault();
+            save.click();
+          } else if (!ev.isComposing && ev.key === "Escape") {
+            // Esc dismisses the panel (same as Cancel — discards any draft).
+            // !isComposing so an IME-cancel Esc closes the composition, not the
+            // panel. shouldForwardKey already mutes the device while the
+            // textarea is focused, so this never leaks an Esc to the simulator.
+            ev.preventDefault();
+            cancel.click();
+          }
+        });
+        const close = () => {
+          popEl.hidden = true;
+          vp.commentFor = null;
+          paintSpot();
+        };
+        save.addEventListener("click", () => {
+          const text = ta.value.trim();
+          if (text) {
+            vp.annotations.push({
+              id: ++vp.annId,
+              target: nodeDesc(node),
+              match: nodeMatch(node),
+              comment: text,
+            });
+          }
+          close();
+          setInspect(false);
+          vpRender();
+        });
+        cancel.addEventListener("click", () => {
+          close();
+          vp.focus = null;
+        });
+      }
+
+      // Structure only — reconcile the pin set with vp.annotations (reused
+      // elements, listener bound once so click survives 60fps repositioning).
+      function ensurePins() {
+        const live = new Set(vp.annotations.map((a) => String(a.id)));
+        for (const [id, el] of vp.pinEls) {
+          if (!live.has(id)) {
+            el.remove();
+            vp.pinEls.delete(id);
+            vp.pinAnim.delete(id);
+          }
+        }
+        vp.annotations.forEach((a, i) => {
+          let el = vp.pinEls.get(String(a.id));
+          if (!el) {
+            el = document.createElement("div");
+            el.className = "ann-pin";
+            // Hover opens the comment detail (no click required); leaving the
+            // pin arms the shared grace close (cancelled if the pointer
+            // reaches the popover or another pin). `a` is captured per pin.
+            el.addEventListener("pointerenter", () => {
+              cancelAnnClose();
+              if (vp.annPopFor !== a.id) openAnnPop(a);
+            });
+            el.addEventListener("pointerleave", scheduleAnnClose);
+            cardsEl.appendChild(el);
+            vp.pinEls.set(String(a.id), el);
+          }
+          el.textContent = String(i + 1);
+          el.title = a.target + ": " + a.comment;
+        });
+      }
+      // Per-frame: place each pin at its spring-eased position (integrated in
+      // vpTick from the latest describe sample). No raw poll coords here, so
+      // the pin glides continuously and never snaps between polls.
+      function positionPins() {
+        for (const a of vp.annotations) {
+          const el = vp.pinEls.get(String(a.id));
+          if (!el) continue;
+          const key = String(a.id);
+          const pa = vp.pinAnim.get(key);
+          const hasTarget = !!(vp._pinT && vp._pinT.has(key));
+          if (!pa || !hasTarget) {
+            el.style.display = "none";
+            continue;
+          }
+          el.style.display = "";
+          el.style.left = pa.p.x + "px";
+          el.style.top = pa.p.y + "px";
+        }
+        placeAnnPop();
+      }
+
+      // ── Saved-annotation review popover ─────────────────────────────────
+      // The pin's eased on-screen point (same source positionPins uses), so
+      // the popover tracks the pin smoothly while the device scrolls.
+      function annPopAnchor(a) {
+        const pa = vp.pinAnim.get(String(a.id));
+        if (pa) return { x: pa.p.x, y: pa.p.y };
+        const n = vp.tree && vpMatchNode(vp.tree, a.match);
+        return n ? elementPoint(n.frame) : null;
+      }
+      function placeAnnPop() {
+        if (vp.annPopFor == null) return;
+        const a = vp.annotations.find((x) => x.id === vp.annPopFor);
+        if (!a) {
+          closeAnnPop();
+          return;
+        }
+        const pt = annPopAnchor(a);
+        if (!pt) {
+          // element scrolled away → dismiss the review popover
+          closeAnnPop();
+          return;
+        }
+        annPop.style.left = pt.x + "px";
+        annPop.style.top = pt.y + "px";
+      }
+      function renderAnnRead(a) {
+        annPop.innerHTML = "";
+        const h = document.createElement("h4");
+        h.textContent = a.target || "Comment";
+        const txt = document.createElement("div");
+        txt.className = "txt";
+        txt.textContent = a.comment;
+        const row = document.createElement("div");
+        row.className = "row";
+        const edit = document.createElement("button");
+        edit.className = "edit";
+        edit.textContent = "Edit";
+        const del = document.createElement("button");
+        del.className = "del";
+        del.textContent = "Remove";
+        row.append(edit, del);
+        annPop.append(h, txt, row);
+        edit.addEventListener("click", (e) => {
+          e.stopPropagation();
+          renderAnnEdit(a);
+        });
+        del.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openConfirm("Remove this comment?", () => {
+            vp.annotations = vp.annotations.filter((x) => x.id !== a.id);
+            closeAnnPop();
+            vpRender();
+          });
+        });
+      }
+      function renderAnnEdit(a) {
+        annPop.innerHTML = "";
+        const h = document.createElement("h4");
+        h.textContent = a.target || "Comment";
+        const ta = document.createElement("textarea");
+        ta.value = a.comment;
+        const row = document.createElement("div");
+        row.className = "row";
+        const saveB = document.createElement("button");
+        saveB.className = "edit";
+        saveB.textContent = "Save";
+        const cancelB = document.createElement("button");
+        cancelB.className = "cancel";
+        cancelB.textContent = "Cancel";
+        row.append(saveB, cancelB);
+        annPop.append(h, ta, row);
+        ta.focus();
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+        const commit = () => {
+          const v = ta.value.trim();
+          if (v) {
+            a.comment = v;
+            renderAnnRead(a);
+            vpRender();
+          }
+        };
+        ta.addEventListener("keydown", (ev) => {
+          // ⌘/Ctrl+Enter submits; plain Enter keeps inserting newlines.
+          // !isComposing so an IME commit-Enter never submits.
+          if (!ev.isComposing && (ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
+            ev.preventDefault();
+            commit();
+          }
+        });
+        saveB.addEventListener("click", (e) => {
+          e.stopPropagation();
+          commit();
+        });
+        cancelB.addEventListener("click", (e) => {
+          e.stopPropagation();
+          renderAnnRead(a);
+        });
+      }
+      function annPopEsc(ev) {
+        if (ev.key === "Escape") closeAnnPop();
+      }
+      function detachAnnGlobal() {
+        if (vp._annPopDown) {
+          window.removeEventListener("pointerdown", vp._annPopDown, true);
+          vp._annPopDown = null;
+        }
+        window.removeEventListener("keydown", annPopEsc);
+      }
+      // Hover-driven open/close for saved-comment pins. The popover opens on
+      // pointerenter (no click needed) and stays open while the pointer is
+      // over the pin OR the popover; leaving either arms a short grace timer
+      // so the user can travel the pin↔popover gap without it vanishing.
+      // Focus inside the popover (i.e. editing) suppresses the auto-close —
+      // Esc / outside-click still dismiss that path.
+      function cancelAnnClose() {
+        if (vp._annHoverClose) {
+          clearTimeout(vp._annHoverClose);
+          vp._annHoverClose = null;
+        }
+      }
+      function scheduleAnnClose() {
+        cancelAnnClose();
+        if (annPop.contains(document.activeElement)) return;
+        vp._annHoverClose = setTimeout(() => {
+          vp._annHoverClose = null;
+          if (annPop.contains(document.activeElement)) return;
+          closeAnnPop();
+        }, THEME.annpopGraceMs);
+      }
+      function openAnnPop(a) {
+        detachAnnGlobal(); // switching pins → drop the previous closer
+        vp.annPopFor = a.id;
+        annPop.hidden = false;
+        renderAnnRead(a);
+        placeAnnPop();
+        // force a reflow so the pre-state (opacity 0) is committed before
+        // .show flips it → the fade/slide-in actually transitions.
+        void annPop.offsetWidth;
+        annPop.classList.add("show");
+        const onDown = (ev) => {
+          if (annPop.contains(ev.target)) return;
+          if (ev.target.classList && ev.target.classList.contains("ann-pin")) return;
+          closeAnnPop();
+        };
+        vp._annPopDown = onDown;
+        window.addEventListener("pointerdown", onDown, true);
+        window.addEventListener("keydown", annPopEsc);
+      }
+      function closeAnnPop() {
+        if (vp.annPopFor == null) return;
+        vp.annPopFor = null;
+        cancelAnnClose();
+        annPop.classList.remove("show");
+        detachAnnGlobal();
+        // hide only after the fade-out so it can't swallow clicks meanwhile
+        setTimeout(() => {
+          if (vp.annPopFor == null) annPop.hidden = true;
+        }, 240);
+      }
+      // Keep the popover alive while the pointer is inside it; re-arm the
+      // grace close on leave. Bound once — annPop is a stable element.
+      annPop.addEventListener("pointerenter", cancelAnnClose);
+      annPop.addEventListener("pointerleave", scheduleAnnClose);
+
+      // Surface proposals that have no visible anchor, split by whether a
+      // scroll direction is meaningful:
+      //   • Seen then scrolled away (everMatched, has lastCY) → ▲/▼ pill on
+      //     the stream edge. The arrow IS a scroll-direction cue — the user
+      //     can scroll there to reveal it. This is the original "off-screen"
+      //     reminder, untouched.
+      //   • Never matched (no anchor ever found in the describe tree) → a
+      //     non-directional "◌ N hidden" badge in the top toolbar. No arrow:
+      //     scrolling would not reveal it (it isn't on the device screen at
+      //     all, just queued). The badge sits next to the round badge so the
+      //     user always knows N pending choices exist, even when no stream
+      //     is connected to position the directional pills.
+      function updateOffscreenHint() {
+        const r = streamRect();
+        const top = [],
+          bot = [],
+          hidden = [];
+        for (const p of vp.proposals) {
+          const rec = vp.cards.get(p.id);
+          if (!rec || !rec.gone) continue;
+          if (rec.everMatched) {
+            (rec.lastCY != null && rec.lastCY < 0.5 ? top : bot).push(p.element || "element");
+          } else {
+            hidden.push(p.element || "element");
+          }
+        }
+        const paint = (el, list, arrow, y) => {
+          if (!r || !list.length) {
+            el.classList.remove("show");
+            return;
+          }
+          el.textContent = `${arrow} ${list.length} choice${list.length > 1 ? "s" : ""} off-screen`;
+          el.title = list.join(", ");
+          el.style.left = r.x + r.w / 2 + "px";
+          el.style.top = y + "px";
+          el.classList.add("show");
+        };
+        paint(osTop, top, "▲", r ? r.y + 8 : 0);
+        paint(osBot, bot, "▼", r ? r.y + r.h - 30 : 0);
+        // Same stream-gate as the directional pills: before a stream is live
+        // we haven't *tried* to match anything, so "N hidden" is misleading —
+        // those proposals just haven't been looked for yet.
+        if (r && hidden.length) {
+          hiddenBadge.textContent = `◌ ${hidden.length} hidden`;
+          hiddenBadge.title = hidden.join(", ");
+          hiddenBadge.hidden = false;
+        } else {
+          hiddenBadge.hidden = true;
+        }
+      }
+
+      // Structural pass (poll / resize / stage cadence). Positions, connector
+      // and pin tracking are handled every animation frame by vpTick().
+      function vpRender() {
+        for (const p of vp.proposals) {
+          // The anchor carries two things: the element's last-seen FRAME (seeded
+          // from the propose-time frame, updated every match) and, once known, a
+          // locked IDENTITY descriptor (role/label/identifier). The frame's SIZE
+          // bootstraps the very first match — among same-text candidates it picks
+          // the right-sized one — and that first match's metadata is then locked
+          // as the descriptor, which gives every later frame certainty: the
+          // element is followed across big scroll jumps, and when it leaves the
+          // screen the bubble goes off-screen instead of re-homing onto a
+          // same-text impostor. See vpMatchNode / vpDescMatches.
+          let anchor = vp.anchors[p.id];
+          if (!anchor) {
+            const av = p.variants && p.variants.find((v) => v.frame);
+            if (av) anchor = vp.anchors[p.id] = { ...av.frame };
+          }
+          p._node = vp.tree ? vpMatchNode(vp.tree, p.match, anchor) : null;
+          if (p._node) {
+            const f0 = p._node.frame;
+            const a = vp.anchors[p.id] || {};
+            vp.anchors[p.id] = {
+              x: f0.x,
+              y: f0.y,
+              width: f0.width,
+              height: f0.height,
+              // Lock identity once (first match wins) so it can't drift.
+              role: a.role || (p._node.role || "").toLowerCase() || undefined,
+              label: a.label || vpNormLabel(p._node.label) || undefined,
+              identifier: a.identifier || vpNormLabel(p._node.identifier) || undefined,
+            };
+          }
+          if (p._node && !vp.thumbFrames[p.id]) {
+            const f = p._node.frame;
+            vp.thumbFrames[p.id] = { x: f.x, y: f.y, width: f.width, height: f.height };
+          }
+        }
+        layoutCards();
+        ensurePins();
+        // Reconcile the review popover in the structural pass (like
+        // ensurePins does for pins): if its annotation is gone — e.g. a new
+        // round cleared vp.annotations — close it here, not only via the
+        // rAF self-heal (vpTick can be idle and skip placeAnnPop).
+        if (vp.annPopFor != null && !vp.annotations.some((a) => a.id === vp.annPopFor)) {
+          closeAnnPop();
+        }
+        if (vp.inspect) paintSpot();
+        updateOffscreenHint();
+
+        const has = vp.proposals.length > 0 || vp.annotations.length > 0;
+        footEl.hidden = !has;
+        completeBtn.disabled = vp.submitting || !has;
+        commentBtn.hidden = !img; // only when a stream is live
+
+        // Once every proposed element has a pick, lift the footbar and surface
+        // the "ready" label so submitting is the self-evident next step.
+        // Annotations are optional, so only element selections gate this.
+        const allChosen = vp.proposals.length > 0 && vp.proposals.every((p) => vp.staged[p.id]);
+        footEl.classList.toggle("ready", allChosen && !vp.submitting);
+
+        // Whenever ANY proposal's element is off-screen, surface the reveal
+        // prompt above the footbar so the user can always bring the hidden
+        // choices into view. (Previously this was gated on every on-screen
+        // choice already being staged, which stranded the user with a "N hidden"
+        // count and no affordance to act on it.) `offscreenPromptCollapsed` only
+        // selects between the full card and the collapsed pill (see below).
+        const offScreenCount = vp.proposals.filter((p) => !p._node).length;
+        const showPrompt = offScreenCount > 0 && !vp.revealOffscreen && !vp.submitting;
+        offscreenPrompt.hidden = !showPrompt;
+        if (showPrompt) {
+          offscreenPrompt.classList.toggle("collapsed", !!vp.offscreenPromptCollapsed);
+          opCount.textContent = offScreenCount;
+          opNoun.textContent = offScreenCount === 1 ? "choice is" : "choices are";
+          opPillCount.textContent = offScreenCount;
+          // Sit just above the footbar, matched to its exact width and right
+          // edge (they read as one stacked pair). The footbar is never .ready
+          // here (off-screen picks are still pending), so its rect is unscaled
+          // and both the width and the gap stay exact.
+          const fr = footEl.getBoundingClientRect();
+          const mr = mainEl.getBoundingClientRect();
+          offscreenPrompt.style.width = fr.width + "px";
+          offscreenPrompt.style.bottom = mr.bottom - fr.top + 10 + "px"; // 10px above the footbar
+        }
+      }
+
+      // rAF loop, fixed-timestep so motion is identical at 60/120 Hz and after
+      // a stutter (accumulator). Two damped springs (semi-implicit Euler):
+      // bubbles use a slow, near-critically-damped spring so they drift into
+      // place like a cloud; the connector endpoint uses a fast, zero-overshoot
+      // spring so the line glides *continuously* between describe samples
+      // (no arrive-wait-jump) and locks onto a fresh sample without wobble.
+      const VP_DT = 1 / 120;
+      // Spring feel comes from theme.css (ω rad/s, ζ damping); K = ω², C = 2ζω.
+      const BUB_K = THEME.bubbleOmega * THEME.bubbleOmega,
+        BUB_C = 2 * THEME.bubbleZeta * THEME.bubbleOmega;
+      const CON_K = THEME.tightOmega * THEME.tightOmega,
+        CON_C = 2 * THEME.tightZeta * THEME.tightOmega;
+      function vpSpr(s, v, key, target, k, c) {
+        const a = -k * (s[key] - target) - c * v[key];
+        v[key] += a * VP_DT;
+        s[key] += v[key] * VP_DT;
+      }
+      let vpLastT = 0;
+      let vpAcc = 0;
+      function vpTick(now) {
+        requestAnimationFrame(vpTick);
+        // Hard-mute the device the entire time a card/chip is being dragged so a
+        // drag that crosses or releases over the phone can't tap it. CSS
+        // pointer-events:none is bulletproof (no event reaches the stream at
+        // all) where the per-handler guard could still race. Held one frame past
+        // release, which also swallows the release tap.
+        rootEl.classList.toggle("drag-muting", vp.cardDragging || vp.dragging);
+        const t = now || performance.now();
+        if (!vp.proposals.length && !vp.inspect && !vp.annotations.length) {
+          vpLastT = t;
+          vpAcc = 0;
+          return;
+        }
+        const dt = vpLastT ? Math.min(0.25, (t - vpLastT) / 1000) : VP_DT;
+        vpLastT = t;
+        vpAcc += dt;
+        let steps = 0;
+        // Resolve each pin's target element point ONCE per frame (tree only
+        // changes per describe poll); the spring below glides toward it.
+        const pinT = vp._pinT || (vp._pinT = new Map());
+        pinT.clear();
+        if (vp.annotations.length && vp.tree) {
+          for (const a of vp.annotations) {
+            const n = vpMatchNode(vp.tree, a.match);
+            const pt = n && elementPoint(n.frame);
+            if (pt) pinT.set(String(a.id), pt);
+          }
+        }
+        while (vpAcc >= VP_DT && steps < 30) {
+          vpAcc -= VP_DT;
+          steps++;
+          for (const p of vp.proposals) {
+            const rec = vp.cards.get(p.id);
+            if (!rec) continue;
+            if (rec.target) {
+              const tf = rec.target;
+              if (!rec.anim || !rec.animVel) {
+                rec.anim = { x: tf.x, y: tf.y, width: tf.width, height: tf.height };
+                rec.animVel = { x: 0, y: 0, width: 0, height: 0 };
+              } else {
+                vpSpr(rec.anim, rec.animVel, "x", tf.x, CON_K, CON_C);
+                vpSpr(rec.anim, rec.animVel, "y", tf.y, CON_K, CON_C);
+                vpSpr(rec.anim, rec.animVel, "width", tf.width, CON_K, CON_C);
+                vpSpr(rec.anim, rec.animVel, "height", tf.height, CON_K, CON_C);
+              }
+            } else {
+              rec.anim = null;
+            }
+            if (rec.pos && rec.home && !(rec.dragging && vp.cardDragging)) {
+              vpSpr(rec.pos, rec.vel, "x", rec.home.x, BUB_K, BUB_C);
+              vpSpr(rec.pos, rec.vel, "y", rec.home.y, BUB_K, BUB_C);
+            }
+          }
+          // Pins use the same fast, zero-overshoot spring as connectors so
+          // they track every animation frame and never snap between polls.
+          for (const a of vp.annotations) {
+            const key = String(a.id);
+            const tp = pinT.get(key);
+            if (!tp) continue;
+            const pa = vp.pinAnim.get(key);
+            if (!pa) {
+              vp.pinAnim.set(key, { p: { x: tp.x, y: tp.y }, v: { x: 0, y: 0 } });
+              continue;
+            }
+            vpSpr(pa.p, pa.v, "x", tp.x, CON_K, CON_C);
+            vpSpr(pa.p, pa.v, "y", tp.y, CON_K, CON_C);
+          }
+        }
+        if (steps >= 30) vpAcc = 0; // shed backlog after a long stall
+        for (const p of vp.proposals) {
+          const rec = vp.cards.get(p.id);
+          if (rec && rec.pos && rec.home && !(rec.dragging && vp.cardDragging)) {
+            rec.el.style.left = rec.pos.x + "px";
+            rec.el.style.top = rec.pos.y + "px";
+          }
+        }
+        drawConnectors();
+        positionPins();
+      }
+      requestAnimationFrame(vpTick);
+
+      // Brief green confirmation card centred on the viewport. In Electron
+      // host mode the surrounding window squeezes closed shortly after this
+      // appears (tool-server adds a delay before sending the close cmd, so
+      // the toast is fully visible first). In a regular browser the toast
+      // auto-dismisses after THEME.successToastShowMs — purely cosmetic
+      // feedback that the round was submitted.
+      let successToastTimer = null;
+      function showSuccessToast(picked, comments) {
+        if (!successToast) return;
+        successText.textContent =
+          comments > 0
+            ? `Sent ${picked} pick(s) + ${comments} comment(s)`
+            : `Sent ${picked} pick(s)`;
+        successToast.hidden = false;
+        // Force a layout pass so the .show transition fires from the
+        // hidden→visible state (otherwise the browser may batch and skip
+        // the transition entirely).
+        // eslint-disable-next-line no-unused-expressions
+        successToast.offsetHeight;
+        successToast.classList.add("show");
+        if (successToastTimer) clearTimeout(successToastTimer);
+        successToastTimer = setTimeout(() => {
+          successToast.classList.remove("show");
+          // Wait for the fade-out before hiding so the transition plays.
+          setTimeout(() => {
+            if (!successToast.classList.contains("show")) successToast.hidden = true;
+          }, 250);
+        }, THEME.successToastShowMs);
+      }
+
+      async function vpComplete() {
+        if (vp.submitting) return;
+        if (vp.proposals.length === 0 && vp.annotations.length === 0) return;
+        vp.submitting = true;
+        completeBtn.disabled = true;
+        setNote("Submitting…");
+        const selections = vp.proposals.map((p) => ({
+          elementId: p.id,
+          variantId: vp.staged[p.id] || null,
+          comment: vp.comments[p.id] || undefined,
+        }));
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/variants/selection`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              selections,
+              annotations: vp.annotations.map((a) => ({
+                target: a.target,
+                match: a.match,
+                comment: a.comment,
+              })),
+              globalComment: globalCommentEl ? globalCommentEl.value : "",
+            }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+          const picked = selections.filter((s) => s.variantId).length;
+          vp.justCompletedRound = vp.round;
+          setNote(
+            `Sent ${picked} pick(s) + ${vp.annotations.length} comment(s) to the agent.`,
+            "ok"
+          );
+          showSuccessToast(picked, vp.annotations.length);
+        } catch (err) {
+          setNote(`Failed: ${err.message || err}`, "err");
+        } finally {
+          vp.submitting = false;
+          completeBtn.disabled = false;
+        }
+      }
+
+      // Called by teardownStream when the stream is torn down.
+      function vpResetOverlay() {
+        vp.cards.clear();
+        vp.thumbFrames = {};
+        vp.anchors = {};
+        vp.conn.clear();
+        vp.pinEls.clear();
+        if (cardsEl) cardsEl.innerHTML = "";
+        if (connEl) while (connEl.firstChild) connEl.removeChild(connEl.firstChild);
+        if (vp.spot) {
+          vp.spot.root.remove();
+          vp.spot = null;
+        }
+        if (popEl) popEl.hidden = true;
+        // Deterministic teardown — don't rely on the rAF self-heal here.
+        closeAnnPop();
+        if (annPop) annPop.hidden = true;
+        vp.pinAnim.clear();
+        if (vp._pinT) vp._pinT.clear();
+        clearSpotIdle();
+        vp.focus = null;
+        vp.commentFor = null;
+        // Fully exit inspect mode so a stream re-attach doesn't leave a
+        // stuck/double-click state (button label, .inspecting class).
+        vp.inspect = false;
+        vp.cardDragging = false;
+        commentBtn.classList.remove("active");
+        commentBtn.title = "Add comment";
+        commentBtn.setAttribute("aria-label", "Add comment");
+        document.getElementById("root").classList.remove("inspecting");
+      }
+
+      // Safety net: HTML5 dragend can be missed if the source node is removed
+      // mid-drag — never let vp.dragging latch true (it gates round clearing).
+      document.addEventListener("dragend", () => {
+        vp.dragging = false;
+      });
+      // Confirm modal — shared backstop for destructive actions (Remove, Clear).
+      let confirmPending = null;
+      function openConfirm(msg, onConfirm) {
+        confirmMsg.textContent = msg;
+        confirmPending = onConfirm;
+        confirmModal.hidden = false;
+        confirmYes.focus();
+      }
+      function closeConfirm() {
+        confirmModal.hidden = true;
+        confirmPending = null;
+      }
+      confirmCancel.addEventListener("click", closeConfirm);
+      confirmYes.addEventListener("click", () => {
+        const cb = confirmPending;
+        closeConfirm();
+        if (cb) cb();
+      });
+      confirmModal.addEventListener("click", (e) => {
+        if (e.target === confirmModal) closeConfirm();
+      });
+
+      function vpClear() {
+        vp.staged = {};
+        vp.comments = {};
+        vp.annotations = [];
+        vp.revealOffscreen = false;
+        vp.offscreenPromptCollapsed = false;
+        if (globalCommentEl) globalCommentEl.value = "";
+        setNote("");
+        closeAnnPop();
+        vpRender();
+      }
+
+      commentBtn.addEventListener("click", () => setInspect(!vp.inspect));
+      completeBtn.addEventListener("click", vpComplete);
+      clearBtn.addEventListener("click", () =>
+        openConfirm("Clear all picks, comments, and the overall note?", vpClear)
+      );
+      document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        if (!confirmModal.hidden) {
+          closeConfirm();
+          return;
+        }
+        if (!vp.inspect) return;
+        // Don't tear down the inspector (and lose an in-progress comment) if
+        // the user is typing — let the comment-pop's own Cancel handle that.
+        const ae = document.activeElement;
+        if (ae && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT")) return;
+        setInspect(false);
+      });
+      viewport.addEventListener("dragover", (ev) => {
+        if (vp.proposals.length) ev.preventDefault();
+      });
+      viewport.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        let data = null;
+        try {
+          data = JSON.parse(ev.dataTransfer.getData("application/json"));
+        } catch {}
+        if (data) vpStage(data.elementId, data.variantId);
+      });
+      // Keep floating cards in their RELATIVE place across a window resize.
+      // Their left/top is absolute px, so without this they'd stay pinned to the
+      // left/top edge as the window grows; scale each card's live + home
+      // position by the size change so they track the resize immediately (the
+      // spring then settles them to the recomputed homes).
+      let lastMainSize = null;
+      window.addEventListener("resize", () => {
+        const mr = mainEl.getBoundingClientRect();
+        if (
+          lastMainSize &&
+          lastMainSize.w > 0 &&
+          lastMainSize.h > 0 &&
+          mr.width > 0 &&
+          mr.height > 0
+        ) {
+          const sx = mr.width / lastMainSize.w;
+          const sy = mr.height / lastMainSize.h;
+          if (sx !== 1 || sy !== 1) {
+            for (const rec of vp.cards.values()) {
+              if (rec.pos) {
+                rec.pos.x *= sx;
+                rec.pos.y *= sy;
+              }
+              if (rec.home) {
+                rec.home.x *= sx;
+                rec.home.y *= sy;
+              }
+            }
+          }
+        }
+        lastMainSize = { w: mr.width, h: mr.height };
+        vpRender();
+      });
+      setInterval(pollVariants, THEME.pollMs);
+      pollVariants();
+      pollDescribe(); // arms the single fast describe loop
+
+      // Opened for a specific device → stream it straight away. Otherwise fall
+      // back to discovering booted simulators (single → auto-connect, multiple →
+      // in-viewport picker).
+      if (initialUdid) {
+        connect(initialUdid).catch((err) => setStatus(String(err.message || err), "error"));
+      } else {
+        refreshSimulators();
+      }
     </script>
   </body>
 </html>

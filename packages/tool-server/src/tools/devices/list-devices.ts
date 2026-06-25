@@ -1,8 +1,15 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { listAndroidDevices, listAvds } from "../../utils/adb";
+import { listAndroidDevices, listAvds, consolePortFromAdbSerial } from "../../utils/adb";
+import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listPhysicalDevices, type PhysicalDevice } from "../../utils/ios-physical-device";
+import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
+import {
+  listVegaDevices,
+  filterVvdShadowsFromAndroid,
+  type VegaDevice,
+} from "../../utils/vega-devices";
 
 type IosSimulatorDevice = IosSimulator & { platform: "ios"; kind: "simulator" };
 type IosPhysicalDevice = PhysicalDevice & { platform: "ios"; kind: "physical" };
@@ -13,13 +20,18 @@ type AndroidDevice = {
   serial: string;
   state: string;
   isEmulator: boolean;
+  // "emulator" for a local AVD, "device" for a physical phone (USB or wireless
+  // adb). The two are driven by different simulator-server controllers, so the
+  // kind is surfaced here for parity with iOS terminology and so consumers can
+  // tell a connected phone apart from an emulator at a glance.
+  kind: "emulator" | "device";
   model: string | null;
   avdName: string | null;
   sdkLevel: number | null;
 };
 
 type ListDevicesResult = {
-  devices: Array<IosDevice | AndroidDevice>;
+  devices: Array<IosDevice | AndroidDevice | ChromiumDevice | VegaDevice>;
   avds: Array<{ name: string }>;
   // Only present when a physical-device scan was requested but devicectl failed
   // (e.g. Xcode < 15, device locked/untrusted) — lets the caller surface the
@@ -48,12 +60,34 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
 // Float booted/ready devices to the top of the merged list regardless of
 // platform — without this, all iOS entries are emitted before any Android.
 // Connected physical devices are always ready.
-function readinessRank(d: IosDevice | AndroidDevice): number {
+function readinessRank(d: IosDevice | AndroidDevice | ChromiumDevice | VegaDevice): number {
   if (d.platform === "ios") {
     if (d.kind === "physical") return 0;
     return d.state === "Booted" ? 0 : 1;
   }
-  return d.state === "device" ? 0 : 1;
+  if (d.platform === "android") return d.state === "device" ? 0 : 1;
+  if (d.platform === "vega") return d.state === "running" || d.state === "device" ? 0 : 1;
+  return 0; // Chromium entries are only listed when their CDP is responsive
+}
+
+// A running VVD also shows on adb as `emulator-<consolePort>` (or `127.0.0.1:<port+1>`
+// after `adb connect`). Drop the adb row(s) whose console port matches a running VVD
+// (from the process table); a real emulator / physical device sits elsewhere and stays.
+async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
+  androidDevices: readonly T[],
+  vega: readonly VegaDevice[]
+): Promise<Set<string>> {
+  // Nothing to dedup unless a VVD is actually running — skip the `ps` spawn on the
+  // common (no-Vega) path; list-devices is alwaysLoad and called often.
+  if (!vega.some((d) => d.kind === "vvd" && d.state === "running")) return new Set();
+  const vvdPorts = await listRunningVvdConsolePorts();
+  if (vvdPorts.size === 0) return new Set();
+  const shadows = new Set<string>();
+  for (const d of androidDevices) {
+    const port = consolePortFromAdbSerial(d.serial);
+    if (port !== null && vvdPorts.has(port)) shadows.add(d.serial);
+  }
+  return shadows;
 }
 
 const zodSchema = z.object({
@@ -61,7 +95,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Also scan for physical iOS devices connected via USB or Wi-Fi (tagged `kind: \"physical\"`). Defaults to false — the scan is slower (~5s) and requires Xcode 15+. Physical devices support profiling/debugging only, not automated interaction."
+      'Also scan for physical iOS devices connected via USB or Wi-Fi (tagged `kind: "physical"`). Defaults to false — the scan is slower (~5s) and requires Xcode 15+. Physical devices support profiling/debugging only, not automated interaction.'
     ),
 });
 
@@ -69,22 +103,26 @@ type Params = z.infer<typeof zodSchema>;
 
 export const listDevicesTool: ToolDefinition<Params, ListDevicesResult> = {
   id: "list-devices",
-  description: `List iOS simulators and Android devices/emulators in one place.
-Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android) to pass to interaction tools, and to see which targets are already running.
-Returns { devices, avds } where each device carries a 'platform' discriminator ('ios' or 'android'); iOS entries also carry 'kind' ('simulator' or 'physical'). 'avds' lists Android AVDs that can be booted via boot-device.
+  description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, and Vega (Fire TV) devices in one place.
+Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
+Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'); iOS entries also carry a 'kind' ('simulator' or 'physical'). 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
+Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb) — physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
 Set include_physical_devices: true to also scan for connected physical iOS devices (slower, requires Xcode 15+); physical devices support profiling/debugging only, not automated interaction.
-Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select or Android platform-tools is not installed.`,
+Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with electronAppPath to launch one.
+Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select, Android platform-tools, or the Vega SDK is not installed.`,
   alwaysLoad: true,
   searchHint:
-    "list devices simulators emulators physical avd serial udid ios android session start",
+    "list devices simulators emulators physical avd serial udid ios android chromium vega app fire tv session start",
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
     const includePhysical = params.include_physical_devices ?? false;
-    const [ios, android, avds, physical] = await Promise.all([
+    const [ios, android, avds, chromium, vega, physical] = await Promise.all([
       listIosSimulators(),
       listAndroidDevices().catch(() => []),
       listAvds(),
+      discoverChromiumDevices().catch(() => []),
+      listVegaDevices().catch(() => []),
       includePhysical ? listPhysicalDevices() : Promise.resolve(null),
     ]);
 
@@ -109,16 +147,22 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       serial: d.serial,
       state: d.state,
       isEmulator: d.isEmulator,
+      kind: d.isEmulator ? "emulator" : "device",
       model: d.model,
       avdName: d.avdName,
       sdkLevel: d.sdkLevel,
     }));
-    androidTagged.sort(sortAndroid);
+    // Drop a running VVD's adb shadow row so it appears only once (as vega).
+    const vvdShadowSerials = await resolveVvdShadowAdbSerials(androidTagged, vega);
+    const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, vvdShadowSerials);
+    androidDeduped.sort(sortAndroid);
 
-    const devices: Array<IosDevice | AndroidDevice> = [
+    const devices: Array<IosDevice | AndroidDevice | ChromiumDevice | VegaDevice> = [
       ...iosSimTagged,
       ...iosPhysTagged,
-      ...androidTagged,
+      ...androidDeduped,
+      ...chromium,
+      ...vega,
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 

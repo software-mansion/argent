@@ -1,4 +1,10 @@
-import type { DeviceInfo, Platform, ToolCapability } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  withFailureSignal,
+  type DeviceInfo,
+  type Platform,
+  type ToolCapability,
+} from "@argent/registry";
 
 /**
  * Thrown when a tool is invoked against a device whose platform/kind it does
@@ -15,6 +21,12 @@ export class UnsupportedOperationError extends Error {
     this.name = "UnsupportedOperationError";
     this.toolId = toolId;
     this.device = device;
+    withFailureSignal(this, {
+      error_code: FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION,
+      failure_stage: "tool_capability_assert_supported",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    });
   }
 }
 
@@ -57,6 +69,28 @@ export class NotImplementedOnPlatformError extends Error {
     this.toolId = opts.toolId;
     this.platform = opts.platform;
     this.hint = opts.hint ?? null;
+    withFailureSignal(this, {
+      error_code: FAILURE_CODES.TOOL_PLATFORM_NOT_IMPLEMENTED,
+      failure_stage: "tool_platform_dispatch",
+      failure_area: "tool_server",
+      error_kind: "not_implemented",
+    });
+  }
+}
+
+function platformMatrix(
+  platform: Platform,
+  capability: ToolCapability
+): Record<string, boolean | undefined> | undefined {
+  switch (platform) {
+    case "ios":
+      return capability.apple;
+    case "android":
+      return capability.android;
+    case "chromium":
+      return capability.chromium;
+    case "vega":
+      return capability.vega;
   }
 }
 
@@ -71,11 +105,11 @@ export function assertSupported(
   device: DeviceInfo
 ): void {
   if (!capability) return;
-  const matrix = device.platform === "ios" ? capability.apple : capability.android;
+  const matrix = platformMatrix(device.platform, capability);
   if (!matrix) {
     throw new UnsupportedOperationError(toolId, device, `no ${device.platform} support declared`);
   }
-  const supported = (matrix as Record<string, boolean | undefined>)[device.kind] === true;
+  const supported = matrix[device.kind] === true;
   if (!supported) {
     throw new UnsupportedOperationError(toolId, device, `kind '${device.kind}' not supported`);
   }

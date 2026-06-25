@@ -5,7 +5,7 @@ import type {
   ToolDependency,
 } from "@argent/registry";
 import { resolveDevice } from "./device-info";
-import { assertSupported } from "./capability";
+import { assertSupported, NotImplementedOnPlatformError } from "./capability";
 import { ensureDeps } from "./check-deps";
 
 /**
@@ -46,17 +46,32 @@ export interface PlatformImpl<Services, Params, Result> {
  * `Services` is the shape of services the tool declares — typed so handlers
  * see real names (e.g. `services.simulatorServer`) instead of the raw
  * `Record<string, unknown>` the registry hands in.
+ *
+ * The `chromium` branch is optional. When omitted, a chromium device triggers
+ * `NotImplementedOnPlatformError` — the capability gate normally fires first,
+ * so this only matters for tools that declare chromium support without wiring
+ * a handler.
  */
 export function dispatchByPlatform<
   IosServices,
   AndroidServices,
   Params extends { udid: string },
   Result,
+  ChromiumServices = Record<string, unknown>,
+  VegaServices = unknown,
 >(opts: {
   toolId: string;
   capability: ToolCapability;
   ios: PlatformImpl<IosServices, Params, Result>;
   android: PlatformImpl<AndroidServices, Params, Result>;
+  chromium?: PlatformImpl<ChromiumServices, Params, Result>;
+  /**
+   * Vega (Fire TV) branch. Optional so existing iOS/Android-only tools compile
+   * unchanged. When a tool's capability declares `vega` support but no `vega`
+   * branch is wired here, a Vega device dispatch throws
+   * `NotImplementedOnPlatformError` (501) rather than silently falling through.
+   */
+  vega?: PlatformImpl<VegaServices, Params, Result>;
 }): (
   services: Record<string, unknown>,
   params: Params,
@@ -71,11 +86,38 @@ export function dispatchByPlatform<
       }
       return opts.ios.handler(services as unknown as IosServices, params, device, invokeOptions);
     }
-    if (opts.android.requires?.length) {
-      await ensureDeps(opts.android.requires);
+    if (device.platform === "android") {
+      if (opts.android.requires?.length) {
+        await ensureDeps(opts.android.requires);
+      }
+      return opts.android.handler(
+        services as unknown as AndroidServices,
+        params,
+        device,
+        invokeOptions
+      );
     }
-    return opts.android.handler(
-      services as unknown as AndroidServices,
+    if (device.platform === "vega") {
+      if (!opts.vega) {
+        throw new NotImplementedOnPlatformError({ toolId: opts.toolId, platform: "vega" });
+      }
+      if (opts.vega.requires?.length) {
+        await ensureDeps(opts.vega.requires);
+      }
+      return opts.vega.handler(services as unknown as VegaServices, params, device, invokeOptions);
+    }
+    // chromium
+    if (!opts.chromium) {
+      throw new NotImplementedOnPlatformError({
+        toolId: opts.toolId,
+        platform: "chromium",
+      });
+    }
+    if (opts.chromium.requires?.length) {
+      await ensureDeps(opts.chromium.requires);
+    }
+    return opts.chromium.handler(
+      services as unknown as ChromiumServices,
       params,
       device,
       invokeOptions

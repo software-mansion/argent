@@ -1,6 +1,12 @@
 import * as crypto from "node:crypto";
 import { z } from "zod";
-import { type Registry, type ToolDefinition, ServiceState } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  type Registry,
+  type ToolDefinition,
+  ServiceState,
+} from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
@@ -19,10 +25,37 @@ import {
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   bootstrapFailureMessage,
   type BootstrapResult,
 } from "../../../utils/react-profiler/devtools-bootstrap";
+
+/**
+ * Verbose explanations the operator sees when the runtime is not profileable.
+ * Centralised so every tool that detects "this app cannot be profiled" emits
+ * the same diagnosis instead of bespoke one-liners.
+ */
+export const NO_DEVTOOLS_HOOK_ERROR =
+  "React DevTools hook (__REACT_DEVTOOLS_GLOBAL_HOOK__) is not present in this app's JavaScript runtime. " +
+  "React profiling requires a development build with React DevTools enabled. " +
+  "Likely causes: (1) the app is a release/production build — DevTools is stripped to reduce bundle size; " +
+  "(2) you connected to the wrong JS runtime; (3) this isn't a React (Native) app. " +
+  "Fix: rebuild in debug/dev mode (e.g. `npx react-native run-ios` without --configuration Release; for Expo, run a dev client). " +
+  "Once the app is running with DevTools attached, call react-profiler-start again.";
+
+/**
+ * Returned when the DevTools hook IS present but no React renderer has
+ * registered against it. Distinct from NO_DEVTOOLS_HOOK_ERROR because the
+ * remediation differs: rebuilding in dev mode does nothing here — the user
+ * needs the renderer to attach (wait for first commit, or let
+ * react-profiler-start bootstrap the DevTools backend on bridgeless RN
+ * dev builds that lack an external DevTools client).
+ */
+export const NO_RENDERERS_ATTACHED_ERROR =
+  "React DevTools hook is present but no React renderer has registered yet. " +
+  "The hook is loaded but no fiber renderer has attached — typically because the app has not committed its first render, or the DevTools backend has not been bootstrapped on a bridgeless React Native dev build. " +
+  "Fix: ensure the app has rendered (interact with it once, then retry); if it stays empty, call react-profiler-start first — it will attempt to attach the DevTools backend automatically.";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -77,6 +110,10 @@ After starting, ask the user to perform the interaction to profile, then call re
 Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success, or the already_running payload described above.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
+    // RN-only: bootstraps the React DevTools backend and uses Hermes'
+    // Profiler.start. A CDP-direct CPU profile for Chromium is tracked as a
+    // follow-up; the React commit recording has no Chromium analog.
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
       const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}:${params.device_id}`;
@@ -122,8 +159,14 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         await disposeAndWait();
         api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
         if (!api.cdp.isConnected()) {
-          throw new Error(
-            "CDP connection not available. The Hermes runtime may still be loading. Call react-profiler-start again."
+          throw new FailureError(
+            "CDP connection not available. The Hermes runtime may still be loading. Call react-profiler-start again.",
+            {
+              error_code: FAILURE_CODES.REACT_PROFILER_CDP_NOT_CONNECTED,
+              failure_stage: "react_profiler_start_cdp_connection",
+              failure_area: "tool_server",
+              error_kind: "network",
+            }
           );
         }
       }
@@ -136,14 +179,25 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // Snapshot backend state so we can decide whether to start, take over, or refuse.
       let stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
       if (!stateJson) {
-        throw new Error("Failed to read React profiler state from runtime (no value returned).");
+        throw new FailureError(
+          "Failed to read React profiler state from runtime (no value returned).",
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_STATE_READ_FAILED,
+            failure_stage: "react_profiler_start_read_state",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          }
+        );
       }
       let state = JSON.parse(stateJson) as ReadStateResult;
 
       if (!state.hookExists) {
-        throw new Error(
-          "React DevTools is not available in this app. This usually means the app is a production build. Ask the user to run a development build of the app, then retry."
-        );
+        throw new FailureError(NO_DEVTOOLS_HOOK_ERROR, {
+          error_code: FAILURE_CODES.REACT_PROFILER_DEVTOOLS_HOOK_MISSING,
+          failure_stage: "react_profiler_start_devtools_hook",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
       }
 
       // If the hook is present but no rendererInterface is registered, the
@@ -158,14 +212,25 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
           | string
           | undefined;
         if (!bootstrapJson) {
-          throw new Error(
-            "Failed to attach React DevTools backend (no value returned from runtime)."
+          throw new FailureError(
+            "Failed to attach React DevTools backend (no value returned from runtime).",
+            {
+              error_code: FAILURE_CODES.REACT_PROFILER_DEVTOOLS_BACKEND_ATTACH_FAILED,
+              failure_stage: "react_profiler_start_bootstrap_backend",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+            }
           );
         }
         const bootstrap = JSON.parse(bootstrapJson) as BootstrapResult;
 
         if (!bootstrap.ok) {
-          throw new Error(bootstrapFailureMessage(bootstrap));
+          throw new FailureError(bootstrapFailureMessage(bootstrap), {
+            error_code: FAILURE_CODES.REACT_PROFILER_DEVTOOLS_BACKEND_BOOTSTRAP_FAILED,
+            failure_stage: "react_profiler_start_bootstrap_backend",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          });
         }
 
         // Re-run the setup script: it walks `hook.rendererInterfaces` and
@@ -177,8 +242,14 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
 
         stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
         if (!stateJson) {
-          throw new Error(
-            "Failed to re-read React profiler state after attach (no value returned)."
+          throw new FailureError(
+            "Failed to re-read React profiler state after attach (no value returned).",
+            {
+              error_code: FAILURE_CODES.REACT_PROFILER_STATE_READ_FAILED,
+              failure_stage: "react_profiler_start_reread_state",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+            }
           );
         }
         state = JSON.parse(stateJson) as ReadStateResult;
@@ -188,8 +259,14 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
           !("rendererInterfaceFound" in state) ||
           !state.rendererInterfaceFound
         ) {
-          throw new Error(
-            "Attached the React DevTools backend but no React renderer registered itself afterwards. Ask the user to fully reload the JS bundle and retry."
+          throw new FailureError(
+            "Attached the React DevTools backend but no React renderer registered itself afterwards. Ask the user to fully reload the JS bundle and retry.",
+            {
+              error_code: FAILURE_CODES.REACT_PROFILER_DEVTOOLS_RENDERER_MISSING,
+              failure_stage: "react_profiler_start_renderer_check",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
           );
         }
       }
@@ -241,7 +318,12 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         | string
         | undefined;
       if (!startJson) {
-        throw new Error("Failed to start React profiler (no value returned from runtime).");
+        throw new FailureError("Failed to start React profiler (no value returned from runtime).", {
+          error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
+          failure_stage: "react_profiler_start_runtime_start",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        });
       }
       const startResult = JSON.parse(startJson) as {
         ok: boolean;
@@ -255,17 +337,29 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       if (!startResult.ok) {
         // Roll back CPU sampler so we don't leak state.
         await cdp.send("Profiler.stop").catch(ignore);
-        throw new Error(
+        throw new FailureError(
           `React profiler failed to start (${startResult.reason ?? "unknown"}${
             startResult.message ? `: ${startResult.message}` : ""
-          })`
+          })`,
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_START_FAILED,
+            failure_stage: "react_profiler_start_runtime_start",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          }
         );
       }
 
       if (startResult.isProfilingFlagSet !== true || startResult.ownerInstalled !== true) {
         await cdp.send("Profiler.stop").catch(ignore);
-        throw new Error(
-          `React profiler failed to start (post-start verification failed: isProfilingFlagSet=${startResult.isProfilingFlagSet === true}, ownerInstalled=${startResult.ownerInstalled === true})`
+        throw new FailureError(
+          `React profiler failed to start (post-start verification failed: isProfilingFlagSet=${startResult.isProfilingFlagSet === true}, ownerInstalled=${startResult.ownerInstalled === true})`,
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_START_VERIFY_FAILED,
+            failure_stage: "react_profiler_start_verify",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          }
         );
       }
 

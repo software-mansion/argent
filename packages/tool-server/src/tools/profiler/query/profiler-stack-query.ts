@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
@@ -10,9 +10,16 @@ import {
   findDominantFunction,
   extractAppCallChain,
 } from "../../../utils/ios-profiler/pipeline/02-aggregate";
+import {
+  runAndroidStackQuery,
+  type AndroidStackQueryMode,
+} from "../../../utils/android-profiler/pipeline/index";
+import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
+import { formatBytes } from "../../../utils/profiler-shared/format";
+import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 
 const zodSchema = z.object({
-  device_id: z.string().describe("iOS Simulator or device UDID"),
+  device_id: z.string().describe("iOS Simulator UDID or Android serial."),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe(
@@ -25,7 +32,15 @@ const zodSchema = z.object({
     .optional()
     .describe("0-based index into the hang list for hang_stacks mode"),
   function_name: z.string().optional().describe("Function name for function_callers mode"),
-  thread: z.string().optional().describe("Thread name filter for thread_breakdown mode"),
+  thread: z
+    .string()
+    .optional()
+    .describe(
+      "Thread filter. thread_breakdown: case-insensitive substring match. " +
+        'function_callers: exact raw thread name (e.g. ".blueskyweb.app"), or "main" for ' +
+        "the UI thread; omit to search ALL threads (each result is tagged with its thread). " +
+        "Run thread_breakdown first to see the exact raw names."
+    ),
   object_type: z.string().optional().describe("Object type filter for leak_stacks mode"),
   top_n: z.coerce
     .number()
@@ -35,16 +50,22 @@ const zodSchema = z.object({
     .describe("Max results to return (default 15)"),
 });
 
-function getParsedData(api: NativeProfilerSessionApi) {
+function getIosParsedData(api: NativeProfilerSessionApi) {
   if (!api.parsedData) {
-    throw new Error(
-      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze first."
+    throw new FailureError(
+      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze first.",
+      {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_stack_query_load_data",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
   return api.parsedData;
 }
 
-function renderHangStacks(
+function renderHangStacksIos(
   cpuSamples: CpuSample[],
   uiHangs: UiHang[],
   hangIndex: number,
@@ -55,18 +76,8 @@ function renderHangStacks(
   }
 
   const hang = uiHangs[hangIndex]!;
-
-  // Reconstruct the hang time window from formatted time
-  // UiHangs have startTimeFormatted but not raw ns — we need to find samples in the window.
-  // Since we have the full cpuSamples array, find samples that occurred during this hang's window.
-  // We use the duration and approximate matching.
-  const hangDurationNs = hang.durationMs * 1_000_000;
-
-  // Find CPU samples that overlap with this hang.
-  // We match based on the hang's suspected functions to identify the time window.
   const suspectedSet = new Set(hang.suspectedFunctions);
 
-  // Collect all unique call chains seen during this hang (from the hang's own data)
   const lines: string[] = [
     `## Hang #${hangIndex} — ${hang.hangType} (${hang.durationMs}ms at ${hang.startTimeFormatted})`,
     "",
@@ -78,7 +89,7 @@ function renderHangStacks(
     lines.push("### Suspected Functions (by sample frequency)");
     lines.push("");
     for (let i = 0; i < hang.suspectedFunctions.length; i++) {
-      lines.push(`${i + 1}. \`${hang.suspectedFunctions[i]}\``);
+      lines.push(`${i + 1}. \`${demangleSymbol(hang.suspectedFunctions[i]!)}\``);
     }
     lines.push("");
   }
@@ -87,13 +98,13 @@ function renderHangStacks(
     lines.push("### App Call Chains During Hang");
     lines.push("");
     for (const { chain, sampleCount } of hang.appCallChains) {
-      lines.push(`- (${sampleCount} samples) ${chain.map((f) => `\`${f}\``).join(" → ")}`);
+      lines.push(
+        `- (${sampleCount} samples) ${chain.map((f) => `\`${demangleSymbol(f)}\``).join(" → ")}`
+      );
     }
     lines.push("");
   }
 
-  // Also find broader context: all unique dominant functions from samples near this hang
-  // Match samples whose dominant function is in the suspected set
   const relatedSamples = cpuSamples.filter((s) => {
     const dominant = findDominantFunction(s.stack);
     return dominant !== null && suspectedSet.has(dominant);
@@ -103,7 +114,6 @@ function renderHangStacks(
     lines.push("### Full Stack Samples (matching suspected functions)");
     lines.push("");
 
-    // Show unique stacks, limited
     const uniqueStacks = new Map<string, { stack: string[]; count: number }>();
     for (const sample of relatedSamples) {
       const chain = extractAppCallChain(sample.stack);
@@ -118,19 +128,18 @@ function renderHangStacks(
 
     const sorted = [...uniqueStacks.values()].sort((a, b) => b.count - a.count).slice(0, topN);
     for (const { stack, count } of sorted) {
-      lines.push(`- (${count}×) ${stack.map((f) => `\`${f}\``).join(" → ")}`);
+      lines.push(`- (${count}×) ${stack.map((f) => `\`${demangleSymbol(f)}\``).join(" → ")}`);
     }
   }
 
   return lines.join("\n");
 }
 
-function renderFunctionCallers(
+function renderFunctionCallersIos(
   cpuSamples: CpuSample[],
   functionName: string,
   topN: number
 ): string {
-  // Find all samples where the function appears in the stack
   const callerCounts = new Map<string, number>();
   const calleeCounts = new Map<string, number>();
   let totalOccurrences = 0;
@@ -140,13 +149,11 @@ function renderFunctionCallers(
       if (sample.stack[i]!.name === functionName) {
         totalOccurrences++;
 
-        // Caller = frame above (higher index = deeper in stack, so caller is i+1)
         if (i + 1 < sample.stack.length) {
           const caller = sample.stack[i + 1]!.name;
           callerCounts.set(caller, (callerCounts.get(caller) ?? 0) + 1);
         }
 
-        // Callee = frame below (i-1)
         if (i - 1 >= 0) {
           const callee = sample.stack[i - 1]!.name;
           calleeCounts.set(callee, (calleeCounts.get(callee) ?? 0) + 1);
@@ -175,7 +182,7 @@ function renderFunctionCallers(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallers) {
-      lines.push(`| \`${name}\` | ${count} |`);
+      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -187,7 +194,7 @@ function renderFunctionCallers(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallees) {
-      lines.push(`| \`${name}\` | ${count} |`);
+      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -195,13 +202,12 @@ function renderFunctionCallers(
   return lines.join("\n");
 }
 
-function renderThreadBreakdown(
+function renderThreadBreakdownIos(
   cpuSamples: CpuSample[],
   cpuHotspots: CpuHotspot[],
   threadFilter: string | undefined,
   topN: number
 ): string {
-  // Group samples by thread
   const threadWeight = new Map<string, number>();
   const threadSamples = new Map<string, number>();
 
@@ -236,7 +242,6 @@ function renderThreadBreakdown(
     lines.push(`| ${thread} | ${weightMs} | ${pct}% | ${samples} |`);
   }
 
-  // If a specific thread is filtered, also show hotspots for that thread
   if (threadFilter) {
     const threadHotspots = cpuHotspots.filter((h) =>
       h.thread.toLowerCase().includes(threadFilter.toLowerCase())
@@ -249,7 +254,7 @@ function renderThreadBreakdown(
       lines.push("|---|---|---|---|");
       for (const h of threadHotspots.slice(0, topN)) {
         lines.push(
-          `| \`${h.dominantFunction}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
+          `| \`${demangleSymbol(h.dominantFunction)}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
         );
       }
     }
@@ -258,7 +263,7 @@ function renderThreadBreakdown(
   return lines.join("\n");
 }
 
-function renderLeakStacks(
+export function renderLeakStacksIos(
   memoryLeaks: MemoryLeak[],
   objectTypeFilter: string | undefined,
   topN: number
@@ -276,41 +281,112 @@ function renderLeakStacks(
       : "_No memory leaks detected._";
   }
 
-  const sorted = [...filtered].sort((a, b) => b.totalSizeBytes - a.totalSizeBytes).slice(0, topN);
+  // Attributed leaks first (so a small real leak survives the top-N slice ahead
+  // of larger unattributed system noise), then by size within each group.
+  const sorted = [...filtered]
+    .sort((a, b) => {
+      if (a.attributed !== b.attributed) return a.attributed ? -1 : 1;
+      return b.totalSizeBytes - a.totalSizeBytes;
+    })
+    .slice(0, topN);
 
   const totalBytes = sorted.reduce((s, l) => s + l.totalSizeBytes, 0);
   const totalCount = sorted.reduce((s, l) => s + l.count, 0);
+
+  const unattributedCount = sorted.filter((l) => !l.attributed).length;
 
   const lines: string[] = [
     `## Memory Leaks${objectTypeFilter ? ` (filter: "${objectTypeFilter}")` : ""}`,
     "",
     `**Total:** ${formatBytes(totalBytes)} across ${totalCount} allocations`,
     "",
-    "| Object Type | Size | Count | Responsible Frame | Library |",
-    "|---|---|---|---|---|",
   ];
+
+  if (unattributedCount > 0) {
+    lines.push(
+      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
+        "(`<Call stack limit reached>`, no library) — captured under `xctrace --attach`, which has no " +
+        "malloc-stack history. Most likely benign system allocations, not confirmed app leaks.",
+      ""
+    );
+  }
+
+  lines.push(
+    "| Object Type | Size | Count | Responsible Frame | Library |",
+    "|---|---|---|---|---|"
+  );
 
   for (const l of sorted) {
     lines.push(
-      `| \`${l.objectType}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${l.responsibleFrame}\` | ${l.responsibleLibrary || "—"} |`
+      `| \`${l.objectType}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${demangleSymbol(l.responsibleFrame)}\` | ${l.responsibleLibrary || "—"} |`
     );
   }
 
   return lines.join("\n");
 }
 
-function normalizeThreadName(threadFmt: string): string {
-  if (/main\s*thread/i.test(threadFmt)) return "Main Thread";
-  if (/hermes/i.test(threadFmt) || /jsthread/i.test(threadFmt)) return "JS/Hermes";
-  const shortMatch = threadFmt.match(/^(.+?)\s+0x/);
-  if (shortMatch) return shortMatch[1];
-  return threadFmt;
+async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof zodSchema>) {
+  const data = getIosParsedData(api);
+  switch (params.mode) {
+    case "hang_stacks": {
+      if (params.hang_index == null) {
+        throw new FailureError("hang_stacks mode requires the hang_index parameter.", {
+          error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+          failure_stage: "profiler_stack_query_params",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
+      }
+      return renderHangStacksIos(data.cpuSamples, data.uiHangs, params.hang_index, params.top_n);
+    }
+    case "function_callers": {
+      if (!params.function_name) {
+        throw new FailureError("function_callers mode requires the function_name parameter.", {
+          error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+          failure_stage: "profiler_stack_query_params",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
+      }
+      return renderFunctionCallersIos(data.cpuSamples, params.function_name, params.top_n);
+    }
+    case "thread_breakdown":
+      return renderThreadBreakdownIos(
+        data.cpuSamples,
+        data.cpuHotspots,
+        params.thread,
+        params.top_n
+      );
+    case "leak_stacks":
+      return renderLeakStacksIos(data.memoryLeaks, params.object_type, params.top_n);
+    default:
+      throw new FailureError(`Unknown mode: ${params.mode}`, {
+        error_code: FAILURE_CODES.PROFILER_QUERY_MODE_INVALID,
+        failure_stage: "profiler_stack_query_mode",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
+  }
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typeof zodSchema>) {
+  if (!api.exportedFiles?.pftrace || !api.traceFile) {
+    throw new Error(
+      "No Android trace loaded. Run native-profiler-stop → native-profiler-analyze first."
+    );
+  }
+  if (params.mode === "leak_stacks") {
+    return "_Memory leak detection is not yet supported on Android. Use the RSS-growth weak signal in the analyze report as a hint, or capture a heap dump manually with `adb shell am dumpheap`._";
+  }
+  return runAndroidStackQuery({
+    tracePath: api.traceFile,
+    mode: params.mode as AndroidStackQueryMode,
+    appPackage: api.appProcess ?? "",
+    hangIndex: params.hang_index,
+    functionName: params.function_name,
+    thread: params.thread,
+    topN: params.top_n,
+  });
 }
 
 export const profilerStackQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
@@ -321,46 +397,26 @@ Modes:
 - hang_stacks: Full CPU context during a specific hang (by hang_index).
 - function_callers: Who calls a specific native function and what it calls.
 - thread_breakdown: CPU time split by thread, optionally filtered.
-- leak_stacks: Memory leak details, optionally filtered by object_type.
+- leak_stacks: Memory leak details (iOS only), optionally filtered by object_type.
 Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after native-profiler-analyze.
 Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
 Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,
   zodSchema,
+  // iOS: reads xctrace output. Android: queries the Perfetto .pftrace via the
+  // in-process trace-processor engine (see executeAndroid). Chromium has no
+  // native trace capture.
+  capability: {
+    apple: { simulator: true, device: true },
+    android: { emulator: true, device: true, unknown: true },
+  },
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
   async execute(services, params) {
     const api = services.session as NativeProfilerSessionApi;
-    const data = getParsedData(api);
-
-    switch (params.mode) {
-      case "hang_stacks": {
-        if (params.hang_index == null) {
-          throw new Error("hang_stacks mode requires the hang_index parameter.");
-        }
-        return renderHangStacks(data.cpuSamples, data.uiHangs, params.hang_index, params.top_n);
-      }
-
-      case "function_callers": {
-        if (!params.function_name) {
-          throw new Error("function_callers mode requires the function_name parameter.");
-        }
-        return renderFunctionCallers(data.cpuSamples, params.function_name, params.top_n);
-      }
-
-      case "thread_breakdown":
-        return renderThreadBreakdown(
-          data.cpuSamples,
-          data.cpuHotspots,
-          params.thread,
-          params.top_n
-        );
-
-      case "leak_stacks":
-        return renderLeakStacks(data.memoryLeaks, params.object_type, params.top_n);
-
-      default:
-        throw new Error(`Unknown mode: ${params.mode}`);
+    if (api.platform === "android") {
+      return executeAndroid(api, params);
     }
+    return executeIos(api, params);
   },
 };

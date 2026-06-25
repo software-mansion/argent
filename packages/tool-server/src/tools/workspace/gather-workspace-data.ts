@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import { readWorkspaceSnapshot, type WorkspaceSnapshot } from "../../utils/workspace-reader";
 
 const zodSchema = z.object({
@@ -7,6 +7,16 @@ const zodSchema = z.object({
     .string()
     .describe("Absolute path to the project root directory to inspect (e.g. /Users/dev/MyApp)"),
 });
+
+/**
+ * The snapshot reads dozens of files across the workspace tree, which can't
+ * ride along in a tool call — gate on the directory existing on this host so
+ * a remote caller gets an actionable error instead of the all-nulls snapshot
+ * readWorkspaceSnapshot returns for an unreadable path.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "workspacePath", path: "${workspacePath}", kind: "directory" },
+];
 
 export const gatherWorkspaceDataTool: ToolDefinition<
   z.infer<typeof zodSchema>,
@@ -32,6 +42,7 @@ Use when you need to inspect project configuration without manually reading mult
 Returns partial data if workspacePath does not exist or is not readable; missing items are represented as null or empty collections.
 Fails if the workspacePath is not an absolute path or the directory cannot be accessed.`,
   zodSchema,
+  fileInputs,
   services: () => ({}),
   async execute(_services, params) {
     return readWorkspaceSnapshot(params.workspacePath);

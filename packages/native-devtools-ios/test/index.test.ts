@@ -17,11 +17,16 @@ import type * as ResolverModule from "../src/index";
 
 let tmpRoot = "";
 const originalPlatform = process.platform;
+const originalArch = process.arch;
 const originalDevtoolsDir = process.env.ARGENT_NATIVE_DEVTOOLS_DIR;
 const originalSimulatorDir = process.env.ARGENT_SIMULATOR_SERVER_DIR;
 
 function setPlatform(value: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { value, configurable: true });
+}
+
+function setArch(value: NodeJS.Architecture) {
+  Object.defineProperty(process, "arch", { value, configurable: true });
 }
 
 beforeAll(() => {
@@ -31,6 +36,7 @@ beforeAll(() => {
 afterAll(() => {
   if (tmpRoot) fs.rmSync(tmpRoot, { recursive: true, force: true });
   setPlatform(originalPlatform);
+  setArch(originalArch);
   if (originalDevtoolsDir === undefined) delete process.env.ARGENT_NATIVE_DEVTOOLS_DIR;
   else process.env.ARGENT_NATIVE_DEVTOOLS_DIR = originalDevtoolsDir;
   if (originalSimulatorDir === undefined) delete process.env.ARGENT_SIMULATOR_SERVER_DIR;
@@ -39,6 +45,7 @@ afterAll(() => {
 
 afterEach(() => {
   setPlatform(originalPlatform);
+  setArch(originalArch);
 });
 
 /**
@@ -135,6 +142,68 @@ describe("simulator-server path resolution", () => {
     const r = await loadResolver();
     expect(() => r.simulatorServerBinaryPath()).toThrow(/old flat path/);
     expect(() => r.simulatorServerBinaryPath()).toThrow(new RegExp(process.platform));
+  });
+});
+
+describe("host platform key (arch-aware Linux bin dirs)", () => {
+  // Linux binaries are single-arch ELFs (unlike the universal macOS binary),
+  // so arm64 Linux resolves to its own "linux-arm64" directory while x86_64
+  // keeps the pre-arm64 "linux" name. Without this split, an arm64 host would
+  // silently pick up the x86_64 ELF and fail with ENOEXEC at spawn time.
+  it("resolves bin/linux-arm64 on arm64 Linux", async () => {
+    setPlatform("linux");
+    setArch("arm64");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "linux-arm64-"));
+    const platDir = path.join(dir, "linux-arm64");
+    fs.mkdirSync(platDir, { recursive: true });
+    const binPath = path.join(platDir, "simulator-server");
+    fs.writeFileSync(binPath, "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(r.hostPlatformKey()).toBe("linux-arm64");
+    expect(r.simulatorServerBinaryPath()).toBe(binPath);
+    expect(r.simulatorServerBinaryDir()).toBe(platDir);
+  });
+
+  it("keeps resolving bin/linux on x86_64 Linux", async () => {
+    setPlatform("linux");
+    setArch("x64");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "linux-x64-"));
+    const platDir = path.join(dir, "linux");
+    fs.mkdirSync(platDir, { recursive: true });
+    const binPath = path.join(platDir, "simulator-server");
+    fs.writeFileSync(binPath, "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(r.hostPlatformKey()).toBe("linux");
+    expect(r.simulatorServerBinaryPath()).toBe(binPath);
+  });
+
+  it("keeps resolving bin/darwin on arm64 macOS (universal binary)", async () => {
+    setPlatform("darwin");
+    setArch("arm64");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "darwin-arm64-"));
+    const platDir = path.join(dir, "darwin");
+    fs.mkdirSync(platDir, { recursive: true });
+    const binPath = path.join(platDir, "simulator-server");
+    fs.writeFileSync(binPath, "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(r.hostPlatformKey()).toBe("darwin");
+    expect(r.simulatorServerBinaryPath()).toBe(binPath);
+  });
+
+  it("names the linux-arm64 key in the missing-binary error", async () => {
+    // The error must name the directory actually searched ("linux-arm64"),
+    // not bare process.platform, so an arm64 user re-running the download
+    // script can tell which asset is absent.
+    setPlatform("linux");
+    setArch("arm64");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "linux-arm64-missing-"));
+    fs.mkdirSync(path.join(dir, "linux-arm64"), { recursive: true });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(() => r.simulatorServerBinaryPath()).toThrow(/linux-arm64/);
   });
 });
 

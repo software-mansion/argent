@@ -1,6 +1,9 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolDefinition } from "@argent/registry";
+import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
 import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { resolveDevice } from "../../utils/device-info";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkDetailReadScript,
@@ -110,10 +113,72 @@ Returns request/response headers (sensitive headers redacted), status, timing, a
 Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
 Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
   zodSchema,
-  services: (params) => ({
-    inspector: `NetworkInspector:${params.port}:${params.device_id}`,
-  }),
+  // Companion to view-network-logs: RN via the injected interceptor, Chromium
+  // via the native CDP Network recording. Dispatched on the device id.
+  capability: DEBUGGER_TOOL_CAPABILITY,
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.device_id);
+    if (device.platform === "chromium") {
+      return { chromium: chromiumCdpRef(device) };
+    }
+    return { inspector: `NetworkInspector:${params.port}:${params.device_id}` };
+  },
   async execute(services, params) {
+    // Chromium: build details from the server-side CDP Network recording, and
+    // fetch the response body on demand via Network.getResponseBody.
+    if (resolveDevice(params.device_id).platform === "chromium") {
+      const chromium = services.chromium as ChromiumCdpApi;
+      const rec = chromium.server.network.get(params.requestId);
+      if (!rec) {
+        return `Request ${params.requestId} not found. Use view-network-logs to list available requests.`;
+      }
+      const details: NetworkRequestDetails = {
+        requestId: rec.requestId,
+        state: rec.failed ? "failed" : rec.status != null ? "complete" : "pending",
+        resourceType: rec.resourceType,
+        durationMs: rec.durationMs != null ? Math.round(rec.durationMs) : undefined,
+        encodedDataLength: rec.encodedDataLength,
+        errorText: rec.errorText,
+        initiator: rec.initiator,
+      };
+      if (rec.url) {
+        details.request = {
+          url: rec.url,
+          method: rec.method,
+          headers: redactHeaders(rec.requestHeaders),
+          postData: rec.postData,
+        };
+      }
+      if (rec.status != null) {
+        const resp: NetworkRequestDetails["response"] = {
+          status: rec.status,
+          statusText: rec.statusText ?? "",
+          headers: redactHeaders(rec.responseHeaders),
+          mimeType: rec.mimeType ?? "",
+        };
+        if (params.includeBody) {
+          try {
+            const out = (await chromium.cdp.send("Network.getResponseBody", {
+              requestId: rec.requestId,
+            })) as { body?: string; base64Encoded?: boolean };
+            if (out.body != null) {
+              const body = out.base64Encoded
+                ? Buffer.from(out.body, "base64").toString("utf8")
+                : out.body;
+              resp.body =
+                body.length > MAX_BODY_SIZE
+                  ? `[TRUNCATED — original size: ${body.length} chars, MIME: ${resp.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`
+                  : body;
+            }
+          } catch {
+            // Body not retained (page navigated, evicted, or never had one).
+          }
+        }
+        details.response = resp;
+      }
+      return details;
+    }
+
     const api = services.inspector as NetworkInspectorApi;
 
     // Ensure the interceptor is installed (idempotent).

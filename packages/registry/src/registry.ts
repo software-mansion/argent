@@ -9,7 +9,9 @@ import {
   RegistryEvents,
   URN,
   InvokeToolOptions,
+  ToolContext,
 } from "./types";
+import { ArtifactStore } from "./artifacts";
 import {
   ServiceNotFoundError,
   ServiceInitializationError,
@@ -18,13 +20,32 @@ import {
 } from "./errors";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
+import { randomUUID } from "node:crypto";
 
 export class Registry {
   /** Single map: URN -> ServiceNode (all instances). */
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
+  /**
+   * Predicate that decides whether a feature-flagged tool is currently enabled.
+   * Injected (rather than importing `@argent/cli` here) so the registry stays
+   * free of a CLI dependency. The default treats every flag as enabled, so
+   * existing `new Registry()` call sites (tests, non-flag deployments) keep
+   * their previous behavior. The tool-server wires the real `isFlagEnabled`.
+   */
+  private readonly isFlagEnabled: (flag: string) => boolean;
+  /**
+   * Host files produced by tools, registered during `execute` and served by the
+   * `/artifacts/:id` route. Owned here (one per registry/process) so the tool
+   * path and the HTTP route resolve the same instance — no module singleton.
+   */
+  public readonly artifacts = new ArtifactStore();
   public readonly events = new TypedEventEmitter<RegistryEvents>();
+
+  constructor(options: { isFlagEnabled?: (flag: string) => boolean } = {}) {
+    this.isFlagEnabled = options.isFlagEnabled ?? (() => true);
+  }
 
   registerBlueprint<T, C>(blueprint: ServiceBlueprint<T, C>): void {
     const { namespace } = blueprint;
@@ -73,8 +94,18 @@ export class Registry {
     if (!record) throw new ToolNotFoundError(id);
 
     const { definition } = record;
+
+    // Feature-flag gate, enforced for EVERY dispatch path (HTTP, flow-execute,
+    // flow-add-step, run-sequence) — not just the HTTP edge. A flag-gated tool
+    // whose flag is off is treated as "not found", mirroring the HTTP 404, so a
+    // flow can't smuggle an invocation of a disabled tool through the registry.
+    if (definition.featureFlag && !this.isFlagEnabled(definition.featureFlag)) {
+      throw new ToolNotFoundError(id);
+    }
+
     const startTime = performance.now();
-    this.events.emit("toolInvoked", id);
+    const toolInvocationId = options?.toolInvocationId ?? randomUUID();
+    this.events.emit("toolInvoked", id, toolInvocationId);
 
     try {
       // Validate params against the tool's zod schema for EVERY dispatch path,
@@ -101,10 +132,14 @@ export class Registry {
         resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
       }
 
-      const result = await definition.execute(resolvedServices, effectiveParams, options);
+      // Build the per-invocation context: caller options (e.g. signal) plus the
+      // registry-owned artifact store, so any tool can register host files via
+      // `ctx.artifacts` without declaring a per-tool service.
+      const ctx: ToolContext = { ...options, artifacts: this.artifacts };
+      const result = await definition.execute(resolvedServices, effectiveParams, ctx);
 
       const duration = performance.now() - startTime;
-      this.events.emit("toolCompleted", id, duration);
+      this.events.emit("toolCompleted", id, toolInvocationId, duration);
       return result as TResult;
     } catch (error) {
       const originalMsg = error instanceof Error ? error.message : String(error);
@@ -118,7 +153,13 @@ export class Registry {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
 
-      this.events.emit("toolFailed", id, wrappedError);
+      this.events.emit(
+        "toolFailed",
+        id,
+        toolInvocationId,
+        wrappedError,
+        performance.now() - startTime
+      );
       throw wrappedError;
     }
   }
@@ -258,7 +299,7 @@ export class Registry {
       node.instance = instance as ServiceInstance;
 
       instance.events.on("terminated", (error?: Error) => {
-        this._teardown(urn, error);
+        void this._teardown(urn, error);
       });
 
       return instance.api as T;

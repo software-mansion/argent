@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/registry",
-  "version": "0.10.0",
+  "version": "0.13.0",
   "description": "Dependency-aware service lifecycle manager with stateless tool invocation",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,6 +16,6 @@
   },
   "devDependencies": {
     "typescript": "^6.0.3",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.9"
   }
 }

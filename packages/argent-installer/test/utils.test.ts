@@ -527,13 +527,15 @@ describe("isSkillsCliAvailable", () => {
     execSyncMock.mockReset();
   });
 
-  it("returns true when `npx --no-install skills --version` exits successfully", () => {
+  it("probes `npx --force --no-install skills --version` and returns true on success", () => {
     execSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
 
     expect(isSkillsCliAvailable()).toBe(true);
     expect(execSyncMock).toHaveBeenCalledTimes(1);
     const [cmd] = execSyncMock.mock.calls[0]!;
-    expect(cmd).toBe("npx --no-install skills --version");
+    // `--force` softens the host project's npm engine gate so the probe can't
+    // hard-fail with EBADDEVENGINES in a devEngines-pinned repo (#298).
+    expect(cmd).toBe("npx --force --no-install skills --version");
   });
 
   it("returns false when the probe throws (skills CLI not in npx cache)", () => {

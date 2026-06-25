@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { getFlowPath, getActiveFlow, appendStep } from "./flow-utils";
+import { getActiveFlow, appendStepToActiveFlow, type FlowSavedTo } from "./flow-utils";
 
 const zodSchema = z.object({
   message: z.string().describe("Message to echo when the flow is replayed"),
@@ -8,7 +8,7 @@ const zodSchema = z.object({
 
 export const flowInsertEchoTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { message: string; flowFile: string }
+  { message: string; flowFile: string; savedTo: FlowSavedTo }
 > = {
   id: "flow-add-echo",
   description: `Record an echo step in the active flow. Echo steps print a message when the flow is replayed — useful as labels between tool calls.
@@ -18,9 +18,8 @@ Returns { message, flowFile }. Fails if no active flow recording is in progress.
   services: () => ({}),
   async execute(_services, params) {
     const flowName = getActiveFlow();
-    const filePath = getFlowPath(flowName);
 
-    const flowFile = await appendStep(filePath, {
+    const { flowFile, savedTo } = await appendStepToActiveFlow({
       kind: "echo",
       message: params.message,
     });
@@ -28,6 +27,7 @@ Returns { message, flowFile }. Fails if no active flow recording is in progress.
     return {
       message: `Echo added to "${flowName}" flow`,
       flowFile,
+      savedTo,
     };
   },
 };

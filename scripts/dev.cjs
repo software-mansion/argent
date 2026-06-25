@@ -61,7 +61,9 @@ async function waitForHttp(url, timeoutMs = 20_000) {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(1000) });
       if (res.ok) return true;
-    } catch {}
+    } catch {
+      /* not up yet — keep polling until the deadline */
+    }
     await new Promise((r) => setTimeout(r, 400));
   }
   return false;
@@ -137,16 +139,20 @@ console.log("✓ Dispatcher TypeScript built\n");
 
 // Copy the simulator-server binary for the current host platform into the
 // platform-keyed subdir the runtime resolver looks at. Mirrors bundle-tools.cjs
-// but only for `process.platform` — dev iterations don't need every host's
-// binary alongside.
-const BIN_DIR = path.join(ARGENT_PKG, "bin", process.platform);
-const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", process.platform, "simulator-server");
+// but only for the current host's key — dev iterations don't need every
+// host's binary alongside. The key mirrors hostPlatformKey() in
+// @argent/native-devtools-ios (process.platform, except "linux-arm64" on
+// arm64 Linux).
+const HOST_PLATFORM_KEY =
+  process.platform === "linux" && process.arch === "arm64" ? "linux-arm64" : process.platform;
+const BIN_DIR = path.join(ARGENT_PKG, "bin", HOST_PLATFORM_KEY);
+const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", HOST_PLATFORM_KEY, "simulator-server");
 const BIN_DEST = path.join(BIN_DIR, "simulator-server");
 fs.mkdirSync(BIN_DIR, { recursive: true });
 if (fs.existsSync(BIN_SRC)) {
   fs.copyFileSync(BIN_SRC, BIN_DEST);
   fs.chmodSync(BIN_DEST, 0o755);
-  console.log(`✓ Copied simulator-server binary (${process.platform})`);
+  console.log(`✓ Copied simulator-server binary (${HOST_PLATFORM_KEY})`);
 } else {
   console.warn(
     `⚠ simulator-server binary not found at ${BIN_SRC} — gestures won't work. ` +
@@ -196,7 +202,9 @@ function restoreMcpEntry(configPath, originalEntry, existedBefore) {
   if (!existedBefore && Object.keys(config).length === 0) {
     try {
       fs.unlinkSync(configPath);
-    } catch {}
+    } catch {
+      /* file already absent — nothing to remove */
+    }
     return;
   }
 
@@ -261,7 +269,9 @@ function cleanup() {
   }
   try {
     fs.unlinkSync(STATE_FILE);
-  } catch {}
+  } catch {
+    /* state file already absent — nothing to remove */
+  }
 
   // Restore editor configs
   restoreMcpEntry(CLAUDE_JSON, originalArgentEntry, claudeConfigExists);
@@ -295,7 +305,9 @@ async function main() {
   }
   try {
     fs.unlinkSync(STATE_FILE);
-  } catch {}
+  } catch {
+    /* state file already absent — nothing to remove */
+  }
 
   // ── Step 6: Start tool-server from source ──────────────────────────────────
 

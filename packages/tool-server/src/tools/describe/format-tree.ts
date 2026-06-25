@@ -41,6 +41,16 @@ const CONTENT_ROLES = new Set([
   "AXAdjustable",
 ]);
 
+// Vega UIToolkit roles (lowercase, distinct from iOS AX* / Android's
+// capitalised names). The toolkit emits these as leaves (e.g. a poster `image`
+// or a label `text`); treating them as content keeps undecorated leaves from
+// being dropped by the nested renderer's content gate. Kept *separate* from the
+// shared CONTENT_ROLES — these generic lowercase roles also occur on Chromium
+// (an undecorated SVG `<text>`/`<image>`, `role="image"`), where adding them to
+// the shared set would print previously-pruned empty lines. They apply only to
+// the vega-automation source.
+const VEGA_CONTENT_ROLES = new Set([...CONTENT_ROLES, "button", "text", "image"]);
+
 function clampFinite(n: number): number {
   return Number.isFinite(n) ? n : 0;
 }
@@ -74,6 +84,8 @@ function formatFlags(n: DescribeNode): string {
   if (n.longClickable) flags.push("long-clickable");
   if (n.scrollable) flags.push("scrollable");
   if (n.checkable) flags.push(n.checked ? "checked" : "checkable");
+  if (n.focused) flags.push("focused");
+  if (n.selected) flags.push("selected");
   if (n.disabled) flags.push("disabled");
   if (n.password) flags.push("password");
   if (typeof n.scrollHidden === "number" && n.scrollHidden > 0) {
@@ -100,8 +112,8 @@ function hasContent(n: DescribeNode): boolean {
 // role check is what keeps unlabeled `AXImage`s and icon-only `AXButton`s on
 // screen — without it, anything missing `accessibilityLabel` on iOS would
 // silently vanish from describe (the bug the user originally flagged).
-function shouldEmit(n: DescribeNode): boolean {
-  return hasContent(n) || CONTENT_ROLES.has(n.role);
+function shouldEmit(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean {
+  return hasContent(n) || contentRoles.has(n.role);
 }
 
 function formatLine(n: DescribeNode, indent: number): string {
@@ -125,9 +137,9 @@ function formatLine(n: DescribeNode, indent: number): string {
 
 // ---- flat renderer (ax-service, native-devtools) ----
 
-function renderFlat(root: DescribeNode): string[] {
+function renderFlat(root: DescribeNode, contentRoles: ReadonlySet<string>): string[] {
   return root.children
-    .filter(shouldEmit)
+    .filter((n) => shouldEmit(n, contentRoles))
     .slice()
     .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
     .map((n) => formatLine(n, 1));
@@ -135,7 +147,7 @@ function renderFlat(root: DescribeNode): string[] {
 
 // ---- nested renderer (uiautomator) ----
 
-function renderNested(root: DescribeNode): string[] {
+function renderNested(root: DescribeNode, contentRoles: ReadonlySet<string>): string[] {
   const lines: string[] = [];
   // Iterative DFS so very deep Compose / RN trees don't risk a stack overflow.
   // Start at the root's children (depth 1) — the root itself is already
@@ -148,7 +160,7 @@ function renderNested(root: DescribeNode): string[] {
   }
   while (stack.length > 0) {
     const { node, depth } = stack.pop()!;
-    if (shouldEmit(node) || node.children.length > 0) {
+    if (shouldEmit(node, contentRoles) || node.children.length > 0) {
       lines.push(formatLine(node, depth));
     }
     for (let i = node.children.length - 1; i >= 0; i--) {
@@ -163,22 +175,48 @@ export interface FormatDescribeOptions {
 }
 
 export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
+  // iOS providers (ax-service, native-devtools) emit a flat list under a
+  // synthetic root, so the flat renderer is correct. Sources that produce
+  // real parent/child trees (uiautomator / android-devtools on Android,
+  // cdp-dom on Chromium, vega-automation on Vega) use the nested renderer so
+  // descendants beyond depth 1 are visible.
   const mode: "flat" | "nested" =
-    opts.source === "uiautomator" || opts.source === "android-devtools" ? "nested" : "flat";
+    opts.source === "uiautomator" ||
+    opts.source === "android-devtools" ||
+    opts.source === "cdp-dom" ||
+    opts.source === "vega-automation"
+      ? "nested"
+      : "flat";
+  const isVega = opts.source === "vega-automation";
   const header: string[] = [];
   header.push(`Source: ${opts.source}`);
   header.push(`Mode: ${mode}`);
   header.push(
-    "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), " +
-      "not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, " +
-      "which expect this same space. " +
-      "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, " +
-      "tap_y = frame.y + frame.height / 2."
+    "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels."
   );
+  if (isVega) {
+    header.push(
+      "Vega is remote-driven, not touch — there is no tap. Use the frames as spatial hints to plan " +
+        "D-pad moves with the `tv-remote` tool: compare the target's frame to the cursor's — the " +
+        "`[focused]` element, or `[selected]` when no element reports `[focused]` (the toolkit often " +
+        "marks the highlighted item `selected` while `focused` stays false) — " +
+        'and count rows/columns to build the path (e.g. one row down and two columns right → ["down","right","right","select"]).'
+    );
+  } else {
+    header.push(
+      "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
+    );
+    header.push(
+      "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."
+    );
+  }
   header.push("");
   header.push(`ROOT  ${root.role} ${fmtFrame(root.frame)}`);
   header.push("");
 
-  const body = mode === "flat" ? renderFlat(root) : renderNested(root);
+  // Vega's lowercase toolkit roles count as content only for its own source; on
+  // every other source the shared CONTENT_ROLES applies unchanged.
+  const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
+  const body = mode === "flat" ? renderFlat(root, contentRoles) : renderNested(root, contentRoles);
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
 }

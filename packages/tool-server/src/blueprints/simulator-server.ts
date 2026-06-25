@@ -1,7 +1,10 @@
 import { spawn, ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import {
+  FAILURE_CODES,
+  FailureError,
   TypedEventEmitter,
+  subprocessFailureMetadata,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceInstance,
@@ -57,9 +60,21 @@ export interface SimulatorServerApi {
 // per-tool zod schemas and the /preview device-list check.
 const SAFE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
+/**
+ * The simulator-server subcommand that drives a given device. iOS simulators and
+ * Android emulators each have their own controller; a physical Android phone is
+ * a third controller (`android_device`) that runs the screen-sharing agent over
+ * adb and decodes its H264 stream, so it is selected by `kind === "device"`
+ * rather than by platform alone.
+ */
+function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_device" {
+  if (device.platform === "ios") return "ios";
+  return device.kind === "device" ? "android_device" : "android";
+}
+
 function spawnSimulatorServerProcess(
   udid: string,
-  platform: "ios" | "android"
+  subcommand: "ios" | "android" | "android_device"
 ): Promise<{
   proc: ChildProcess;
   apiUrl: string;
@@ -72,7 +87,7 @@ function spawnSimulatorServerProcess(
   }
   const { BINARY_PATH, BINARY_DIR } = getPaths();
   return new Promise((resolve, reject) => {
-    const args = [platform, "--id", udid];
+    const args = [subcommand, "--id", udid];
 
     const proc = spawn(BINARY_PATH, args, {
       cwd: BINARY_DIR,
@@ -136,17 +151,60 @@ function spawnSimulatorServerProcess(
       process.stderr.write(`[sim ${udidTag}] ${data}`);
     });
 
-    proc.on("exit", () => {
-      settle(() => reject(new Error(`simulator-server exited with code before becoming ready`)));
+    proc.on("exit", (code, signal) => {
+      settle(() =>
+        reject(
+          new FailureError("simulator-server exited with code before becoming ready", {
+            error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_EXITED,
+            failure_stage: "simulator_server_spawn_ready",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            failure_command: "simulator_server",
+            ...(typeof code === "number" ? { failure_exit_code: code } : {}),
+            ...(signal === "SIGABRT" ||
+            signal === "SIGHUP" ||
+            signal === "SIGINT" ||
+            signal === "SIGKILL" ||
+            signal === "SIGQUIT" ||
+            signal === "SIGTERM"
+              ? { failure_signal: signal }
+              : {}),
+          })
+        )
+      );
     });
 
     proc.on("error", (err) => {
-      settle(() => reject(err));
+      settle(() =>
+        reject(
+          new FailureError(
+            err instanceof Error ? err.message : String(err),
+            {
+              error_code: FAILURE_CODES.SIMULATOR_SERVER_PROCESS_ERROR,
+              failure_stage: "simulator_server_spawn_process",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              ...subprocessFailureMetadata(err, "simulator_server"),
+            },
+            { cause: err instanceof Error ? err : new Error(String(err)) }
+          )
+        )
+      );
     });
 
     const timer = setTimeout(() => {
       settle(
-        () => reject(new Error("Timed out waiting for simulator-server to become ready")),
+        () =>
+          reject(
+            new FailureError("Timed out waiting for simulator-server to become ready", {
+              error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_TIMEOUT,
+              failure_stage: "simulator_server_spawn_ready",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              failure_command: "simulator_server",
+              failure_signal: "SIGKILL",
+            })
+          ),
         () => proc.kill()
       );
     }, READY_TIMEOUT_MS);
@@ -161,34 +219,63 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
   async factory(_deps, _payload, options) {
     const opts = options as unknown as SimulatorServerFactoryOptions | undefined;
     if (!opts?.device) {
-      throw new Error(
+      throw new FailureError(
         `${SIMULATOR_SERVER_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use simulatorServerRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`
+          `Use simulatorServerRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_SERVER_FACTORY_OPTIONS_MISSING,
+          failure_stage: "simulator_server_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 
     const { device } = opts;
     if (typeof device.id !== "string" || device.id.length === 0) {
-      throw new Error(
-        `${SIMULATOR_SERVER_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`
+      throw new FailureError(
+        `${SIMULATOR_SERVER_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_SERVER_DEVICE_ID_INVALID,
+          failure_stage: "simulator_server_factory_device_id",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 
     if (device.platform === "ios") {
       await ensureAutomationEnabled(device.id).catch(() => {});
-    } else {
+    } else if (device.platform === "android") {
+      // Both the emulator and the physical-device controller talk to the target
+      // through adb (gRPC bridge / screen-sharing agent respectively).
       await ensureDep("adb");
+    } else {
+      // The simulator-server binary only knows iOS and Android. Other platforms
+      // (Chromium) have their own blueprints (chromium-cdp); reaching this
+      // factory with one means a tool's services() wired the wrong ref.
+      throw new Error(
+        `${SIMULATOR_SERVER_NAMESPACE}.factory does not support platform "${device.platform}". Use the platform-specific service blueprint instead.`
+      );
     }
 
     const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
       device.id,
-      device.platform
+      subcommandForDevice(device)
     );
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
     proc.on("exit", (code) => {
-      events.emit("terminated", new Error(`Process exited with code ${code}`));
+      events.emit(
+        "terminated",
+        new FailureError(`Process exited with code ${code}`, {
+          error_code: FAILURE_CODES.SIMULATOR_SERVER_TERMINATED,
+          failure_stage: "simulator_server_process_exit",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        })
+      );
     });
     proc.on("error", (err) => {
       events.emit("terminated", err);

@@ -46,3 +46,27 @@ export {
   type ParsedLinkUrl,
   type ParsedLinkTarget,
 } from "./link-config.js";
+
+export {
+  materializeArtifacts,
+  isArtifactHandle,
+  getDeviceIdFromArgs,
+  artifactsRoot,
+  ARTIFACT_MARKER,
+  type ArtifactHandle,
+  type MaterializeContext,
+  type MaterializedImage,
+} from "./artifacts.js";
+
+export {
+  prepareFileInputs,
+  applyClientFileDirectives,
+  FILE_INPUT_MARKER,
+  CLIENT_FILE_MARKER,
+  type FileInputSpec,
+  type FileInputKind,
+  type FileInputWire,
+  type ClientFileDirective,
+  type PrepareFileInputsOptions,
+  type AppliedClientFiles,
+} from "./file-inputs.js";

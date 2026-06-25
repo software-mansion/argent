@@ -1,8 +1,11 @@
 import { Registry } from "@argent/registry";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
+import { chromiumCdpBlueprint } from "../blueprints/chromium-cdp";
+import { chromiumJsRuntimeDebuggerBlueprint } from "../blueprints/chromium-js-runtime-debugger";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
@@ -22,12 +25,15 @@ import { openUrlTool } from "../tools/open-url";
 import { screenshotTool } from "../tools/screenshot";
 import { gestureTapTool } from "../tools/gesture-tap";
 import { gestureSwipeTool } from "../tools/gesture-swipe";
+import { gestureScrollTool } from "../tools/gesture-scroll";
+import { gestureDragTool } from "../tools/gesture-drag";
 import { gestureCustomTool } from "../tools/gesture-custom";
 import { gesturePinchTool } from "../tools/gesture-pinch";
 import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { keyboardTool } from "../tools/keyboard";
 import { rotateTool } from "../tools/rotate";
+import { tvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { debuggerStatusTool } from "../tools/debugger/debugger-status";
@@ -39,6 +45,7 @@ import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
 import { createDescribeTool } from "../tools/describe";
+import { createAwaitUiElementTool } from "../tools/await-ui-element";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
 import { createReactProfilerStatusTool } from "../tools/profiler/react/react-profiler-status";
@@ -69,9 +76,18 @@ import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-dat
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
 import { screenshotDiffTool } from "../tools/screenshot-diff";
+import { createProposeVariantTool } from "../tools/variants/propose-variant";
+import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
+import { chromiumTabsTool } from "../tools/chromium-tabs";
+import { chromiumCookiesTool } from "../tools/chromium-cookies";
+import { chromiumStorageTool } from "../tools/chromium-storage";
 
 export function createRegistry(): Registry {
-  const registry = new Registry();
+  // Inject the real feature-flag check so the gate is enforced for EVERY
+  // dispatch path (flow-execute, flow-add-step, run-sequence) — not only the
+  // HTTP edge in http.ts. Re-read per invocation, so `argent enable/disable
+  // <flag>` takes effect without restarting the long-lived tool-server.
+  const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
@@ -81,6 +97,8 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
+  registry.registerBlueprint(chromiumCdpBlueprint);
+  registry.registerBlueprint(chromiumJsRuntimeDebuggerBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
@@ -91,13 +109,19 @@ export function createRegistry(): Registry {
   registry.registerTool(screenshotTool);
   registry.registerTool(screenshotDiffTool);
   registry.registerTool(gestureTapTool);
+  registry.registerTool(chromiumTabsTool);
+  registry.registerTool(chromiumCookiesTool);
+  registry.registerTool(chromiumStorageTool);
   registry.registerTool(gestureSwipeTool);
+  registry.registerTool(gestureScrollTool);
+  registry.registerTool(gestureDragTool);
   registry.registerTool(gestureCustomTool);
   registry.registerTool(gesturePinchTool);
   registry.registerTool(gestureRotateTool);
   registry.registerTool(buttonTool);
   registry.registerTool(keyboardTool);
   registry.registerTool(rotateTool);
+  registry.registerTool(tvRemoteTool);
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(debuggerStatusTool);
@@ -109,6 +133,7 @@ export function createRegistry(): Registry {
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
   registry.registerTool(createDescribeTool(registry));
+  registry.registerTool(createAwaitUiElementTool(registry));
   registry.registerTool(createReactProfilerStartTool(registry));
   registry.registerTool(createReactProfilerStopTool(registry));
   registry.registerTool(createReactProfilerStatusTool(registry));
@@ -150,6 +175,16 @@ export function createRegistry(): Registry {
   // System tools
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
+
+  // Variant proposal tools (non-blocking propose + single blocking await).
+  // Both declare `featureFlag: "argent-lens"`, so the HTTP layer
+  // (http.ts) hides them from GET /tools and rejects invocation when the flag
+  // is off — re-checked on every request, so `argent enable/disable
+  // argent-lens` takes effect on the next tools/list WITHOUT restarting
+  // the long-lived tool-server. Registered unconditionally; the flag gates at
+  // the exposure boundary, not at registration.
+  registry.registerTool(createProposeVariantTool(registry));
+  registry.registerTool(awaitUserSelectionTool);
 
   return registry;
 }

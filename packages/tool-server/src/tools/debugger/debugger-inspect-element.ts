@@ -4,6 +4,7 @@ import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { makeInspectScript } from "../../utils/debugger/scripts/inspect-at-point";
 import { shouldSkip, isHardSkip } from "../../utils/debugger/skip-rules";
+import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 
 export interface InspectItem {
   name: string;
@@ -11,6 +12,16 @@ export interface InspectItem {
   code: string | null;
   skipped?: boolean;
   skipReason?: string;
+}
+
+// A raw bundle URL (e.g. http://localhost:8081/index.bundle) is not an openable
+// source: readSourceFragment rejects it and `code` stays null. The symbolication
+// fallback assigns such a URL as `source` when Metro cannot map a frame, so for
+// skip-filter purposes it must count as "no source" — otherwise every framework
+// wrapper it touches would survive Pass 1 / Pass 3 and flood the result in
+// exactly the symbolication-failure mode the fallback exists to handle.
+function hasRealSource(item: InspectItem): boolean {
+  return item.source !== null && !/^https?:\/\//.test(item.source.file);
 }
 
 /**
@@ -57,7 +68,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
       skipFiltered.push(item);
       continue;
     }
-    const hasSource = item.source !== null;
+    const hasSource = hasRealSource(item);
     if (i > 0 && !hasSource && (isHardSkip(item.name) || shouldSkip(item.name))) {
       if (includeSkipped) {
         skipFiltered.push(skip(item, "skip-rule:no-source"));
@@ -97,7 +108,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
       result.push(item);
       continue;
     }
-    if (keptCount > 0 && item.name === "View" && item.source === null) {
+    if (keptCount > 0 && item.name === "View" && !hasRealSource(item)) {
       if (includeSkipped) {
         result.push(skip(item, "anonymous-view"));
       }
@@ -174,6 +185,11 @@ Set resolveSourceMaps to false to skip symbolication and get raw bundled locatio
 Set includeSkipped=true to see filtered items annotated with skip reasons.
 Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
   zodSchema,
+  // RN-only: uses React Native's internal getInspectorDataForViewAtPoint and
+  // Metro's /symbolicate endpoint. Chromium's CDP has DOM.getNodeForLocation
+  // for "what's here?" but the source-map flow would need a complete rewrite —
+  // out of scope for this port.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
@@ -224,6 +240,12 @@ Use when you need the source file and line for a component at a tap coordinate. 
             if (resolved) {
               source = resolved;
               code = await api.sourceResolver.readSourceFragment(resolved, params.contextLines);
+            } else {
+              source = {
+                file: item.frame.file,
+                line: item.frame.line,
+                column: item.frame.col,
+              };
             }
           } else {
             source = {

@@ -138,6 +138,25 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(spawnMock.mock.calls[0]![1]).toEqual(["android", "--id", serial]);
   });
 
+  it("spawns the `android_device` subcommand for a physical Android device", async () => {
+    // A physical phone (kind 'device') is driven by a different simulator-server
+    // controller than an emulator — the screen-sharing-agent path. The blueprint
+    // selects it by kind, so the rest of the tool surface stays identical.
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const serial = "HT82A0203045";
+    const device: DeviceInfo = { id: serial, platform: "android", kind: "device" };
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55559);
+    await factoryPromise;
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0]![1]).toEqual(["android_device", "--id", serial]);
+  });
+
   it("trusts the supplied DeviceInfo and does not reclassify the id", async () => {
     // Single-source-of-truth: the blueprint must not run resolveDevice itself.
     // If a caller passes an Android device whose id happens to look like an

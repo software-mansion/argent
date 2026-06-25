@@ -74,7 +74,7 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    - First call `xctrace export --toc` to discover what schemas the trace actually contains.
    - Pick the first match from `["time-profile", "cpu-profile", "time-sample"]` for CPU.
    - Fall back to brute-forcing each candidate if TOC parsing fails.
-   - For Leaks, append `--hal` on `xctrace` ≥ 15 (required by newer xctrace versions for the leaks export); retry without the flag on failure for backward compatibility.
+   - For Leaks, a single `xctrace export --xpath` of the `Leaks` track detail — no extra flags.
 3. Three XMLs land next to the `.trace` bundle:
    - `<base>_raw_cpu.xml` — `time-profile` table
    - `<base>_raw_hangs.xml` — `potential-hangs` table
@@ -116,7 +116,7 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 ### Stage 1 — Correlate (`pipeline/01-correlate.ts`)
 
 - **Hang ↔ CPU correlation.** For each hang, filter CPU samples whose `timestampNs` ∈ `[startNs, startNs + durationNs]`. Within that window, count the **dominant function** of every sample and the **app call chain** (system + hex frames stripped). Top 5 functions and top 3 chains attach to the hang. Their timestamps are also returned in `hangSampleTimestamps` so Stage 2 can flag overlapping CPU hotspots.
-- **Leak aggregation.** Group raw leaks by `objectType`, summing `sizeBytes * count`. Sorted by total size descending. (Leaks have no timestamps, so they cannot be correlated with CPU samples — they are reported independently and always RED.)
+- **Leak aggregation.** Group raw leaks by `objectType`, summing `sizeBytes * count`. Attributed leaks (a resolved responsible frame) sort first, then by total size descending. (Leaks have no timestamps, so they cannot be correlated with CPU samples — they are reported independently.) Severity follows attribution: a resolved responsible frame ⇒ RED, the `<Call stack limit reached>` sentinel under `--attach` ⇒ a low-confidence YELLOW (see `isLeakAttributed`).
 - Hang severity is classified from the type string: contains `severe` or equals `hang` ⇒ RED; `microhang` ⇒ YELLOW.
 
 ### Stage 2 — Aggregate CPU (`pipeline/02-aggregate.ts`)
@@ -136,7 +136,7 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 
 ## 6. What the report contains
 
-`renderIosProfilerReport` produces a markdown document with these sections:
+`renderNativeProfilerReport` produces a markdown document with these sections:
 
 1. **Header** — trace filename, platform, timestamp, any export warnings.
 2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks).
@@ -189,22 +189,21 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 
 - **Hang ↔ Commit correlations** — top overlapping commit per hang with its root-cause component, top components, JS CPU hotspots, and native CPU "suspects".
 - **Hangs without React commit match** — likely pure native work.
-- **Memory leaks** — heuristically flagged when `objectType` or `responsibleFrame` matches a recently-mounted React component name.
+- **Memory leaks** — same attribution split as the analyze report: attributed leaks are listed individually (and heuristically tied to a recently-mounted React component when `objectType`/`responsibleFrame` matches its name), while unattributed leaks collapse into a single low-confidence YELLOW caveat.
 
 ---
 
 ## 10. Severity rules at a glance
 
-| Category    | Condition                               | Severity     |
-| ----------- | --------------------------------------- | ------------ |
-| CPU hotspot | wall-time > 15 %                        | RED          |
-| CPU hotspot | wall-time 3 – 15 %                      | YELLOW       |
-| CPU hotspot | wall-time < 3 %                         | filtered out |
-| UI hang     | type contains `severe` or equals `hang` | RED          |
-| UI hang     | `microhang`                             | YELLOW       |
-| Memory leak | any                                     | RED          |
-
-> Note: `argent-native-profiler/SKILL.md` currently documents the YELLOW band as 5–15 %. The implementation uses 3–15 % (`MIN_WEIGHT_PERCENTAGE = 3` in `02-aggregate.ts`). The code is the source of truth.
+| Category    | Condition                                                    | Severity     |
+| ----------- | ------------------------------------------------------------ | ------------ |
+| CPU hotspot | wall-time > 15 %                                             | RED          |
+| CPU hotspot | wall-time 3 – 15 %                                           | YELLOW       |
+| CPU hotspot | wall-time < 3 %                                              | filtered out |
+| UI hang     | type contains `severe` or equals `hang`                      | RED          |
+| UI hang     | `microhang`                                                  | YELLOW       |
+| Memory leak | attributed (resolved responsible frame)                      | RED          |
+| Memory leak | unattributed (`<Call stack limit reached>` under `--attach`) | YELLOW       |
 
 ---
 
@@ -214,7 +213,8 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 - **`xctrace` overhead.** Hermes runtime internals (`JSLexer`, `JSONEmitter`, etc.) dominating the JS thread usually means profiler overhead, not app work.
 - **Run-to-run variance.** Treat changes < ~15 % across a single run as noise.
 - **Live data variance.** Different API responses change rendering work — record a flow (`argent-create-flow`) for stable before/after comparisons.
-- **xctrace requirement.** Needs Xcode CLT installed (`xcrun xctrace version`). Some commands (`--hal` for leaks) gate on `xctrace ≥ 15`.
+- **xctrace requirement.** Needs Xcode CLT installed (`xcrun xctrace version`).
+- **Leak attribution is limited under `--attach`.** Argent attaches to the already-running app, so the `Leaks`/`Allocations` instruments have no malloc-stack history. On the simulator this means leaked objects come back with `responsible-frame = "<Call stack limit reached>"`, an empty library, and the list is dominated by untracked system allocations (`Malloc N Bytes`, `xpc_*`). Treat the simulator leak list as a coarse signal, not a set of attributed app bugs — actionable stacks need malloc stack logging enabled at launch.
 
 ---
 

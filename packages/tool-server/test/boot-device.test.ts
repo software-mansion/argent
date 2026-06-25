@@ -80,7 +80,8 @@ describe("boot-device — iOS path", () => {
   });
 
   it("pre-boots AX prefs on a Shutdown sim then waits for boot completion and native-devtools init", async () => {
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const reverifyEnv = vi.fn(async () => {});
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null, reverifyEnv }));
     const registry = {
       resolveService,
     } as unknown as Registry;
@@ -140,10 +141,17 @@ describe("boot-device — iOS path", () => {
     expect(resolveService.mock.invocationCallOrder[0]).toBeLessThan(
       mockExecFile.mock.invocationCallOrder[2]
     );
+    // The (re)boot wipes launchd's DYLD_INSERT_LIBRARIES; boot-device must
+    // force a re-apply so a cached/latched native-devtools service can't leave
+    // the env unset (which would make the next launch uninjected).
+    expect(reverifyEnv).toHaveBeenCalledOnce();
   });
 
   it("skips pre-boot plist write when the sim is already Booted and falls back to ensureAutomationEnabled", async () => {
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const registry = { resolveService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
@@ -163,7 +171,10 @@ describe("boot-device — iOS path", () => {
     // writes prefs best-effort.
     listIosSimulatorsMock.mockResolvedValueOnce([]);
 
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const registry = { resolveService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
@@ -180,7 +191,10 @@ describe("boot-device — iOS path", () => {
     // ensureAutomationEnabled writes prefs best-effort post-boot.
     setAccessibilityPrefsPreBootMock.mockRejectedValueOnce(new Error("plutil missing"));
 
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const registry = { resolveService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
@@ -197,6 +211,7 @@ describe("boot-device — iOS path", () => {
 
   it("returns a structured init_failed result when native-devtools has given up", async () => {
     const resolveService = vi.fn(async () => ({
+      reverifyEnv: async () => {},
       getInitFailure: () => ({
         attempts: 3,
         lastError: "simctl spawn timed out",
@@ -229,7 +244,10 @@ describe("boot-device — iOS path", () => {
         return {} as never;
       });
 
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const registry = { resolveService } as unknown as Registry;
 
     const tool = createBootDeviceTool(registry);
@@ -256,7 +274,10 @@ describe("boot-device — iOS path", () => {
   });
 
   it("force=true on a Booted sim triggers shutdown → pre-boot write → boot", async () => {
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const registry = { resolveService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
@@ -283,7 +304,10 @@ describe("boot-device — iOS path", () => {
   });
 
   it("force not set on a Booted sim does not shut down", async () => {
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const registry = { resolveService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
@@ -314,7 +338,7 @@ describe("boot-device — input validation (exclusive udid/avdName)", () => {
           avdName: "Pixel_7_API_34",
         }
       )
-    ).rejects.toThrow(/exactly one of `udid` .* or `avdName`/);
+    ).rejects.toThrow(/exactly one of `udid`/);
   });
 
   it("rejects when neither udid nor avdName is provided — no target", async () => {

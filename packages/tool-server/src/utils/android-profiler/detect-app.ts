@@ -1,0 +1,160 @@
+import { adbShell, shellQuote } from "../adb";
+
+const DETECT_TIMEOUT_MS = 10_000;
+
+/**
+ * Validate an explicitly-provided `app_process` before recording.
+ *
+ * Android Perfetto scopes the `linux.perf` data source to a cmdline, but it
+ * does NOT verify that cmdline exists — a typo or a not-installed package
+ * silently yields a trace with zero samples, whose failure only surfaces
+ * (misattributed to "non-debuggable / missing <profileable>") at analyze time,
+ * minutes later. Fail fast here instead, with the real reason.
+ *
+ * Accepts the target if it is either an installed package or a currently
+ * running process. adb/device errors propagate (they are not "not found").
+ */
+export async function validateAndroidAppProcess(serial: string, appProcess: string): Promise<void> {
+  let packagesOut: string;
+  try {
+    packagesOut = await adbShell(serial, "pm list packages", { timeoutMs: DETECT_TIMEOUT_MS });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not verify app_process \`${appProcess}\` on ${serial} (adb error: ${msg}). ` +
+        `Check the device is booted and responsive, then retry.`,
+      { cause: err }
+    );
+  }
+  if (parseUserPackages(packagesOut).has(appProcess)) return;
+
+  // Not an installed package — maybe a bare process name that is running.
+  // `pidof` exits non-zero when nothing matches; `|| true` makes that an empty
+  // stdout so a genuine adb/device failure still propagates (per this
+  // function's contract) instead of being misread as "process not running".
+  let pidOut: string;
+  try {
+    pidOut = await adbShell(serial, `pidof ${shellQuote(appProcess)} || true`, {
+      timeoutMs: DETECT_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not verify app_process \`${appProcess}\` on ${serial} (adb error: ${msg}). ` +
+        `Check the device is booted and responsive, then retry.`,
+      { cause: err }
+    );
+  }
+  if (pidOut.trim().length > 0) return;
+
+  throw new Error(
+    `app_process \`${appProcess}\` was not found on ${serial}: no installed package and no running ` +
+      `process matches that name. Pass an installed package (see \`adb shell pm list packages\`), ` +
+      `or omit app_process to auto-detect the foreground app.`
+  );
+}
+
+/**
+ * Auto-detect the foreground app on an Android device. Mirrors the iOS
+ * `detectRunningApp` contract in semantics: returns a single package name, or
+ * fails fast with an actionable message when zero or multiple user apps match.
+ *
+ * Strategy:
+ *   1. `dumpsys activity activities` → parse ResumedActivity / topResumedActivity
+ *      lines for the foreground package.
+ *   2. Cross-check against `pm list packages -3` (user-installed apps only) so
+ *      a system overlay (launcher, system UI) cannot masquerade as the target.
+ */
+export async function detectAndroidRunningApp(serial: string): Promise<string> {
+  let activitiesOut: string;
+  try {
+    activitiesOut = await adbShell(serial, "dumpsys activity activities", {
+      timeoutMs: DETECT_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to enumerate running activities on ${serial} within ${DETECT_TIMEOUT_MS} ms. ` +
+        `Verify the device is booted and responsive, then retry. Underlying error: ${msg}`,
+      { cause: err }
+    );
+  }
+
+  const candidates = extractResumedPackages(activitiesOut);
+  if (candidates.size === 0) {
+    throw new Error(
+      "No foreground app detected via `dumpsys activity activities`. " +
+        "Launch the app first using `launch-app`, then retry."
+    );
+  }
+
+  let userPackagesOut: string;
+  try {
+    userPackagesOut = await adbShell(serial, "pm list packages -3", {
+      timeoutMs: DETECT_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to list user-installed packages on ${serial} within ${DETECT_TIMEOUT_MS} ms. ` +
+        `Underlying error: ${msg}`,
+      { cause: err }
+    );
+  }
+
+  const userPackages = parseUserPackages(userPackagesOut);
+  const userResumed = [...candidates].filter((pkg) => userPackages.has(pkg));
+
+  if (userResumed.length === 0) {
+    throw new Error(
+      `Foreground activity belongs to a system package, not a user app. Resumed candidates were: [${[...candidates].join(", ")}]. ` +
+        `Launch your app via \`launch-app\`, then retry.`
+    );
+  }
+  if (userResumed.length > 1) {
+    throw new Error(
+      `Multiple user apps are in the foreground:\n  - ${userResumed.join("\n  - ")}\n` +
+        `Specify \`app_process\` with the package name you want to profile.`
+    );
+  }
+  return userResumed[0]!;
+}
+
+/**
+ * Extract the resumed/top-resumed package name(s) from `dumpsys activity activities`
+ * output. The relevant lines look like:
+ *
+ *   ResumedActivity: ActivityRecord{... com.example.app/.MainActivity ...}
+ *   topResumedActivity=ActivityRecord{... com.example.app/.MainActivity ...}
+ *   mResumedActivity: ActivityRecord{... u0 com.example.app/.MainActivity ...}
+ *
+ * We extract the `pkg/Activity` slug, then drop the `/Activity` half.
+ */
+export function extractResumedPackages(output: string): Set<string> {
+  const result = new Set<string>();
+  const lineRe =
+    /(?:ResumedActivity|topResumedActivity|mResumedActivity)[^A-Za-z0-9._]*?ActivityRecord\{[^}]*?\s([A-Za-z_][\w.]*)\/[\w.$]+/g;
+  let m;
+  while ((m = lineRe.exec(output)) !== null) {
+    result.add(m[1]!);
+  }
+  return result;
+}
+
+/**
+ * Parse `pm list packages` output into a Set of package names. Each line has
+ * the shape `package:com.example.app`. Caller-dependent scope: auto-detect
+ * passes `-3` (user-installed only, to reject system overlays) while explicit
+ * app_process validation passes the unfiltered list (an explicit target may
+ * legitimately be any installed package, including a system one).
+ */
+export function parseUserPackages(output: string): Set<string> {
+  const result = new Set<string>();
+  for (const raw of output.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("package:")) continue;
+    const pkg = line.slice("package:".length).trim();
+    if (pkg) result.add(pkg);
+  }
+  return result;
+}

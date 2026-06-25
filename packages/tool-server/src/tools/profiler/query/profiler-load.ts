@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { promises as fs } from "fs";
 import * as path from "path";
-import type { ServiceRef, ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  type ServiceRef,
+  type ToolDefinition,
+} from "@argent/registry";
 import {
   cacheProfilerPaths,
   type ProfilerSessionPaths,
@@ -11,9 +16,11 @@ import {
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
+import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
 
 // session_id is interpolated into on-disk file paths
 // (`react-profiler-${id}_cpu.json`, `native-profiler-${id}_raw_cpu.xml`, …).
@@ -56,6 +63,12 @@ const zodSchema = z.object({
     .describe(
       "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
     ),
+  app_process: z
+    .string()
+    .optional()
+    .describe(
+      "Android package name to use when restoring older load_native .pftrace sessions that do not have a metadata sidecar."
+    ),
 });
 
 async function listSessions(debugDir: string): Promise<string> {
@@ -84,6 +97,27 @@ async function listSessions(debugDir: string): Promise<string> {
       if (!nativeSessions.has(sid)) nativeSessions.set(sid, []);
       nativeSessions.get(sid)!.push(entry);
     }
+  }
+
+  // `nativeSessions` collected every native-profiler-* file regardless of
+  // extension. Classify each session by the platform-specific artifacts it
+  // holds: a `.pftrace` (or its `.metadata.json` sidecar) is Android; an
+  // xctrace `.trace` bundle or `_raw_*.xml` is iOS. A session can legitimately
+  // hold both (iOS + Android captured in the same second share one
+  // discriminator-free session id), so it may appear under BOTH headings —
+  // each listing only its own files — instead of one platform hiding the
+  // other. A lone `-report.md` with no platform artifacts defaults to iOS.
+  const iosSessions = new Map<string, string[]>();
+  const androidSessions = new Map<string, string[]>();
+  for (const [sid, files] of nativeSessions) {
+    const androidFiles = files.filter(
+      (f) => f.endsWith(".pftrace") || f.endsWith(".pftrace.metadata.json")
+    );
+    const iosFiles = files.filter((f) => f.endsWith(".trace") || f.includes("_raw_"));
+    const sharedFiles = files.filter((f) => f.includes("-report.md"));
+    if (androidFiles.length > 0) androidSessions.set(sid, [...androidFiles, ...sharedFiles]);
+    if (iosFiles.length > 0) iosSessions.set(sid, [...iosFiles, ...sharedFiles]);
+    if (androidFiles.length === 0 && iosFiles.length === 0) iosSessions.set(sid, files);
   }
 
   if (reactSessions.size === 0 && nativeSessions.size === 0) {
@@ -119,11 +153,11 @@ async function listSessions(debugDir: string): Promise<string> {
     lines.push("");
   }
 
-  if (nativeSessions.size > 0) {
-    lines.push("### Native Profiler Sessions", "");
+  if (iosSessions.size > 0) {
+    lines.push("### Native Profiler Sessions (iOS)", "");
     lines.push("| Session ID | Files |");
     lines.push("|---|---|");
-    for (const [sid, files] of [...nativeSessions.entries()].sort().reverse()) {
+    for (const [sid, files] of [...iosSessions.entries()].sort().reverse()) {
       const hasCpu = files.some((f) => f.includes("_raw_cpu.xml"));
       const hasHangs = files.some((f) => f.includes("_raw_hangs.xml"));
       const hasLeaks = files.some((f) => f.includes("_raw_leaks.xml"));
@@ -133,6 +167,19 @@ async function listSessions(debugDir: string): Promise<string> {
       if (hasHangs) parts.push("hangs");
       if (hasLeaks) parts.push("leaks");
       if (hasReport) parts.push("report");
+      lines.push(`| \`${sid}\` | ${parts.join(", ")} |`);
+    }
+    lines.push("");
+  }
+
+  if (androidSessions.size > 0) {
+    lines.push("### Native Profiler Sessions (Android)", "");
+    lines.push("| Session ID | Files |");
+    lines.push("|---|---|");
+    for (const [sid, files] of [...androidSessions.entries()].sort().reverse()) {
+      const parts: string[] = [];
+      if (files.some((f) => f.endsWith(".pftrace"))) parts.push("pftrace");
+      if (files.some((f) => f.includes("-report.md"))) parts.push("report");
       lines.push(`| \`${sid}\` | ${parts.join(", ")} |`);
     }
     lines.push("");
@@ -180,9 +227,15 @@ async function loadReactSession(
   }
 
   if (!hasCpu && !hasCommits) {
-    throw new Error(
+    throw new FailureError(
       `No data found for React session "${sessionId}". ` +
-        `Expected files at:\n  ${cpuPath}\n  ${commitsPath}`
+        `Expected files at:\n  ${cpuPath}\n  ${commitsPath}`,
+      {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_load_react_session",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
 
@@ -260,10 +313,49 @@ async function loadReactSession(
 async function loadNativeSession(
   debugDir: string,
   sessionId: string,
-  api: NativeProfilerSessionApi
+  api: NativeProfilerSessionApi,
+  appProcessOverride?: string
 ): Promise<string> {
   assertSafeSessionId(sessionId);
-  // Find exported XML files for this session
+  // Android .pftrace first — the platform field on the resolved session API
+  // tells us which shape to load. If the platform is android but the .pftrace
+  // is missing we fall through to the iOS XML path so the user gets the
+  // "no files found" error.
+  if (api.platform === "android") {
+    const pftrace = path.join(debugDir, `native-profiler-${sessionId}.pftrace`);
+    try {
+      await fs.access(pftrace);
+    } catch {
+      throw new Error(
+        `No native profiler .pftrace found for session "${sessionId}". ` +
+          `Expected file at ${pftrace}`
+      );
+    }
+    const metadata = await readAndroidNativeProfilerMetadata(pftrace);
+    const appProcess = metadata?.appProcess ?? appProcessOverride?.trim();
+    if (!appProcess) {
+      throw new Error(
+        `Android profiler session "${sessionId}" is missing its metadata sidecar. ` +
+          "Retry profiler-load with app_process set to the Android package name used for the recording."
+      );
+    }
+    api.traceFile = pftrace;
+    api.exportedFiles = { pftrace };
+    api.appProcess = appProcess;
+    api.wallClockStartMs = metadata?.wallClockStartMs ?? null;
+    api.parsedData = null;
+    return [
+      `Loaded Android profiler session \`${sessionId}\`.`,
+      "",
+      `- Trace file: \`${pftrace}\``,
+      `- App package: \`${appProcess}\``,
+      "",
+      "Query tools (`profiler-stack-query`) will re-query the .pftrace on demand.",
+      "Run `native-profiler-analyze` to produce a report from this trace.",
+    ].join("\n");
+  }
+
+  // iOS XML path
   const cpuXml = path.join(debugDir, `native-profiler-${sessionId}_raw_cpu.xml`);
   const hangsXml = path.join(debugDir, `native-profiler-${sessionId}_raw_hangs.xml`);
   const leaksXml = path.join(debugDir, `native-profiler-${sessionId}_raw_leaks.xml`);
@@ -296,9 +388,15 @@ async function loadNativeSession(
   }
 
   if (!files.cpu && !files.hangs && !files.leaks) {
-    throw new Error(
+    throw new FailureError(
       `No native profiler XML files found for session "${sessionId}". ` +
-        `Expected files matching native-profiler-${sessionId}_raw_*.xml in ${debugDir}`
+        `Expected files matching native-profiler-${sessionId}_raw_*.xml in ${debugDir}`,
+      {
+        error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
+        failure_stage: "profiler_load_native_session",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
 
@@ -330,9 +428,14 @@ Modes:
 - list: Show all available profiling sessions in the project's debug directory.
 - load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
 - load_native: Re-parse native profiler XML files into memory. Requires session_id and device_id.
+  For Android .pftrace restores, pass app_process for older sessions that do not have a metadata sidecar.
 Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or required XML files are missing from disk.`,
   zodSchema,
+  // Loads Hermes-format React traces or iOS xctrace XML — neither maps onto
+  // Chromium yet. The gate keeps the error close to the call site instead of
+  // letting it surface from inside the trace parser.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => {
     const svcs: Record<string, ServiceRef> = {};
     if (params.mode === "load_native") {
@@ -349,8 +452,14 @@ Fails if the session_id is not found or required XML files are missing from disk
 
       case "load_react": {
         if (!params.session_id) {
-          throw new Error(
-            "load_react mode requires the session_id parameter. Use list mode first."
+          throw new FailureError(
+            "load_react mode requires the session_id parameter. Use list mode first.",
+            {
+              error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+              failure_stage: "profiler_load_params",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
           );
         }
         return loadReactSession(debugDir, params.session_id, params.port, params.device_id);
@@ -358,16 +467,27 @@ Fails if the session_id is not found or required XML files are missing from disk
 
       case "load_native": {
         if (!params.session_id) {
-          throw new Error(
-            "load_native mode requires the session_id parameter. Use list mode first."
+          throw new FailureError(
+            "load_native mode requires the session_id parameter. Use list mode first.",
+            {
+              error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+              failure_stage: "profiler_load_params",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
           );
         }
         const api = services.session as NativeProfilerSessionApi;
-        return loadNativeSession(debugDir, params.session_id, api);
+        return loadNativeSession(debugDir, params.session_id, api, params.app_process);
       }
 
       default:
-        throw new Error(`Unknown mode: ${params.mode}`);
+        throw new FailureError(`Unknown mode: ${params.mode}`, {
+          error_code: FAILURE_CODES.PROFILER_QUERY_MODE_INVALID,
+          failure_stage: "profiler_load_mode",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
     }
   },
 };

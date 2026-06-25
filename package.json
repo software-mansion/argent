@@ -10,16 +10,26 @@
     "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "download:simulator-server": "bash scripts/download-simulator-server.sh",
     "download:native-binaries": "bash scripts/download-native-binaries.sh",
+    "download:trace-processor": "bash scripts/download-trace-processor.sh",
     "build:ios-binaries": "bash packages/native-devtools-ios/scripts/build.sh dev",
     "build:android-binaries": "bash packages/native-devtools-android/scripts/build.sh",
-    "pack": "npm run download:simulator-server && npm run download:native-binaries && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
-    "pack:mcp": "npm run pack",
-    "pack:mcp:local": "npm run download:simulator-server && npm run build:ios-binaries && npm run build:android-binaries && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
+    "pack": "node scripts/pack-mcp.cjs",
+    "pack:mcp": "node scripts/pack-mcp.cjs",
+    "pack:mcp:local": "npm run download:simulator-server && npm run build:ios-binaries && npm run build:android-binaries && npm run download:trace-processor && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
     "dev": "node scripts/dev.cjs",
     "format": "prettier --write .",
-    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json"
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
+    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs",
+    "check:versions": "node scripts/check-workspace-versions.mjs"
   },
   "devDependencies": {
-    "prettier": "^3.8.3"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.5.0",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.4",
+    "semver": "^7.8.0",
+    "typescript-eslint": "^8.61.1"
   }
 }

@@ -65,6 +65,10 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
     }));
+    vi.doMock("../../src/utils/check-deps", () => ({
+      ensureDeps: vi.fn(async () => {}),
+      ensureDep: vi.fn(async () => {}),
+    }));
 
     const { nativeProfilerStartTool: startTool } =
       await import("../../src/tools/profiler/native-profiler/native-profiler-start");
@@ -109,6 +113,10 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
     }));
+    vi.doMock("../../src/utils/check-deps", () => ({
+      ensureDeps: vi.fn(async () => {}),
+      ensureDep: vi.fn(async () => {}),
+    }));
 
     const { nativeProfilerStartTool: startTool } =
       await import("../../src/tools/profiler/native-profiler/native-profiler-start");
@@ -128,8 +136,8 @@ describe("native-profiler-start cold-start retry", () => {
     expect(waitForReady).toHaveBeenCalledTimes(2);
     expect(spawnFn).toHaveBeenCalledTimes(2);
     expect(api.profilingActive).toBe(false);
-    expect(api.xctracePid).toBeNull();
-    expect(api.xctraceProcess).toBeNull();
+    expect(api.capturePid).toBeNull();
+    expect(api.captureProcess).toBeNull();
   });
 
   it("does not retry when xctrace fails with an unrelated error", async () => {
@@ -157,6 +165,10 @@ describe("native-profiler-start cold-start retry", () => {
     }));
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
+    }));
+    vi.doMock("../../src/utils/check-deps", () => ({
+      ensureDeps: vi.fn(async () => {}),
+      ensureDep: vi.fn(async () => {}),
     }));
 
     const { nativeProfilerStartTool: startTool } =

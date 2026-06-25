@@ -1,8 +1,16 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
-import type { Registry, ToolDefinition } from "@argent/registry";
-import { getFlowPath, parseFlow, setActiveProjectRoot, type FlowStep } from "./flow-utils";
-import { sleep } from "../../utils/timing";
+import type { FileInputSpec, Registry, ToolContext, ToolDefinition } from "@argent/registry";
+import {
+  assertSafeFlowName,
+  getFlowPath,
+  parseFlow,
+  setActiveProjectRoot,
+  type FlowStep,
+} from "./flow-utils";
+import { sleepOrAbort } from "../../utils/timing";
+import { invokeSubTool } from "../../utils/sub-invoke";
+import { isUnmetUiWaitResult } from "../await-ui-element";
 
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
@@ -11,6 +19,12 @@ const zodSchema = z.object({
     .describe(
       "Absolute path to the project root directory that contains `.argent/flows/<name>.yaml`."
     ),
+  flow_file: z
+    .string()
+    .optional()
+    .describe(
+      "Path to the flow .yaml as readable by the tool-server. Internal — the argent client derives it from project_root and name automatically; leave unset."
+    ),
   prerequisiteAcknowledged: z
     .boolean()
     .optional()
@@ -18,6 +32,16 @@ const zodSchema = z.object({
       "Set to true to confirm the execution prerequisite has been met. Required when the flow defines an executionPrerequisite."
     ),
 });
+
+/**
+ * The flow YAML lives in the AGENT's project, so it crosses the boundary as a
+ * `file` input: read in place when this host can see it, materialized from the
+ * uploaded content when the tool-server is remote. Either way `flow_file`
+ * arrives as a path this process can read.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+];
 
 type StepResult =
   | { kind: "echo"; message: string }
@@ -47,16 +71,19 @@ echo steps print a message. A tool step may carry \`delayMs: <ms>\` to sleep
 that long before the step runs. Returns the result of every step, including images.
 Use when you want to replay a recorded flow or run a scripted sequence of device actions.
 Fails if the flow file does not exist or a step tool raises an error (execution stops at that step).
+An \`await-ui-element\` step whose condition is not met before its timeout also stops the flow there
+(its later steps were recorded assuming the condition held), so use one to gate a step on a screen transition.
 
 If the flow has an execution prerequisite and prerequisiteAcknowledged is not
 set to true, the tool returns a notice with the prerequisite instead of running.
 Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
     longRunning: true,
     zodSchema,
+    fileInputs,
     services: () => ({}),
-    async execute(_services, params) {
-      setActiveProjectRoot(params.project_root);
-      const filePath = getFlowPath(params.name);
+    async execute(_services, params, ctx?: ToolContext) {
+      const signal = ctx?.signal;
+      const filePath = resolveFlowFilePath(params);
       const fileContent = await fs.readFile(filePath, "utf8");
       const flow = parseFlow(fileContent);
 
@@ -75,17 +102,35 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
       for (let i = 0; i < flow.steps.length; i++) {
         const step = flow.steps[i] as FlowStep;
 
+        // Honour a client disconnect between steps (the HTTP layer aborts
+        // `signal`) — and forward it into each step below so a long step (e.g.
+        // an await-ui-element blocking on a UI condition) is cancelled promptly.
+        if (signal?.aborted) break;
+
         if (step.kind === "echo") {
           steps.push({ kind: "echo", message: step.message });
           continue;
         }
 
-        if (step.delayMs) await sleep(step.delayMs);
+        // Abortable so a disconnect during the pre-step pause stops replay promptly.
+        if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) break;
 
         const toolDef = registry.getTool(step.name);
 
         try {
-          const result = await registry.invokeTool(step.name, step.args);
+          const result = await invokeSubTool(registry, ctx, step.name, step.args);
+          // A gating await-ui-element step that timed out returns { success: false }
+          // instead of throwing. Stop the flow there rather than running the next
+          // step (typically a tap) against a screen that never settled.
+          if (isUnmetUiWaitResult(step.name, result)) {
+            const note = (result as { note?: string }).note;
+            steps.push({
+              kind: "tool",
+              tool: step.name,
+              error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+            });
+            break;
+          }
           steps.push({
             kind: "tool",
             tool: step.name,
@@ -107,4 +152,21 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
       };
     },
   };
+}
+
+/**
+ * Prefer the boundary-resolved `flow_file` (always a path this host can read);
+ * fall back to deriving the path from project_root + name for callers that
+ * predate the file boundary. The name is validated in both branches so an
+ * unsafe name can't reach error messages or the legacy path join.
+ */
+export function resolveFlowFilePath(params: {
+  name: string;
+  project_root: string;
+  flow_file?: string;
+}): string {
+  assertSafeFlowName(params.name);
+  if (params.flow_file) return params.flow_file;
+  setActiveProjectRoot(params.project_root);
+  return getFlowPath(params.name);
 }

@@ -7,6 +7,7 @@ import {
   getProjectSkillLockPath,
   listArgentSkillsInLock,
   listBundledSkills,
+  withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
 
@@ -22,6 +23,13 @@ export interface SkillScopeResult {
   pruned: string[];
   /** First line of the prune error, or null on success. */
   pruneError: string | null;
+}
+
+export interface SkillRefreshTelemetrySummary {
+  scope_count: number;
+  synced_count: number;
+  pruned_count: number;
+  failed_count: number;
 }
 
 interface ScopeSpec {
@@ -84,7 +92,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
 
     if (bundled.size > 0) {
       try {
-        execFileSync("npx", spec.buildAddArgs(primarySource), {
+        execFileSync("npx", withNpmForce(spec.buildAddArgs(primarySource)), {
           stdio: ["ignore", "pipe", "pipe"],
         });
         result.synced = bundled.size;
@@ -94,7 +102,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
             primaryErr instanceof Error ? primaryErr.message.split("\n")[0] : String(primaryErr);
         } else {
           try {
-            execFileSync("npx", spec.buildAddArgs(SKILLS_DIR), {
+            execFileSync("npx", withNpmForce(spec.buildAddArgs(SKILLS_DIR)), {
               stdio: ["ignore", "pipe", "pipe"],
             });
             result.synced = bundled.size;
@@ -110,7 +118,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
 
     if (orphaned.length > 0) {
       try {
-        execFileSync("npx", [...spec.removeArgs, ...orphaned], {
+        execFileSync("npx", withNpmForce([...spec.removeArgs, ...orphaned]), {
           stdio: ["ignore", "pipe", "pipe"],
         });
         result.pruned = orphaned;
@@ -149,4 +157,15 @@ export function formatSkillRefreshSummary(results: readonly SkillScopeResult[]):
     }
   }
   return lines.length > 0 ? lines.join("\n") : null;
+}
+
+export function summarizeSkillRefreshForTelemetry(
+  results: readonly SkillScopeResult[]
+): SkillRefreshTelemetrySummary {
+  return {
+    scope_count: results.length,
+    synced_count: results.reduce((sum, result) => sum + result.synced, 0),
+    pruned_count: results.reduce((sum, result) => sum + result.pruned.length, 0),
+    failed_count: results.filter((result) => result.syncError || result.pruneError).length,
+  };
 }

@@ -127,6 +127,7 @@ const PROJECT_ROOT_MARKERS = [
   ".codex",
   ".agents",
   ".zed",
+  ".kiro",
   ".opencode",
   "opencode.json",
   "opencode.jsonc",
@@ -448,9 +449,21 @@ export function isGloballyInstalled(): boolean {
   return getGlobalBinaryPath() !== null;
 }
 
+// Every `npx` call is `npm exec`, which evaluates the host project's
+// package.json `engines` / `devEngines` gate before running the command. A
+// project that pins a runtime the user's machine doesn't match — e.g. Bluesky's
+// `devEngines.runtime: { node: "^24.15.0" }` — otherwise aborts with
+// EBADDEVENGINES (exit 1) before the skills CLI ever runs, so `argent init`
+// can't install skills on an older Node (issue #298). `--force` downgrades that
+// gate to a non-fatal warning; we scope it to argent's own skills commands so
+// nothing else is affected.
+export function withNpmForce(npxArgs: string[]): string[] {
+  return ["--force", ...npxArgs];
+}
+
 export function isSkillsCliAvailable(): boolean {
   try {
-    execSync("npx --no-install skills --version", {
+    execSync("npx --force --no-install skills --version", {
       stdio: ["ignore", "ignore", "ignore"],
       timeout: PROBE_TIMEOUT_MS,
     });

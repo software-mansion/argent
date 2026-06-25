@@ -10,10 +10,25 @@ import {
 vi.mock("../../src/utils/ios-profiler/export", () => ({
   exportIosTraceData: vi.fn(),
 }));
+// `native-profiler-stop` now preflights its iOS binary requirement via
+// `ensureDeps(["xcrun"])` inside execute (so the cross-platform stop tool can
+// preflight adb on Android). The unit-level tests here don't have a real
+// host-binary install — short-circuit the check.
+vi.mock("../../src/utils/check-deps", () => ({
+  ensureDeps: vi.fn(async () => {}),
+  ensureDep: vi.fn(async () => {}),
+}));
 
 import { exportIosTraceData } from "../../src/utils/ios-profiler/export";
-import { nativeProfilerStopTool } from "../../src/tools/profiler/native-profiler/native-profiler-stop";
+import {
+  nativeProfilerStopTool,
+  type IosStopArtifacts,
+} from "../../src/tools/profiler/native-profiler/native-profiler-stop";
 import { handleXctraceExit } from "../../src/tools/profiler/native-profiler/native-profiler-start";
+import { ArtifactStore } from "@argent/registry";
+
+// Tool context the registry would inject; stop registers its trace/exports here.
+const STOP_CTX = { artifacts: new ArtifactStore() };
 
 const mockedExport = vi.mocked(exportIosTraceData);
 
@@ -58,15 +73,15 @@ describe("handleXctraceExit", () => {
     const api = await buildSession();
     const child = new FakeChild();
     api.profilingActive = true;
-    api.xctracePid = 1234;
-    api.xctraceProcess = asChild(child);
+    api.capturePid = 1234;
+    api.captureProcess = asChild(child);
     api.traceFile = FAKE_TRACE;
 
     handleXctraceExit(api, 0, null);
 
     expect(api.profilingActive).toBe(false);
-    expect(api.xctracePid).toBeNull();
-    expect(api.xctraceProcess).toBeNull();
+    expect(api.capturePid).toBeNull();
+    expect(api.captureProcess).toBeNull();
     expect(api.recordingExitedUnexpectedly).toBe(true);
     expect(api.recordingTimedOut).toBe(false);
     expect(api.lastExitInfo).toEqual({ code: 0, signal: null });
@@ -99,7 +114,7 @@ describe("handleXctraceExit", () => {
 describe("native-profiler-stop recovery branch", () => {
   beforeEach(() => {
     mockedExport.mockReset();
-    mockedExport.mockReturnValue(FAKE_EXPORT_RESULT);
+    mockedExport.mockResolvedValue(FAKE_EXPORT_RESULT);
   });
 
   afterEach(() => {
@@ -112,13 +127,28 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 0, signal: null };
 
-    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const result = (await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    )) as IosStopArtifacts;
 
     expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
-    expect(result.traceFile).toBe(FAKE_TRACE);
-    expect(result.exportedFiles).toEqual(FAKE_EXPORT_RESULT.files);
+    // exportedFiles are now artifact handles (materialized client-side), not raw paths.
+    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true, filename: "cpu.xml" });
+    expect(result.exportedFiles.hangs).toMatchObject({
+      __argentArtifact: true,
+      filename: "hangs.xml",
+    });
+    // The .trace bundle is now a downloadable artifact (delivered as tar.gz
+    // on demand), not a "stays on the host" note.
+    expect(result.traceFile).toMatchObject({
+      __argentArtifact: true,
+      archive: "tar.gz",
+      filename: "ios-profiler-20260101-000000.trace",
+    });
     expect(result.exportDiagnostics).toEqual(FAKE_EXPORT_RESULT.diagnostics);
     expect(result.warning).toBeDefined();
     expect(api.recordingExitedUnexpectedly).toBe(false);
@@ -131,9 +161,13 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 137, signal: "SIGKILL" };
 
-    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const result = await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
 
     expect(result.warning).toContain("code=137");
     expect(result.warning).toContain("signal=SIGKILL");
@@ -145,9 +179,13 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingTimedOut = true;
     api.recordingExitedUnexpectedly = false;
 
-    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const result = await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
 
     expect(result.warning).toContain("Recording timed out at 10 min cap");
     expect(result.warning).not.toContain("xctrace exited before stop");
@@ -188,20 +226,24 @@ describe("native-profiler-stop recovery branch", () => {
     child.on("exit", (code, signal) => handleXctraceExit(api, code, signal));
 
     api.profilingActive = true;
-    api.xctracePid = 4321;
-    api.xctraceProcess = asChild(child);
+    api.capturePid = 4321;
+    api.captureProcess = asChild(child);
     api.traceFile = FAKE_TRACE;
 
-    const promise = nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const promise = nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
     await vi.advanceTimersByTimeAsync(10);
     const result = await promise;
 
     expect(result.warning).toBeUndefined();
-    expect(result.traceFile).toBe(FAKE_TRACE);
+    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true });
     expect(api.profilingActive).toBe(false);
-    expect(api.xctraceProcess).toBeNull();
+    expect(api.captureProcess).toBeNull();
     expect(api.recordingExitedUnexpectedly).toBe(false);
     expect(api.lastExitInfo).toBeNull();
   });
@@ -250,6 +292,10 @@ describe("native-profiler-start fresh-start reset", () => {
     }));
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
+    }));
+    vi.doMock("../../src/utils/check-deps", () => ({
+      ensureDeps: vi.fn(async () => {}),
+      ensureDep: vi.fn(async () => {}),
     }));
 
     const { nativeProfilerStartTool: startTool } =

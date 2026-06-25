@@ -1,11 +1,14 @@
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
+import { prepareFileInputs, applyClientFileDirectives, type FileInputSpec } from "./file-inputs.js";
 
 export interface ToolMeta {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
   outputHint?: string;
+  /** Args that name files on the CALLER's machine — see file-inputs.ts. */
+  fileInputs?: FileInputSpec[];
   alwaysLoad?: boolean;
   searchHint?: string;
   longRunning?: boolean;
@@ -77,10 +80,24 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
 
   async function callTool(name: string, args: unknown): Promise<ToolInvocationResult> {
     const { url, token } = await baseUrl();
+
+    // File boundary, outbound: wrap declared file-path args so the server can
+    // read them in place (co-located) or from inlined content (remote). The
+    // tool's advertised metadata drives this — an older server that doesn't
+    // declare fileInputs gets the args verbatim.
+    let finalArgs = args;
+    const meta = await fetchTool(name);
+    if (meta?.fileInputs?.length) {
+      const { url: routedUrl } = await getResolvedToolsUrl();
+      finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
+        includeContent: routedUrl !== null,
+      });
+    }
+
     const res = await fetch(`${url}/tools/${encodeURIComponent(name)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders(token) },
-      body: JSON.stringify(args ?? {}),
+      body: JSON.stringify(finalArgs ?? {}),
     });
     const json = (await res.json().catch(() => ({}))) as {
       data?: unknown;
@@ -91,7 +108,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     if (!res.ok) {
       throw new Error(json.error ?? json.message ?? `${res.status} ${res.statusText}`);
     }
-    return { data: json.data, note: json.note };
+    // File boundary, inbound: persist any client-write directives (files that
+    // belong in the caller's project, e.g. recorded flow YAMLs) and rewrite
+    // them to the written paths.
+    const { result: data } = await applyClientFileDirectives(json.data);
+    return { data, note: json.note };
   }
 
   return { fetchTools, fetchTool, callTool, baseUrl };

@@ -4,7 +4,10 @@
     <img width="1100" height="382" alt="argent-header" src="https://github.com/user-attachments/assets/6cec01d5-da3c-4b6c-97c3-0374a63c213c" />
   </a>
 </p>
-<br/>
+
+[![Ad](https://swm-delivery.com/www/images/zone-gh-argent-1?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-1&n=1)
+[![Ad](https://swm-delivery.com/www/images/zone-gh-argent-2?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-2&n=1)
+[![Ad](https://swm-delivery.com/www/images/zone-gh-argent-3?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-3&n=1)
 
 **[Argent](https://argent.swmansion.com)** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators and Android Emulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
@@ -33,7 +36,7 @@ npx @swmansion/argent init
 
 #### Prerequisites
 
-- **Node.js 18** or later
+- **Node.js 20.11** or later
 - For iOS: macOS with **Xcode** installed
 - For Android: **Android SDK Platform Tools** (`adb`) on `PATH`, and the **Android Emulator** package if you want to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
 
@@ -108,30 +111,36 @@ argent init
 | `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local) |
 | `argent disable`   | Disable a feature flag (`--scope project` for project-local)           |
 | `argent flags`     | List available feature flags and their state                           |
+| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`            |
 
 ## Supported Editors
 
 `argent init` auto-detects and configures MCP for:
 
-| Editor      | Config location                                                          |
-| ----------- | ------------------------------------------------------------------------ |
-| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                       |
-| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)            |
-| VS Code     | `.vscode/mcp.json`                                                       |
-| Windsurf    | `.windsurf/mcp.json`                                                     |
-| Zed         | `.zed/settings.json`                                                     |
-| Gemini CLI  | `.gemini/settings.json`                                                  |
-| Codex CLI   | `.codex/config.yaml`                                                     |
-| opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global) |
+| Editor      | Config location                                                             |
+| ----------- | --------------------------------------------------------------------------- |
+| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                          |
+| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)               |
+| VS Code     | `.vscode/mcp.json`                                                          |
+| Windsurf    | `~/.codeium/windsurf/mcp_config.json` (global)                              |
+| Zed         | `.zed/settings.json`                                                        |
+| Gemini CLI  | `.gemini/settings.json`                                                     |
+| Codex CLI   | `.codex/config.toml` (project) or `~/.codex/config.toml` (global)           |
+| Hermes      | `~/.hermes/config.yaml` (global)                                            |
+| opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global)    |
+| Kiro        | `.kiro/settings/mcp.json` (project) or `~/.kiro/settings/mcp.json` (global) |
 
 ## Privacy
 
-Argent does not collect or transmit any user data.
-No telemetry, no analytics, no crash reporting.
+Argent collects anonymous, opt-out usage and diagnostic telemetry to help us prioritise features and fix what breaks. It is minimal by design.
 
-- Argent integrates with your agent locally over MCP stdio.
-- Its internal tools are not reachable from outside your machine.
-- The only outbound network call we make is the version check against our public npm package, which sends no user data and fails gracefully if blocked.
+You can opt out at any time:
+
+```bash
+argent telemetry disable   # check status with: argent telemetry status
+```
+
+For the full details — see the [Argent Privacy Notice (Telemetry)](https://github.com/software-mansion/argent/blob/main/Telemetry.md).
 
 ## License
 

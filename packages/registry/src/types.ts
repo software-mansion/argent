@@ -1,5 +1,7 @@
 import { TypedEventEmitter } from "./event-emitter";
 import { z } from "zod";
+import type { ArtifactStore } from "./artifacts";
+import type { FileInputSpec, ResolvedFileInput } from "./file-inputs";
 
 // ── Service Types ──
 
@@ -58,13 +60,56 @@ export type ServiceRef = string | { urn: string; options?: Record<string, unknow
 /** Options passed to tool execution (e.g. AbortSignal for request cancellation). */
 export interface InvokeToolOptions {
   signal?: AbortSignal;
+  /**
+   * Resolution outcome for each declared {@link ToolDefinition.fileInputs}
+   * target the caller sent as a file-input wrapper, keyed by target arg name.
+   * Populated by the HTTP layer (which resolves wrappers before validation)
+   * and forwarded to the tool via {@link ToolContext}. Absent for plain-string
+   * args (older clients, direct invocations), so a missing entry means
+   * "legacy caller — behave exactly as before the file boundary existed".
+   */
+  fileInputs?: Record<string, ResolvedFileInput>;
+  /** Optional caller-provided id used to correlate outer request metadata. */
+  toolInvocationId?: string;
+  /**
+   * Registers a freshly-minted invocation id against the outer request's
+   * telemetry attribution, returning a release fn. Set by the tool-server's HTTP
+   * layer (bound to the request's metadata) and forwarded verbatim into
+   * {@link ToolContext}. Orchestrator tools (run-sequence, flow-execute,
+   * flow-add-step) call it for every sub-tool they dispatch through
+   * {@link Registry.invokeTool} so nested invocations inherit attribution
+   * instead of being recorded as anonymous; they also pass it back down here so
+   * propagation survives arbitrary nesting.
+   *
+   * The outer request's AI client is inherited unchanged. The platform is
+   * re-derived from each sub-tool's own `childArgs` (its `udid` / `device_id` /
+   * `avdName`), falling back to the outer request's platform when the sub-tool
+   * carries no device arg — an orchestrator like flow-execute has no platform of
+   * its own and a single flow can target several devices, so the child's device
+   * arg is the only correct platform source. Opaque to the registry — it neither
+   * reads nor validates the recorded metadata.
+   */
+  recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;
+}
+
+/**
+ * What a tool's `execute` receives as its third argument. The registry builds
+ * this for every invocation: it carries the caller's {@link InvokeToolOptions}
+ * (e.g. `signal`) plus cross-cutting context the registry owns — currently the
+ * {@link ArtifactStore}, so any tool that produces a host file can register it
+ * (`ctx.artifacts.register(path)`) without declaring a per-tool service. The
+ * registry always populates `artifacts`; it is only ever absent when `execute`
+ * is called directly (bypassing `invokeTool`), e.g. in a unit test.
+ */
+export interface ToolContext extends InvokeToolOptions {
+  artifacts: ArtifactStore;
 }
 
 // ── Device + Capability Types ──
 
-export type Platform = "ios" | "android";
+export type Platform = "ios" | "android" | "chromium" | "vega";
 
-export type DeviceKind = "simulator" | "emulator" | "device" | "unknown";
+export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
@@ -95,6 +140,13 @@ export interface ToolCapability {
     device?: boolean;
     unknown?: boolean;
   };
+  chromium?: {
+    app?: boolean;
+  };
+  vega?: {
+    vvd?: boolean;
+    device?: boolean;
+  };
   /** Optional refiner. Returns true if this device is supported. */
   supports?: (device: DeviceInfo) => boolean;
 }
@@ -119,7 +171,7 @@ export interface ToolCapability {
  * On a missing binary, the HTTP layer returns 424 Failed Dependency with an
  * install hint the agent can surface verbatim.
  */
-export type ToolDependency = "adb" | "xcrun" | "emulator";
+export type ToolDependency = "adb" | "xcrun" | "emulator" | "vega";
 
 // ── Tool Types ──
 
@@ -151,6 +203,16 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * aborted mid-flight.
    */
   longRunning?: boolean;
+  /**
+   * Gates this tool behind a feature flag (a name in @argent/configuration-core's
+   * FLAG_REGISTRY). Enforced in TWO places, both re-checked on every request so
+   * `argent enable/disable <flag>` takes effect without restarting the long-lived
+   * tool-server: (1) the HTTP layer hides the tool from `GET /tools` and rejects
+   * `POST /tools/:name` with 404, and (2) `Registry.invokeTool` rejects it so
+   * internal dispatch paths (flows, run-sequence) can't bypass the gate. The tool
+   * is still registered; gating happens at invocation, not at registration.
+   */
+  featureFlag?: string;
   /** Per-platform support declaration. Cross-platform tools assert against this before dispatching. */
   capability?: ToolCapability;
   /**
@@ -162,13 +224,16 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * resolved branch's deps after `classifyDevice`.
    */
   requires?: ToolDependency[];
+  /**
+   * Args that name files/directories on the CALLER's machine. Surfaced through
+   * `GET /tools` so the client can wrap them for the file boundary, and
+   * resolved back to server-readable paths before zod validation. See
+   * `file-inputs.ts` for the wire contract and kind semantics.
+   */
+  fileInputs?: FileInputSpec[];
   /** Returns alias → URN or { urn, options }; registry resolves each and passes alias → API into execute. */
   services: (params: TParams) => Record<string, ServiceRef>;
-  execute(
-    services: Record<string, unknown>,
-    params: TParams,
-    options?: InvokeToolOptions
-  ): Promise<TResult>;
+  execute(services: Record<string, unknown>, params: TParams, ctx?: ToolContext): Promise<TResult>;
 }
 
 export interface ToolRecord {
@@ -182,7 +247,7 @@ export type RegistryEvents = {
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
-  toolInvoked: (toolId: string) => void;
-  toolCompleted: (toolId: string, durationMs: number) => void;
-  toolFailed: (toolId: string, error: Error) => void;
+  toolInvoked: (toolId: string, toolInvocationId: string) => void;
+  toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number) => void;
+  toolFailed: (toolId: string, toolInvocationId: string, error: Error, durationMs?: number) => void;
 };

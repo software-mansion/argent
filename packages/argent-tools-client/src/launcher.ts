@@ -175,7 +175,7 @@ export async function isToolsServerHealthy(
   }
 }
 
-export interface SpawnToolsServerOptions extends BuildToolsServerEnvOptions {}
+export type SpawnToolsServerOptions = BuildToolsServerEnvOptions;
 
 export function spawnToolsServer(
   paths: ToolsServerPaths,

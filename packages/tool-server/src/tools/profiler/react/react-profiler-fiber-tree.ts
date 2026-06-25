@@ -1,19 +1,26 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
 import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
+import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-profiler-start";
 
-const HOOK_NOT_PRESENT_ERRORS = new Set([
-  "no __REACT_DEVTOOLS_GLOBAL_HOOK__",
-  "no renderers attached to hook",
-]);
+const HOOK_MISSING_ERROR = "no __REACT_DEVTOOLS_GLOBAL_HOOK__";
+const NO_RENDERERS_ERROR = "no renderers attached to hook";
+const HOOK_NOT_PRESENT_ERRORS = new Set([HOOK_MISSING_ERROR, NO_RENDERERS_ERROR]);
 
-const HOOK_MISSING_MESSAGE =
-  "React DevTools hook not present. Ensure the app is in development mode. " +
-  "Try calling react-profiler-start first to re-inject the hook.";
+// See `react-profiler-renders.ts` for the rationale — branch on the actual
+// error code so "hook missing" (rebuild in dev mode) and "renderers not
+// attached" (wait for first render / let start bootstrap) get accurate
+// remediation instead of being collapsed into one misleading message.
+function messageForHookError(code: string): string {
+  if (code === HOOK_MISSING_ERROR) return NO_DEVTOOLS_HOOK_ERROR;
+  if (code === NO_RENDERERS_ERROR) return NO_RENDERERS_ATTACHED_ERROR;
+  return `Fiber tree error: ${code}`;
+}
 
 function buildFiberTreeScript(maxDepth: number, filter: string): string {
   return `
@@ -111,6 +118,8 @@ Use when tracing ancestry of a library component or checking for useMemoCache ho
 Returns a nested JSON tree of fiber nodes with name, tag, actualDuration, selfBaseDuration, and children.
 Fails if the React DevTools hook is not present or no fiber roots have been committed yet.`,
   zodSchema,
+  // RN-only: walks the fiber tree via the React DevTools backend hook.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`,
   }),
@@ -141,11 +150,21 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
     let result = await evalFiberTree();
 
     if (result?.exceptionDetails) {
-      throw new Error(`Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`);
+      throw new FailureError(`Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`, {
+        error_code: FAILURE_CODES.REACT_PROFILER_RUNTIME_EXCEPTION,
+        failure_stage: "react_profiler_fiber_tree_runtime_eval",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      });
     }
 
     if (!result?.result?.value) {
-      throw new Error("No data returned from runtime evaluation.");
+      throw new FailureError("No data returned from runtime evaluation.", {
+        error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
+        failure_stage: "react_profiler_fiber_tree_runtime_eval",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      });
     }
 
     let parsed = JSON.parse(result.result.value) as unknown;
@@ -166,11 +185,14 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
 
     if (typeof parsed === "object" && parsed !== null && "error" in parsed) {
       const errorMsg = (parsed as { error: string }).error;
-      throw new Error(
-        HOOK_NOT_PRESENT_ERRORS.has(errorMsg)
-          ? HOOK_MISSING_MESSAGE
-          : `Fiber tree error: ${errorMsg}`
-      );
+      throw new FailureError(messageForHookError(errorMsg), {
+        error_code: HOOK_NOT_PRESENT_ERRORS.has(errorMsg)
+          ? FAILURE_CODES.REACT_PROFILER_DEVTOOLS_HOOK_MISSING
+          : FAILURE_CODES.REACT_PROFILER_HOOK_ERROR,
+        failure_stage: "react_profiler_fiber_tree_hook_read",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
 
     if (Array.isArray(parsed) && parsed.length === 0) {
