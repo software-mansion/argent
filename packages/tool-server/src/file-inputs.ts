@@ -22,6 +22,7 @@
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import bytesUtil from "bytes";
 import {
   isFileInputWire,
   type FileInputSpec,
@@ -82,8 +83,7 @@ async function probeHostPath(wire: FileInputWire, kind: FileInputSpec["kind"]): 
 
 function formatBytes(bytes: number | undefined): string {
   if (bytes == null) return "unknown size";
-  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return bytesUtil(bytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${bytes} B`;
 }
 
 function sanitizeFilename(name: string): string {

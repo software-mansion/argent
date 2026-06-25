@@ -17,6 +17,7 @@
     "@argent/tools-client": "file:../argent-tools-client",
     "@argent/update-core": "file:../update-core",
     "@clack/prompts": "^1.5.1",
+    "escape-string-regexp": "^5.0.0",
     "jsonc-parser": "^3.3.1",
     "picocolors": "^1.1.1",
     "semver": "^7.8.4",

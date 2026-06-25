@@ -162,13 +162,25 @@ function reactWrapperCall(node: TreeSitterNode | undefined): {
   return { isWrapper: false, isMemo: false };
 }
 
-function isWrappedInMemo(source: string, componentName: string): boolean {
-  const memoPattern = /\b(React\.memo|memo)\s*\(\s*(\w+)/g;
-  let match;
-  while ((match = memoPattern.exec(source)) !== null) {
-    if (match[2] === componentName) return true;
-  }
-  return false;
+/**
+ * Collect component names passed by reference to memo()/React.memo(), e.g.
+ * `function Card() {}; export default memo(Card)`. This is the cross-reference
+ * form that reactWrapperCall (which inspects a declarator's value node) does
+ * not catch. Replaces a former regex scan of the raw source text that also
+ * matched `memo(...)` inside comments and string literals and ignored AST scope.
+ */
+function collectMemoizedNames(root: TreeSitterNode): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: TreeSitterNode): void => {
+    if (node.type === "call_expression" && reactWrapperCall(node).isMemo) {
+      const args = node.children.find((c) => c.type === "arguments");
+      const arg = args?.children.find((c) => c.type === "identifier");
+      if (arg) names.add(arg.text);
+    }
+    for (const c of node.children) visit(c);
+  };
+  visit(root);
+  return names;
 }
 
 /**
@@ -206,6 +218,9 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
       continue;
     }
 
+    // Names wrapped by a cross-referenced memo() call anywhere in this file.
+    const memoizedNames = collectMemoizedNames(tree.rootNode);
+
     function findComponents(node: TreeSitterNode): void {
       if (node.type === "function_declaration") {
         const nameNode = node.children.find((c) => c.type === "identifier");
@@ -216,7 +231,7 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
               file,
               line: nameNode.startPosition.row + 1,
               col: nameNode.startPosition.column,
-              isMemoized: isWrappedInMemo(source, componentName),
+              isMemoized: memoizedNames.has(componentName),
               hasUseCallback: nodeContainsCall(node, "useCallback"),
               hasUseMemo: nodeContainsCall(node, "useMemo"),
             });
@@ -241,7 +256,7 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
               file,
               line: nameNode.startPosition.row + 1,
               col: nameNode.startPosition.column,
-              isMemoized: isWrappedInMemo(source, componentName) || wrapper.isMemo,
+              isMemoized: memoizedNames.has(componentName) || wrapper.isMemo,
               hasUseCallback: nodeContainsCall(node, "useCallback"),
               hasUseMemo: nodeContainsCall(node, "useMemo"),
             });

@@ -167,7 +167,7 @@ export function makeNetworkDetailReadScript(requestId: string): string {
   return `(function() {
   var byId = globalThis.__argent_network_by_id;
   if (!byId) return JSON.stringify({ error: 'Network interceptor not installed' });
-  var entry = byId['${requestId.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'];
+  var entry = byId[${JSON.stringify(requestId)}];
   if (!entry) return JSON.stringify({ error: 'Request not found' });
 
   return JSON.stringify({
