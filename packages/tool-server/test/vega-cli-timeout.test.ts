@@ -114,7 +114,11 @@ function sweep(): void {
   try {
     // Match only this suite's sentinels (6910[0-9]) rather than a loose `sleep 691`
     // substring, so a stray `sleep` from unrelated work on the machine is never killed.
-    execSync(`pkill -f 'sleep 6910[0-9]' || true`);
+    // Anchored to the whole command line (`^…$`) for the same reason as strayCount: an
+    // unanchored `-f` pattern would also match the wrapper shell execSync spawns to run
+    // it (whose argv contains the literal pattern). The real sleeps' cmdline is exactly
+    // `sleep 6910<n>`.
+    execSync(`pkill -f '^sleep 6910[0-9]$' || true`);
   } catch {
     /* nothing to clean */
   }
@@ -122,7 +126,15 @@ function sweep(): void {
 
 function strayCount(sentinel: string): number {
   try {
-    const out = execSync(`pgrep -f 'sleep ${sentinel}' || true`, { encoding: "utf-8" });
+    // Anchor the pattern to the WHOLE command line (`^sleep <sentinel>$`). With a bare
+    // `sleep <sentinel>` substring, Linux's procps `pgrep -f` also matches the wrapper
+    // shell `/bin/sh -c "pgrep -f 'sleep <sentinel>' || true"` that execSync spawns —
+    // its own argv contains the literal `sleep <sentinel>`, and pgrep excludes only its
+    // own pid, not that parent shell — so a clean reap still reported 1 phantom stray
+    // and every waitForClear assertion failed on CI. (macOS's BSD pgrep doesn't match
+    // the wrapper, which is why it only bit Linux.) The anchors restrict the match to a
+    // real `sleep <sentinel>` process, whose full cmdline is exactly that.
+    const out = execSync(`pgrep -f '^sleep ${sentinel}$' || true`, { encoding: "utf-8" });
     return out.split("\n").filter((l) => l.trim()).length;
   } catch {
     return 0;
