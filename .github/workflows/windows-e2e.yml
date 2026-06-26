@@ -80,11 +80,20 @@ jobs:
 
       - name: adb.exe resolves on Windows
         # windows-latest ships the Android SDK with ANDROID_HOME/ANDROID_SDK_ROOT
-        # set. Prove the Windows resolver finds adb.exe (the `.exe` suffix + SDK
-        # roots), the host half of Android support that does work on a runner.
+        # set but does NOT put platform-tools on PATH — exactly the gap the
+        # Windows resolver closes (`.exe` suffix + SDK-root fallback). Resolve
+        # adb the way the tool-server does, then run the *resolved* path (a bare
+        # `adb` wouldn't be found, which is the whole point).
+        shell: pwsh
         run: |
-          node -e "require('./packages/tool-server/dist/utils/android-binary.js').resolveAndroidBinary('adb').then(p => { console.log('resolved adb ->', p); if (!p || !p.toLowerCase().endsWith('adb.exe')) { console.error('expected an adb.exe path'); process.exit(1); } })"
-          adb version
+          $adb = node -e "require('./packages/tool-server/dist/utils/android-binary.js').resolveAndroidBinary('adb').then(p => process.stdout.write(p || ''))"
+          Write-Host "resolved adb -> $adb"
+          if ([string]::IsNullOrWhiteSpace($adb) -or -not $adb.ToLower().EndsWith('adb.exe')) {
+            Write-Error "expected resolveAndroidBinary('adb') to return an adb.exe path"
+            exit 1
+          }
+          if (-not (Test-Path $adb)) { Write-Error "resolved adb path does not exist: $adb"; exit 1 }
+          & $adb version
 
       - name: Locate Chrome
         id: chrome
