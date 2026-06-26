@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { detectAgentEnv, type AgentEnv } from "./agent-detect.js";
+import { detectCloudAgent, type CloudAgent } from "./cloud-agent-detect.js";
 import { isCi } from "./ci-detect.js";
 
 // Build-time version metadata injected by esbuild's `define`. It substitutes the
