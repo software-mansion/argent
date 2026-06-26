@@ -91,6 +91,24 @@ if [[ -n "${PREBUILT_NATIVE_DEVTOOLS_IOS:-}" ]] && [[ -n "${PREBUILT_KEYBOARD_PA
     cp "$PREBUILT_KEYBOARD_PATCH_TVOS" "${ROOT_DIR}/dylibs/tvos/libKeyboardPatch.dylib"
     cp "$PREBUILT_INJECTION_BOOTSTRAP_TVOS" "${ROOT_DIR}/dylibs/tvos/libArgentInjectionBootstrap.dylib"
   fi
+  # tvOS daemon binaries (bin/<dir>/). These are the tvos-ax-service (runs inside
+  # the sim) and tvos-hid-daemon (runs on the host) — without them the Apple TV
+  # control service has nothing to spawn. They're advertised as prebuilt inputs
+  # in the header, but the build path below sits after this early exit, so on the
+  # prebuilt (non-macOS CI) route they must be copied here too. Unix transport
+  # only, matching the build path's guard.
+  if [[ "$TRANSPORT" == "unix" ]]; then
+    if [[ -n "${PREBUILT_TVOS_AX_SERVICE:-}" ]]; then
+      echo "Using pre-built tvos-ax-service"
+      mkdir -p "$BIN_DIR"
+      cp "$PREBUILT_TVOS_AX_SERVICE" "${BIN_DIR}/tvos-ax-service"
+    fi
+    if [[ -n "${PREBUILT_TVOS_HID_DAEMON:-}" ]]; then
+      echo "Using pre-built tvos-hid-daemon"
+      mkdir -p "$BIN_DIR"
+      cp "$PREBUILT_TVOS_HID_DAEMON" "${BIN_DIR}/tvos-hid-daemon"
+    fi
+  fi
   exit 0
 fi
 

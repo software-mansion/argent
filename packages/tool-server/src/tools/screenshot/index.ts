@@ -17,7 +17,9 @@ const execFileAsync = promisify(execFile);
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Apple TV UDID, Vega serial, or Chromium id)."
+    ),
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
@@ -99,7 +101,7 @@ async function tvScreenshot(
 export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {
   return {
     id: "screenshot",
-    description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, or Chromium app). Returns { url, path }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
+    description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,

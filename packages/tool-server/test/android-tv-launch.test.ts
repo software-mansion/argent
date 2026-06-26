@@ -26,7 +26,10 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { resolveLauncherActivity } from "../src/tools/launch-app/platforms/android";
+import {
+  normalizeActivityComponent,
+  resolveLauncherActivity,
+} from "../src/tools/launch-app/platforms/android";
 
 // Returns the shell command string of an `adb -s <serial> shell <cmd>` call.
 function shellCmd(args: string[]): string {
@@ -35,6 +38,33 @@ function shellCmd(args: string[]): string {
 
 beforeEach(() => {
   execFileMock.mockReset();
+});
+
+describe("normalizeActivityComponent — shared by launch-app + restart-app", () => {
+  const PKG = "com.example.app";
+
+  it("makes a bare class name relative so `am start` doesn't reject it", () => {
+    // The trap: `${pkg}/MainActivity` is treated as a default-package class and
+    // rejected ("no match"). It must become `${pkg}/.MainActivity`.
+    expect(normalizeActivityComponent(PKG, "MainActivity")).toBe(`${PKG}/.MainActivity`);
+  });
+
+  it("passes a relative (dot-prefixed) activity through under the bundle id", () => {
+    expect(normalizeActivityComponent(PKG, ".MainActivity")).toBe(`${PKG}/.MainActivity`);
+  });
+
+  it("qualifies a fully-qualified class name with the bundle id", () => {
+    expect(normalizeActivityComponent(PKG, "com.other.SplashActivity")).toBe(
+      `${PKG}/com.other.SplashActivity`
+    );
+  });
+
+  it("leaves an already-complete pkg/Activity component untouched", () => {
+    expect(normalizeActivityComponent(PKG, "com.example.app/.MainActivity")).toBe(
+      `${PKG}/.MainActivity`
+    );
+    expect(normalizeActivityComponent(PKG, "other.pkg/full.Class")).toBe("other.pkg/full.Class");
+  });
 });
 
 describe("resolveLauncherActivity — leanback (Android TV)", () => {
@@ -85,6 +115,39 @@ describe("resolveLauncherActivity — leanback (Android TV)", () => {
     expect(component).toBe("com.example.app/com.example.app.MainActivity");
     const calls = execFileMock.mock.calls.map((c) => shellCmd(c[1] as string[]));
     expect(calls.some((s) => s.includes("LEANBACK_LAUNCHER"))).toBe(false);
+  });
+
+  it("rejects the system ResolverActivity and falls through to the real launcher", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      const shell = shellCmd(args);
+      // The leanback resolve returns the system chooser (the package has no
+      // leanback activity) — it matches the component shape but must NOT be
+      // treated as resolved.
+      if (shell.includes("LEANBACK_LAUNCHER")) {
+        return {
+          stdout: "android/com.android.internal.app.ResolverActivity\n",
+          stderr: "",
+        };
+      }
+      // The plain LAUNCHER resolve then finds the real activity.
+      if (shell.startsWith("cmd package resolve-activity --brief ") && !shell.includes("-c ")) {
+        return { stdout: "com.example.tv/com.example.tv.MainActivity\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const component = await resolveLauncherActivity("emulator-5556", "com.example.tv", true);
+    expect(component).toBe("com.example.tv/com.example.tv.MainActivity");
+  });
+
+  it("throws (not launches the chooser) when only the system ResolverActivity resolves", async () => {
+    execFileMock.mockImplementation(() => ({
+      stdout: "android/com.android.internal.app.ResolverActivity\n",
+      stderr: "",
+    }));
+    await expect(resolveLauncherActivity("emulator-5556", "com.example.tv", true)).rejects.toThrow(
+      /LEANBACK_LAUNCHER or LAUNCHER/
+    );
   });
 
   it("throws a leanback-aware error when nothing resolves on a TV target", async () => {

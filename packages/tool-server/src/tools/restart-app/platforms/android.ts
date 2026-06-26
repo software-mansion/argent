@@ -1,7 +1,11 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
-import { assertAmStartOk, resolveLauncherActivity } from "../../launch-app/platforms/android";
+import {
+  assertAmStartOk,
+  normalizeActivityComponent,
+  resolveLauncherActivity,
+} from "../../launch-app/platforms/android";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
 export const androidImpl: PlatformImpl<
@@ -20,11 +24,10 @@ export const androidImpl: PlatformImpl<
     // assertion launch-app moved to.
     let component: string;
     if (activity) {
-      component = activity.startsWith(".")
-        ? `${bundleId}/${activity}`
-        : activity.includes("/")
-          ? activity
-          : `${bundleId}/${activity}`;
+      // Shared with launch-app so a bare class name ("MainActivity") becomes a
+      // relative `${pkg}/.MainActivity` rather than the `${pkg}/MainActivity`
+      // that `am start` rejects — the two tools must agree on this.
+      component = normalizeActivityComponent(bundleId, activity);
     } else {
       const isTv = await isAndroidTv(udid);
       component = await resolveLauncherActivity(udid, bundleId, isTv);

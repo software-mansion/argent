@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
-import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 
 const ALLOWED_TOOLS = new Set([
@@ -25,7 +25,7 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id) — shared across all steps."
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id) — shared across all steps."
     ),
   steps: z
     .array(
@@ -69,6 +69,11 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  // Vega (Fire TV) is a valid target: its `tv-remote` / `keyboard` steps are
+  // supported, and the description advertises it. Without this key the outer
+  // capability gate (HTTP layer's assertSupported) would reject a Vega udid
+  // before any step runs — each step's own capability is still enforced below.
+  vega: { vvd: true },
 };
 
 export function createRunSequenceTool(
@@ -96,10 +101,10 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, angle?: number, durationMs?: number }              [ios only]
   gesture-rotate: { centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number, durationMs?: number }                    [ios only]
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
-  keyboard:       { text?: string, key?: string, delayMs?: number }  (TV: text only)                                    [ios/android/chromium/tv]
+  keyboard:       { text?: string, key?: string, delayMs?: number }  (TV: text only)                                    [ios/android/chromium/vega/tv]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
-                  buttons: up/down/left/right/select/back/home/menu (+ playPause and, Vega-only, rewind/fastForward/next/previous/volumeUp/volumeDown/mute)
+                  buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute — work on Android TV and Vega; rejected on the Apple TV simulator)
 
 Example — scroll down three times (use gesture-scroll with positive deltaY on Chromium):
   { "udid": "<UDID>", "steps": [
@@ -139,8 +144,16 @@ Stops on the first error and returns partial results.`,
       const { udid, steps } = params;
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
+      // The HTTP layer aborts `signal` when the client disconnects. run-sequence
+      // is `longRunning` (and a single `tv-remote` step can fire dozens of
+      // daemon/adb round-trips), so the MCP adapter won't abort it for us — honour
+      // the signal between steps and on the inter-step delay so a cancelled
+      // request stops promptly instead of running the rest of the sequence at the
+      // device. Each sub-tool also receives `signal` via `ctx`.
+      const signal = ctx?.signal;
 
       for (const step of steps) {
+        if (signal?.aborted) break;
         if (!ALLOWED_TOOLS.has(step.tool)) {
           results.push({
             tool: step.tool,
@@ -180,7 +193,7 @@ Stops on the first error and returns partial results.`,
         }
 
         const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;
-        if (delay > 0) await sleep(delay);
+        if (delay > 0 && !(await sleepOrAbort(delay, signal))) break;
       }
 
       return {

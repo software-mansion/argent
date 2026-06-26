@@ -25,5 +25,7 @@ export async function typeTv(
     const api = await resolveTvApi(registry, device.id);
     await api.type(text);
   }
-  return { typed: text, keys: text.length };
+  // Count by codepoint (not UTF-16 units) so a non-BMP char reports `keys: 1`,
+  // matching the vega and simulator-server keyboard backends.
+  return { typed: text, keys: [...text].length };
 }

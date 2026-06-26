@@ -13,6 +13,12 @@ export function makeAndroidImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
+    // Both sub-paths shell out to `adb`: the `isAndroidTv` probe up front, then
+    // either `adb input text` (TV) or the simulator-server (phone, adb-backed).
+    // Declare it so `dispatchByPlatform` preflights adb and a missing binary
+    // fails with the clean 424 install hint rather than surfacing from deeper in
+    // the probe. Matches the android branch of `describe` and `tv-remote`.
+    requires: ["adb"],
     handler: async (_services, params, device) =>
       (await isAndroidTv(device.id))
         ? typeTv(registry, device, params)

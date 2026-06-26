@@ -184,4 +184,54 @@ describe("run-sequence", () => {
     );
     expect(release).toHaveBeenCalledTimes(2);
   });
+
+  it("forwards the request's abort signal to each sub-tool so a long step is cancellable", async () => {
+    const registry = mockRegistry();
+    const tool = createRunSequenceTool(registry);
+
+    const controller = new AbortController();
+    const ctx = { artifacts: {}, signal: controller.signal } as unknown as ToolContext;
+
+    await tool.execute(
+      {},
+      { udid: IOS, steps: [{ tool: "tv-remote", args: { button: "right" }, delayMs: 0 }] },
+      ctx
+    );
+
+    // The sub-tool must receive `signal` via its options — otherwise its own
+    // `throwIfAborted` is a no-op and a long step runs to completion after the
+    // client disconnects. (No attribution context here, so this is the
+    // pass-through branch.)
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "tv-remote",
+      expect.objectContaining({ button: "right", udid: IOS }),
+      expect.objectContaining({ signal: controller.signal })
+    );
+  });
+
+  it("stops before the next step once the signal is aborted", async () => {
+    const controller = new AbortController();
+    // Abort as soon as the first step runs; the loop must not dispatch the second.
+    const registry = mockRegistry(() => {
+      controller.abort();
+      return { ok: true };
+    });
+    const tool = createRunSequenceTool(registry);
+    const ctx = { artifacts: {}, signal: controller.signal } as unknown as ToolContext;
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "tv-remote", args: { button: "up" }, delayMs: 0 },
+          { tool: "tv-remote", args: { button: "down" }, delayMs: 0 },
+        ],
+      },
+      ctx
+    );
+
+    expect(result.completed).toBe(1);
+    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+  });
 });

@@ -26,15 +26,27 @@ export async function invokeSubTool<T = unknown>(
   toolId: string,
   args: unknown
 ): Promise<T> {
+  // Forward the outer request's abort signal so a cancelled/disconnected client
+  // stops an in-flight sub-step too — not just the gap between steps. An
+  // orchestrator like run-sequence is `longRunning` and a single step (e.g. a
+  // long `tv-remote` path) can run for minutes; without this the sub-tool's own
+  // `options.signal.throwIfAborted()` is a no-op and the step runs to completion
+  // at the held device after the caller is gone.
+  const signal = ctx?.signal;
   const recordChildInvocation = ctx?.recordChildInvocation;
   if (!recordChildInvocation) {
-    return registry.invokeTool<T>(toolId, args);
+    // Nothing to attribute — pass through. Only attach options when there's a
+    // signal to forward, so the no-context case stays a plain 2-arg invoke.
+    return signal
+      ? registry.invokeTool<T>(toolId, args, { signal })
+      : registry.invokeTool<T>(toolId, args);
   }
 
   const toolInvocationId = randomUUID();
   const release = recordChildInvocation(toolInvocationId, args);
   try {
     return await registry.invokeTool<T>(toolId, args, {
+      ...(signal ? { signal } : {}),
       toolInvocationId,
       recordChildInvocation,
     });
