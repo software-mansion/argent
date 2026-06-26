@@ -19,13 +19,16 @@ TAG="${1:-radon-main}"
 DEST_DIR="packages/native-devtools-ios/bin"
 
 # release-asset-name → host platform key. Asset names follow the upstream
-# build matrix (`simulator-server-argent-{macos,linux,linux-arm64}`); the keys
-# mirror hostPlatformKey() in @argent/native-devtools-ios (process.platform,
-# except "linux-arm64" on arm64 Linux) so the resolver can lookup by host.
+# build matrix (`simulator-server-argent-{macos,linux,linux-arm64,windows.exe}`);
+# the keys mirror hostPlatformKey() in @argent/native-devtools-ios
+# (process.platform, except "linux-arm64" on arm64 Linux) so the resolver can
+# look up by host. The Windows asset keeps its `.exe` extension end-to-end —
+# the release asset, the local copy, and what the resolver/dispatcher spawn.
 declare -a TARGETS=(
   "simulator-server-argent-macos:darwin"
   "simulator-server-argent-linux:linux"
   "simulator-server-argent-linux-arm64:linux-arm64"
+  "simulator-server-argent-windows.exe:win32"
 )
 
 mkdir -p "${DEST_DIR}"
@@ -34,6 +37,14 @@ for entry in "${TARGETS[@]}"; do
   ASSET_NAME="${entry%%:*}"
   PLATFORM="${entry##*:}"
   PLATFORM_DIR="${DEST_DIR}/${PLATFORM}"
+  # Windows ships a PE `.exe`; every other host an extensionless binary. The
+  # resolver (simulatorServerBinaryName()) and the dispatcher pick the same
+  # name by host, so the on-disk copy must match.
+  if [[ "${PLATFORM}" == "win32" ]]; then
+    BIN_BASENAME="simulator-server.exe"
+  else
+    BIN_BASENAME="simulator-server"
+  fi
 
   # Purge then recreate the platform dir before each download so a previous
   # run's stale binary can't ship if THIS run's download fails. Without this,
@@ -43,7 +54,7 @@ for entry in "${TARGETS[@]}"; do
   rm -rf "${PLATFORM_DIR}"
   mkdir -p "${PLATFORM_DIR}"
 
-  echo "Downloading ${ASSET_NAME} → ${PLATFORM_DIR}/simulator-server"
+  echo "Downloading ${ASSET_NAME} → ${PLATFORM_DIR}/${BIN_BASENAME}"
   # Tolerate missing assets so the script keeps working for macOS-only
   # consumers when the Linux artifact lags behind a release. Capture gh's
   # stderr and print it on failure so "not authenticated" vs "asset missing"
@@ -66,8 +77,8 @@ for entry in "${TARGETS[@]}"; do
   fi
   rm -f "${GH_STDERR}"
 
-  mv "${PLATFORM_DIR}/${ASSET_NAME}" "${PLATFORM_DIR}/simulator-server"
-  chmod +x "${PLATFORM_DIR}/simulator-server"
+  mv "${PLATFORM_DIR}/${ASSET_NAME}" "${PLATFORM_DIR}/${BIN_BASENAME}"
+  chmod +x "${PLATFORM_DIR}/${BIN_BASENAME}"
 
   # Architecture sanity check: a wrong-arch binary in a platform dir is worse
   # than a missing one — the resolver would happily pick it and the user gets
@@ -75,11 +86,12 @@ for entry in "${TARGETS[@]}"; do
   # (unlike the missing-asset case above) because a present-but-mislabeled
   # asset is an upstream packaging bug that must not ship.
   if command -v file >/dev/null 2>&1; then
-    DESC="$(file -b "${PLATFORM_DIR}/simulator-server")"
+    DESC="$(file -b "${PLATFORM_DIR}/${BIN_BASENAME}")"
     case "${PLATFORM}" in
       darwin) EXPECT="Mach-O universal" ;;
       linux) EXPECT="ELF 64-bit.*x86-64" ;;
       linux-arm64) EXPECT="ELF 64-bit.*aarch64" ;;
+      win32) EXPECT="PE32\+.*x86-64|PE32\+ executable" ;;
       *) EXPECT="" ;;
     esac
     if [[ -n "${EXPECT}" ]] && ! [[ "${DESC}" =~ ${EXPECT} ]]; then
@@ -94,7 +106,7 @@ done
 
 echo ""
 echo "Downloaded simulator-server binaries:"
-find "${DEST_DIR}" -name simulator-server -type f -exec ls -la {} \;
+find "${DEST_DIR}" \( -name simulator-server -o -name 'simulator-server.exe' \) -type f -exec ls -la {} \;
 
 # Physical-Android-device support: the simulator-server `android_device`
 # controller pushes the screen-sharing agent (a host-independent .jar + a
@@ -126,7 +138,7 @@ if gh release download "${TAG}" \
     mkdir -p "${res_dir}"
     tar -xzf "${AGENT_TMP}/${AGENT_ASSET}" -C "${res_dir}"
     echo "  ✓ screen-sharing agent → ${res_dir}"
-  done < <(find "${DEST_DIR}" -name simulator-server -type f)
+  done < <(find "${DEST_DIR}" \( -name simulator-server -o -name 'simulator-server.exe' \) -type f)
 else
   GH_MSG=$(<"${GH_STDERR}")
   rm -f "${GH_STDERR}"

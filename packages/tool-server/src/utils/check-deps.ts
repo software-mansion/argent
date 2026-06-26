@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { FAILURE_CODES, withFailureSignal, type ToolDependency } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { resolveVegaBinary } from "./vega-cli";
-
-const execFileAsync = promisify(execFile);
+import { commandOnPath } from "./command-on-path";
 
 /**
  * Thrown when a tool declares a host-binary dependency (e.g. `adb`, `xcrun`)
@@ -62,16 +59,11 @@ async function probe(dep: ToolDependency): Promise<boolean> {
   if (dep === "vega") {
     return (await resolveVegaBinary()) !== null;
   }
-  try {
-    // `command -v` via `/bin/sh` is POSIX-portable and doesn't invoke the dep
-    // itself — a bare `xcrun` call would fork the tool just to check existence,
-    // which is both slower and (for xcrun) can prompt the license agreement
-    // dialog on first use.
-    await execFileAsync("/bin/sh", ["-c", `command -v ${dep}`], { timeout: 2_000 });
-    return true;
-  } catch {
-    return false;
-  }
+  // `commandOnPath` probes existence without invoking the dep itself — a bare
+  // `xcrun` call would fork the tool just to check existence, which is both
+  // slower and (for xcrun) can prompt the license agreement dialog on first
+  // use. It uses `command -v` on POSIX and `where` on Windows.
+  return (await commandOnPath(dep)) !== null;
 }
 
 async function isAvailable(dep: ToolDependency): Promise<boolean> {
