@@ -27,7 +27,7 @@ export function makeIosImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, TvRemoteParams, TvRemoteResult> {
   return {
-    handler: (_services, params, device) =>
-      pressFocusRemote(registry, device, params, APPLE_TV_UNSUPPORTED),
+    handler: (_services, params, device, options) =>
+      pressFocusRemote(registry, device, params, APPLE_TV_UNSUPPORTED, options),
   };
 }

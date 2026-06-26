@@ -89,6 +89,20 @@ function sendLine(socketPath: string, line: string, timeoutMs = 10_000): Promise
   });
 }
 
+// The HID daemon types ~1 keypress every ~40ms and only writes its reply once
+// the WHOLE string is entered, so the timeout for a `type` must scale with the
+// input length — the fixed 10s default (fine for a single `navigate` press)
+// would fire mid-type on a long input, rejecting and destroying the socket while
+// the daemon is still typing, so `keyboard` reports a hard failure for text that
+// was in fact largely entered. Budget the per-char cost (generous over the ~40ms
+// observed) plus fixed overhead (connect + the daemon's own setup) so the reply
+// reliably wins the race.
+const TYPE_MS_PER_CHAR = 60;
+const TYPE_BASE_MS = 10_000;
+export function typeTimeoutMs(textLength: number): number {
+  return TYPE_BASE_MS + textLength * TYPE_MS_PER_CHAR;
+}
+
 async function sendJson(socketPath: string, command: string, timeoutMs?: number): Promise<unknown> {
   const raw = (await sendLine(socketPath, command, timeoutMs)).trim();
   if (!raw) return {};
@@ -144,26 +158,35 @@ async function waitForSocket(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let exited: number | null | undefined;
-  proc.once("exit", (code) => (exited = code));
-  while (Date.now() < deadline) {
-    if (exited !== undefined) {
-      throw new Error(`tv daemon exited with code ${exited} before its socket was ready`);
-    }
-    if (fs.existsSync(socketPath)) {
-      // Confirm it actually accepts, not just that the file exists.
-      const ok = await new Promise<boolean>((resolve) => {
-        const s = net.createConnection(socketPath);
-        s.on("connect", () => {
-          s.destroy();
-          resolve(true);
+  // Track exit only for the duration of this wait. Remove the listener on every
+  // exit path (success or timeout) — otherwise it stays attached to a daemon
+  // that lives ~1h, holding a closure over this resolved call, and a fresh one
+  // accumulates per respawn.
+  const onExit = (code: number | null) => (exited = code);
+  proc.once("exit", onExit);
+  try {
+    while (Date.now() < deadline) {
+      if (exited !== undefined) {
+        throw new Error(`tv daemon exited with code ${exited} before its socket was ready`);
+      }
+      if (fs.existsSync(socketPath)) {
+        // Confirm it actually accepts, not just that the file exists.
+        const ok = await new Promise<boolean>((resolve) => {
+          const s = net.createConnection(socketPath);
+          s.on("connect", () => {
+            s.destroy();
+            resolve(true);
+          });
+          s.on("error", () => resolve(false));
         });
-        s.on("error", () => resolve(false));
-      });
-      if (ok) return;
+        if (ok) return;
+      }
+      await new Promise((r) => setTimeout(r, 150));
     }
-    await new Promise((r) => setTimeout(r, 150));
+    throw new Error(`Timed out waiting for tv daemon socket ${socketPath}`);
+  } finally {
+    proc.removeListener("exit", onExit);
   }
-  throw new Error(`Timed out waiting for tv daemon socket ${socketPath}`);
 }
 
 export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
@@ -236,13 +259,13 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     };
     axProc.on("exit", onAxExit);
 
-    const onProcExit = (which: string) => (code: number | null) => {
+    const onHidExit = (code: number | null) => {
       if (disposed) return;
       // HID daemon exit is fatal for the service — no reconnect path there.
-      const err = new Error(`tvOS ${which} daemon exited with code ${code}`);
+      const err = new Error(`tvOS hid-daemon exited with code ${code}`);
       events.emit("terminated", err);
     };
-    hidProc.on("exit", onProcExit("hid-daemon"));
+    hidProc.on("exit", onHidExit);
 
     try {
       await Promise.all([
@@ -250,8 +273,29 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         waitForSocket(hidSock, hidProc, 15_000),
       ]);
     } catch (err) {
-      if (!axProc.killed) axProc.kill("SIGTERM");
+      // The factory is about to throw, so this instance is never handed to the
+      // registry and no one is subscribed to its events. Detach the exit
+      // listeners before killing the procs so the kill doesn't fire a
+      // `terminated` emit on an instance that was never returned.
+      axProc.removeListener("exit", onAxExit);
+      hidProc.removeListener("exit", onHidExit);
+      // SIGKILL the ax daemon to match dispose()/spawnFreshAx: it runs via
+      // `simctl spawn`, where SIGTERM doesn't reliably propagate to the in-sim
+      // process, so a SIGTERM here would orphan the in-sim ax daemon when one
+      // socket came up but the other timed out. The hid daemon is a direct host
+      // process, so SIGTERM reaps it.
+      if (!axProc.killed) axProc.kill("SIGKILL");
       if (!hidProc.killed) hidProc.kill("SIGTERM");
+      // Unlink any socket a daemon already bound before the other timed out, so
+      // a stale file can't make the next factory's accept-probe see a false
+      // "ready" against a dead socket before the fresh daemon rebinds.
+      for (const p of [axSock, hidSock]) {
+        try {
+          fs.unlinkSync(p);
+        } catch {
+          /* socket never bound or already gone */
+        }
+      }
       throw err;
     }
 
@@ -273,7 +317,37 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       }
       axProc = spawnAxDaemon(udid, axSock);
       axProc.on("exit", onAxExit);
-      await waitForSocket(axSock, axProc, 15_000);
+      try {
+        await waitForSocket(axSock, axProc, 15_000);
+      } catch (err) {
+        // The socket never came up (a slow bind that timed out, not a clean
+        // process exit — `onAxExit` only fires for the latter). Mark the daemon
+        // dead so the next `ensureAxAlive` re-enters the respawn branch instead
+        // of returning early and connecting to the socket we just unlinked and
+        // never rebound. Best-effort reap the half-spawned process too.
+        axExited = true;
+        if (!axProc.killed) {
+          axProc.removeListener("exit", onAxExit);
+          axProc.kill("SIGKILL");
+        }
+        throw err;
+      }
+      // dispose() may have run while we were awaiting the new socket. dispose
+      // kills only the axProc reference current at *its* moment and doesn't wait
+      // for an in-flight respawn, so without this a daemon spawned here would
+      // outlive teardown (orphaned in-sim process + a re-created socket file).
+      // Reap what we just spawned and re-clear the socket.
+      if (disposed) {
+        if (!axProc.killed) {
+          axProc.removeListener("exit", onAxExit);
+          axProc.kill("SIGKILL");
+        }
+        try {
+          fs.unlinkSync(axSock);
+        } catch {
+          /* socket already gone */
+        }
+      }
     }
 
     // Respawn only if the daemon process actually exited (rare — it normally
@@ -306,15 +380,42 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       await axRespawn;
     }
 
+    // Send a command on the ax socket, tolerating the unlink→rebind window of a
+    // *concurrent* recycle. `ensureAxAlive` only holds the single-flight guard
+    // for its own duration; once it returns, a recycle on another in-flight call
+    // (the service instance is shared per device, so two concurrent describes
+    // can race) can set `axRespawn`, unlink the socket, and begin rebinding
+    // before this connect lands — surfacing as ECONNREFUSED/ENOENT on a socket
+    // that is merely mid-respawn, not dead. When a respawn is in flight at the
+    // point of failure, wait it out and retry against the rebound socket rather
+    // than reporting a hard failure. Bounded so a genuinely dead daemon (no
+    // respawn pending) still propagates immediately.
+    async function sendAx(command: string, timeoutMs: number): Promise<unknown> {
+      for (let attempt = 0; ; attempt++) {
+        await ensureAxAlive();
+        try {
+          return await sendJson(axSock, command, timeoutMs);
+        } catch (err) {
+          // Only a respawn racing this connect is recoverable: `axRespawn` is set
+          // synchronously (kill + unlink happen before spawnFreshAx's first
+          // await), so it is non-null here exactly when the socket was pulled out
+          // from under us. No respawn in flight ⇒ a real failure ⇒ rethrow.
+          if (axRespawn && attempt < 2) {
+            await axRespawn.catch(() => {});
+            continue;
+          }
+          throw err;
+        }
+      }
+    }
+
     const api: TvControlApi = {
       async describe(): Promise<TvDescribeResponse> {
-        await ensureAxAlive();
-        const r = (await sendJson(axSock, "describe", 10_000)) as Partial<TvDescribeResponse>;
+        const r = (await sendAx("describe", 10_000)) as Partial<TvDescribeResponse>;
         return {
           bundleId: r.bundleId,
           focused: r.focused ?? null,
           focusable: r.focusable ?? [],
-          screenFrame: r.screenFrame,
         };
       },
 
@@ -323,7 +424,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       },
 
       async type(text: string): Promise<void> {
-        await sendJson(hidSock, `type ${text}`);
+        // Scale the socket timeout to the input length (see typeTimeoutMs) so a
+        // long string doesn't time out mid-type and report a false failure.
+        await sendJson(hidSock, `type ${text}`, typeTimeoutMs(text.length));
       },
 
       async recycleAx(): Promise<void> {
@@ -335,7 +438,23 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       api,
       dispose: async () => {
         disposed = true;
-        if (!axProc.killed) axProc.kill("SIGTERM"); // axProc may be a respawned instance
+        // Wait out an in-flight recycle/respawn so we kill the *final* axProc
+        // (and clean its socket) rather than a reference that spawnFreshAx is
+        // about to replace. spawnFreshAx also re-checks `disposed` after its
+        // await and self-reaps, so the daemon is torn down on either ordering.
+        if (axRespawn) {
+          try {
+            await axRespawn;
+          } catch {
+            /* respawn failed — nothing extra to kill beyond the current axProc */
+          }
+        }
+        // SIGKILL the ax daemon (axProc may be a respawned instance): it runs
+        // via `simctl spawn`, where SIGTERM doesn't reliably propagate to the
+        // in-sim process — so spawnFreshAx already uses SIGKILL to reap it, and
+        // dispose must match or risk orphaning the in-sim daemon. The hid daemon
+        // is a direct host process, so SIGTERM is enough there.
+        if (!axProc.killed) axProc.kill("SIGKILL");
         if (!hidProc.killed) hidProc.kill("SIGTERM");
         for (const p of [axSock, hidSock]) {
           try {

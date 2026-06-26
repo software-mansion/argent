@@ -1,4 +1,4 @@
-import type { DeviceInfo, Registry } from "@argent/registry";
+import type { DeviceInfo, InvokeToolOptions, Registry } from "@argent/registry";
 import { resolveTvApi } from "../../tv/tv-service";
 import { UnsupportedOperationError } from "../../../utils/capability";
 import type { RemoteButton } from "../../../utils/vega-input";
@@ -20,7 +20,8 @@ export async function pressFocusRemote(
   registry: Registry,
   device: DeviceInfo,
   params: TvRemoteParams,
-  unsupported?: ReadonlySet<RemoteButton>
+  unsupported?: ReadonlySet<RemoteButton>,
+  options?: InvokeToolOptions
 ): Promise<TvRemoteResult> {
   const buttons = expandButtons(params.button, params.repeat);
 
@@ -39,7 +40,17 @@ export async function pressFocusRemote(
 
   const api = await resolveTvApi(registry, device.id);
   const pressed: RemoteButton[] = [];
+  // A path of up to 64 buttons × repeat 50 is one press per daemon / adb
+  // round-trip, so the loop can run for minutes — and `tv-remote` is
+  // `longRunning`, so the MCP adapter won't abort it for us. Check the framework
+  // signal between presses: if the client cancels or disconnects, abort the call
+  // rather than keep firing at the held device to completion. Already-sent
+  // presses aren't rolled back (they can't be), and `throwIfAborted` rejects the
+  // call rather than returning a partial `pressed` count — a cancelled request
+  // has no caller waiting for the tally. (The Vega branch injects the whole path
+  // in one round-trip and is unaffected.)
   for (const button of buttons) {
+    options?.signal?.throwIfAborted();
     await api.navigate(button);
     pressed.push(button);
   }

@@ -532,9 +532,6 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
 
       async describe(): Promise<AXDescribeResponse> {
         const result = (await query("describe", 10_000)) as AXDescribeResponse & {
-          // tvOS's ax-service returns the focus-engine elements under
-          // `focusable` rather than `elements`; fall back to it below.
-          focusable?: AXDescribeElement[];
           error?: string;
         };
         if (result.error) {
@@ -548,7 +545,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         return {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
-          elements: result.elements ?? result.focusable ?? [],
+          elements: result.elements ?? [],
         };
       },
 

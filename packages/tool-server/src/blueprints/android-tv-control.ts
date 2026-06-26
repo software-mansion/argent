@@ -8,7 +8,8 @@ import {
 import { adbExecOutBinary, adbShell, shellQuote, getAndroidRuntimeKind } from "../utils/adb";
 import {
   parseUiAutomatorXml,
-  parseUiAutomatorBounds,
+  attrIsTrue,
+  labelOf,
 } from "../tools/describe/platforms/android/uiautomator-parser";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
@@ -37,8 +38,8 @@ export function androidTvControlRef(device: DeviceInfo): {
 }
 
 // D-pad / system keyevents. Android TV is driven entirely through the remote's
-// directional pad — there is no touch — so the same eight logical actions the
-// The full TV-remote vocabulary mapped onto Android KEYCODE_* values:
+// directional pad — there is no touch — so the full TV-remote vocabulary maps
+// onto Android KEYCODE_* values:
 //   back → BACK; menu → KEYCODE_MENU (the options-menu affordance, distinct from
 //   back). The media-transport and volume keys map onto the standard Android
 //   media/volume keycodes, all of which `adb input keyevent` accepts.
@@ -61,18 +62,11 @@ const KEYEVENTS: Record<TvDirection, number> = {
   mute: 164, // KEYCODE_VOLUME_MUTE
 };
 
-interface PixelRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-// One parsed focusable node, kept in pixel space for the set-focus geometry walk.
+// One parsed focusable node. A TV surface is focus-driven (no tap coordinates),
+// so we keep only what the focus view renders — no pixel geometry.
 interface TvNode {
   label: string;
   value: string;
-  rect: PixelRect | null;
   focused: boolean;
   selected: boolean;
   disabled: boolean;
@@ -81,17 +75,9 @@ interface TvNode {
   pkg: string;
 }
 
-function attrIsTrue(attrs: Record<string, string>, key: string): boolean {
-  return attrs[key] === "true";
-}
-
-// Prefer the screen-reader label (content-desc) and surface the user-typed text
-// as `value`, the same split `describe` uses. Either may be empty.
-function labelOf(attrs: Record<string, string>): string {
-  const cd = (attrs["content-desc"] ?? "").trim();
-  if (cd) return cd;
-  return (attrs.text ?? "").trim();
-}
+// `attrIsTrue` and `labelOf` (the content-desc-vs-text label contract) are
+// shared with the phone describe parser so the two stay in lockstep — imported
+// from uiautomator-parser rather than re-implemented here.
 
 function valueOf(attrs: Record<string, string>): string {
   const cd = (attrs["content-desc"] ?? "").trim();
@@ -106,7 +92,7 @@ function valueOf(attrs: Record<string, string>): string {
  * Walk a parsed uiautomator tree collecting the focused node and every
  * focusable node. Unlike `parseUiAutomatorDump` (which drops the `focused`
  * attribute and normalises to the describe contract), the focus walk needs the
- * raw `focused` flag and pixel bounds, so this is a dedicated lightweight pass.
+ * raw `focused` flag, so this is a dedicated lightweight pass.
  */
 function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNode[] } {
   const root = parseUiAutomatorXml(xml);
@@ -135,7 +121,6 @@ function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNod
     const tvNode: TvNode = {
       label,
       value: valueOf(attrs),
-      rect: parseUiAutomatorBounds(attrs.bounds ?? ""),
       focused: isFocused,
       selected: attrIsTrue(attrs, "selected"),
       disabled: attrs.enabled === "false",
@@ -161,7 +146,6 @@ function traitsOf(n: TvNode): string[] {
 function toTvElement(n: TvNode): TvElement {
   return {
     label: n.label || undefined,
-    frame: n.rect ? { x: n.rect.x, y: n.rect.y, width: n.rect.w, height: n.rect.h } : undefined,
     traits: traitsOf(n),
     value: n.value || undefined,
     isFocused: n.focused,

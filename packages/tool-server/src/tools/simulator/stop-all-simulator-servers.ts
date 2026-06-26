@@ -4,12 +4,22 @@ import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
 import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
+import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
+import { ANDROID_TV_CONTROL_NAMESPACE } from "../../blueprints/android-tv-control";
 
 const PREFIXES = [
   `${SIMULATOR_SERVER_NAMESPACE}:`,
   `${NATIVE_DEVTOOLS_NAMESPACE}:`,
   `${ANDROID_DEVTOOLS_NAMESPACE}:`,
   `${CHROMIUM_CDP_NAMESPACE}:`,
+  // The Apple TV service owns two spawned daemons (in-sim tvos-ax-service +
+  // host-side tvos-hid-daemon, both --timeout 3600); only its dispose() reaps
+  // them and unlinks the sockets. Without this prefix a session-end stop leaves
+  // them running for up to an hour. (AndroidTvControl is stateless adb shell-outs
+  // with a no-op dispose, but include it for symmetry so the snapshot is fully
+  // drained.)
+  `${TV_CONTROL_NAMESPACE}:`,
+  `${ANDROID_TV_CONTROL_NAMESPACE}:`,
 ];
 
 export function createStopAllSimulatorServersTool(

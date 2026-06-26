@@ -13,7 +13,6 @@
 
 export interface TvElement {
   label?: string;
-  frame?: { x: number; y: number; width: number; height: number };
   traits?: string[];
   value?: string;
   isFocused?: boolean;
@@ -23,7 +22,6 @@ export interface TvDescribeResponse {
   bundleId?: string;
   focused: TvElement | null;
   focusable: TvElement[];
-  screenFrame?: { width: number; height: number };
 }
 
 // The full TV-remote button vocabulary, shared by every focus-driven backend

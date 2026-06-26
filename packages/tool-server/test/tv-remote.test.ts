@@ -7,6 +7,7 @@ vi.mock("../src/utils/vega-input", async (importActual) => {
   return { ...actual, injectVegaButtons: (...a: unknown[]) => injectVegaButtons(...a) };
 });
 
+import type { ToolContext } from "@argent/registry";
 import { createTvRemoteTool } from "../src/tools/tv-remote";
 import { UnsupportedOperationError } from "../src/utils/capability";
 import type { TvControlApi } from "../src/blueprints/tv-control-types";
@@ -111,6 +112,39 @@ describe("tv-remote execute — Apple TV / Android TV (focus-driven)", () => {
     ).rejects.toBeInstanceOf(UnsupportedOperationError);
     // Whole path rejected up front — no partial execution.
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("stops pressing mid-path when the invocation signal is already aborted", async () => {
+    const { registry, navigate } = makeRegistry();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      createTvRemoteTool(registry).execute!(
+        {},
+        { udid: ANDROID_TV_SERIAL, button: ["up", "down", "select"] },
+        { artifacts: {}, signal: controller.signal } as unknown as ToolContext
+      )
+    ).rejects.toThrow();
+    // Aborted before the first press — nothing fired at the held device.
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("aborts partway through a long path once the client disconnects", async () => {
+    const { registry, navigate } = makeRegistry();
+    const controller = new AbortController();
+    // Abort after the 2nd press lands; the loop must not fire the remaining ones.
+    navigate.mockImplementation(async () => {
+      if (navigate.mock.calls.length >= 2) controller.abort();
+    });
+    await expect(
+      createTvRemoteTool(registry).execute!(
+        {},
+        { udid: ANDROID_TV_SERIAL, button: ["up", "up", "up", "up", "up"] },
+        { artifacts: {}, signal: controller.signal } as unknown as ToolContext
+      )
+    ).rejects.toThrow();
+    // Pressed exactly the two before the abort, then bailed — not all five.
+    expect(navigate).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -11,6 +11,7 @@ export function makeAndroidImpl(
 ): PlatformImpl<Record<string, unknown>, TvRemoteParams, TvRemoteResult> {
   return {
     requires: ["adb"],
-    handler: (_services, params, device) => pressFocusRemote(registry, device, params),
+    handler: (_services, params, device, options) =>
+      pressFocusRemote(registry, device, params, undefined, options),
   };
 }
