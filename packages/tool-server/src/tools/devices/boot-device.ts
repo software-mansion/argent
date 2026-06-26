@@ -1155,8 +1155,9 @@ async function bootVegaImpl(params: {
       const which = runningImage ? `("${runningImage}")` : "(its image could not be confirmed)";
       throw new Error(
         `A Vega VVD ${which} is already running; argent v1 supports a single running VVD. ` +
-          `To boot "${params.vvdImage}", re-run boot-device with force:true (stops the current ` +
-          "VVD first) or stop it via `vega virtual-device stop`."
+          `To boot "${params.vvdImage}", re-run boot-device with force:true, which stops the ` +
+          "current VVD first (by process, since the `vega` CLI does not reliably stop a VVD " +
+          "argent booted) and then boots the requested image."
       );
     }
     return {
