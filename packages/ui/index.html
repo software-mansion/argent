@@ -2716,7 +2716,11 @@
       let describeWarmupPending = false;
       async function describeOnce() {
         const need =
-          currentUdid && (vp.proposals.length > 0 || vp.inspect || describeWarmupPending);
+          currentUdid &&
+          (vp.proposals.length > 0 ||
+            vp.annotations.length > 0 ||
+            vp.inspect ||
+            describeWarmupPending);
         if (need && !describeInFlight) {
           describeInFlight = true;
           // Bound each request — describe is polled ~3×/s now, so a single
@@ -2796,20 +2800,52 @@
           }, floor);
         });
       }
-      // Single loop (started once, never twice). Background cadence ~300ms
-      // while work is on screen; a kick from sendCmd() collapses the wait to
-      // the floor so connectors chase live drags/scrolls, then it idles at
-      // 900ms when there is nothing to track.
+      // Cheap order-sensitive hash of the describe tree's JSON — used only to
+      // tell whether the on-screen layout changed since the last poll (FNV-1a).
+      function treeSignature(tree) {
+        const s = JSON.stringify(tree);
+        let h = 2166136261;
+        for (let i = 0; i < s.length; i++) {
+          h ^= s.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+        }
+        return (h >>> 0).toString(36) + ":" + s.length;
+      }
+      // Single loop (started once, never twice). Cadence tracks on-screen motion
+      // instead of a fixed interval: the sim-server only emits frames (so the
+      // describe tree only changes) while the screen moves, so we poll fast while
+      // the tree is changing — navigation, animation, a live drag — and ramp
+      // toward idle once it's been static, mirroring the stream's own FPS rather
+      // than re-describing a frozen screen. A kick from sendCmd() still collapses
+      // the wait to the floor so connectors chase live input immediately; the
+      // resulting tree change resets the ramp. Comment pins keep the loop alive
+      // (need), so they reposition within one poll of a navigation instead of
+      // floating on a stale tree until it expires.
       let describeLoopArmed = false;
+      const DESCRIBE_FAST_MS = 300; // tracking motion
+      const DESCRIBE_IDLE_MS = 1500; // static screen, work still on it
       async function pollDescribe() {
         if (describeLoopArmed) return;
         describeLoopArmed = true;
+        let lastSig = "";
+        let staticPolls = 0;
         for (;;) {
           const t0 = Date.now();
           await describeOnce();
-          const need = currentUdid && (vp.proposals.length > 0 || vp.inspect);
-          const base = need ? Math.max(160, 300 - (Date.now() - t0)) : 900;
-          await describeDelay(base, need ? 130 : 0);
+          const need =
+            currentUdid && (vp.proposals.length > 0 || vp.annotations.length > 0 || vp.inspect);
+          const sig = vp.tree ? treeSignature(vp.tree) : "";
+          if (sig !== lastSig) {
+            lastSig = sig;
+            staticPolls = 0; // motion → describe again promptly
+          } else if (need) {
+            staticPolls++;
+          }
+          let base;
+          if (!need) base = DESCRIBE_IDLE_MS;
+          else if (staticPolls === 0) base = Math.max(160, DESCRIBE_FAST_MS - (Date.now() - t0));
+          else base = Math.min(DESCRIBE_IDLE_MS, DESCRIBE_FAST_MS + staticPolls * 250);
+          await describeDelay(base, need && staticPolls === 0 ? 130 : 0);
         }
       }
 
