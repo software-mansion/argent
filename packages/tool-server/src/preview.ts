@@ -55,6 +55,69 @@ function wsUrlFromHttp(httpUrl: string): string {
 export function createPreviewRouter(registry: Registry): Router {
   const router = express.Router();
 
+  // ── Known-device cache ────────────────────────────────────────────────
+  // Both /describe/:udid and /simulator-server/:udid validate the :udid against
+  // the live device list before dispatching, so this auth-exempt route can't
+  // amplify forged ids into unbounded `xcrun`/`adb` subprocess spawns. But the
+  // preview UI polls /describe ~3×/s while variants are on screen, and `argent
+  // lens` holds the window open across rounds — so invoking `list-devices`
+  // (which itself shells `xcrun`/`adb`/`ps` + probes Chromium CDP) per request
+  // turns the guard into a spawn storm. Cache the known-id set for a short
+  // window: the guard stays O(1) on the hot path and `list-devices` runs at most
+  // ~once per window. This also tightens the guard — a flood of forged ids now
+  // shares one refresh instead of triggering a `list-devices` spawn each.
+  // /simulators refreshes the cache as a side effect, so a device the UI just
+  // listed is immediately connectable without waiting out the TTL.
+  const KNOWN_DEVICES_TTL_MS = 5_000;
+  let knownDevices: { ids: Set<string>; at: number } | null = null;
+  let knownDevicesInFlight: Promise<Set<string>> | null = null;
+
+  // Mirror the original `.some()` guard exactly: an iOS device is keyed by its
+  // udid, every other platform by its serial (a chromium entry has neither, so
+  // it's skipped — it was never a valid preview target anyway).
+  function deviceIdSet(
+    devices: ReadonlyArray<{ platform: string; udid?: string; serial?: string }>
+  ): Set<string> {
+    const ids = new Set<string>();
+    for (const d of devices) {
+      const id = d.platform === "ios" ? d.udid : d.serial;
+      if (typeof id === "string") ids.add(id);
+    }
+    return ids;
+  }
+
+  // Record a freshly-resolved device list into the cache (used by both the
+  // dedicated refresh below and the /simulators handler, which already fetches
+  // the full list for its dropdown).
+  function rememberDevices(
+    devices: ReadonlyArray<{ platform: string; udid?: string; serial?: string }>
+  ): void {
+    knownDevices = { ids: deviceIdSet(devices), at: Date.now() };
+  }
+
+  // Resolve the set of known device ids, refreshing via `list-devices` only when
+  // the cache is cold or stale. Concurrent callers within one refresh share a
+  // single in-flight invocation. Rejections propagate (the routes 500 on them,
+  // as they did when calling `list-devices` inline).
+  async function knownDeviceIds(): Promise<Set<string>> {
+    if (knownDevices && Date.now() - knownDevices.at < KNOWN_DEVICES_TTL_MS) {
+      return knownDevices.ids;
+    }
+    if (knownDevicesInFlight) return knownDevicesInFlight;
+    knownDevicesInFlight = registry
+      .invokeTool<{
+        devices: Array<{ platform: string; udid?: string; serial?: string }>;
+      }>(listDevicesTool.id)
+      .then((data) => {
+        rememberDevices(data.devices);
+        return knownDevices!.ids;
+      })
+      .finally(() => {
+        knownDevicesInFlight = null;
+      });
+    return knownDevicesInFlight;
+  }
+
   router.get("/simulators", async (_req: Request, res: Response) => {
     try {
       const data = await registry.invokeTool<{
@@ -116,6 +179,11 @@ export function createPreviewRouter(registry: Registry): Router {
         }
         return [];
       });
+      // This is the authoritative fresh device list — prime the validation
+      // cache so the immediately-following connect (/simulator-server/:udid)
+      // and the describe poll loop hit a warm, correct set instead of each
+      // re-running `list-devices`.
+      rememberDevices(data.devices);
       res.json({ simulators });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -142,11 +210,10 @@ export function createPreviewRouter(registry: Registry): Router {
       // number of simulator-server processes with arbitrary distinct ids
       // (DoS), nor (b) inject argv into the binary via a crafted id. The UI
       // only ever requests ids returned by /preview/simulators — no
-      // regression.
-      const data = await registry.invokeTool<{
-        devices: Array<{ platform: "ios"; udid: string } | { platform: "android"; serial: string }>;
-      }>(listDevicesTool.id);
-      const known = data.devices.some((d) => (d.platform === "ios" ? d.udid : d.serial) === udid);
+      // regression. Validation goes through the short-lived known-device cache
+      // (see top of createPreviewRouter) so the describe poll loop doesn't
+      // re-run `list-devices` on every tick.
+      const known = (await knownDeviceIds()).has(udid);
       if (!known) {
         res
           .status(400)
@@ -319,13 +386,11 @@ export function createPreviewRouter(registry: Registry): Router {
       // bind the dispatch to an actually-present device — otherwise an
       // unauthenticated caller could flood distinct ids and amplify into
       // unbounded subprocess spawns. The UI only ever requests ids returned by
-      // /preview/simulators — no regression.
-      const deviceList = await registry.invokeTool<{
-        devices: Array<{ platform: "ios"; udid: string } | { platform: "android"; serial: string }>;
-      }>(listDevicesTool.id);
-      const known = deviceList.devices.some(
-        (d) => (d.platform === "ios" ? d.udid : d.serial) === udid
-      );
+      // /preview/simulators — no regression. Validation goes through the
+      // short-lived known-device cache (see top of createPreviewRouter): this
+      // route is polled ~3×/s, so re-running `list-devices` per tick would
+      // storm `xcrun`/`adb`/`ps`.
+      const known = (await knownDeviceIds()).has(udid);
       if (!known) {
         res
           .status(400)
