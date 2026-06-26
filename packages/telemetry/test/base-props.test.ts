@@ -23,8 +23,8 @@ describe("base-props", () => {
         [
           "$process_person_profile",
           "$session_id",
-          "agent_env",
           "arch",
+          "cloud_agent",
           "cli_version",
           "is_ci",
           "is_tty",
@@ -60,13 +60,13 @@ describe("base-props", () => {
     }
   });
 
-  it("sets agent_env when an AI agent runtime is detected", () => {
-    // CURSOR_AGENT is checked before the generic AI_AGENT fallback, so it wins
-    // deterministically regardless of any agent vars in the ambient test env.
-    const restore = snapshotEnv(["CURSOR_AGENT"]);
+  it("sets cloud_agent when a cloud/remote agent runtime is detected", () => {
+    // REPLIT_AGENT is an env-only signal (no filesystem check) and is not the
+    // ambient env of this test process, so it resolves deterministically.
+    const restore = snapshotEnv(["REPLIT_AGENT"]);
     try {
-      process.env.CURSOR_AGENT = "1";
-      expect(getBaseProps("cli").agent_env).toBe("cursor");
+      process.env.REPLIT_AGENT = "1";
+      expect(getBaseProps("cli").cloud_agent).toBe("replit");
     } finally {
       restore();
     }

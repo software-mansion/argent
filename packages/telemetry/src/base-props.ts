@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { detectAgentEnv, type AgentEnv } from "./agent-detect.js";
+import { detectCloudAgent, type CloudAgent } from "./cloud-agent-detect.js";
 import { isCi } from "./ci-detect.js";
 
 // Build-time version metadata injected by esbuild's `define`. It substitutes the
@@ -35,9 +35,10 @@ export interface BaseProps {
   arch: NodeJS.Architecture;
   is_tty: boolean;
   is_ci: boolean;
-  // Canonical slug of the detected AI coding-agent runtime, or null if none.
-  // The agent analogue of is_ci — see ./agent-detect.ts.
-  agent_env: AgentEnv | null;
+  // Canonical slug of the detected cloud/remote AI coding-agent runtime, or null.
+  // The agent-environment analogue of is_ci — see ./cloud-agent-detect.ts. Fires
+  // only for vendor-hosted/remote runs, not local agent CLI use.
+  cloud_agent: CloudAgent | null;
   runtime: Runtime;
   $session_id: string;
   $process_person_profile: false;
@@ -47,8 +48,9 @@ export interface BaseProps {
 // matters for the long-lived tool-server, which calls getBaseProps() on every
 // tracked event: readCliVersion(), the process.version regex, and especially
 // isCi() (which scans ~9 env vars and walks every ci-info vendor definition) and
-// detectAgentEnv() (which scans the agent signal table and may stat the Devin
-// marker) would otherwise re-run per event. Only `runtime` and `$session_id` are kept
+// detectCloudAgent() (which scans the agent signal table and may stat the
+// Devin/Jules markers) would otherwise re-run per event. Only `runtime` and
+// `$session_id` are kept
 // dynamic below — the session id reads SESSION_ID live so the test seam can
 // rotate it.
 type InvariantProps = Omit<BaseProps, "runtime" | "$session_id">;
@@ -63,7 +65,7 @@ function getInvariantProps(): InvariantProps {
       arch: process.arch,
       is_tty: Boolean(process.stdout.isTTY),
       is_ci: isCi(),
-      agent_env: detectAgentEnv(),
+      cloud_agent: detectCloudAgent(),
       $process_person_profile: false,
     };
   }
