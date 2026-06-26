@@ -1,20 +1,22 @@
 /**
- * `argent lens` — open Argent Lens bound to a fresh `claude` session.
+ * `argent lens` — open Argent Lens bound to a fresh coding-agent session.
  *
  * The problem this solves: the Lens preview window and the agent talk through a
  * shared, process-wide tool-server that carries no per-agent identity, so when
  * the user requests changes in the window there is no way to know WHICH agent to
  * route them to. This command sidesteps that entirely by inverting ownership —
  * the human launches Lens, and Lens spawns (and therefore owns) exactly one
- * `claude` terminal. The binding is 1:1 by construction.
+ * agent terminal. The binding is 1:1 by construction.
  *
  * Flow:
- *   1. Ensure a tool-server is up; mark it as a CLI Lens session so it opens the
- *      preview window now (no `await_user_selection` needed) and keeps it open
- *      across rounds.
- *   2. Spawn a tracked `claude` terminal in the current directory, seeded to use
+ *   1. Ensure a tool-server is up and pick the agent to bind (the only installed
+ *      one, or a prompt when several are; see `lens-agents.ts`).
+ *   2. Mark a CLI Lens session so the tool-server opens the preview window now
+ *      (no `await_user_selection` needed) and keeps it open across rounds, and
+ *      ensure a device is running so the preview has something to stream.
+ *   3. Spawn a tracked agent terminal in the current directory, seeded to use
  *      `propose_variant` without blocking.
- *   3. Watch the tool-server for submitted feedback and type a one-line summary
+ *   4. Watch the tool-server for submitted feedback and type a one-line summary
  *      into that terminal — queuing it to the agent as its next prompt.
  *
  * macOS only: the terminal spawn/track/write path drives `osascript` (see
@@ -24,6 +26,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as readline from "node:readline";
 import { createToolsClient, type ToolsServerPaths } from "@argent/tools-client";
 import { isFlagEnabled } from "@argent/configuration-core";
 import {
@@ -39,6 +42,16 @@ import {
   type TerminalApp,
   type TerminalSession,
 } from "./lens-terminal.js";
+import {
+  AGENTS,
+  detectInstalledAgents,
+  findAgentById,
+  isAgentInstalled,
+  agentIds,
+  type AgentSpec,
+} from "./lens-agents.js";
+
+type ToolsClient = ReturnType<typeof createToolsClient>;
 
 export interface LensCommandOptions {
   paths: ToolsServerPaths;
@@ -99,6 +112,160 @@ async function dismissTrustPrompt(session: TerminalSession): Promise<void> {
       return;
     }
   }
+}
+
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/**
+ * Resolve which agent CLI to bind. With `--agent`, validate it's known and
+ * installed. Otherwise auto-pick the only installed agent, or prompt the user to
+ * choose when several are present. Exits (nothing is open yet) when there's no
+ * usable agent.
+ */
+async function resolveAgent(agentId: string | undefined): Promise<AgentSpec> {
+  if (agentId) {
+    const want = findAgentById(agentId);
+    if (!want) {
+      process.stderr.write(
+        `lens: unknown agent "${agentId}". Choose one of: ${agentIds().join(", ")}\n`
+      );
+      process.exit(2);
+    }
+    if (!isAgentInstalled(want)) {
+      process.stderr.write(
+        `lens: ${want.displayName} (${want.bin}) is not installed or not on PATH.\n`
+      );
+      process.exit(1);
+    }
+    return want;
+  }
+
+  const installed = detectInstalledAgents();
+  if (installed.length === 0) {
+    process.stderr.write(
+      "lens: no supported coding-agent CLI found on PATH.\n" +
+        `  Install one of: ${AGENTS.map((a) => a.bin).join(", ")}, then re-run argent lens.\n`
+    );
+    process.exit(1);
+  }
+  if (installed.length === 1) {
+    process.stdout.write(`  Agent: ${installed[0].displayName}.\n`);
+    return installed[0];
+  }
+  if (!process.stdin.isTTY) {
+    process.stderr.write(
+      `lens: multiple agents installed (${installed.map((a) => a.id).join(", ")}). ` +
+        "Pass --agent <id> when stdin isn't interactive.\n"
+    );
+    process.exit(1);
+  }
+  return promptSelectAgent(installed);
+}
+
+/** Numbered interactive picker for the agent (Enter takes the first option). */
+function promptSelectAgent(agents: AgentSpec[]): Promise<AgentSpec> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const menu = agents.map((a, i) => `    ${i + 1}. ${a.displayName}  (${a.bin})`).join("\n");
+  return new Promise((resolve) => {
+    const ask = (): void => {
+      rl.question(
+        `\n  Which agent should Lens bind to?\n${menu}\n\n  Choice [1-${agents.length}] (default 1): `,
+        (answer) => {
+          const t = answer.trim();
+          if (t === "") {
+            rl.close();
+            resolve(agents[0]);
+            return;
+          }
+          const n = Number(t);
+          if (Number.isInteger(n) && n >= 1 && n <= agents.length) {
+            rl.close();
+            resolve(agents[n - 1]);
+            return;
+          }
+          process.stdout.write("  Please enter a number from the list.\n");
+          ask();
+        }
+      );
+    };
+    ask();
+  });
+}
+
+/** Shape of a `list-devices` entry we care about (the tool returns more). */
+interface ListedDevice {
+  platform?: string;
+  state?: string;
+  udid?: string;
+  name?: string;
+  serial?: string;
+}
+
+function isDeviceReady(d: ListedDevice): boolean {
+  if (d.platform === "ios") return d.state === "Booted";
+  if (d.platform === "android") return d.state === "device";
+  if (d.platform === "vega") return d.state === "running" || d.state === "device";
+  if (d.platform === "chromium") return true; // only listed when its CDP is live
+  return false;
+}
+
+function deviceLabel(d: ListedDevice): string {
+  return d.name || d.udid || d.serial || "device";
+}
+
+/**
+ * Ensure a device is running so the preview window can stream. Uses the already
+ * up tool-server: if nothing is booted, boots an iOS simulator (or an Android
+ * AVD). Entirely best-effort — every failure path just prints a note and lets
+ * the session start anyway (the agent can still target a device by udid later).
+ */
+async function ensureDevice(client: ToolsClient): Promise<void> {
+  let data: { devices?: ListedDevice[]; avds?: Array<{ name?: string }> } | undefined;
+  try {
+    data = (await client.callTool("list-devices", {})).data as typeof data;
+  } catch (err) {
+    process.stdout.write(
+      `  (couldn't list devices: ${errMsg(err)}; the preview streams once a device is up)\n`
+    );
+    return;
+  }
+  const devices = Array.isArray(data?.devices) ? data.devices : [];
+  const avds = Array.isArray(data?.avds) ? data.avds : [];
+
+  const ready = devices.find(isDeviceReady);
+  if (ready) {
+    process.stdout.write(`  Device ready: ${deviceLabel(ready)}.\n`);
+    return;
+  }
+
+  const iosSim = devices.find((d) => d.platform === "ios" && d.udid);
+  try {
+    if (iosSim) {
+      process.stdout.write(`  Booting iOS simulator "${deviceLabel(iosSim)}"…\n`);
+      await client.callTool("boot-device", { udid: iosSim.udid });
+      process.stdout.write("  Simulator booted.\n");
+    } else if (avds.length && avds[0].name) {
+      process.stdout.write(`  Booting Android emulator "${avds[0].name}"…\n`);
+      await client.callTool("boot-device", { avdName: avds[0].name });
+      process.stdout.write("  Emulator booted.\n");
+    } else {
+      process.stdout.write(
+        "  No simulator or emulator found — start one (or create an iOS simulator) so the\n" +
+          "  preview can stream the device.\n"
+      );
+    }
+  } catch (err) {
+    process.stdout.write(
+      `  (couldn't boot a device: ${errMsg(err)}; continuing — the agent can target one by udid)\n`
+    );
+  }
+}
+
+/** Seed an inject-mode agent (its TUI takes no initial-prompt arg) by typing the
+ * CLI-Lens prompt in once the terminal has settled after boot. */
+async function injectSeedAfterBoot(session: TerminalSession): Promise<void> {
+  await sleep(5_000);
+  writeToSession(session, buildSeedPrompt());
 }
 
 /** The instruction the spawned `claude` starts with, establishing CLI-Lens
@@ -182,8 +349,13 @@ export function formatLensFeedback(o: LensOutcome): string {
   );
 }
 
-function parseArgs(argv: string[]): { terminal: TerminalApp | undefined; help: boolean } {
+function parseArgs(argv: string[]): {
+  terminal: TerminalApp | undefined;
+  agent: string | undefined;
+  help: boolean;
+} {
   let terminal: TerminalApp | undefined;
+  let agent: string | undefined;
   let help = false;
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i];
@@ -195,27 +367,35 @@ function parseArgs(argv: string[]): { terminal: TerminalApp | undefined; help: b
         process.stderr.write(`lens: --terminal expects "iterm" or "terminal", got "${v ?? ""}"\n`);
         process.exit(2);
       }
+    } else if (tok === "--agent" || tok === "-a") {
+      agent = argv[++i];
+      if (!agent) {
+        process.stderr.write(`lens: --agent expects one of: ${agentIds().join(", ")}\n`);
+        process.exit(2);
+      }
     }
   }
-  return { terminal, help };
+  return { terminal, agent, help };
 }
 
 function printHelp(): void {
   process.stdout.write(
-    `Usage: argent lens [--terminal iterm|terminal]\n\n` +
-      `Open Argent Lens bound to a fresh claude session.\n\n` +
-      `  Spawns a claude terminal in the current directory and opens the Lens\n` +
-      `  preview window. When you request changes in the window, they are typed\n` +
-      `  into that claude session — queued as its next prompt. Ctrl-C ends the\n` +
-      `  bridge (the claude terminal keeps running).\n\n` +
+    `Usage: argent lens [--agent <id>] [--terminal iterm|terminal]\n\n` +
+      `Open Argent Lens bound to a fresh coding-agent session.\n\n` +
+      `  Ensures a simulator is running and opens the Lens preview window, then\n` +
+      `  spawns your chosen agent in the current directory (you pick when more than\n` +
+      `  one is installed). When you request changes in the window, they are typed\n` +
+      `  into that agent session — queued as its next prompt. Ctrl-C ends the bridge\n` +
+      `  (the agent terminal keeps running).\n\n` +
       `Options:\n` +
+      `  -a, --agent <id>       Agent to bind: ${agentIds().join(", ")}\n` +
       `  -t, --terminal <app>   Terminal to spawn (iterm preferred, else terminal)\n` +
       `  -h, --help             Show this help\n`
   );
 }
 
 export async function lens(argv: string[], options: LensCommandOptions): Promise<void> {
-  const { terminal: preferred, help } = parseArgs(argv);
+  const { terminal: preferred, agent: agentId, help } = parseArgs(argv);
   if (help) {
     printHelp();
     return;
@@ -224,7 +404,7 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
   if (process.platform !== "darwin") {
     process.stderr.write(
       "argent lens is macOS-only — it drives Terminal/iTerm via osascript to spawn and\n" +
-        "feed the claude session. (The preview window itself works elsewhere via the MCP\n" +
+        "feed the agent session. (The preview window itself works elsewhere via the MCP\n" +
         "propose_variant / await_user_selection flow.)\n"
     );
     process.exit(1);
@@ -252,6 +432,10 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
 
   const previewUrl = `${baseUrl}/preview/`;
 
+  // Pick the agent to bind before touching the window, so an unknown or
+  // uninstalled agent fails cleanly with nothing to tear down.
+  const agent = await resolveAgent(agentId);
+
   // Begin the CLI session — the tool-server opens the preview window now and
   // keeps it open across rounds.
   try {
@@ -268,16 +452,19 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     process.exit(1);
   }
 
-  // Spawn the tracked claude terminal in the current directory. The prompt is
-  // staged in a temp file and read back with $(cat …) so a multi-line seed never
-  // has to survive nested shell + AppleScript quoting (the applet's trick).
+  // Make sure a device is up so the preview has something to stream (boots one
+  // when none is running). Best-effort: never blocks the session from starting.
+  await ensureDevice(client);
+
+  // Spawn the tracked agent terminal in the current directory. The seed prompt
+  // is staged in a temp file and read back with $(cat …) so a multi-line seed
+  // never has to survive nested shell + AppleScript quoting (the applet's trick).
   const term = resolveTerminal(preferred);
   const seedFile = path.join(os.tmpdir(), `argent-lens-seed-${process.pid}-${Date.now()}.txt`);
   fs.writeFileSync(seedFile, buildSeedPrompt(), "utf8");
-  // `$(cat <file>)` stays double-quoted so the seed reaches claude as one
-  // argument; the file path is single-quoted so it survives the shell. The
-  // command-substitution itself must run unquoted-by-us, hence the literal "$(…)".
-  const launchCmd = `cd ${shellQuote(process.cwd())} 2>/dev/null; claude "$(cat ${shellQuote(seedFile)})"`;
+  // `$(cat <file>)` stays double-quoted so the seed reaches the agent as one
+  // argument; the file path is single-quoted so it survives the shell.
+  const launchCmd = agent.launch(shellQuote(process.cwd()), shellQuote(seedFile));
 
   let session: TerminalSession;
   try {
@@ -295,8 +482,12 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
   // background (the user shouldn't have to babysit the spawned terminal).
   void dismissTrustPrompt(session);
 
+  // Inject-mode agents (no initial-prompt arg) get the seed typed in after boot.
+  if (agent.injectSeed) void injectSeedAfterBoot(session);
+
   process.stdout.write(
     `\n  Argent Lens is live.\n\n` +
+      `    • Agent:           ${agent.displayName}\n` +
       `    • Preview window:  ${previewUrl}\n` +
       `    • Agent terminal:  ${terminalAppName(term)} (tty ${session.tty || "?"})\n\n` +
       `  Ask the agent to redesign something; review the variants in the window and\n` +
