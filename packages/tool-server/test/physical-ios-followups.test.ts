@@ -25,7 +25,6 @@ import { resolveDevice, isPhysicalIosUdid } from "../src/utils/device-info";
 import { parsePhysicalIosDevices } from "../src/utils/ios-devices";
 import { UnsupportedOperationError, assertSupported } from "../src/utils/capability";
 import { swipeDragParams, ensureCoreDeviceTunnel } from "../src/blueprints/core-device";
-import { nativeProfilerSessionBlueprint } from "../src/blueprints/native-profiler-session";
 import { buttonTool } from "../src/tools/button";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
 import { describeIos } from "../src/tools/describe/platforms/ios";
@@ -105,10 +104,13 @@ describe("discovery does not surface simulators as physical devices", () => {
 describe("button — CoreDevice HID mapping on physical iOS", () => {
   const press = async (button: string) => {
     const coreDevice = { button: vi.fn().mockResolvedValue(undefined) };
-    const res = await buttonTool.execute({ coreDevice } as never, {
-      udid: PHYSICAL_UDID,
-      button,
-    } as never);
+    const res = await buttonTool.execute(
+      { coreDevice } as never,
+      {
+        udid: PHYSICAL_UDID,
+        button,
+      } as never
+    );
     return { coreDevice, res };
   };
 
@@ -174,23 +176,6 @@ describe("tools unsupported on physical iOS reject with UnsupportedOperationErro
   });
 });
 
-describe("native-profiler-session blueprint", () => {
-  it("rejects a physical iPhone (iOS profiler path is simulator-only)", async () => {
-    await expect(
-      nativeProfilerSessionBlueprint.factory({} as never, undefined as never, {
-        device: resolveDevice(PHYSICAL_UDID),
-      })
-    ).rejects.toThrow(/iOS-simulator-only|physical/);
-  });
-
-  it("still accepts an Android device (its physical-device path is supported)", async () => {
-    const instance = await nativeProfilerSessionBlueprint.factory({} as never, undefined as never, {
-      device: resolveDevice("emulator-5554"),
-    });
-    expect(instance.api.platform).toBe("android");
-  });
-});
-
 describe("run-sequence does not eagerly hold simulator-server for physical iOS", () => {
   const tool = createRunSequenceTool({} as never);
   const params = (udid: string) => ({ udid, steps: [{ tool: "gesture-tap", args: {} }] });
@@ -222,6 +207,10 @@ describe("capability matrix is honest about physical-iOS support (clean 400 at t
       ["gesture-pinch", gesturePinchTool.capability],
       ["screenshot-diff", screenshotDiffTool.capability],
       ["native-describe-screen", nativeDescribeScreenTool.capability],
+      // native-profiler-start does LIVE capture via simulator-only simctl (the
+      // process enumeration mislabels a real iPhone as a "simulator"), so it
+      // rejects physical iOS at the gate. (Its post-capture sibling tools stay
+      // device-agnostic — see profiler-query-android-capability.test.ts.)
       ["native-profiler-start", nativeProfilerStartTool.capability],
     ] as const) {
       expect(() => assertSupported(id, cap, physical)).toThrow(UnsupportedOperationError);
@@ -231,7 +220,9 @@ describe("capability matrix is honest about physical-iOS support (clean 400 at t
   });
 
   it("native-profiler-start still accepts a physical Android device", () => {
-    expect(() => assertSupported("native-profiler-start", nativeProfilerStartTool.capability, androidEmu)).not.toThrow();
+    expect(() =>
+      assertSupported("native-profiler-start", nativeProfilerStartTool.capability, androidEmu)
+    ).not.toThrow();
   });
 });
 
