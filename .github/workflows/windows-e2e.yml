@@ -108,50 +108,50 @@ jobs:
           Write-Host "Chrome: $chrome"
           "path=$chrome" >> $env:GITHUB_OUTPUT
 
-      - name: Launch headless Chrome with CDP
-        run: |
-          $page = "file:///" + ((Resolve-Path scripts/ci/e2e-chromium-page.html).Path -replace '\\','/')
-          $udd  = Join-Path $env:RUNNER_TEMP "chrome-e2e-profile"
-          $log  = Join-Path $env:RUNNER_TEMP "chrome.log"
-          Start-Process -FilePath "${{ steps.chrome.outputs.path }}" -ArgumentList @(
-            "--headless=new","--remote-debugging-port=9222","--user-data-dir=$udd",
-            "--no-first-run","--no-default-browser-check","--disable-gpu",$page
-          ) -RedirectStandardOutput $log -RedirectStandardError "$log.err" | Out-Null
-          $up = $false
-          for ($i = 0; $i -lt 30; $i++) {
-            try {
-              $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:9222/json/version" -TimeoutSec 2
-              if ($r.StatusCode -eq 200) { Write-Host "CDP up at t+${i}s"; $up = $true; break }
-            } catch {}
-            Start-Sleep -Seconds 1
-          }
-          if (-not $up) { Get-Content "$log.err" -ErrorAction SilentlyContinue; Write-Error "Chrome CDP never came up on :9222"; exit 1 }
-
-      - name: Start tool-server
-        run: |
-          $env:ARGENT_PORT = "3033"
-          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.argent" | Out-Null
-          $log = Join-Path $env:RUNNER_TEMP "tool-server.log"
-          Start-Process -FilePath "node" -ArgumentList @("packages/tool-server/dist/index.js","start") `
-            -RedirectStandardOutput $log -RedirectStandardError "$log.err" | Out-Null
-          $up = $false
-          for ($i = 0; $i -lt 40; $i++) {
-            try {
-              $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:3033/tools" -TimeoutSec 2
-              if ($r.StatusCode -eq 200) { Write-Host "tool-server up at t+${i}s"; $up = $true; break }
-            } catch {}
-            Start-Sleep -Seconds 1
-          }
-          if (-not $up) {
-            Write-Host "--- tool-server.log ---"; Get-Content $log -ErrorAction SilentlyContinue
-            Write-Host "--- tool-server.err ---"; Get-Content "$log.err" -ErrorAction SilentlyContinue
-            Write-Error "tool-server never came up on :3033"; exit 1
-          }
-
-      - name: Run Chromium E2E
+      # Launch Chrome + the tool-server AND run the E2E in one step. On Windows
+      # runners, `Start-Process` background processes don't reliably survive into
+      # a later step (unlike `nohup` on Linux), so both must stay in scope for
+      # the duration of the E2E — hence a single step rather than three.
+      - name: Launch Chrome + tool-server and run Chromium E2E
         env:
           ARGENT_E2E_URL: http://127.0.0.1:3033
         run: |
+          $page = "file:///" + ((Resolve-Path scripts/ci/e2e-chromium-page.html).Path -replace '\\','/')
+          $udd  = Join-Path $env:RUNNER_TEMP "chrome-e2e-profile"
+          $chromeLog = Join-Path $env:RUNNER_TEMP "chrome.log"
+          Start-Process -FilePath "${{ steps.chrome.outputs.path }}" -ArgumentList @(
+            "--headless=new","--remote-debugging-port=9222","--user-data-dir=$udd",
+            "--no-first-run","--no-default-browser-check","--disable-gpu",$page
+          ) -RedirectStandardOutput $chromeLog -RedirectStandardError "$chromeLog.err" | Out-Null
+          $cdpUp = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:9222/json/version" -TimeoutSec 2
+              if ($r.StatusCode -eq 200) { Write-Host "CDP up at t+${i}s"; $cdpUp = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 1
+          }
+          if (-not $cdpUp) { Get-Content "$chromeLog.err" -ErrorAction SilentlyContinue; Write-Error "Chrome CDP never came up on :9222"; exit 1 }
+
+          $env:ARGENT_PORT = "3033"
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.argent" | Out-Null
+          $tsLog = Join-Path $env:RUNNER_TEMP "tool-server.log"
+          Start-Process -FilePath "node" -ArgumentList @("packages/tool-server/dist/index.js","start") `
+            -RedirectStandardOutput $tsLog -RedirectStandardError "$tsLog.err" | Out-Null
+          $tsUp = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:3033/tools" -TimeoutSec 2
+              if ($r.StatusCode -eq 200) { Write-Host "tool-server up at t+${i}s"; $tsUp = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 1
+          }
+          if (-not $tsUp) {
+            Write-Host "--- tool-server.log ---"; Get-Content $tsLog -ErrorAction SilentlyContinue
+            Write-Host "--- tool-server.err ---"; Get-Content "$tsLog.err" -ErrorAction SilentlyContinue
+            Write-Error "tool-server never came up on :3033"; exit 1
+          }
+
           $env:ARGENT_E2E_OUT = Join-Path $env:RUNNER_TEMP "e2e"
           node scripts/ci/windows-chromium-e2e.mjs
 
