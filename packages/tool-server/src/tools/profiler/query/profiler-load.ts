@@ -29,9 +29,15 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function assertSafeSessionId(sessionId: string): void {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
-    throw new Error(
+    throw new FailureError(
       `Invalid session_id "${sessionId}". Allowed: letters, digits, '_' and '-' ` +
-        `(no path separators, no "..").`
+        `(no path separators, no "..").`,
+      {
+        error_code: FAILURE_CODES.PROFILER_SESSION_ID_INVALID,
+        failure_stage: "profiler_load_session_id",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
 }
@@ -326,17 +332,29 @@ async function loadNativeSession(
     try {
       await fs.access(pftrace);
     } catch {
-      throw new Error(
+      throw new FailureError(
         `No native profiler .pftrace found for session "${sessionId}". ` +
-          `Expected file at ${pftrace}`
+          `Expected file at ${pftrace}`,
+        {
+          error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
+          failure_stage: "profiler_load_android_pftrace",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        }
       );
     }
     const metadata = await readAndroidNativeProfilerMetadata(pftrace);
     const appProcess = metadata?.appProcess ?? appProcessOverride?.trim();
     if (!appProcess) {
-      throw new Error(
+      throw new FailureError(
         `Android profiler session "${sessionId}" is missing its metadata sidecar. ` +
-          "Retry profiler-load with app_process set to the Android package name used for the recording."
+          "Retry profiler-load with app_process set to the Android package name used for the recording.",
+        {
+          error_code: FAILURE_CODES.PROFILER_NATIVE_METADATA_MISSING,
+          failure_stage: "profiler_load_android_metadata",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     api.traceFile = pftrace;

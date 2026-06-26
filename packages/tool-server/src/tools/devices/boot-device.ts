@@ -1130,9 +1130,15 @@ async function bootVegaImpl(params: {
   const image = images.find((i) => i.name === params.vvdImage);
   if (!image) {
     const available = images.map((i) => i.name).join(", ") || "(none found)";
-    throw new Error(
+    throw new FailureError(
       `Vega VVD image "${params.vvdImage}" not found. Available: ${available}. ` +
-        "Image names come from `list-devices` → the `vvdImage` field on a Vega device."
+        "Image names come from `list-devices` → the `vvdImage` field on a Vega device.",
+      {
+        error_code: FAILURE_CODES.VEGA_IMAGE_NOT_FOUND,
+        failure_stage: "boot_vega_image_lookup",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
 
@@ -1153,11 +1159,17 @@ async function bootVegaImpl(params: {
     // and every later tool would silently drive that other device.
     if (runningImage !== params.vvdImage) {
       const which = runningImage ? `("${runningImage}")` : "(its image could not be confirmed)";
-      throw new Error(
+      throw new FailureError(
         `A Vega VVD ${which} is already running; argent v1 supports a single running VVD. ` +
           `To boot "${params.vvdImage}", re-run boot-device with force:true, which stops the ` +
           "current VVD first (by process, since the `vega` CLI does not reliably stop a VVD " +
-          "argent booted) and then boots the requested image."
+          "argent booted) and then boots the requested image.",
+        {
+          error_code: FAILURE_CODES.VEGA_ALREADY_RUNNING,
+          failure_stage: "boot_vega_already_running",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
       );
     }
     return {
@@ -1199,7 +1211,7 @@ function bootVega(params: {
   // restart, so it must NOT join an in-flight non-force boot (which would skip
   // the restart and hand back the stale device). Two same-mode boots of the same
   // image still share one promise.
-  const key = `${params.vvdImage} ${params.force ? "force" : "normal"}`;
+  const key = `${params.vvdImage} ${params.force ? "force" : "normal"}`;
   const existing = inFlightVegaBoots.get(key);
   if (existing) return existing;
   const promise = bootVegaImpl(params).finally(() => {

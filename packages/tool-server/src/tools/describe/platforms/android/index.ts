@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeTreeData } from "../../contract";
 import { adbExecOutBinary } from "../../../../utils/adb";
@@ -77,10 +78,20 @@ export async function describeAndroid(
   const raw = rawBuf.toString("utf-8");
   const trimmed = raw.trim();
   if (/^ERROR:/i.test(trimmed) || (!trimmed.includes("<hierarchy") && /error/i.test(trimmed))) {
-    throw new Error(
+    throw new FailureError(
       `uiautomator could not capture the screen: ${trimmed}. ` +
         `Common causes: device locked / keyguard, DRM or secure overlay, Play Integrity screen. ` +
-        `Unlock the device or take a screenshot as a fallback.`
+        `Unlock the device or take a screenshot as a fallback.`,
+      {
+        // The adb wrapper exits 0, but the uiautomator tool it ran reported an
+        // in-band `ERROR:` line — a functional failure of the uiautomator
+        // subprocess. Classified `subprocess` to match the sibling
+        // ANDROID_UIAUTOMATOR_PARSE_FAILED (also adb-exit-0, unusable output).
+        error_code: FAILURE_CODES.ANDROID_UIAUTOMATOR_CAPTURE_FAILED,
+        failure_stage: "android_uiautomator_capture",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      }
     );
   }
   const tree = parseUiAutomatorDump(raw, size.width, size.height);

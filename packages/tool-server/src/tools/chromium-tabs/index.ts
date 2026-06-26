@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
@@ -65,7 +66,12 @@ Returns { tabs: [{ tabId, targetId, title, url, active, label? }] }. Fails if th
         return { tabs: await tabs.list() };
       case "select":
         if (!params.tab) {
-          throw new Error("`select` requires `tab` (a tabId like `t2` or a label).");
+          throw new FailureError("`select` requires `tab` (a tabId like `t2` or a label).", {
+            error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
+            failure_stage: "chromium_tabs_select_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         return { tabs: await tabs.select(params.tab) };
       case "new":

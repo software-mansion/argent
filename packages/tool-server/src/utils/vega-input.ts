@@ -161,8 +161,14 @@ export async function injectVegaButtons(buttons: RemoteButton[]): Promise<void> 
 export async function injectVegaNamedKey(name: string): Promise<void> {
   const code = NAMED_KEYCODES[name.toLowerCase()];
   if (!code) {
-    throw new Error(
-      `Unknown Vega key "${name}". Supported: ${Object.keys(NAMED_KEYCODES).join(", ")}`
+    throw new FailureError(
+      `Unknown Vega key "${name}". Supported: ${Object.keys(NAMED_KEYCODES).join(", ")}`,
+      {
+        error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+        failure_stage: "vega_named_key",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
     );
   }
   await injectViaInputd([`button_press ${code}`]);
@@ -173,7 +179,12 @@ export async function injectVegaText(text: string): Promise<void> {
   // send_text reads the rest of the line, so an embedded newline would truncate
   // it; reject newlines rather than silently dropping the tail.
   if (/[\n\r]/.test(text)) {
-    throw new Error("Vega keyboard text must not contain newlines");
+    throw new FailureError("Vega keyboard text must not contain newlines", {
+      error_code: FAILURE_CODES.VEGA_TEXT_INVALID,
+      failure_stage: "vega_text_newline",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   await injectViaInputd([`send_text ${shellQuote(text)}`]);
 }

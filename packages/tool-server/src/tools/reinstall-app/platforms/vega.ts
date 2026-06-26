@@ -1,4 +1,5 @@
 import { resolve as resolvePath } from "node:path";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { vegaDevice } from "../../../utils/vega-cli";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
@@ -33,7 +34,13 @@ export const vegaImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Re
       const succeeded = /\.\.\.\s*success\b/i.test(output);
       const failed = /\.\.\.\s*failed\b/i.test(output);
       if (!succeeded || failed) {
-        throw new Error(`vega install-app failed: ${output.trim()}`);
+        throw new FailureError(`vega install-app failed: ${output.trim()}`, {
+          error_code: FAILURE_CODES.VEGA_CLI_COMMAND_FAILED,
+          failure_stage: "vega_reinstall_install_app",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          failure_command: "vega",
+        });
       }
       return { reinstalled: true, bundleId };
     },

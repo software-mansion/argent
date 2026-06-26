@@ -164,7 +164,15 @@ export async function httpScreenshot(
     // real cause is visible rather than sending callers to restart a perfectly
     // healthy server.
     if (resBody.error) {
-      throw new Error(`Screenshot failed: ${resBody.error}.`);
+      // HTTP 200 with an in-band `error` field: the server was reachable and
+      // answered, so this is a server-reported capture failure, not a transport
+      // problem — classify it as such rather than as a network error.
+      throw new FailureError(`Screenshot failed: ${resBody.error}.`, {
+        error_code: FAILURE_CODES.SIMULATOR_SCREENSHOT_FAILED,
+        failure_stage: "simulator_screenshot_error_field",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      });
     }
     throw new FailureError(
       "Screenshot failed: server response missing url or path. " +

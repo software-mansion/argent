@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import { promises as fs } from "fs";
+import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { traceConfigPath } from "@argent/native-devtools-android";
 import { resolveAndroidBinary } from "../android-binary";
 import { runAdb, adbShell } from "../adb";
@@ -14,6 +15,16 @@ const STOP_TOTAL_TIMEOUT_MS = 30_000;
 // stop block well over a minute before failing. A tight timeout (matching the
 // device-enrichment probes in adb.ts) lets a dead device fail fast instead.
 const STOP_PROBE_TIMEOUT_MS = 5_000;
+
+// Perfetto can emit many warning lines, and its stdout/stderr may carry device
+// paths, so cap what we interpolate into a failure message to a short tail —
+// enough to diagnose (the PID is expected on the last stdout line) without
+// dumping the whole buffer.
+function clip(s: string, max = 300): string {
+  const t = s.trim();
+  if (!t) return "<empty>";
+  return t.length > max ? `…${t.slice(-max)}` : t;
+}
 
 /**
  * Fill the TARGET_*_PLACEHOLDER tokens in the bundled tracecfg with the app
@@ -57,9 +68,16 @@ export interface StartPerfettoResult {
 export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPerfettoResult> {
   const adbPath = await resolveAndroidBinary("adb");
   if (!adbPath) {
-    throw new Error(
+    throw new FailureError(
       "`adb` not found on PATH or under `$ANDROID_HOME/platform-tools`. " +
-        "Install Android SDK Platform Tools or set `$ANDROID_HOME` to your SDK root."
+        "Install Android SDK Platform Tools or set `$ANDROID_HOME` to your SDK root.",
+      {
+        error_code: FAILURE_CODES.ANDROID_ADB_NOT_FOUND,
+        failure_stage: "android_profiler_resolve_adb",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+        failure_command: "adb",
+      }
     );
   }
 
@@ -97,9 +115,16 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
 
     const timer = setTimeout(() => {
       fail(
-        new Error(
+        new FailureError(
           `perfetto did not return a PID within ${START_TIMEOUT_MS} ms. ` +
-            `stdout: ${stdout.trim() || "<empty>"} | stderr: ${stderr.trim() || "<empty>"}`
+            `stdout: ${clip(stdout)} | stderr: ${clip(stderr)}`,
+          {
+            error_code: FAILURE_CODES.NATIVE_PROFILER_PERFETTO_READY_TIMEOUT,
+            failure_stage: "android_profiler_perfetto_ready",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+            failure_command: "adb",
+          }
         )
       );
     }, START_TIMEOUT_MS);
@@ -129,10 +154,34 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
     // exception that can take down the whole server — so reject the start
     // promise instead.
     child.on("error", (err) =>
-      fail(new Error(`Failed to launch adb for perfetto: ${err.message}`))
+      fail(
+        new FailureError(
+          `Failed to launch adb for perfetto: ${err.message}`,
+          {
+            error_code: FAILURE_CODES.NATIVE_PROFILER_PERFETTO_PROCESS_ERROR,
+            failure_stage: "android_profiler_perfetto_spawn",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            ...subprocessFailureMetadata(err, "adb"),
+          },
+          { cause: err }
+        )
+      )
     );
     child.stdin.on("error", (err) =>
-      fail(new Error(`Failed to write perfetto config to adb stdin: ${err.message}`))
+      fail(
+        new FailureError(
+          `Failed to write perfetto config to adb stdin: ${err.message}`,
+          {
+            error_code: FAILURE_CODES.NATIVE_PROFILER_PERFETTO_PROCESS_ERROR,
+            failure_stage: "android_profiler_perfetto_stdin",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            failure_command: "adb",
+          },
+          { cause: err }
+        )
+      )
     );
 
     // `final` is true only from the exit handler: once the process has ended,
@@ -158,14 +207,22 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
     };
 
     child.stdout.on("data", () => tryResolve());
-    child.once("exit", (code) => {
+    child.once("exit", (code, signal) => {
       if (settled) return;
+      // A signal kill leaves code=null, so report whichever is present.
+      const reason = signal ? `signal ${signal}` : `code ${code ?? "?"}`;
       // If perfetto exited before printing the PID, surface stderr.
       if (stdout.trim() === "") {
         fail(
-          new Error(
-            `perfetto exited (code=${code}) before printing a PID. ` +
-              `stderr: ${stderr.trim() || "<empty>"}`
+          new FailureError(
+            `perfetto exited (${reason}) before printing a PID. ` + `stderr: ${clip(stderr)}`,
+            {
+              error_code: FAILURE_CODES.NATIVE_PROFILER_PERFETTO_READY_EXITED,
+              failure_stage: "android_profiler_perfetto_exited",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              ...subprocessFailureMetadata({ code, signal }, "adb"),
+            }
           )
         );
         return;
@@ -175,9 +232,16 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
       // The process is gone; if no valid PID was found, fail now rather than
       // hanging until the start timeout fires.
       fail(
-        new Error(
-          `perfetto exited (code=${code}) without a valid PID on its last stdout line. ` +
-            `stdout: ${stdout.trim()} | stderr: ${stderr.trim() || "<empty>"}`
+        new FailureError(
+          `perfetto exited (${reason}) without a valid PID on its last stdout line. ` +
+            `stdout: ${clip(stdout)} | stderr: ${clip(stderr)}`,
+          {
+            error_code: FAILURE_CODES.NATIVE_PROFILER_PERFETTO_READY_EXITED,
+            failure_stage: "android_profiler_perfetto_exited",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            ...subprocessFailureMetadata({ code, signal }, "adb"),
+          }
         )
       );
     });
@@ -189,10 +253,18 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
       child.stdin.end();
     } catch (err) {
       fail(
-        new Error(
+        new FailureError(
           `Failed to write perfetto config to adb stdin: ${
             err instanceof Error ? err.message : String(err)
-          }`
+          }`,
+          {
+            error_code: FAILURE_CODES.NATIVE_PROFILER_PERFETTO_PROCESS_ERROR,
+            failure_stage: "android_profiler_perfetto_stdin",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            failure_command: "adb",
+          },
+          { cause: err instanceof Error ? err : new Error(String(err)) }
         )
       );
     }

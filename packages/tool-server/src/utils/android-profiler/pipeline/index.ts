@@ -8,6 +8,7 @@ import {
   classifyNativeFrame,
   summarizeHangBlocking,
 } from "../../profiler-shared/native-frame-class";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { ensureTraceProcessorReady } from "@argent/native-devtools-android";
 import { runTpQuery } from "./run-tp";
 import { foldHangAnnotations } from "./hang-fold";
@@ -242,7 +243,16 @@ async function renderHangStacksAndroid(
   target: string
 ): Promise<string> {
   if (opts.hangIndex == null) {
-    throw new Error("hang_stacks mode requires the hang_index parameter.");
+    // Mirrors the iOS twin in profiler-stack-query (executeIos): the same
+    // missing-param condition gets the same classified code rather than
+    // falling through to REGISTRY_TOOL_FAILURE_UNCLASSIFIED. hang_index is
+    // zod-optional, so this is reachable user input, not an internal invariant.
+    throw new FailureError("hang_stacks mode requires the hang_index parameter.", {
+      error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+      failure_stage: "profiler_stack_query_params",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   const hangRows = await runTpQuery<AndroidJankRow>({
     tracePath: opts.tracePath,
@@ -391,7 +401,13 @@ async function renderFunctionCallersAndroid(
   target: string
 ): Promise<string> {
   if (!opts.functionName) {
-    throw new Error("function_callers mode requires the function_name parameter.");
+    // Same classification as the iOS twin (see renderHangStacksAndroid above).
+    throw new FailureError("function_callers mode requires the function_name parameter.", {
+      error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+      failure_stage: "profiler_stack_query_params",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   const { token, label, allThreads } = resolveFunctionCallersThread(opts.thread);
   const rows = await runTpQuery<AndroidFunctionCallersRow>({

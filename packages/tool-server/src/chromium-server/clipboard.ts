@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 
 /**
@@ -51,8 +52,14 @@ export async function setClipboardText(cdp: CDPClient, text: string): Promise<vo
   )) as { result?: { value?: { ok?: boolean; error?: string } }; exceptionDetails?: unknown };
   const result = out.result?.value;
   if (!result?.ok) {
-    throw new Error(
-      `Chromium clipboard set failed: ${result?.error ?? "renderer rejected the write"}`
+    throw new FailureError(
+      `Chromium clipboard set failed: ${result?.error ?? "renderer rejected the write"}`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_CLIPBOARD_FAILED,
+        failure_stage: "chromium_clipboard_set",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      }
     );
   }
 }

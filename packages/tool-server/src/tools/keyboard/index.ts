@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
@@ -63,8 +64,14 @@ async function runChromium(api: ChromiumCdpApi, params: Params): Promise<Result>
   if (params.key) {
     const named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
     if (!named) {
-      throw new Error(
-        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`
+      throw new FailureError(
+        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`,
+        {
+          error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+          failure_stage: "keyboard_named_key_chromium",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
       );
     }
     await api.dispatchKeyEvent({
@@ -87,7 +94,12 @@ async function runChromium(api: ChromiumCdpApi, params: Params): Promise<Result>
     for (const char of params.text) {
       const desc = charToChromiumKey(char);
       if (!desc) {
-        throw new Error(`No CDP key descriptor for character "${char}"`);
+        throw new FailureError(`No CDP key descriptor for character "${char}"`, {
+          error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+          failure_stage: "keyboard_char_chromium",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        });
       }
       await api.dispatchKeyEvent({
         type: "keyDown",
@@ -138,8 +150,14 @@ async function runSimulatorServer(api: SimulatorServerApi, params: Params): Prom
   if (params.key) {
     const code = NAMED_KEYS[params.key.toLowerCase()];
     if (code == null) {
-      throw new Error(
-        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`
+      throw new FailureError(
+        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`,
+        {
+          error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+          failure_stage: "keyboard_named_key_simulator",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
       );
     }
     await pressKeyCode(code);
@@ -148,7 +166,13 @@ async function runSimulatorServer(api: SimulatorServerApi, params: Params): Prom
   if (params.text) {
     for (const char of params.text) {
       const press = charToKeyPress(char);
-      if (!press) throw new Error(`No keycode for character "${char}"`);
+      if (!press)
+        throw new FailureError(`No keycode for character "${char}"`, {
+          error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+          failure_stage: "keyboard_char_simulator",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        });
       await pressKeyCode(press.keyCode, press.withShift);
       await sleep(delay);
     }
