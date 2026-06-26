@@ -23,6 +23,7 @@ describe("base-props", () => {
         [
           "$process_person_profile",
           "$session_id",
+          "agent_env",
           "arch",
           "cli_version",
           "is_ci",
@@ -54,6 +55,18 @@ describe("base-props", () => {
     try {
       process.env.CI = "1";
       expect(getBaseProps("cli").is_ci).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("sets agent_env when an AI agent runtime is detected", () => {
+    // CURSOR_AGENT is checked before the generic AI_AGENT fallback, so it wins
+    // deterministically regardless of any agent vars in the ambient test env.
+    const restore = snapshotEnv(["CURSOR_AGENT"]);
+    try {
+      process.env.CURSOR_AGENT = "1";
+      expect(getBaseProps("cli").agent_env).toBe("cursor");
     } finally {
       restore();
     }
