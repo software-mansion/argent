@@ -91,7 +91,7 @@ for entry in "${TARGETS[@]}"; do
       darwin) EXPECT="Mach-O universal" ;;
       linux) EXPECT="ELF 64-bit.*x86-64" ;;
       linux-arm64) EXPECT="ELF 64-bit.*aarch64" ;;
-      win32) EXPECT="PE32\+.*x86-64|PE32\+ executable" ;;
+      win32) EXPECT="PE32\+.*x86-64" ;;
       *) EXPECT="" ;;
     esac
     if [[ -n "${EXPECT}" ]] && ! [[ "${DESC}" =~ ${EXPECT} ]]; then

@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { homedir } from "node:os";
+import { isAbsolute } from "node:path";
 import { parse as parseIni } from "ini";
 import {
   FAILURE_CODES,
@@ -525,7 +527,9 @@ export async function checkSnapshotLoadable(
  *   5. `$HOME/.android/avd`             — default
  */
 function avdRootCandidates(): string[] {
-  const home = process.env.HOME ?? "";
+  // os.homedir() (not $HOME) so the default root resolves on Windows too, where
+  // it's %USERPROFILE%\.android\avd and $HOME is typically unset.
+  const home = homedir();
   const candidates: Array<string | null | undefined> = [
     process.env.ANDROID_USER_HOME ? `${process.env.ANDROID_USER_HOME}/avd` : null,
     process.env.ANDROID_AVD_HOME,
@@ -533,7 +537,9 @@ function avdRootCandidates(): string[] {
     process.env.ANDROID_SDK_HOME ? `${process.env.ANDROID_SDK_HOME}/.android/avd` : null,
     home ? `${home}/.android/avd` : null,
   ];
-  return candidates.filter((p): p is string => Boolean(p && p.startsWith("/")));
+  // isAbsolute() rather than startsWith("/") so Windows roots (C:\…, \\unc\…)
+  // aren't discarded; on POSIX it still rejects relative paths exactly as before.
+  return candidates.filter((p): p is string => Boolean(p && isAbsolute(p)));
 }
 
 /**
@@ -553,9 +559,10 @@ export async function resolveAvdPath(avdName: string): Promise<string | null> {
       const raw = parseIni(content).path;
       if (typeof raw !== "string") continue;
       // Reject anything non-absolute (the emulator always writes an absolute
-      // path; relative would resolve against cwd).
+      // path; relative would resolve against cwd). isAbsolute() handles Windows
+      // drive/UNC paths too, where startsWith("/") would wrongly reject them.
       const trimmed = raw.trim();
-      if (!trimmed.startsWith("/")) continue;
+      if (!isAbsolute(trimmed)) continue;
       return trimmed;
     } catch {
       // .ini missing or unreadable in this root; try the next one

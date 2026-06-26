@@ -71,6 +71,7 @@ jobs:
           npx vitest run
           test/command-on-path.test.ts
           test/android-binary-windows.test.ts
+          test/adb-resolve-avd-path.test.ts
           test/check-deps.test.ts
           test/http-dep-gate.test.ts
 
