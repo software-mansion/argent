@@ -29,6 +29,14 @@ function setArch(value: NodeJS.Architecture) {
   Object.defineProperty(process, "arch", { value, configurable: true });
 }
 
+// The on-disk binary name is `.exe` on Windows, extensionless elsewhere — must
+// match simulatorServerBinaryName(). Tests that don't override the platform run
+// against the host's real one, so their fixtures have to use the host-correct
+// name to pass on a Windows runner as well as on macOS/Linux.
+function ssBinName(): string {
+  return process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
+}
+
 beforeAll(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-resolver-"));
 });
@@ -108,7 +116,7 @@ describe("simulator-server path resolution", () => {
     const dir = fs.mkdtempSync(path.join(tmpRoot, "platform-join-"));
     const platDir = path.join(dir, process.platform);
     fs.mkdirSync(platDir, { recursive: true });
-    const binPath = path.join(platDir, "simulator-server");
+    const binPath = path.join(platDir, ssBinName());
     fs.writeFileSync(binPath, "", { mode: 0o755 });
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
@@ -135,8 +143,8 @@ describe("simulator-server path resolution", () => {
     // the message tells them exactly what changed and how to fix it.
     const dir = fs.mkdtempSync(path.join(tmpRoot, "flat-layout-"));
     fs.mkdirSync(path.join(dir, process.platform), { recursive: true });
-    // Place the binary at the flat (old) path.
-    const flatBin = path.join(dir, "simulator-server");
+    // Place the binary at the flat (old) path, host-correct name.
+    const flatBin = path.join(dir, ssBinName());
     fs.writeFileSync(flatBin, "", { mode: 0o755 });
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();

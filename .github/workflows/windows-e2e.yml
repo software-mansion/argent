@@ -1,24 +1,21 @@
 name: Windows E2E
 
 # Proves Argent runs on Windows. iOS Simulator is macOS-only (Apple), so
-# "Argent on Windows" means the Android + Chromium host control plane:
+# "Argent on Windows" means the Android + Chromium host control plane.
 #
-#   windows-chromium  — the tool-server drives a real headless Chrome over CDP
-#                       (discover → screenshot → describe → tap → observe the
-#                       DOM change). Chromium control is pure host-side TS, so a
-#                       hosted Windows runner (no virtualization) verifies it
-#                       fully. Also runs the cross-platform resolver unit tests
-#                       natively on Windows, and confirms adb.exe resolution.
+# This job, windows-chromium, has the tool-server drive a real headless Chrome
+# over CDP (discover → screenshot → describe → tap → observe the DOM change).
+# Chromium control is pure host-side TypeScript, so a hosted Windows runner (no
+# virtualization) verifies it fully. It also runs the cross-platform resolver
+# unit tests natively on Windows and confirms adb.exe resolution.
 #
-#   windows-simulator-server — builds the argent simulator-server.exe from
-#                       source on Windows (the same feature set the radon
-#                       release job ships) and smoke-runs it, proving the
-#                       binary the Android path depends on builds + executes
-#                       natively. (Booting an Android emulator needs WHPX/HAXM,
-#                       unavailable on hosted Windows runners — that piece needs
-#                       a physical Windows box and is out of scope here.)
-#
-# Manual + on-change trigger; the cargo build makes the second job ~12-15 min.
+# The simulator-server.exe itself (the binary the Android path spawns) lives in
+# the private radon repo, so it can't be built here without a cross-repo token.
+# Its Windows build + smoke-run is verified in radon CI instead — see the
+# build_argent_windows job in radon's simulator-server-ci workflow (companion
+# PR). Booting an Android emulator needs WHPX/HAXM, unavailable on hosted
+# Windows runners, so that piece needs a physical Windows box and is out of
+# scope here.
 
 on:
   workflow_dispatch:
@@ -160,77 +157,5 @@ jobs:
             ${{ runner.temp }}/tool-server.log.err
             ${{ runner.temp }}/chrome.log
             ${{ runner.temp }}/chrome.log.err
-          if-no-files-found: warn
-          retention-days: 7
-
-  windows-simulator-server:
-    name: Build + smoke argent simulator-server.exe (Windows)
-    runs-on: windows-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout argent
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install dependencies + build resolver
-        run: |
-          npm ci
-          npx tsc --build
-
-      - name: Checkout radon (simulator-server source)
-        # Public repo; shallow clone of main. The build command mirrors the
-        # radon argent Linux/Windows job (argent,swdec,swenc), so this also
-        # independently validates the radon CI change adding the Windows leg.
-        run: git clone --depth 1 https://github.com/software-mansion/radon.git radon-src
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-
-      - name: Install protoc + nasm
-        run: choco install -y protoc nasm
-
-      - name: Build argent simulator-server.exe
-        working-directory: radon-src/packages/simulator-server
-        run: cargo build --release --features argent,swdec,swenc
-
-      - name: Install binary into the per-platform bin layout
-        run: |
-          $dest = "packages/native-devtools-ios/bin/win32"
-          New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          Copy-Item "radon-src/packages/simulator-server/target/release/simulator-server.exe" `
-            (Join-Path $dest "simulator-server.exe") -Force
-          Get-Item (Join-Path $dest "simulator-server.exe") | Format-List Name,Length
-
-      - name: Resolver finds the Windows binary
-        # Prove simulatorServerBinaryPath() resolves bin/win32/simulator-server.exe
-        # on a real Windows host (the .exe-suffix + win32 key logic).
-        run: |
-          node -e "const m=require('./packages/native-devtools-ios/dist/index.js'); const p=m.simulatorServerBinaryPath(); console.log('resolved ->', p); if(!p.toLowerCase().endsWith('win32\\simulator-server.exe')){console.error('unexpected path');process.exit(1);}"
-
-      - name: Smoke-run the binary (executes natively)
-        # The binary is a valid PE that runs on Windows: invoke --help and assert
-        # it launched (any exit code is fine — a non-PE / wrong-arch / missing-DLL
-        # binary would throw on launch or fail with a load error instead).
-        run: |
-          $exe = "packages/native-devtools-ios/bin/win32/simulator-server.exe"
-          $out = & $exe --help 2>&1 | Out-String
-          Write-Host "exit code: $LASTEXITCODE"
-          Write-Host "output (first 500 chars):"
-          Write-Host $out.Substring(0, [Math]::Min(500, $out.Length))
-          if ($LASTEXITCODE -eq $null) { Write-Error "binary did not execute"; exit 1 }
-
-      - name: Upload binary
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: simulator-server-argent-windows
-          path: packages/native-devtools-ios/bin/win32/simulator-server.exe
           if-no-files-found: warn
           retention-days: 7
