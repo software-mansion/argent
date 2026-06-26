@@ -68,8 +68,10 @@ and leave it running: `sudo pymobiledevice3 remote tunneld`.
 
 **Limitations / notes**
 
-- Not supported on physical iOS yet: keyboard/typing, pinch & rotate (multi-touch),
-  `open-url`, `reinstall-app`, and `restart-app` — these return a clear "not supported" error.
+- Not supported on physical iOS yet: `describe` / accessibility inspection (use `screenshot`
+  instead), keyboard/typing, pinch & rotate (multi-touch), `open-url`, `reinstall-app`,
+  `restart-app`, and the native inspection / profiling tools (`native-*`, `native-profiler-*`,
+  `screenshot-diff`) — all return a clear "not supported" error.
 - Overrides: `ARGENT_PYMOBILEDEVICE3` (path to the binary), `ARGENT_PMD3_TUNNELD_PORT`
   (defaults to `49151`).
 
