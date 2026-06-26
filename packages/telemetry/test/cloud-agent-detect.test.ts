@@ -28,13 +28,17 @@ describe("cloud-agent-detect", () => {
     });
 
     it("detects a remote session id", () => {
-      expect(detectCloudAgent({ CLAUDE_CODE_REMOTE_SESSION_ID: "rs_1" }, noFile)).toBe("claude_code");
+      expect(detectCloudAgent({ CLAUDE_CODE_REMOTE_SESSION_ID: "rs_1" }, noFile)).toBe(
+        "claude_code"
+      );
     });
 
     it.each(["cli", "claude-vscode", "sdk-cli"])(
       "does NOT treat local entrypoint %s as cloud",
       (entrypoint) => {
-        expect(detectCloudAgent({ CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: entrypoint }, noFile)).toBeNull();
+        expect(
+          detectCloudAgent({ CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: entrypoint }, noFile)
+        ).toBeNull();
       }
     );
 
@@ -53,7 +57,9 @@ describe("cloud-agent-detect", () => {
     });
 
     it("does NOT treat the local Cursor CLI as cloud", () => {
-      expect(detectCloudAgent({ CURSOR_AGENT: "1", CURSOR_AGENT_CLI_LOCAL_MODE: "true" }, noFile)).toBeNull();
+      expect(
+        detectCloudAgent({ CURSOR_AGENT: "1", CURSOR_AGENT_CLI_LOCAL_MODE: "true" }, noFile)
+      ).toBeNull();
     });
   });
 
@@ -67,14 +73,19 @@ describe("cloud-agent-detect", () => {
     it("detects via the workflow ref", () => {
       expect(
         detectCloudAgent(
-          { GITHUB_ACTIONS: "true", GITHUB_WORKFLOW_REF: "owner/repo/.github/workflows/copilot-swe-agent/copilot" },
+          {
+            GITHUB_ACTIONS: "true",
+            GITHUB_WORKFLOW_REF: "owner/repo/.github/workflows/copilot-swe-agent/copilot",
+          },
           noFile
         )
       ).toBe("copilot");
     });
 
     it("does NOT treat a normal CI run as a copilot agent", () => {
-      expect(detectCloudAgent({ GITHUB_ACTIONS: "true", GITHUB_ACTOR: "octocat" }, noFile)).toBeNull();
+      expect(
+        detectCloudAgent({ GITHUB_ACTIONS: "true", GITHUB_ACTOR: "octocat" }, noFile)
+      ).toBeNull();
     });
 
     it("does NOT match a copilot actor outside Actions", () => {
