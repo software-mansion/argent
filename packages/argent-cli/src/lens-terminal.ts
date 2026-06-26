@@ -119,9 +119,16 @@ export function buildSpawnScript(app: TerminalApp, shellCommand: string): string
 /**
  * AppleScript that writes `text` (one line) into an EXISTING tracked session as
  * if typed — the "outputting" mechanism. iTerm targets the session by its GUID;
- * Terminal.app targets the window by id and uses `do script … in <tab>`. The
- * trailing newline both apps append submits the line, so `claude` queues it as
- * the next prompt.
+ * Terminal.app targets the window by id and uses `do script … in <tab>`.
+ *
+ * Submitting takes TWO steps, not one. A TUI like `claude` runs an input
+ * composer that treats a single injected `text + newline` chunk as composer
+ * CONTENT (the newline becomes a literal line break) and does NOT submit it — so
+ * the first write only fills the box. A SEPARATE, standalone newline a beat later
+ * is read as a distinct Enter keypress and submits the message (which `claude`
+ * then queues to the agent). A program reading the tty directly (a plain shell,
+ * `cat`) submits on the first newline already; the second is a harmless blank
+ * line. The `delay` lets the composer register the paste before the Enter lands.
  */
 export function buildWriteScript(session: TerminalSession, text: string): string {
   const esc = escapeAppleScript(flattenLine(text));
@@ -134,6 +141,8 @@ export function buildWriteScript(session: TerminalSession, text: string): string
       "      repeat with s in sessions of t",
       `        if (id of s) is "${session.sessionId}" then`,
       `          tell s to write text "${esc}"`,
+      "          delay 0.2",
+      '          tell s to write text ""',
       "          set _found to true",
       "        end if",
       "      end repeat",
@@ -149,6 +158,8 @@ export function buildWriteScript(session: TerminalSession, text: string): string
     "  repeat with w in windows",
     `    if (id of w as string) is "${session.windowId}" then`,
     `      do script "${esc}" in (selected tab of w)`,
+    "      delay 0.2",
+    '      do script "" in (selected tab of w)',
     "      set _found to true",
     "    end if",
     "  end repeat",

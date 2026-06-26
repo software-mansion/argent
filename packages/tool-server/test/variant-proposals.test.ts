@@ -355,3 +355,60 @@ describe("VariantProposalStore — preview-window lifecycle events", () => {
     expect(submitted).toBe(2);
   });
 });
+
+describe("VariantProposalStore — CLI Lens session (`argent lens`)", () => {
+  it("toggles snapshot.cliSession and emits cliSessionChanged with the state", () => {
+    const s = new VariantProposalStore();
+    const seen: boolean[] = [];
+    s.events.on("cliSessionChanged", (active) => seen.push(active));
+
+    expect(s.snapshot().cliSession).toBe(false);
+    s.setCliSession(true);
+    expect(s.snapshot().cliSession).toBe(true);
+    expect(s.isCliSession()).toBe(true);
+    s.setCliSession(true); // idempotent — no event
+    s.setCliSession(false);
+    expect(s.snapshot().cliSession).toBe(false);
+    expect(seen).toEqual([true, false]);
+  });
+
+  it("exposes the last submitted outcome via getLastOutcome (null until submit)", () => {
+    const s = new VariantProposalStore();
+    expect(s.getLastOutcome()).toBeNull();
+
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    s.submitSelection({
+      selections: [],
+      annotations: [{ target: "Foo", match: { by: "text", value: "Foo" }, comment: "make it pop" }],
+      globalComment: "overall: tighter",
+    });
+
+    const out = s.getLastOutcome();
+    expect(out?.status).toBe("completed");
+    expect(out?.annotations[0]!.comment).toBe("make it pop");
+    expect(out?.globalComment).toBe("overall: tighter");
+  });
+
+  it("rolls to a fresh round on the next propose after a CLI-session submit", () => {
+    const s = new VariantProposalStore();
+    s.setCliSession(true);
+    expect(s.proposeVariant({ element: "Foo", variant: variant("Bold") }).round).toBe(1);
+    s.submitSelection({ selections: [] });
+    // No await consumes a CLI-session round, but the next propose must still open
+    // a NEW round (not append to the submitted one) and clear the stale outcome.
+    const r = s.proposeVariant({ element: "Bar", variant: variant("Tall") });
+    expect(r.round).toBe(2);
+    expect(r.totalElements).toBe(1);
+    expect(s.getLastOutcome()).toBeNull();
+  });
+
+  it("without a CLI session, a submitted-but-unconsumed round is NOT auto-rolled", () => {
+    const s = new VariantProposalStore();
+    expect(s.proposeVariant({ element: "Foo", variant: variant("Bold") }).round).toBe(1);
+    s.submitSelection({ selections: [] }); // no waiter parked → unconsumed
+    // Legacy (non-CLI) behaviour is unchanged: the next propose appends to round 1.
+    const r = s.proposeVariant({ element: "Bar", variant: variant("Tall") });
+    expect(r.round).toBe(1);
+    expect(r.totalElements).toBe(2);
+  });
+});

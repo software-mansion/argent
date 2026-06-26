@@ -76,16 +76,22 @@ describe("buildWriteScript", () => {
     tty: "/dev/ttys004",
   };
 
-  it("iTerm targets the session by id and writes the flattened text", () => {
+  it("iTerm targets the session by id, writes the flattened text, then a separate Enter", () => {
     const s = buildWriteScript(iterm, "line one\nline two");
     expect(s).toContain('if (id of s) is "GUID-9" then');
     expect(s).toContain('tell s to write text "line one line two"');
+    // A standalone empty write is the submit Enter — a TUI composer ignores the
+    // first chunk's trailing newline, so the message stays unsent without it.
+    expect(s).toContain('tell s to write text ""');
+    expect(s).toContain("delay 0.2");
     expect(s).toContain('error "session gone"');
   });
-  it("Terminal targets the window by id with do script in the tab", () => {
+  it("Terminal writes via do script in the tab, then a separate Enter", () => {
     const s = buildWriteScript(term, "do it");
     expect(s).toContain('if (id of w as string) is "42" then');
     expect(s).toContain('do script "do it" in (selected tab of w)');
+    expect(s).toContain('do script "" in (selected tab of w)');
+    expect(s).toContain("delay 0.2");
     expect(s).toContain('error "window gone"');
   });
 });

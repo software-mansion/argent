@@ -442,6 +442,13 @@ export class VariantProposalStore {
     const toSettle = this.waitersList.filter((w) => !w.settled && w.round === round);
     this.waitersList = this.waitersList.filter((w) => w.round !== round || w.settled);
     if (toSettle.length > 0) this.consumed = true;
+    // In a CLI Lens session no await_user_selection consumes the round — the
+    // `argent lens` watcher reads the frozen outcome over HTTP and types it into
+    // the agent terminal. Mark the round consumed here too, so the agent's next
+    // propose_variant opens a FRESH round (the preview UI keys "new round" off
+    // the round number, and getLastOutcome stops returning a stale outcome)
+    // rather than appending to this already-submitted one.
+    if (this.cliSession) this.consumed = true;
     for (const w of toSettle) {
       w.settled = true;
       w.settle(this.lastOutcome);
