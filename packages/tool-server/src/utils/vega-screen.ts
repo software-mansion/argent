@@ -2,6 +2,7 @@ import { mkdtemp, readdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PNG } from "pngjs";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { runAdb } from "./adb";
 import { discoverVegaConsolePort } from "./vega-vvd";
 import { getScreenshotScale } from "./simulator-client";
@@ -39,7 +40,12 @@ async function captureViaEmulatorConsole(opts: { scale?: number }): Promise<stri
     });
     const pngName = (await readdir(outDir)).find((f) => f.toLowerCase().endsWith(".png"));
     if (!pngName) {
-      throw new Error(`emulator console wrote no PNG to ${outDir} for ${serial}`);
+      throw new FailureError(`emulator console wrote no PNG to ${outDir} for ${serial}`, {
+        error_code: FAILURE_CODES.VEGA_SCREENSHOT_FAILED,
+        failure_stage: "vega_screenshot_no_png",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      });
     }
     const decoded = PNG.sync.read(await readFile(join(outDir, pngName)));
     const scaled = scalePng(decoded, opts.scale);

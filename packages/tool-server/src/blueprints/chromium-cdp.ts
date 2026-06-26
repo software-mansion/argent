@@ -1,4 +1,6 @@
 import {
+  FAILURE_CODES,
+  FailureError,
   TypedEventEmitter,
   type DeviceInfo,
   type ServiceBlueprint,
@@ -154,21 +156,39 @@ export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> 
     const deviceFromOpts = opts?.device;
     const payloadStr = typeof payload === "string" ? payload : (payload as DeviceInfo)?.id;
     if (deviceFromOpts && payloadStr && deviceFromOpts.id !== payloadStr) {
-      throw new Error(
-        `${CHROMIUM_CDP_NAMESPACE}.factory: options.device.id "${deviceFromOpts.id}" disagrees with URN payload "${payloadStr}".`
+      throw new FailureError(
+        `${CHROMIUM_CDP_NAMESPACE}.factory: options.device.id "${deviceFromOpts.id}" disagrees with URN payload "${payloadStr}".`,
+        {
+          error_code: FAILURE_CODES.CHROMIUM_FACTORY_OPTIONS_INVALID,
+          failure_stage: "chromium_factory_device_mismatch",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     const device = deviceFromOpts ?? (payloadStr ? resolveDevice(payloadStr) : null);
     if (!device) {
-      throw new Error(
-        `${CHROMIUM_CDP_NAMESPACE}.factory could not determine the device — pass it via chromiumCdpRef(device).options or via the URN payload.`
+      throw new FailureError(
+        `${CHROMIUM_CDP_NAMESPACE}.factory could not determine the device — pass it via chromiumCdpRef(device).options or via the URN payload.`,
+        {
+          error_code: FAILURE_CODES.CHROMIUM_FACTORY_OPTIONS_INVALID,
+          failure_stage: "chromium_factory_device_undetermined",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     const port = parseChromiumCdpPort(device.id);
     if (port == null) {
-      throw new Error(
+      throw new FailureError(
         `${CHROMIUM_CDP_NAMESPACE}.factory got a malformed device id "${device.id}". ` +
-          `Expected "chromium-cdp-<port>".`
+          `Expected "chromium-cdp-<port>".`,
+        {
+          error_code: FAILURE_CODES.CHROMIUM_DEVICE_ID_INVALID,
+          failure_stage: "chromium_factory_device_id",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 
@@ -194,8 +214,14 @@ export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> 
       refreshViewport: () => server.refreshViewport(),
       dispatchMouseEvent: async (event: MouseEventArgs) => {
         if (!Number.isFinite(event.x) || !Number.isFinite(event.y)) {
-          throw new Error(
-            `Chromium CDP: dispatchMouseEvent received non-finite coords x=${event.x}, y=${event.y}.`
+          throw new FailureError(
+            `Chromium CDP: dispatchMouseEvent received non-finite coords x=${event.x}, y=${event.y}.`,
+            {
+              error_code: FAILURE_CODES.CHROMIUM_INPUT_INVALID,
+              failure_stage: "chromium_dispatch_mouse_coords",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
           );
         }
         const button = event.button ?? (event.type === "mouseMoved" ? "none" : "left");

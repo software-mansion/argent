@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { IncomingMessage, Server } from "node:http";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ButtonType, ChromiumServer, KeyDirection, Rotation, TouchType } from "./types";
 
 /**
@@ -331,6 +332,11 @@ async function handleWsCommand(
       return {};
     }
     default:
-      throw new Error(`Unknown ws cmd: ${msg.cmd}`);
+      throw new FailureError(`Unknown ws cmd: ${msg.cmd}`, {
+        error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
+        failure_stage: "chromium_ws_unknown_cmd",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
   }
 }

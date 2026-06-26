@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import os from "node:os";
 import path from "path";
 import { z } from "zod";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type {
   FileInputSpec,
   ServiceRef,
@@ -190,7 +191,7 @@ async function resolveInputPaths(
 
   const baselinePath = params.captureBaseline
     ? await captureLiveInput({
-        api: services.simulatorServer as SimulatorServerApi,
+        api: requireSimulatorServer(services),
         outputDir,
         name: "baseline",
         rotation: params.rotation,
@@ -201,7 +202,7 @@ async function resolveInputPaths(
 
   const currentPath = params.captureCurrent
     ? await captureLiveInput({
-        api: services.simulatorServer as SimulatorServerApi,
+        api: requireSimulatorServer(services),
         outputDir,
         name: "current",
         rotation: params.rotation,
@@ -214,37 +215,73 @@ async function resolveInputPaths(
 }
 
 function validateInputSources(params: Params): void {
+  const invalid = (message: string, stage: string): FailureError =>
+    new FailureError(message, {
+      error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+      failure_stage: stage,
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   if (params.captureBaseline && params.captureCurrent) {
-    throw new Error(
-      "captureBaseline and captureCurrent cannot both be true; provide one saved image path and capture the other side live."
+    throw invalid(
+      "captureBaseline and captureCurrent cannot both be true; provide one saved image path and capture the other side live.",
+      "screenshot_diff_both_captures"
     );
   }
   if (params.captureBaseline && params.baselinePath) {
-    throw new Error("Provide either baselinePath or captureBaseline, not both.");
+    throw invalid(
+      "Provide either baselinePath or captureBaseline, not both.",
+      "screenshot_diff_baseline_conflict"
+    );
   }
   if (params.captureCurrent && params.currentPath) {
-    throw new Error("Provide either currentPath or captureCurrent, not both.");
+    throw invalid(
+      "Provide either currentPath or captureCurrent, not both.",
+      "screenshot_diff_current_conflict"
+    );
   }
   if (!params.captureBaseline && !params.baselinePath) {
-    throw new Error("baselinePath is required unless captureBaseline is true.");
+    throw invalid(
+      "baselinePath is required unless captureBaseline is true.",
+      "screenshot_diff_baseline_missing"
+    );
   }
   if (!params.captureCurrent && !params.currentPath) {
-    throw new Error("currentPath is required unless captureCurrent is true.");
+    throw invalid(
+      "currentPath is required unless captureCurrent is true.",
+      "screenshot_diff_current_missing"
+    );
   }
 }
 
+// simulatorServer is declared as an unconditional service dependency, so the
+// registry resolves it before execute() runs. Guard anyway: executeScreenshotDiffTool
+// is exported and a direct caller (e.g. a test) can pass a services map without it —
+// a classified failure beats a downstream TypeError on `.captureScreenshot`. Only
+// the live-capture branches call this, so non-capture diffs never require the service.
+function requireSimulatorServer(services: Record<string, unknown>): SimulatorServerApi {
+  const api = services.simulatorServer as SimulatorServerApi | undefined;
+  if (!api) {
+    throw new FailureError("Live screenshot capture requires a simulatorServer service.", {
+      error_code: FAILURE_CODES.SCREENSHOT_DIFF_CAPTURE_UNAVAILABLE,
+      failure_stage: "screenshot_diff_live_capture",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+    });
+  }
+  return api;
+}
+
 async function captureLiveInput(params: {
-  api: SimulatorServerApi | undefined;
+  // Resolved and validated by requireSimulatorServer at the call site, so it is
+  // never undefined here.
+  api: SimulatorServerApi;
   outputDir: string;
   name: "baseline" | "current";
   rotation?: Params["rotation"];
   signal?: AbortSignal;
   captureScreenshot: CaptureScreenshot;
 }): Promise<string> {
-  if (!params.api) {
-    throw new Error("Live screenshot capture requires a simulatorServer service.");
-  }
-
   // Prefer a full-resolution capture for maximum diff fidelity. Some Android
   // emulator configurations cannot stream a full-res frame — the simulator-server
   // rejects it with a "wrong data size" framebuffer mismatch — which previously

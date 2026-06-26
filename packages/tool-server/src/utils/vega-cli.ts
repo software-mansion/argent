@@ -78,9 +78,16 @@ export function __resetVegaBinaryCacheForTests(): void {
 async function resolveVegaOrThrow(): Promise<string> {
   const path = await resolveVegaBinary();
   if (!path) {
-    throw new Error(
+    throw new FailureError(
       "`vega` (or `kepler`) not found on PATH or under `~/vega/bin`. " +
-        "Install the Vega SDK and run `source ~/vega/env`, then retry."
+        "Install the Vega SDK and run `source ~/vega/env`, then retry.",
+      {
+        error_code: FAILURE_CODES.VEGA_CLI_NOT_FOUND,
+        failure_stage: "vega_binary_resolve",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+        failure_command: "vega",
+      }
     );
   }
   return path;
@@ -593,6 +600,12 @@ export async function vegaDevice(
   subcommand: string[],
   options: { timeoutMs?: number } = {}
 ): Promise<VegaRunResult> {
-  if (!serial) throw new Error("vegaDevice requires a non-empty device serial");
+  if (!serial)
+    throw new FailureError("vegaDevice requires a non-empty device serial", {
+      error_code: FAILURE_CODES.VEGA_DEVICE_ID_INVALID,
+      failure_stage: "vega_device_serial_required",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   return runVegaDevice(subcommand, options);
 }
