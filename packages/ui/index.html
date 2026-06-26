@@ -1090,10 +1090,10 @@
         min-width: 220px;
         max-width: 320px;
         background: var(--color-surface);
-        border: var(--border-hairline) solid var(--color-accent);
+        border: var(--border-hairline) solid var(--color-border);
         border-radius: var(--radius-card);
         padding: var(--pad-footbar);
-        box-shadow: var(--glow-accent);
+        box-shadow: var(--shadow-card);
       }
       .ap-title {
         margin: 0;
@@ -1107,28 +1107,49 @@
         font-size: var(--fs-note);
         line-height: var(--lh-snug);
       }
+      /* gap-0 connected list: one bordered container, rows divided by hairlines
+         and clipped to the container's radius. */
       .ap-list {
         display: flex;
         flex-direction: column;
-        gap: var(--gap-inline);
+        gap: 0;
         margin-top: var(--gap-inline);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-button);
+        overflow: hidden;
       }
       .ap-item {
+        display: flex;
+        align-items: center;
+        gap: var(--gap-inline);
         text-align: left;
         background: var(--color-bg);
         color: var(--color-fg);
-        border: var(--border-hairline) solid var(--color-border);
-        border-radius: var(--radius-button);
+        border: 0;
+        border-top: var(--border-hairline) solid var(--color-border);
+        border-radius: 0;
         padding: var(--pad-complete);
         font-size: var(--fs-body);
         font-weight: var(--fw-semibold);
         cursor: pointer;
       }
+      .ap-item:first-child {
+        border-top: 0;
+      }
       .ap-item:hover {
-        border-color: var(--color-accent);
         background: var(--color-surface);
       }
+      /* Square placeholder for the agent's icon/logo (filled in later). */
+      .ap-icon {
+        flex: none;
+        width: 22px;
+        height: 22px;
+        border-radius: var(--radius-input);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+      }
       .ap-item .ap-bin {
+        margin-left: auto;
         color: var(--color-muted);
         font-weight: 400;
         font-size: var(--fs-note);
@@ -2807,7 +2828,10 @@
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "ap-item";
-            btn.innerHTML = `${escapeHtml(a.name)} <span class="ap-bin">${escapeHtml(a.id)}</span>`;
+            btn.innerHTML =
+              `<span class="ap-icon" aria-hidden="true"></span>` +
+              `<span class="ap-name">${escapeHtml(a.name)}</span>` +
+              `<span class="ap-bin">${escapeHtml(a.id)}</span>`;
             btn.addEventListener("click", () => {
               apPicked = a.id;
               agentPickerEl.hidden = true;
