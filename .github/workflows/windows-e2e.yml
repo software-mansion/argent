@@ -1,0 +1,236 @@
+name: Windows E2E
+
+# Proves Argent runs on Windows. iOS Simulator is macOS-only (Apple), so
+# "Argent on Windows" means the Android + Chromium host control plane:
+#
+#   windows-chromium  — the tool-server drives a real headless Chrome over CDP
+#                       (discover → screenshot → describe → tap → observe the
+#                       DOM change). Chromium control is pure host-side TS, so a
+#                       hosted Windows runner (no virtualization) verifies it
+#                       fully. Also runs the cross-platform resolver unit tests
+#                       natively on Windows, and confirms adb.exe resolution.
+#
+#   windows-simulator-server — builds the argent simulator-server.exe from
+#                       source on Windows (the same feature set the radon
+#                       release job ships) and smoke-runs it, proving the
+#                       binary the Android path depends on builds + executes
+#                       natively. (Booting an Android emulator needs WHPX/HAXM,
+#                       unavailable on hosted Windows runners — that piece needs
+#                       a physical Windows box and is out of scope here.)
+#
+# Manual + on-change trigger; the cargo build makes the second job ~12-15 min.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/tool-server/src/utils/command-on-path.ts"
+      - "packages/tool-server/src/utils/android-binary.ts"
+      - "packages/tool-server/src/utils/check-deps.ts"
+      - "packages/tool-server/src/tools/simulator/stop-metro.ts"
+      - "packages/native-devtools-ios/src/index.ts"
+      - "packages/argent/scripts/bundle-tools.cjs"
+      - "packages/argent/scripts/argent-simulator-server.cjs"
+      - "scripts/download-simulator-server.sh"
+      - "scripts/ci/windows-chromium-e2e.mjs"
+      - "scripts/ci/e2e-chromium-page.html"
+      - ".github/workflows/windows-e2e.yml"
+
+jobs:
+  windows-chromium:
+    name: Chromium control plane + resolver unit tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fix rollup native bindings (win32)
+        # vitest 4 transforms via rollup, whose platform binary is an optional
+        # dep npm ci sometimes skips; install the win32 one explicitly.
+        run: npm install @rollup/rollup-win32-x64-msvc --no-save
+
+      - name: Build workspace
+        run: npx tsc --build
+
+      - name: Resolver unit tests on Windows (tool-server)
+        # The win32 branches added for Windows support, exercised on a real
+        # Windows host (real `where.exe`, real `.exe` access semantics) rather
+        # than a mocked platform. The broader suite has POSIX-only fixtures, so
+        # this is the curated cross-platform subset.
+        working-directory: packages/tool-server
+        run: >
+          npx vitest run
+          test/command-on-path.test.ts
+          test/android-binary-windows.test.ts
+          test/check-deps.test.ts
+          test/http-dep-gate.test.ts
+
+      - name: Resolver unit tests on Windows (native-devtools-ios)
+        working-directory: packages/native-devtools-ios
+        run: npx vitest run
+
+      - name: adb.exe resolves on Windows
+        # windows-latest ships the Android SDK with ANDROID_HOME/ANDROID_SDK_ROOT
+        # set. Prove the Windows resolver finds adb.exe (the `.exe` suffix + SDK
+        # roots), the host half of Android support that does work on a runner.
+        run: |
+          node -e "require('./packages/tool-server/dist/utils/android-binary.js').resolveAndroidBinary('adb').then(p => { console.log('resolved adb ->', p); if (!p || !p.toLowerCase().endsWith('adb.exe')) { console.error('expected an adb.exe path'); process.exit(1); } })"
+          adb version
+
+      - name: Locate Chrome
+        id: chrome
+        run: |
+          $candidates = @(
+            "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+            "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+            "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+          )
+          $chrome = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $chrome) { Write-Error "Google Chrome not found on this runner"; exit 1 }
+          Write-Host "Chrome: $chrome"
+          "path=$chrome" >> $env:GITHUB_OUTPUT
+
+      - name: Launch headless Chrome with CDP
+        run: |
+          $page = "file:///" + ((Resolve-Path scripts/ci/e2e-chromium-page.html).Path -replace '\\','/')
+          $udd  = Join-Path $env:RUNNER_TEMP "chrome-e2e-profile"
+          $log  = Join-Path $env:RUNNER_TEMP "chrome.log"
+          Start-Process -FilePath "${{ steps.chrome.outputs.path }}" -ArgumentList @(
+            "--headless=new","--remote-debugging-port=9222","--user-data-dir=$udd",
+            "--no-first-run","--no-default-browser-check","--disable-gpu",$page
+          ) -RedirectStandardOutput $log -RedirectStandardError "$log.err" | Out-Null
+          $up = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:9222/json/version" -TimeoutSec 2
+              if ($r.StatusCode -eq 200) { Write-Host "CDP up at t+${i}s"; $up = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 1
+          }
+          if (-not $up) { Get-Content "$log.err" -ErrorAction SilentlyContinue; Write-Error "Chrome CDP never came up on :9222"; exit 1 }
+
+      - name: Start tool-server
+        run: |
+          $env:ARGENT_PORT = "3033"
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.argent" | Out-Null
+          $log = Join-Path $env:RUNNER_TEMP "tool-server.log"
+          Start-Process -FilePath "node" -ArgumentList @("packages/tool-server/dist/index.js","start") `
+            -RedirectStandardOutput $log -RedirectStandardError "$log.err" | Out-Null
+          $up = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:3033/tools" -TimeoutSec 2
+              if ($r.StatusCode -eq 200) { Write-Host "tool-server up at t+${i}s"; $up = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 1
+          }
+          if (-not $up) {
+            Write-Host "--- tool-server.log ---"; Get-Content $log -ErrorAction SilentlyContinue
+            Write-Host "--- tool-server.err ---"; Get-Content "$log.err" -ErrorAction SilentlyContinue
+            Write-Error "tool-server never came up on :3033"; exit 1
+          }
+
+      - name: Run Chromium E2E
+        env:
+          ARGENT_E2E_URL: http://127.0.0.1:3033
+        run: |
+          $env:ARGENT_E2E_OUT = Join-Path $env:RUNNER_TEMP "e2e"
+          node scripts/ci/windows-chromium-e2e.mjs
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-chromium-e2e
+          path: |
+            ${{ runner.temp }}/e2e/*.png
+            ${{ runner.temp }}/tool-server.log
+            ${{ runner.temp }}/tool-server.log.err
+            ${{ runner.temp }}/chrome.log
+            ${{ runner.temp }}/chrome.log.err
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-simulator-server:
+    name: Build + smoke argent simulator-server.exe (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout argent
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies + build resolver
+        run: |
+          npm ci
+          npx tsc --build
+
+      - name: Checkout radon (simulator-server source)
+        # Public repo; shallow clone of main. The build command mirrors the
+        # radon argent Linux/Windows job (argent,swdec,swenc), so this also
+        # independently validates the radon CI change adding the Windows leg.
+        run: git clone --depth 1 https://github.com/software-mansion/radon.git radon-src
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install protoc + nasm
+        run: choco install -y protoc nasm
+
+      - name: Build argent simulator-server.exe
+        working-directory: radon-src/packages/simulator-server
+        run: cargo build --release --features argent,swdec,swenc
+
+      - name: Install binary into the per-platform bin layout
+        run: |
+          $dest = "packages/native-devtools-ios/bin/win32"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item "radon-src/packages/simulator-server/target/release/simulator-server.exe" `
+            (Join-Path $dest "simulator-server.exe") -Force
+          Get-Item (Join-Path $dest "simulator-server.exe") | Format-List Name,Length
+
+      - name: Resolver finds the Windows binary
+        # Prove simulatorServerBinaryPath() resolves bin/win32/simulator-server.exe
+        # on a real Windows host (the .exe-suffix + win32 key logic).
+        run: |
+          node -e "const m=require('./packages/native-devtools-ios/dist/index.js'); const p=m.simulatorServerBinaryPath(); console.log('resolved ->', p); if(!p.toLowerCase().endsWith('win32\\simulator-server.exe')){console.error('unexpected path');process.exit(1);}"
+
+      - name: Smoke-run the binary (executes natively)
+        # The binary is a valid PE that runs on Windows: invoke --help and assert
+        # it launched (any exit code is fine — a non-PE / wrong-arch / missing-DLL
+        # binary would throw on launch or fail with a load error instead).
+        run: |
+          $exe = "packages/native-devtools-ios/bin/win32/simulator-server.exe"
+          $out = & $exe --help 2>&1 | Out-String
+          Write-Host "exit code: $LASTEXITCODE"
+          Write-Host "output (first 500 chars):"
+          Write-Host $out.Substring(0, [Math]::Min(500, $out.Length))
+          if ($LASTEXITCODE -eq $null) { Write-Error "binary did not execute"; exit 1 }
+
+      - name: Upload binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-server-argent-windows
+          path: packages/native-devtools-ios/bin/win32/simulator-server.exe
+          if-no-files-found: warn
+          retention-days: 7
