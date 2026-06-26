@@ -14,7 +14,7 @@
   "dependencies": {
     "@argent/registry": "file:../registry",
     "ci-info": "^4.4.0",
-    "posthog-node": "5.35.0"
+    "posthog-node": "5.38.6"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
