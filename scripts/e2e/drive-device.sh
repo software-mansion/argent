@@ -100,13 +100,31 @@ test "$SZ" -gt "$MIN_SHOT_BYTES" || {
 }
 
 echo "::group::gesture-tap"
-TAP_RESP=$(curl -sS -m 30 -X POST "${BASE_URL}/gesture-tap" \
-  -H 'Content-Type: application/json' \
-  -d "{\"udid\":\"${DEVICE_ID}\",\"x\":0.5,\"y\":0.5}")
-echo "gesture-tap: $TAP_RESP"
+# Mirror the screenshot retry above: the successful screenshot already proves the
+# device is painted, so a tap race (#391) is unlikely here — but a tiny loop keeps
+# the tap symmetric with the screenshot and avoids an unguarded hard-fail if the
+# same transport race ever surfaces. A non-JSON / error response just retries
+# instead of spewing a raw python traceback.
+TAPPED=""
+for attempt in 1 2 3; do
+  TAP_RESP=$(curl -sS -m 30 -X POST "${BASE_URL}/gesture-tap" \
+    -H 'Content-Type: application/json' \
+    -d "{\"udid\":\"${DEVICE_ID}\",\"x\":0.5,\"y\":0.5}" || true)
+  echo "gesture-tap attempt ${attempt}/3: $TAP_RESP"
+  if printf '%s' "$TAP_RESP" | python3 -c "import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and d.get('data', {}).get('tapped') is True else 1)"; then
+    TAPPED=1
+    break
+  fi
+  sleep 2
+done
 echo "::endgroup::"
-echo "$TAP_RESP" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('data',{}).get('tapped') is True else 1)" || {
-  echo "::error::gesture-tap did not report tapped:true"
+[ -n "$TAPPED" ] || {
+  echo "::error::gesture-tap did not report tapped:true after 3 attempts"
   exit 1
 }
 

@@ -47,6 +47,14 @@ on:
       - "packages/tool-server/test/fixtures/electron-smoke-app/**"
       - "scripts/e2e/drive-device.sh"
       - ".github/workflows/e2e-device-smoke.yml"
+      # The shared composite action is part of the test harness too.
+      - ".github/actions/start-tool-server/action.yml"
+
+# Cancel superseded runs on the same ref: rapid pushes to a PR would otherwise
+# stack up the slow, billed macOS jobs (see header) with no cancellation.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ── iOS simulator on macOS ────────────────────────────────────────────────
@@ -56,43 +64,22 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
 
-      - name: Install deps + build
-        run: |
-          npm ci
-          npm install @rollup/rollup-darwin-arm64 --no-save
-          npx tsc --build
+      - uses: ./.github/actions/start-tool-server
 
       - name: Download signed native binaries (darwin)
         # iOS needs the simulator-server (screenshot/gesture-tap backend) AND the
         # dylibs + ax-service: bootIos() only returns booted:true when native-
         # devtools injection does NOT give up (boot-device.ts), so missing dylibs
-        # would surface here as a hard failure rather than a silent skip.
+        # would surface here as a hard failure rather than a silent skip. Only
+        # consumed at boot time, so it can run after the server starts — and after
+        # start-tool-server has set up Node (download-native-binaries.sh reads the
+        # Android manifest version with `node -p`).
         run: |
           bash scripts/download-simulator-server.sh
           bash scripts/download-native-binaries.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Start tool-server
-        run: |
-          mkdir -p ~/.argent
-          : > ~/.argent/tool-server.log
-          cd packages/tool-server
-          # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
-          # typecheck job already enforces types). Without it a cold start on a
-          # loaded CI runner can take >60s to bind and flakily times out.
-          nohup env ARGENT_PORT=3033 TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
-            > ~/.argent/tool-server.log 2>&1 &
-          for i in $(seq 1 60); do
-            curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3033/tools | grep -q 200 \
-              && { echo "tool-server up t+${i}s"; exit 0; }
-            sleep 1
-          done
-          echo "tool-server failed to start"; cat ~/.argent/tool-server.log; exit 1
 
       - name: Pick an available simulator UDID
         run: |
@@ -124,49 +111,27 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-
-      - name: Install deps + build
-        run: |
-          npm ci
-          npm install @rollup/rollup-linux-x64-gnu --no-save
-          npx tsc --build
-
-      - name: Vendor the fixture's electron
-        # The fixture brings its own electron (kept out of the root lockfile);
-        # boot-electron resolves ./node_modules/.bin/electron from the app dir.
-        # Standalone project (not a packages/* workspace member), so this ci is
-        # independent of the root install.
-        run: npm ci
-        working-directory: packages/tool-server/test/fixtures/electron-smoke-app
 
       - name: Start Xvfb
         # boot-electron spawns the Electron child inheriting the tool-server's
-        # env, so DISPLAY must be set BEFORE the tool-server starts.
+        # env, so DISPLAY must be set (in GITHUB_ENV) BEFORE the tool-server
+        # starts in the start-tool-server action below.
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends xvfb
           Xvfb :99 -screen 0 1280x1024x24 >/tmp/xvfb.log 2>&1 &
           echo "DISPLAY=:99" >> "$GITHUB_ENV"
 
-      - name: Start tool-server
-        run: |
-          mkdir -p ~/.argent
-          : > ~/.argent/tool-server.log
-          cd packages/tool-server
-          # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
-          # typecheck job already enforces types). Without it a cold start on a
-          # loaded CI runner can take >60s to bind and flakily times out.
-          nohup env ARGENT_PORT=3033 TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
-            > ~/.argent/tool-server.log 2>&1 &
-          for i in $(seq 1 60); do
-            curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3033/tools | grep -q 200 \
-              && { echo "tool-server up t+${i}s"; exit 0; }
-            sleep 1
-          done
-          echo "tool-server failed to start"; cat ~/.argent/tool-server.log; exit 1
+      - uses: ./.github/actions/start-tool-server
+
+      - name: Vendor the fixture's electron
+        # The fixture brings its own electron (kept out of the root lockfile);
+        # boot-electron resolves ./node_modules/.bin/electron from the app dir.
+        # Standalone project (not a packages/* workspace member), so this ci is
+        # independent of the root install. Electron is only needed at boot time,
+        # so vendoring it after the server starts is fine.
+        run: npm ci
+        working-directory: packages/tool-server/test/fixtures/electron-smoke-app
 
       - name: Boot + drive
         run: bash scripts/e2e/drive-device.sh
@@ -193,36 +158,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
 
-      - name: Install deps + build
-        run: |
-          npm ci
-          npm install @rollup/rollup-darwin-arm64 --no-save
-          npx tsc --build
+      - uses: ./.github/actions/start-tool-server
 
       - name: Vendor the fixture's electron
         run: npm ci
         working-directory: packages/tool-server/test/fixtures/electron-smoke-app
-
-      - name: Start tool-server
-        run: |
-          mkdir -p ~/.argent
-          : > ~/.argent/tool-server.log
-          cd packages/tool-server
-          # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
-          # typecheck job already enforces types). Without it a cold start on a
-          # loaded CI runner can take >60s to bind and flakily times out.
-          nohup env ARGENT_PORT=3033 TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
-            > ~/.argent/tool-server.log 2>&1 &
-          for i in $(seq 1 60); do
-            curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3033/tools | grep -q 200 \
-              && { echo "tool-server up t+${i}s"; exit 0; }
-            sleep 1
-          done
-          echo "tool-server failed to start"; cat ~/.argent/tool-server.log; exit 1
 
       - name: Boot + drive
         # macOS runner has a window server and Electron's sandbox is fine there,
