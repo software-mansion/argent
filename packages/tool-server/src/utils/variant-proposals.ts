@@ -142,6 +142,14 @@ export interface StoreSnapshot {
    * await-and-close phrasing).
    */
   cliSession: boolean;
+  /**
+   * Agent choices the window's picker offers (empty unless a CLI Lens session
+   * began with more than one installed agent) and the id the human picked (null
+   * until they do). The `argent lens` bridge polls `lensAgentChoice` to learn
+   * which agent to spawn.
+   */
+  lensAgents: Array<{ id: string; name: string }>;
+  lensAgentChoice: string | null;
 }
 
 type StoreEvents = {
@@ -207,6 +215,15 @@ export class VariantProposalStore {
    * many propose→submit rounds, like `device`.
    */
   private cliSession = false;
+  /**
+   * The agent choices a CLI Lens session offers (when more than one is
+   * installed) and the one the human picked in the window. The `argent lens`
+   * bridge passes the choices in on begin and polls `lensAgentChoice` to learn
+   * which agent to spawn. Empty / null outside an unresolved pick. Like
+   * `cliSession`, deliberately NOT cleared by `reset()`.
+   */
+  private lensAgents: Array<{ id: string; name: string }> = [];
+  private lensAgentChoice: string | null = null;
   private submitted: SubmittedSelection[] = [];
   private submittedAnnotations: ElementAnnotation[] = [];
   private variantSeq = 0;
@@ -368,19 +385,36 @@ export class VariantProposalStore {
       device: this.device,
       agentWaiting: this.waitersList.some((w) => !w.settled),
       cliSession: this.cliSession,
+      lensAgents: this.lensAgents.map((a) => ({ ...a })),
+      lensAgentChoice: this.lensAgentChoice,
     };
   }
 
   /**
-   * Begin or end a CLI-driven Lens session (`argent lens`). Idempotent: a
-   * no-change call does nothing. Emits `cliSessionChanged` (and `changed`) so
-   * the window manager can open/close the window and the UI can relabel.
+   * Begin or end a CLI-driven Lens session (`argent lens`), optionally offering
+   * a set of agent choices for the window's picker. `cliSessionChanged` fires
+   * only on an actual begin/end transition (so the window opens/closes once),
+   * but the agent choices are always refreshed on a begin call — a re-begin from
+   * a fresh `argent lens` must replace any stale choices.
    */
-  setCliSession(active: boolean): void {
-    if (this.cliSession === active) return;
+  setCliSession(active: boolean, agents: Array<{ id: string; name: string }> = []): void {
+    const transitioned = this.cliSession !== active;
     this.cliSession = active;
-    this.events.emit("cliSessionChanged", active);
+    this.lensAgents = active ? agents.map((a) => ({ ...a })) : [];
+    this.lensAgentChoice = null;
+    if (transitioned) this.events.emit("cliSessionChanged", active);
     this.events.emit("changed");
+  }
+
+  /** Record the agent the human picked in the window's picker. */
+  setLensAgentChoice(id: string): void {
+    this.lensAgentChoice = id;
+    this.events.emit("changed");
+  }
+
+  /** The agent id picked in the window, or null until the human chooses. */
+  getLensAgentChoice(): string | null {
+    return this.lensAgentChoice;
   }
 
   /** Whether a CLI-driven Lens session currently owns the window. */

@@ -8,16 +8,18 @@
  * the human launches Lens, and Lens spawns (and therefore owns) exactly one
  * agent terminal. The binding is 1:1 by construction.
  *
- * Flow:
- *   1. Ensure a tool-server is up and pick the agent to bind (the only installed
- *      one, or a prompt when several are; see `lens-agents.ts`).
+ * Flow — the foreground command does the minimum, then DETACHES so the terminal
+ * is freed:
+ *   1. Ensure a tool-server is up; decide the agent (resolved now for `--agent`
+ *      or a single install, otherwise the window's picker chooses among the
+ *      installed ones; see `lens-agents.ts`).
  *   2. Mark a CLI Lens session so the tool-server opens the preview window now
- *      (no `await_user_selection` needed) and keeps it open across rounds, and
- *      ensure a device is running so the preview has something to stream.
- *   3. Spawn a tracked agent terminal in the current directory, seeded to use
- *      `propose_variant` without blocking.
- *   4. Watch the tool-server for submitted feedback and type a one-line summary
- *      into that terminal — queuing it to the agent as its next prompt.
+ *      (no `await_user_selection` needed), handing it the picker choices.
+ *   3. Fork a detached background BRIDGE and return. The bridge ensures a device
+ *      is streaming, resolves the agent (a given one, or whichever the human
+ *      clicks in the window), spawns its terminal seeded to use `propose_variant`
+ *      without blocking, and watches the tool-server for submitted feedback —
+ *      typing a one-line summary into the terminal as the agent's next prompt.
  *
  * macOS only: the terminal spawn/track/write path drives `osascript` (see
  * `lens-terminal.ts`).
@@ -26,7 +28,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as readline from "node:readline";
+import { spawn } from "node:child_process";
 import { createToolsClient, type ToolsServerPaths } from "@argent/tools-client";
 import { isFlagEnabled } from "@argent/configuration-core";
 import {
@@ -38,7 +40,6 @@ import {
   isSessionAlive,
   shellQuote,
   flattenLine,
-  terminalAppName,
   type TerminalApp,
   type TerminalSession,
 } from "./lens-terminal.js";
@@ -117,12 +118,12 @@ async function dismissTrustPrompt(session: TerminalSession): Promise<void> {
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
- * Resolve which agent CLI to bind. With `--agent`, validate it's known and
- * installed. Otherwise auto-pick the only installed agent, or prompt the user to
- * choose when several are present. Exits (nothing is open yet) when there's no
- * usable agent.
+ * Decide how the agent gets chosen. With `--agent`, validate it's known and
+ * installed and resolve it now. Otherwise auto-resolve the only installed agent,
+ * or defer to the window's picker when several are present (returning the
+ * choices). Exits (nothing is open yet) when there's no usable agent.
  */
-async function resolveAgent(agentId: string | undefined): Promise<AgentSpec> {
+function planAgent(agentId: string | undefined): { agent: AgentSpec } | { choose: AgentSpec[] } {
   if (agentId) {
     const want = findAgentById(agentId);
     if (!want) {
@@ -137,7 +138,7 @@ async function resolveAgent(agentId: string | undefined): Promise<AgentSpec> {
       );
       process.exit(1);
     }
-    return want;
+    return { agent: want };
   }
 
   const installed = detectInstalledAgents();
@@ -148,48 +149,8 @@ async function resolveAgent(agentId: string | undefined): Promise<AgentSpec> {
     );
     process.exit(1);
   }
-  if (installed.length === 1) {
-    process.stdout.write(`  Agent: ${installed[0].displayName}.\n`);
-    return installed[0];
-  }
-  if (!process.stdin.isTTY) {
-    process.stderr.write(
-      `lens: multiple agents installed (${installed.map((a) => a.id).join(", ")}). ` +
-        "Pass --agent <id> when stdin isn't interactive.\n"
-    );
-    process.exit(1);
-  }
-  return promptSelectAgent(installed);
-}
-
-/** Numbered interactive picker for the agent (Enter takes the first option). */
-function promptSelectAgent(agents: AgentSpec[]): Promise<AgentSpec> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const menu = agents.map((a, i) => `    ${i + 1}. ${a.displayName}  (${a.bin})`).join("\n");
-  return new Promise((resolve) => {
-    const ask = (): void => {
-      rl.question(
-        `\n  Which agent should Lens bind to?\n${menu}\n\n  Choice [1-${agents.length}] (default 1): `,
-        (answer) => {
-          const t = answer.trim();
-          if (t === "") {
-            rl.close();
-            resolve(agents[0]);
-            return;
-          }
-          const n = Number(t);
-          if (Number.isInteger(n) && n >= 1 && n <= agents.length) {
-            rl.close();
-            resolve(agents[n - 1]);
-            return;
-          }
-          process.stdout.write("  Please enter a number from the list.\n");
-          ask();
-        }
-      );
-    };
-    ask();
-  });
+  if (installed.length === 1) return { agent: installed[0] };
+  return { choose: installed };
 }
 
 /** Shape of a `list-devices` entry we care about (the tool returns more). */
@@ -382,11 +343,12 @@ function printHelp(): void {
   process.stdout.write(
     `Usage: argent lens [--agent <id>] [--terminal iterm|terminal]\n\n` +
       `Open Argent Lens bound to a fresh coding-agent session.\n\n` +
-      `  Ensures a simulator is running and opens the Lens preview window, then\n` +
-      `  spawns your chosen agent in the current directory (you pick when more than\n` +
-      `  one is installed). When you request changes in the window, they are typed\n` +
-      `  into that agent session — queued as its next prompt. Ctrl-C ends the bridge\n` +
-      `  (the agent terminal keeps running).\n\n` +
+      `  Opens the Lens preview window and runs a detached background bridge (this\n` +
+      `  terminal stays free). Ensures a simulator is running, then spawns your agent\n` +
+      `  in the current directory — you pick it in the window when more than one is\n` +
+      `  installed, or pass --agent. When you request changes in the window they are\n` +
+      `  typed into that agent session as its next prompt. The bridge ends when you\n` +
+      `  close the agent terminal (or kill its pid).\n\n` +
       `Options:\n` +
       `  -a, --agent <id>       Agent to bind: ${agentIds().join(", ")}\n` +
       `  -t, --terminal <app>   Terminal to spawn (iterm preferred, else terminal)\n` +
@@ -395,6 +357,11 @@ function printHelp(): void {
 }
 
 export async function lens(argv: string[], options: LensCommandOptions): Promise<void> {
+  // Internal re-entry: the detached background bridge runs the rest of the
+  // session (agent pick, spawn, relay) so the foreground command can return.
+  const bridgeIdx = argv.indexOf("--__bridge");
+  if (bridgeIdx !== -1) return runBridge(argv[bridgeIdx + 1], options);
+
   const { terminal: preferred, agent: agentId, help } = parseArgs(argv);
   if (help) {
     printHelp();
@@ -432,90 +399,169 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
 
   const previewUrl = `${baseUrl}/preview/`;
 
-  // Pick the agent to bind before touching the window, so an unknown or
-  // uninstalled agent fails cleanly with nothing to tear down.
-  const agent = await resolveAgent(agentId);
+  // Decide the agent: resolved now for --agent / a single install, otherwise the
+  // window's picker chooses. Fails cleanly here with nothing open yet.
+  const plan = planAgent(agentId);
+  const choices = "choose" in plan ? plan.choose : [];
 
-  // Begin the CLI session — the tool-server opens the preview window now and
-  // keeps it open across rounds.
+  // Begin the CLI session — opens the preview window and, when the user must
+  // choose, hands it the agent list to render the picker.
   try {
     const res = await fetch(`${baseUrl}/preview/cli-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ active: true }),
+      body: JSON.stringify({
+        active: true,
+        agents: choices.map((a) => ({ id: a.id, name: a.displayName })),
+      }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } catch (err) {
-    process.stderr.write(
-      `lens: failed to start the Lens session: ${err instanceof Error ? err.message : String(err)}\n`
-    );
+    process.stderr.write(`lens: failed to start the Lens session: ${errMsg(err)}\n`);
     process.exit(1);
   }
 
-  // Make sure a device is up so the preview has something to stream (boots one
-  // when none is running). Best-effort: never blocks the session from starting.
-  await ensureDevice(client);
-
-  // Spawn the tracked agent terminal in the current directory. The seed prompt
-  // is staged in a temp file and read back with $(cat …) so a multi-line seed
-  // never has to survive nested shell + AppleScript quoting (the applet's trick).
+  // Hand the rest — device-ensure, the agent pick, spawn, trust dismissal, and
+  // the feedback relay — to a DETACHED background bridge, so this terminal is
+  // freed instead of being held by the watch loop.
   const term = resolveTerminal(preferred);
-  const seedFile = path.join(os.tmpdir(), `argent-lens-seed-${process.pid}-${Date.now()}.txt`);
-  fs.writeFileSync(seedFile, buildSeedPrompt(), "utf8");
-  // `$(cat <file>)` stays double-quoted so the seed reaches the agent as one
-  // argument; the file path is single-quoted so it survives the shell.
-  const launchCmd = agent.launch(shellQuote(process.cwd()), shellQuote(seedFile));
+  const state: BridgeState = {
+    baseUrl,
+    cwd: process.cwd(),
+    terminal: term,
+    agentId: "agent" in plan ? plan.agent.id : null,
+  };
+  const stamp = `${process.pid}-${Date.now()}`;
+  const stateFile = path.join(os.tmpdir(), `argent-lens-bridge-${stamp}.json`);
+  const logFile = path.join(os.tmpdir(), `argent-lens-bridge-${stamp}.log`);
+  fs.writeFileSync(stateFile, JSON.stringify(state), "utf8");
 
-  let session: TerminalSession;
+  const logFd = fs.openSync(logFile, "a");
+  const child = spawn(process.execPath, [process.argv[1], "lens", "--__bridge", stateFile], {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    cwd: process.cwd(),
+  });
+  child.unref();
+  fs.closeSync(logFd);
+
+  const agentLine =
+    "agent" in plan
+      ? `    • Agent:           ${plan.agent.displayName}\n`
+      : `    • Agent:           choose in the preview window\n`;
+  process.stdout.write(
+    `\n  Argent Lens is live — running in the background (this terminal is free).\n\n` +
+      agentLine +
+      `    • Preview window:  ${previewUrl}\n` +
+      `    • Bridge:          pid ${child.pid ?? "?"}  ·  log ${logFile}\n\n` +
+      ("choose" in plan ? "  Pick an agent in the preview window to start.\n" : "") +
+      `  Ask the agent to redesign something; review the variants in the window and\n` +
+      `  request changes — they're queued to the agent automatically.\n\n` +
+      `  End it by closing the agent terminal${child.pid ? `, or: kill ${child.pid}` : ""}.\n\n`
+  );
+}
+
+/** Persisted hand-off from the foreground command to the detached bridge. */
+interface BridgeState {
+  baseUrl: string;
+  cwd: string;
+  terminal: TerminalApp;
+  /** The pre-chosen agent id, or null when the window's picker decides. */
+  agentId: string | null;
+}
+
+/**
+ * The detached background bridge. Ensures a device, resolves the agent (a given
+ * one, or whichever the human clicks in the window's picker), spawns its
+ * terminal, dismisses the trust prompt, and runs the feedback relay until the
+ * terminal closes. Its stdout/stderr go to the log file the parent opened.
+ */
+async function runBridge(stateFile: string, options: LensCommandOptions): Promise<void> {
+  let state: BridgeState;
   try {
-    session = spawnTerminalSession(launchCmd, term);
+    state = JSON.parse(fs.readFileSync(stateFile, "utf8")) as BridgeState;
   } catch (err) {
-    await endSession(baseUrl);
-    process.stderr.write(
-      `lens: failed to spawn the ${terminalAppName(term)} session: ${err instanceof Error ? err.message : String(err)}\n`
-    );
+    process.stderr.write(`lens bridge: unreadable state: ${errMsg(err)}\n`);
     process.exit(1);
   }
-
-  // A fresh agent in an un-trusted directory opens on a "trust this folder?"
-  // prompt that blocks it from reading the seed. Dismiss it hands-free in the
-  // background (the user shouldn't have to babysit the spawned terminal).
-  void dismissTrustPrompt(session);
-
-  // Inject-mode agents (no initial-prompt arg) get the seed typed in after boot.
-  if (agent.injectSeed) void injectSeedAfterBoot(session);
-
-  process.stdout.write(
-    `\n  Argent Lens is live.\n\n` +
-      `    • Agent:           ${agent.displayName}\n` +
-      `    • Preview window:  ${previewUrl}\n` +
-      `    • Agent terminal:  ${terminalAppName(term)} (tty ${session.tty || "?"})\n\n` +
-      `  Ask the agent to redesign something; review the variants in the window and\n` +
-      `  request changes — they'll be queued to the agent automatically.\n\n` +
-      `  Press Ctrl-C to end the bridge (the agent terminal keeps running).\n\n`
-  );
+  const { baseUrl, cwd, terminal, agentId } = state;
 
   let stopping = false;
+  let seedFile = "";
   const stop = (): void => {
     if (stopping) return;
     stopping = true;
     void endSession(baseUrl).finally(() => {
-      try {
-        fs.rmSync(seedFile, { force: true });
-      } catch {
-        /* best-effort */
+      for (const f of [stateFile, seedFile]) {
+        if (!f) continue;
+        try {
+          fs.rmSync(f, { force: true });
+        } catch {
+          /* best-effort */
+        }
       }
-      process.stdout.write("\n  Lens session ended.\n");
       process.exit(0);
     });
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  await watchAndRelay(baseUrl, session, () => stopping);
+  // Ensure a device is streaming before we spawn (best-effort).
+  await ensureDevice(createToolsClient({ paths: options.paths }));
 
-  // The watch loop only returns when the agent terminal closed.
-  stop();
+  // Resolve the agent: a pre-chosen one, or whichever the human clicks.
+  let agent = agentId ? findAgentById(agentId) : undefined;
+  if (!agent) {
+    const id = await awaitAgentChoice(baseUrl, () => stopping);
+    if (id) agent = findAgentById(id);
+  }
+  if (!agent) {
+    stop(); // picker abandoned / server gone — tear the session down
+    return;
+  }
+
+  seedFile = path.join(os.tmpdir(), `argent-lens-seed-${process.pid}-${Date.now()}.txt`);
+  fs.writeFileSync(seedFile, buildSeedPrompt(), "utf8");
+  const launchCmd = agent.launch(shellQuote(cwd), shellQuote(seedFile));
+
+  let session: TerminalSession;
+  try {
+    session = spawnTerminalSession(launchCmd, terminal);
+  } catch (err) {
+    process.stderr.write(`lens bridge: failed to spawn the agent: ${errMsg(err)}\n`);
+    stop();
+    return;
+  }
+
+  void dismissTrustPrompt(session);
+  if (agent.injectSeed) void injectSeedAfterBoot(session);
+
+  await watchAndRelay(baseUrl, session, () => stopping);
+  stop(); // the watch loop returns only when the agent terminal closed
+}
+
+/**
+ * Poll the window snapshot until the human picks an agent. Returns the picked id,
+ * or null when stopping or the server has been unreachable for too long.
+ */
+async function awaitAgentChoice(
+  baseUrl: string,
+  isStopping: () => boolean
+): Promise<string | null> {
+  let failStreak = 0;
+  while (!isStopping()) {
+    await sleep(POLL_INTERVAL_MS);
+    try {
+      const res = await fetch(`${baseUrl}/preview/variants`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const snap = (await res.json()) as { lensAgentChoice?: string | null };
+      failStreak = 0;
+      if (snap.lensAgentChoice) return snap.lensAgentChoice;
+    } catch {
+      if (++failStreak >= 30) return null; // ~36s with no server → give up
+    }
+  }
+  return null;
 }
 
 /** Poll the tool-server for submitted feedback and type each new round's

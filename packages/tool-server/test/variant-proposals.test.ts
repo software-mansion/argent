@@ -372,6 +372,38 @@ describe("VariantProposalStore — CLI Lens session (`argent lens`)", () => {
     expect(seen).toEqual([true, false]);
   });
 
+  it("carries the agent picker choices and records the human's pick", () => {
+    const s = new VariantProposalStore();
+    expect(s.snapshot().lensAgents).toEqual([]);
+    expect(s.snapshot().lensAgentChoice).toBeNull();
+
+    s.setCliSession(true, [
+      { id: "claude", name: "Claude Code" },
+      { id: "codex", name: "Codex CLI" },
+    ]);
+    expect(s.snapshot().lensAgents.map((a) => a.id)).toEqual(["claude", "codex"]);
+    expect(s.snapshot().lensAgentChoice).toBeNull();
+
+    s.setLensAgentChoice("codex");
+    expect(s.snapshot().lensAgentChoice).toBe("codex");
+    expect(s.getLensAgentChoice()).toBe("codex");
+
+    // Ending the session clears the picker state.
+    s.setCliSession(false);
+    expect(s.snapshot().lensAgents).toEqual([]);
+    expect(s.snapshot().lensAgentChoice).toBeNull();
+  });
+
+  it("a re-begin replaces stale choices and clears a prior pick", () => {
+    const s = new VariantProposalStore();
+    s.setCliSession(true, [{ id: "claude", name: "Claude Code" }]);
+    s.setLensAgentChoice("claude");
+    // Same active state, but a fresh begin must refresh the offered agents.
+    s.setCliSession(true, [{ id: "gemini", name: "Gemini CLI" }]);
+    expect(s.snapshot().lensAgents.map((a) => a.id)).toEqual(["gemini"]);
+    expect(s.snapshot().lensAgentChoice).toBeNull();
+  });
+
   it("exposes the last submitted outcome via getLastOutcome (null until submit)", () => {
     const s = new VariantProposalStore();
     expect(s.getLastOutcome()).toBeNull();

@@ -1067,6 +1067,72 @@
       .offscreen-prompt:not(.collapsed) .op-pill {
         display: none;
       }
+      /* Agent picker — a centred modal the `argent lens` bridge shows when more
+         than one agent CLI is installed: a list of choices, click one to bind. */
+      .agent-picker {
+        position: absolute;
+        inset: 0;
+        z-index: var(--z-overlay);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: color-mix(in srgb, var(--color-bg) 60%, transparent);
+        backdrop-filter: blur(3px);
+        -webkit-app-region: no-drag;
+      }
+      .agent-picker[hidden] {
+        display: none;
+      }
+      .ap-card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        min-width: 220px;
+        max-width: 320px;
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-accent);
+        border-radius: var(--radius-card);
+        padding: var(--pad-footbar);
+        box-shadow: var(--glow-accent);
+      }
+      .ap-title {
+        margin: 0;
+        color: var(--color-fg);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-bold);
+      }
+      .ap-sub {
+        margin: 0;
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+        line-height: var(--lh-snug);
+      }
+      .ap-list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-inline);
+        margin-top: var(--gap-inline);
+      }
+      .ap-item {
+        text-align: left;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-button);
+        padding: var(--pad-complete);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-semibold);
+        cursor: pointer;
+      }
+      .ap-item:hover {
+        border-color: var(--color-accent);
+        background: var(--color-surface);
+      }
+      .ap-item .ap-bin {
+        color: var(--color-muted);
+        font-weight: 400;
+        font-size: var(--fs-note);
+      }
       .footbar textarea {
         background: var(--color-bg);
         color: var(--color-fg);
@@ -1297,6 +1363,15 @@
             </svg>
             <span><b id="op-pill-count">0</b> hidden — show</span>
           </button>
+        </div>
+        <!-- Agent picker: the `argent lens` bridge populates this when more than
+             one agent CLI is installed; clicking a row binds Lens to that agent. -->
+        <div class="agent-picker" id="agent-picker" hidden>
+          <div class="ap-card">
+            <p class="ap-title">Bind Argent Lens to an agent</p>
+            <p class="ap-sub">Pick the coding agent to drive this session.</p>
+            <div class="ap-list" id="ap-list"></div>
+          </div>
         </div>
         <div class="footbar" id="footbar" hidden>
           <div class="ready-label">
@@ -2698,11 +2773,57 @@
             vp.cliSession = !!snap.cliSession;
             const label = vp.cliSession ? "Request changes" : "Complete";
             if (completeBtn && completeBtn.textContent !== label) completeBtn.textContent = label;
+            renderAgentPicker(
+              Array.isArray(snap.lensAgents) ? snap.lensAgents : [],
+              snap.lensAgentChoice || null
+            );
           }
         } catch {
           /* keep last state */
         }
         vpRender();
+      }
+
+      // ── Agent picker (CLI Lens session) ─────────────────────────────────
+      // The `argent lens` bridge offers a list of installed agents when more
+      // than one is present; the human clicks one and the bridge spawns it.
+      const agentPickerEl = document.getElementById("agent-picker");
+      const apListEl = document.getElementById("ap-list");
+      let apRenderedKey = "";
+      let apPicked = null; // optimistic: the id we POSTed, to hide before the snapshot catches up
+      function renderAgentPicker(agents, choice) {
+        // Show only while a choice is still pending (offered, not yet picked).
+        const show = agents.length > 0 && !choice && apPicked == null;
+        if (!show) {
+          if (!agentPickerEl.hidden) agentPickerEl.hidden = true;
+          if (choice) apPicked = null; // server confirmed — reset for any future session
+          return;
+        }
+        const key = agents.map((a) => a.id).join(",");
+        if (key !== apRenderedKey) {
+          apRenderedKey = key;
+          apListEl.innerHTML = "";
+          for (const a of agents) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "ap-item";
+            btn.innerHTML = `${escapeHtml(a.name)} <span class="ap-bin">${escapeHtml(a.id)}</span>`;
+            btn.addEventListener("click", () => {
+              apPicked = a.id;
+              agentPickerEl.hidden = true;
+              fetch(`${TOOL_SERVER}/preview/cli-agent`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: a.id }),
+              }).catch(() => {
+                // Let the user retry if the POST failed to land.
+                apPicked = null;
+              });
+            });
+            apListEl.appendChild(btn);
+          }
+        }
+        agentPickerEl.hidden = false;
       }
 
       // Element geometry changes continuously as the user scrolls the device,

@@ -180,16 +180,34 @@ export function createPreviewRouter(registry: Registry): Router {
   // like the rest of /preview (localhost-only) and state-changing exactly as
   // /variants/selection already is — the spawned window URL is computed server
   // side, never caller-supplied.
+  // The optional `agents` array is the choices the window's picker offers (when
+  // more than one agent is installed); the bridge polls `lensAgentChoice` to
+  // learn which one the human clicked.
   router.post("/cli-session", (req: Request, res: Response) => {
     const active = Boolean(req.body?.active);
-    variantProposalStore.setCliSession(active);
+    const agents = Array.isArray(req.body?.agents)
+      ? (req.body.agents as unknown[])
+          .map((a) => a as { id?: unknown; name?: unknown })
+          .filter((a) => typeof a.id === "string" && typeof a.name === "string")
+          .map((a) => ({ id: String(a.id).slice(0, 64), name: String(a.name).slice(0, 64) }))
+      : [];
+    variantProposalStore.setCliSession(active, agents);
     res.json({ ok: true, cliSession: active });
+  });
+
+  // The human clicked an agent in the window's picker — record which one so the
+  // bridge can spawn it. Tokenless and state-changing exactly like the rest of
+  // /preview; the id is matched against the offered choices on the bridge side.
+  router.post("/cli-agent", (req: Request, res: Response) => {
+    const id = typeof req.body?.id === "string" ? req.body.id.slice(0, 64) : "";
+    variantProposalStore.setLensAgentChoice(id);
+    res.json({ ok: true, choice: id });
   });
 
   // The frozen outcome of the last submitted round (selections + comments +
   // annotations + globalComment), or null since the last reset. The `argent
   // lens` watcher polls this and, on each new `completedAt`, types a flattened
-  // summary of the feedback into the bound `claude` terminal.
+  // summary of the feedback into the bound agent terminal.
   router.get("/outcome", (_req: Request, res: Response) => {
     res.set("Cache-Control", "no-store");
     res.json({ outcome: variantProposalStore.getLastOutcome() });
