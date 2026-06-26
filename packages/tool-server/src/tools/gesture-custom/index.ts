@@ -49,7 +49,7 @@ interface Result {
 }
 
 const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true, device: false },
   android: { emulator: true, device: true, unknown: true },
 };
 

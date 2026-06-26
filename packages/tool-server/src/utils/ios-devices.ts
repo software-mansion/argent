@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { isPhysicalIosUdid } from "./device-info";
 
 const execFileAsync = promisify(execFile);
 
@@ -87,10 +88,17 @@ export function parsePhysicalIosDevices(data: DevicectlOutput): IosPhysicalDevic
     const udid = d.hardwareProperties?.udid;
     const platform = d.hardwareProperties?.platform;
     const transport = d.connectionProperties?.transportType;
-    // iOS only (skip watchOS/tvOS), and only currently-connected devices: a
-    // reachable device reports a `transportType` (wired/network); paired-but-
-    // offline ones carry `tunnelState: "unavailable"` and no transport.
-    if (!udid || platform !== "iOS" || !transport) continue;
+    // Keep only iOS (skip watchOS/tvOS), with a physical ECID UDID, that is
+    // currently reachable. The `isPhysicalIosUdid` (8hex-16hex) check is
+    // load-bearing: `devicectl list devices` also enumerates the host's iOS
+    // *simulators*, which report `platform: "iOS"` with
+    // `transportType: "sameMachine"` (verified against real devicectl JSON) —
+    // without the shape gate every simulator surfaces as a phantom physical
+    // device. It also keeps discovery consistent with `classifyDevice`, which
+    // routes only this UDID shape to the CoreDevice backend. A reachable device
+    // reports a `transportType` (wired/network); paired-but-offline ones carry
+    // `tunnelState: "unavailable"` and no transport, and are dropped.
+    if (!udid || platform !== "iOS" || !isPhysicalIosUdid(udid) || !transport) continue;
     if (d.connectionProperties?.tunnelState === "unavailable") continue;
     out.push({
       udid,

@@ -3,7 +3,7 @@ import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry"
 import type { ServiceRef } from "@argent/registry";
 import { simulatorServerRef } from "../../blueprints/simulator-server";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 
@@ -124,6 +124,15 @@ Stops on the first error and returns partial results.`,
       const device = resolveDevice(params.udid);
       if (device.platform === "chromium") {
         return { chromium: chromiumCdpRef(device) };
+      }
+      // Physical iOS is driven over CoreDevice, not simulator-server. Eagerly
+      // holding simulatorServerRef here would resolve the simulator-server
+      // blueprint, whose guard throws for kind === "device" — failing the whole
+      // sequence before step 1 even when every step is individually supported
+      // (gesture-tap/gesture-swipe/button). Hold nothing; each step resolves its
+      // own backend (CoreDevice) lazily via registry.invokeTool.
+      if (isPhysicalIos(device)) {
+        return {};
       }
       return { simulatorServer: simulatorServerRef(device) };
     },

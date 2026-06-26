@@ -115,6 +115,22 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
         }
       );
     }
+    if (device.platform === "ios" && device.kind === "device") {
+      // The iOS profiler path is simulator-only — it enumerates processes via
+      // `xcrun simctl spawn`, which rejects a physical UDID and then mislabels
+      // the iPhone as an unresponsive "simulator". Physical iPhones are driven
+      // over CoreDevice and have no native-profiler path yet. (Android physical
+      // devices ARE supported, hence the iOS-specific guard.)
+      throw new FailureError(
+        `${NATIVE_PROFILER_SESSION_NAMESPACE} is iOS-simulator-only; the physical device '${device.id}' is driven over CoreDevice and native profiling is not supported on physical iOS yet.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_WRONG_PLATFORM,
+          failure_stage: "native_profiler_session_factory_options",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
+      );
+    }
     const state: NativeProfilerSessionApi = {
       deviceId: device.id,
       platform: device.platform,

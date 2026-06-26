@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { precheckNativeDevtools } from "../../../blueprints/native-devtools";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { UnsupportedOperationError } from "../../../utils/capability";
 import type { RestartAppIosServices, RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -12,7 +13,14 @@ export const iosImpl: PlatformImpl<RestartAppIosServices, RestartAppParams, Rest
   handler: async (services, params, device) => {
     const { udid, bundleId } = params;
     if (device.kind === "device") {
-      throw new Error("restart-app is not supported on physical iOS devices.");
+      // Physical iOS is driven over CoreDevice and has no relaunch path (the
+      // native-devtools injection is simulator-only). UnsupportedOperationError
+      // maps to a clean 400 (a plain Error would surface as a generic 500).
+      throw new UnsupportedOperationError(
+        "restart-app",
+        device,
+        "physical iOS is driven over CoreDevice and has no relaunch path"
+      );
     }
     const blocked = await precheckNativeDevtools(services.nativeDevtools, udid);
     if (blocked) return blocked;

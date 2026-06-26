@@ -19,7 +19,7 @@ interface Result {
 // Android serials with "Tool 'paste' is not supported on android". The handler
 // itself is iOS-only — no platforms/ split needed.
 const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true, device: false },
 };
 
 export const pasteTool: ToolDefinition<Params, Result> = {

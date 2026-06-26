@@ -57,9 +57,11 @@ up in `list-devices` with `kind: "device"`.
 
 `list-devices` then includes the iPhone, and the supported tools work against its UDID.
 The first interaction (or `boot-device`) starts the required CoreDevice tunnel
-automatically: Argent shows a standard macOS authorization prompt — branded as Argent,
-with Touch ID / password — to launch `pymobiledevice3 remote tunneld` as root (creating the
-tunnel interface needs root once; every other command runs unprivileged). No manual `sudo`.
+automatically: Argent shows a standard macOS authorization prompt (Touch ID / password)
+to launch `pymobiledevice3 remote tunneld` as root (creating the tunnel interface needs
+root once; every other command runs unprivileged). No manual `sudo`. When the signed
+`argent-device-auth` helper is installed, the prompt is branded as Argent; otherwise it's
+the system's default admin prompt.
 
 If the prompt is declined or there's no GUI session (headless), start the tunnel manually
 and leave it running: `sudo pymobiledevice3 remote tunneld`.

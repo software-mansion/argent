@@ -196,11 +196,15 @@ let tunnelStartInFlight: Promise<void> | null = null;
 
 function tunnelHelp(udid: string, reason: string): string {
   const port = tunneldPort();
+  // Echo the custom port in the manual command — otherwise a user who set
+  // ARGENT_PMD3_TUNNELD_PORT would start tunneld on pmd3's default (49151) and
+  // discovery, which probes the custom port, would never find it.
+  const portFlag = port === 49151 ? "" : ` --port ${port}`;
   return (
     `Physical iOS control needs a CoreDevice tunnel for ${udid}, but ${reason} ` +
     `(checked tunneld at 127.0.0.1:${port}). Argent tries to start it automatically via the macOS ` +
     `authorization prompt; if that was declined or no GUI session is available, start it manually ` +
-    `and leave it running:\n  sudo pymobiledevice3 remote tunneld\n` +
+    `and leave it running:\n  sudo pymobiledevice3 remote tunneld${portFlag}\n` +
     `Also ensure the iPhone is on iOS 27+, unlocked, and trusted. ` +
     `(Override the port with ARGENT_PMD3_TUNNELD_PORT.)`
   );
@@ -333,6 +337,25 @@ export function toHid(v: number): number {
 }
 
 /**
+ * Derive the pmd3 `drag` parameters for a swipe of `durationMs`. A drag must
+ * dwell to register, so degenerate inputs are clamped: 0ms is dropped by iOS
+ * like a zero-dwell tap, and a negative value would reach pmd3 as a flag-like
+ * "-0.100" arg; both floor to 50ms. A pathological value is capped at 60s so it
+ * can't pin the device for minutes. The command timeout scales with the drag so
+ * a long swipe isn't SIGTERM-killed mid-gesture (pmd3 runs for ~`dur` ms; the
+ * +15s buffer covers the interpreter's startup).
+ */
+export function swipeDragParams(durationMs: number): {
+  steps: number;
+  seconds: string;
+  timeoutMs: number;
+} {
+  const dur = Math.max(50, Math.min(60_000, Math.round(durationMs)));
+  const steps = Math.max(2, Math.min(60, Math.round(dur / 16)));
+  return { steps, seconds: (dur / 1000).toFixed(3), timeoutMs: dur + 15_000 };
+}
+
+/**
  * Ensure the personalized DeveloperDiskImage is mounted (the CoreDevice services
  * live in it). Idempotent: when already mounted, pymobiledevice3 exits non-zero
  * with "already mounted", which we treat as success. CoreDevice usually mounts
@@ -368,6 +391,15 @@ export const coreDeviceBlueprint: ServiceBlueprint<CoreDeviceApi, DeviceInfo> = 
     if (device.platform !== "ios" || device.kind !== "device") {
       throw new Error(
         `${CORE_DEVICE_NAMESPACE} only drives physical iOS devices; got ${device.platform}/${device.kind}.`
+      );
+    }
+    // Gate first — before any setup probe — so a flag-disabled user gets the
+    // "enable the flag" message rather than an incidental "install pymobiledevice3"
+    // (ensureCoreDeviceTunnel re-checks this; the duplicate keeps the message
+    // correct regardless of whether pmd3 happens to be installed).
+    if (!isFlagEnabled(PHYSICAL_IOS_FLAG)) {
+      throw new Error(
+        `Physical iOS support is disabled. Enable it with: argent enable ${PHYSICAL_IOS_FLAG}`
       );
     }
 
@@ -428,8 +460,7 @@ export const coreDeviceBlueprint: ServiceBlueprint<CoreDeviceApi, DeviceInfo> = 
         );
       },
       async swipe(fromX, fromY, toX, toY, durationMs) {
-        const steps = Math.max(2, Math.min(60, Math.round(durationMs / 16)));
-        const seconds = (durationMs / 1000).toFixed(3);
+        const { steps, seconds, timeoutMs } = swipeDragParams(durationMs);
         await run(
           "swipe",
           [
@@ -444,7 +475,7 @@ export const coreDeviceBlueprint: ServiceBlueprint<CoreDeviceApi, DeviceInfo> = 
             "--duration",
             seconds,
           ],
-          15_000
+          timeoutMs
         );
       },
       async button(name) {

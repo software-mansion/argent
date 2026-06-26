@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { UnsupportedOperationError } from "../../../utils/capability";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -13,7 +14,13 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
     if (device.kind === "device") {
       // Installing on a physical iPhone needs a device-signed .app and a
       // provisioning profile; that is out of scope for the CoreDevice path.
-      throw new Error("reinstall-app is not supported on physical iOS devices.");
+      // UnsupportedOperationError maps to a clean 400 (a plain Error would
+      // surface as a generic 500).
+      throw new UnsupportedOperationError(
+        "reinstall-app",
+        device,
+        "installing on physical iOS needs a device-signed .app and provisioning profile, which is out of scope for the CoreDevice path"
+      );
     }
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
