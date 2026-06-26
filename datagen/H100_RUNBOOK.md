@@ -4,7 +4,13 @@ Everything below was de-risked on free hardware first. What's **proven** vs what
 H100-only unknown** is spelled out at the bottom — read that before paying.
 
 ## 0. Box
-- 1× H100 **80GB**, recent PyTorch image (**torch ≥ 2.4**, CUDA 12.x), internet on.
+- 1× 80GB GPU (A100/H100/H200/RTX PRO 6000 — all fine; static 4-bit load is only ~8.9GB so OOM is a
+  non-issue at this data's 30-39K context). Recent PyTorch image (**torch ≥ 2.5**, CUDA 12.x), internet on.
+- **torch ≥ 2.5 is a HARD floor, not ≥2.4** (hardware-verified 2026-06-26): transformers 5.5.0's bnb-4bit
+  integration calls `nn.Module.set_submodule`, added in torch 2.5. The RunPod `runpod-torch-v240` image
+  ships torch 2.4.1 and crashes at model load with `AttributeError: ... has no attribute 'set_submodule'`.
+  Fix: either pick a torch≥2.5 image, or on the box `pip install torch==2.6.0 torchvision==0.21.0
+  --index-url https://download.pytorch.org/whl/cu124` (keeps cuda 12.4 / bnb wheels) before running.
 - The script installs its own deps (transformers 5.5.0 pin + liger/bnb/peft/accelerate). It checks pip
   exit codes and aborts on a failed install, so you won't silently train on a broken stack.
 
@@ -41,19 +47,19 @@ If step 1 errors or loss is NaN, kill immediately — you've spent pennies, not 
 ## 4. Get the adapter back
 Saved to `./adapter` (LoRA only, ~150 MB) + `TRAIN_OK.txt`. Pull it to the Mac:
 ```
-scp -r user@h100:~/run/adapter  datagen/fused/silver-longctx-adapter
+scp -r user@h100:~/run/adapter  datagen/fused/silver-v7-adapter
 ```
 
 ## 5. Package locally (Mac) — proven path from v6
-- Edit `datagen/local_merge.py`: point `ADAPTER` at `datagen/fused/silver-longctx-adapter`, set
-  `MERGED` to `fused/silver-longctx-merged`.
+- Edit `datagen/local_merge.py`: point `ADAPTER` at `datagen/fused/silver-v7-adapter`, set
+  `MERGED` to `fused/silver-v7-merged`.
 - Then mirror `package-v6.sh` (peft-merge fp16 → `convert_hf_to_gguf.py` auto-extracts the text LM →
-  `llama-quantize Q6_K` → `ollama create silver-longctx:e4b-text-Q6-K`). The Modelfile must keep
+  `llama-quantize Q6_K` → `ollama create silver-v7:e4b-text-Q6-K`). The Modelfile must keep
   `RENDERER gemma4` + `PARSER gemma4` + `num_ctx 131072`.
 
 ## 6. Verify (the test that catches the schema-as-args bug)
 ```
-python3 datagen/verify_realpath.py silver-longctx:e4b-text-Q6-K
+python3 datagen/verify_realpath.py silver-v7:e4b-text-Q6-K
 ```
 Hits ollama `/v1/messages` with a real provider prompt + the full 67-tool catalog (`mcp__argent__*`
 names — that convention is in the training mix) and a multi-step nav scenario. Pass = **✅ real args**

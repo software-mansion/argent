@@ -31,6 +31,18 @@ def sh(cmd):
 sh("pip install -q accelerate bitsandbytes datasets peft liger-kernel")
 sh('pip install -q --no-deps transformers==5.5.0 "tokenizers>=0.22.0,<=0.23.0"')
 sh("pip install -q --no-deps --upgrade timm")
+# Gemma 3n E4B attention is mixed: 35 sliding-window layers (head_dim 256, flash-attn handles them) + 7
+# full-attention layers (head_dim 512, which flash-attn REJECTS — its cap is 256). The hybrid attention
+# below routes the 512-dim layers through xformers (cutlass, head_dim<=512, O(L) memory). Both kernels are
+# required; without them SDPA falls back to the math backend and OOMs at >~10K tokens. (flash-attn wheel is
+# pinned for torch2.6/cu124/py311/abiFALSE — swap it to match a different torch/python.)
+def _ensure(mod, install):
+    try: __import__(mod)
+    except Exception: sh(install)
+_ensure("flash_attn", 'pip install -q --no-deps einops '
+        '"https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/'
+        'flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"')
+_ensure("xformers", "pip install -q --no-deps xformers==0.0.29.post3")
 
 import torch
 from transformers import (AutoModelForImageTextToText, AutoTokenizer, BitsAndBytesConfig,
@@ -40,11 +52,31 @@ from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
 import datasets, transformers, peft, bitsandbytes
 print(f"versions: torch={torch.__version__} transformers={transformers.__version__} "
       f"peft={peft.__version__} bnb={bitsandbytes.__version__}", flush=True)
+
+# ---- hybrid attention (verified numerically exact vs eager: max|Δ|~0.01 at bf16 noise) ----
+# Registered under "flash_attention_2", so the model's 35 head_dim-256 layers keep transformers' proven
+# flash path (incl. sliding-window handling) and only the 7 head_dim-512 full-attention layers divert to
+# xformers. Inputs are heads-first [B, H, L, D]; xformers wants [B, L, H, D] and KV expanded for GQA.
+from transformers import AttentionInterface
+from transformers.integrations.flash_attention import flash_attention_forward as _orig_flash
+import xformers.ops as _xops
+def _hybrid_attn(module, query, key, value, attention_mask, scaling=None, dropout=0.0, **kw):
+    if query.shape[-1] <= 256:
+        return _orig_flash(module, query, key, value, attention_mask, scaling=scaling, dropout=dropout, **kw)
+    Hq, Hkv = query.shape[1], key.shape[1]
+    q = query.transpose(1, 2); k = key.transpose(1, 2); v = value.transpose(1, 2)
+    if Hkv != Hq:
+        r = Hq // Hkv; k = k.repeat_interleave(r, dim=2); v = v.repeat_interleave(r, dim=2)
+    o = _xops.memory_efficient_attention(q.contiguous(), k.contiguous(), v.contiguous(),
+                                         attn_bias=_xops.LowerTriangularMask(), scale=scaling)
+    return o, None
+AttentionInterface.register("flash_attention_2", _hybrid_attn)
 assert torch.cuda.is_available(), "FATAL: no CUDA device"
 
 MAXLEN  = 40960
 MODEL   = "unsloth/gemma-4-E4B-it"
 EPOCHS  = float(os.environ.get("EPOCHS", "2"))  # v6 worked at ~600 seqs; 2 epochs = ~6.5k seqs w/ focused mask
+MAX_STEPS = int(os.environ.get("MAX_STEPS", "-1"))  # >0 caps total optim steps (overrides EPOCHS) for a bounded run
 OUT_DIR = os.environ.get("OUT_DIR", "./adapter")
 
 # ---- data discovery FIRST (fail fast, before the multi-minute 8B model download/quantize) ----
@@ -126,7 +158,7 @@ def collate(batch):
 bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True,
                          bnb_4bit_compute_dtype=torch.bfloat16)
 model = AutoModelForImageTextToText.from_pretrained(
-    MODEL, quantization_config=bnb, dtype=torch.bfloat16, attn_implementation="sdpa", device_map={"": 0})
+    MODEL, quantization_config=bnb, dtype=torch.bfloat16, attn_implementation="flash_attention_2", device_map={"": 0})
 model.config.use_cache = False
 for p in model.parameters():
     p.requires_grad = False  # base frozen; LoRA adapters (created below) are the only trainable params
@@ -155,7 +187,7 @@ print(f"plan: {EPOCHS} epochs x ~{steps_per_epoch} optim steps = ~{int(EPOCHS*st
 trainer = LigerCETrainer(
     model=model, processing_class=TKZ, train_dataset=train_ds, data_collator=collate,
     args=TrainingArguments(
-        per_device_train_batch_size=1, gradient_accumulation_steps=4, num_train_epochs=EPOCHS,
+        per_device_train_batch_size=1, gradient_accumulation_steps=4, num_train_epochs=EPOCHS, max_steps=MAX_STEPS,
         warmup_ratio=0.03, learning_rate=2e-4, logging_steps=5, save_steps=50, save_total_limit=2,
         optim="adamw_8bit", gradient_checkpointing=False, fp16=False, bf16=True,
         lr_scheduler_type="cosine", report_to="none", remove_unused_columns=False, output_dir="./out"))

@@ -5,9 +5,9 @@ from transformers import AutoModelForImageTextToText, AutoTokenizer
 from peft import PeftModel
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ADAPTER = os.path.join(HERE, "kaggle/realtrain/out/adapter")
+ADAPTER = os.path.join(HERE, "fused/silver-v7-adapter")
 BASE = "unsloth/gemma-4-E4B-it"
-MERGED = os.path.join(HERE, "fused/silver-v6-merged")
+MERGED = os.path.join(HERE, "fused/silver-v7-merged")
 
 print("=== loading base fp16 (downloads ~15GB first time) ===", flush=True)
 base = AutoModelForImageTextToText.from_pretrained(BASE, torch_dtype=torch.float16, low_cpu_mem_usage=True)
@@ -17,8 +17,13 @@ print("=== saving merged ===", flush=True)
 model.save_pretrained(MERGED, safe_serialization=True)
 AutoTokenizer.from_pretrained(BASE).save_pretrained(MERGED)
 
-idx = json.load(open(f"{MERGED}/model.safetensors.index.json"))
-keys = list(idx["weight_map"].keys())
+idx_path = f"{MERGED}/model.safetensors.index.json"
+if os.path.exists(idx_path):  # sharded save
+    keys = list(json.load(open(idx_path))["weight_map"].keys())
+else:  # single-file save (merged model fit under the shard limit) -> read keys from the header
+    from safetensors import safe_open
+    with safe_open(f"{MERGED}/model.safetensors", framework="pt") as _f:
+        keys = list(_f.keys())
 print("TOTAL keys:", len(keys), flush=True)
 print("first keys:", keys[:4], flush=True)
 print("lm_head/embed keys:", [k for k in keys if "lm_head" in k or "embed_tokens" in k][:4], flush=True)
