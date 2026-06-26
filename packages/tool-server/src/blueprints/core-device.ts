@@ -24,6 +24,21 @@ export const CORE_DEVICE_NAMESPACE = "CoreDevice";
 // start must not be reachable unless the user enabled the experimental feature.
 const PHYSICAL_IOS_FLAG = "physical-ios-devices";
 
+/**
+ * Throw the standard "enable the flag" error unless physical-iOS support is on.
+ * The single gate for every physical-iOS operation — the CoreDevice factory and
+ * tunnel start funnel through it, and `launch-app` (which drives a real device
+ * via `devicectl` rather than the CoreDevice backend) calls it directly so it
+ * can't bypass the opt-in.
+ */
+export function assertPhysicalIosEnabled(): void {
+  if (!isFlagEnabled(PHYSICAL_IOS_FLAG)) {
+    throw new Error(
+      `Physical iOS support is disabled. Enable it with: argent enable ${PHYSICAL_IOS_FLAG}`
+    );
+  }
+}
+
 // The registry's `ServiceRef.options` is typed as `Record<string, unknown>`;
 // the intersection adds the implicit string index signature an interface lacks.
 type CoreDeviceFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
@@ -258,11 +273,7 @@ async function isTunneldReachable(port: number): Promise<boolean> {
  * locked), it waits rather than popping a second, pointless prompt.
  */
 export async function ensureCoreDeviceTunnel(udid: string): Promise<Rsd> {
-  if (!isFlagEnabled(PHYSICAL_IOS_FLAG)) {
-    throw new Error(
-      `Physical iOS support is disabled. Enable it with: argent enable ${PHYSICAL_IOS_FLAG}`
-    );
-  }
+  assertPhysicalIosEnabled();
   try {
     return await resolveTunnel(udid);
   } catch (notRunning) {
@@ -397,11 +408,7 @@ export const coreDeviceBlueprint: ServiceBlueprint<CoreDeviceApi, DeviceInfo> = 
     // "enable the flag" message rather than an incidental "install pymobiledevice3"
     // (ensureCoreDeviceTunnel re-checks this; the duplicate keeps the message
     // correct regardless of whether pmd3 happens to be installed).
-    if (!isFlagEnabled(PHYSICAL_IOS_FLAG)) {
-      throw new Error(
-        `Physical iOS support is disabled. Enable it with: argent enable ${PHYSICAL_IOS_FLAG}`
-      );
-    }
+    assertPhysicalIosEnabled();
 
     const pmd3 = resolvePmd3();
     const udid = device.id;

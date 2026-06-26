@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { precheckNativeDevtools } from "../../../blueprints/native-devtools";
+import { assertPhysicalIosEnabled } from "../../../blueprints/core-device";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import type { LaunchAppIosServices, LaunchAppParams, LaunchAppResult } from "../types";
 
@@ -14,6 +15,11 @@ export const iosImpl: PlatformImpl<LaunchAppIosServices, LaunchAppParams, Launch
     // (the app must already be installed/signed on the device). The
     // native-devtools precheck is simulator-only, so it is skipped here.
     if (device.kind === "device") {
+      // Unlike the CoreDevice-routed tools, launch-app shells devicectl directly
+      // (no CoreDevice service), so it must enforce the opt-in flag itself —
+      // otherwise it would be the one physical-iOS operation reachable while the
+      // feature is disabled.
+      assertPhysicalIosEnabled();
       try {
         await execFileAsync("xcrun", [
           "devicectl",

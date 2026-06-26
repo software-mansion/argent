@@ -24,13 +24,19 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import { resolveDevice, isPhysicalIosUdid } from "../src/utils/device-info";
 import { parsePhysicalIosDevices } from "../src/utils/ios-devices";
 import { UnsupportedOperationError, assertSupported } from "../src/utils/capability";
-import { swipeDragParams, ensureCoreDeviceTunnel } from "../src/blueprints/core-device";
+import {
+  swipeDragParams,
+  ensureCoreDeviceTunnel,
+  assertPhysicalIosEnabled,
+} from "../src/blueprints/core-device";
 import { buttonTool } from "../src/tools/button";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
 import { describeIos } from "../src/tools/describe/platforms/ios";
 import { iosImpl as openUrlIos } from "../src/tools/open-url/platforms/ios";
 import { iosImpl as reinstallIos } from "../src/tools/reinstall-app/platforms/ios";
 import { iosImpl as restartIos } from "../src/tools/restart-app/platforms/ios";
+import { iosImpl as launchAppIos } from "../src/tools/launch-app/platforms/ios";
+import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { keyboardTool } from "../src/tools/keyboard";
 import { gesturePinchTool } from "../src/tools/gesture-pinch";
@@ -141,6 +147,64 @@ describe("privileged tunnel start is gated behind the feature flag", () => {
       /Physical iOS support is disabled.*argent enable physical-ios-devices/s
     );
     expect(mockFlag).toHaveBeenCalledWith("physical-ios-devices");
+  });
+});
+
+describe("launch-app enforces the physical-iOS flag (no bypass)", () => {
+  // launch-app drives a real device via `devicectl` directly (not the
+  // CoreDevice service), so unlike screenshot/tap/swipe it must enforce the
+  // opt-in itself — otherwise it would be the one physical-iOS operation
+  // reachable while the feature is disabled.
+  it("assertPhysicalIosEnabled throws when the flag is off, not when on", () => {
+    mockFlag.mockReturnValue(false);
+    expect(() => assertPhysicalIosEnabled()).toThrow(/Physical iOS support is disabled/);
+    mockFlag.mockReturnValue(true);
+    expect(() => assertPhysicalIosEnabled()).not.toThrow();
+  });
+
+  it("launch-app rejects a physical iPhone when the flag is off (before shelling devicectl)", async () => {
+    mockFlag.mockReturnValue(false);
+    await expect(
+      launchAppIos.handler(
+        {} as never,
+        { udid: PHYSICAL_UDID, bundleId: "com.apple.Preferences" } as never,
+        resolveDevice(PHYSICAL_UDID)
+      )
+    ).rejects.toThrow(/Physical iOS support is disabled.*argent enable physical-ios-devices/s);
+  });
+});
+
+describe("gesture-swipe routes physical iOS to the CoreDevice backend", () => {
+  it("forwards normalized coords and duration to coreDevice.swipe", async () => {
+    const coreDevice = { swipe: vi.fn().mockResolvedValue(undefined) };
+    const res = await gestureSwipeTool.execute(
+      { coreDevice } as never,
+      {
+        udid: PHYSICAL_UDID,
+        fromX: 0.5,
+        fromY: 0.7,
+        toX: 0.5,
+        toY: 0.3,
+        durationMs: 250,
+      } as never
+    );
+    expect(coreDevice.swipe).toHaveBeenCalledWith(0.5, 0.7, 0.5, 0.3, 250);
+    expect(res).toMatchObject({ swiped: true });
+  });
+
+  it("defaults the duration to 300ms when omitted", async () => {
+    const coreDevice = { swipe: vi.fn().mockResolvedValue(undefined) };
+    await gestureSwipeTool.execute(
+      { coreDevice } as never,
+      {
+        udid: PHYSICAL_UDID,
+        fromX: 0.2,
+        fromY: 0.2,
+        toX: 0.8,
+        toY: 0.8,
+      } as never
+    );
+    expect(coreDevice.swipe).toHaveBeenCalledWith(0.2, 0.2, 0.8, 0.8, 300);
   });
 });
 
