@@ -126,9 +126,14 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
   // Still empty after the transition window: on Apple TV the daemon may be
   // holding a stale primaryApp cache from a killed app. Recycle it once and
   // re-probe — a fresh daemon rebinds to the current foreground app, recovering
-  // a fully-rendered screen the stale cache reported as empty. (No-op on
-  // Android TV.)
-  if (isEmpty(res)) {
+  // a fully-rendered screen the stale cache reported as empty.
+  //
+  // Skip this on Android TV: `recycleAx` is a documented no-op there, so the
+  // re-probe would just repeat the uiautomator dump the retry loop already
+  // found empty (and the empty-focus fallback below dumps once more). Going
+  // straight to that fallback saves two redundant dumps on the empty-focus path
+  // — the headline case for RN-focus-engine screens.
+  if (isEmpty(res) && device.platform !== "android") {
     await api.recycleAx();
     res = await api.describe();
   }
@@ -136,18 +141,20 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
   // Android TV with a still-empty focus engine: fall back to the full
   // uiautomator tree so describe stays useful on RN-focus-engine screens.
   if (isEmpty(res) && device.platform === "android") {
-    try {
-      const data = await describeAndroid(registry, device.id);
-      return {
-        description: `${ANDROID_FOCUS_EMPTY_HINT}\n\n${formatDescribeTree(data.tree, {
-          source: data.source,
-        })}`,
+    // We only reach here on a confirmed Android TV (the dispatcher routed us
+    // here via isAndroidTv), so pass isTv through to skip a redundant probe.
+    // Let a capture failure propagate rather than swallowing it: describeAndroid
+    // throws an actionable error (device locked / keyguard / DRM / secure
+    // overlay, or an adb-level failure), all strictly more useful than masking
+    // it as the generic "app is probably still launching" EMPTY_HINT below.
+    const data = await describeAndroid(registry, device.id, undefined, true);
+    return {
+      description: `${ANDROID_FOCUS_EMPTY_HINT}\n\n${formatDescribeTree(data.tree, {
         source: data.source,
-        hint: ANDROID_FOCUS_EMPTY_HINT,
-      };
-    } catch {
-      // Fall through to the empty focus rendering + EMPTY_HINT below.
-    }
+      })}`,
+      source: data.source,
+      hint: ANDROID_FOCUS_EMPTY_HINT,
+    };
   }
 
   const empty = isEmpty(res);

@@ -98,7 +98,10 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
   async execute(_services, _params) {
     const [ios, android, avds, chromium, vega] = await Promise.all([
       listIosSimulators(),
-      listAndroidDevices().catch(() => []),
+      // Opt into runtimeKind enrichment: list-devices surfaces TV vs mobile to
+      // the agent, so the extra feature probe per device is warranted here (the
+      // boot-loop poller deliberately omits it).
+      listAndroidDevices({ runtimeKind: true }).catch(() => []),
       listAvds(),
       discoverChromiumDevices().catch(() => []),
       listVegaDevices().catch(() => []),

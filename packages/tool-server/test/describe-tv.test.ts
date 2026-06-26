@@ -1,5 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import type { DeviceInfo } from "@argent/registry";
+
+// The Android empty-focus fallback shells out to uiautomator via describeAndroid;
+// stub it so the TV-describe routing can be tested without adb.
+const describeAndroidMock = vi.fn();
+vi.mock("../src/tools/describe/platforms/android", () => ({
+  describeAndroid: (...a: unknown[]) => describeAndroidMock(...a),
+}));
+
 import { describeTv } from "../src/tools/describe/platforms/tv";
 import type { TvControlApi, TvDescribeResponse } from "../src/blueprints/tv-control";
 
@@ -101,5 +109,41 @@ describe("describe (TV) — empty-state resilience", () => {
     expect(res.description).toContain("Focusable: (none reported)");
     expect(res.hint).toMatch(/still launching|loading|transition|recycl/i);
     expect(res.description).toContain("Note:");
+  });
+});
+
+// Android TV target — platform "android" by serial shape.
+const ANDROID_TV_DEVICE: DeviceInfo = {
+  id: "emulator-5556",
+  platform: "android",
+  kind: "emulator",
+};
+
+describe("describe (TV) — Android skips the no-op recycle", () => {
+  it("does not recycle on an empty Android focus set — goes straight to the uiautomator fallback", async () => {
+    // recycleAx is a documented no-op on Android, so re-probing after it would
+    // just repeat the empty uiautomator dump. describeTv must skip it and fall
+    // back to the full tree instead.
+    const describeFn = vi.fn().mockResolvedValue(empty);
+    const recycleAx = vi.fn().mockResolvedValue(undefined);
+    const frame = { x: 0, y: 0, width: 100, height: 50 };
+    describeAndroidMock.mockResolvedValue({
+      tree: {
+        role: "RCTView",
+        frame,
+        children: [{ role: "AXButton", label: "Play", frame, children: [] }],
+      },
+      source: "uiautomator",
+    });
+
+    const res = await describeTv(makeRegistry(makeApi(describeFn, recycleAx)), ANDROID_TV_DEVICE);
+
+    // recycle never fired, and the post-recycle re-probe never happened: only the
+    // 3 transition-window probes ran (no 4th).
+    expect(recycleAx).not.toHaveBeenCalled();
+    expect(describeFn).toHaveBeenCalledTimes(3);
+    // The Android uiautomator fallback supplied the rendering + its hint.
+    expect(describeAndroidMock).toHaveBeenCalledTimes(1);
+    expect(res.hint).toMatch(/Android TV focus engine/i);
   });
 });

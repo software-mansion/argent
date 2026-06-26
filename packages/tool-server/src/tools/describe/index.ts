@@ -108,9 +108,12 @@ function makeDescribeExecute(
     android: {
       requires: androidRequires,
       handler: async (_services, params, device) =>
+        // Resolve the form factor once and route on it: a TV goes to the
+        // focus-driven describe, a phone to the uiautomator tree — and pass the
+        // known `isTv: false` through so describeAndroid doesn't re-probe.
         (await isAndroidTv(device.id))
           ? describeTv(registry, device)
-          : withDescription(await describeAndroid(registry, params.udid, params.bundleId)),
+          : withDescription(await describeAndroid(registry, params.udid, params.bundleId, false)),
     },
     chromium: {
       handler: async (services) => withDescription(await describeChromium(services.chromium)),

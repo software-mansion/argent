@@ -31,11 +31,16 @@ const ANDROID_TV_HINT =
 export async function describeAndroid(
   registry: Registry | undefined,
   serial: string,
-  _bundleId?: string
+  _bundleId?: string,
+  // When the caller already resolved the form factor (the `describe` dispatch
+  // and the TV fallback both call `isAndroidTv` before reaching here), thread
+  // that verdict in so we don't re-probe — `getAndroidRuntimeKind` still costs
+  // an `adb devices` + avdName getprop per call even on a cache hit, and
+  // `describe` is an alwaysLoad hot path. `undefined` means "unknown, probe".
+  isTv?: boolean
 ): Promise<DescribeTreeData> {
-  // Probe form factor up front (cheap + memoised) so both the devtools and the
-  // legacy uiautomator return paths can attach the TV hint.
-  const hint = (await isAndroidTv(serial)) ? ANDROID_TV_HINT : undefined;
+  // Attach the TV hint on both the devtools and legacy uiautomator return paths.
+  const hint = (isTv ?? (await isAndroidTv(serial))) ? ANDROID_TV_HINT : undefined;
 
   if (registry) {
     try {

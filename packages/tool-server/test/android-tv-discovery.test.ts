@@ -26,7 +26,12 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { listAndroidDevices, getAndroidRuntimeKind, isAndroidTv } from "../src/utils/adb";
+import {
+  listAndroidDevices,
+  getAndroidRuntimeKind,
+  isAndroidTv,
+  __resetAndroidRuntimeKindCacheForTesting,
+} from "../src/utils/adb";
 
 // Mock one device. `features` is the `pm list features` output (the primary TV
 // signal — leanback / television); `characteristics` is the `ro.build.characteristics`
@@ -60,12 +65,32 @@ const PHONE_FEATURES = "feature:android.hardware.touchscreen\nfeature:android.so
 
 beforeEach(() => {
   execFileMock.mockReset();
+  // The runtime-kind memo persists across calls within the process; clear it so
+  // each case starts from a cold probe (and reused serials don't leak verdicts).
+  __resetAndroidRuntimeKindCacheForTesting();
 });
+
+// `mockDevice` populates avd_name as empty, so the cache key avdName is null.
+function withAvdName(serial: string, avdName: string): void {
+  const prev = execFileMock.getMockImplementation();
+  execFileMock.mockImplementation((cmd: string, args: string[]) => {
+    if (
+      cmd === "adb" &&
+      args[0] === "-s" &&
+      args[1] === serial &&
+      args[2] === "shell" &&
+      (args[3] === "getprop ro.boot.qemu.avd_name" || args[3] === "getprop ro.kernel.qemu.avd_name")
+    ) {
+      return { stdout: `${avdName}\n`, stderr: "" };
+    }
+    return prev?.(cmd, args) ?? { stdout: "", stderr: "" };
+  });
+}
 
 describe("Android TV discovery — runtimeKind", () => {
   it("tags a device exposing the leanback/television feature as runtimeKind 'tv'", async () => {
     mockDevice("emulator-5556", { features: LEANBACK_FEATURES, characteristics: "emulator" });
-    const devices = await listAndroidDevices();
+    const devices = await listAndroidDevices({ runtimeKind: true });
     expect(devices).toHaveLength(1);
     expect(devices[0]!.runtimeKind).toBe("tv");
   });
@@ -75,32 +100,63 @@ describe("Android TV discovery — runtimeKind", () => {
     // (NOT 'tv'), so the feature list is the only reliable signal. This is the
     // exact shape observed on the Television_1080p AVD during live testing.
     mockDevice("emulator-5554", { features: LEANBACK_FEATURES, characteristics: "emulator" });
-    const devices = await listAndroidDevices();
+    const devices = await listAndroidDevices({ runtimeKind: true });
     expect(devices[0]!.runtimeKind).toBe("tv");
   });
 
   it("falls back to the characteristics 'tv' token when the feature list is empty", async () => {
     mockDevice("emulator-5556", { features: "", characteristics: "nosdcard,tv" });
-    const devices = await listAndroidDevices();
+    const devices = await listAndroidDevices({ runtimeKind: true });
     expect(devices[0]!.runtimeKind).toBe("tv");
   });
 
   it("tags a phone (touchscreen features, no leanback) as runtimeKind 'mobile'", async () => {
     mockDevice("emulator-5554", { features: PHONE_FEATURES, characteristics: "nosdcard" });
-    const devices = await listAndroidDevices();
+    const devices = await listAndroidDevices({ runtimeKind: true });
     expect(devices[0]!.runtimeKind).toBe("mobile");
   });
 
-  it("defaults to 'mobile' when both signals are empty/unreadable", async () => {
+  it("reports an indeterminate runtimeKind (undefined) when both signals are empty/unreadable", async () => {
+    // An empty feature list is indistinguishable from a genuine phone, so a
+    // device mid-boot / under load must NOT be pinned to "mobile" — it stays
+    // undefined (and uncached) so the next call re-probes.
     mockDevice("emulator-5554", {});
-    const devices = await listAndroidDevices();
-    expect(devices[0]!.runtimeKind).toBe("mobile");
+    const devices = await listAndroidDevices({ runtimeKind: true });
+    expect(devices[0]!.runtimeKind).toBeUndefined();
   });
 
   it("characteristics fallback does not false-match a non-'tv' token like 'atv'", async () => {
     mockDevice("emulator-5554", { features: PHONE_FEATURES, characteristics: "atv,nosdcard" });
-    const devices = await listAndroidDevices();
+    const devices = await listAndroidDevices({ runtimeKind: true });
     expect(devices[0]!.runtimeKind).toBe("mobile");
+  });
+
+  it("a populated non-leanback feature list wins over a stray 'tv' characteristics token", async () => {
+    // The feature list is the primary, authoritative signal. A phone that
+    // answered `pm list features` (no leanback) must stay "mobile" even if
+    // ro.build.characteristics happens to carry a `tv` token — and we must not
+    // pay the characteristics round-trip at all once features answered.
+    mockDevice("emulator-5554", { features: PHONE_FEATURES, characteristics: "tv,nosdcard" });
+    const devices = await listAndroidDevices({ runtimeKind: true });
+    expect(devices[0]!.runtimeKind).toBe("mobile");
+    const probedCharacteristics = execFileMock.mock.calls.some(
+      (c) => c[0] === "adb" && (c[1] as string[]).includes("ro.build.characteristics")
+    );
+    expect(probedCharacteristics).toBe(false);
+  });
+
+  it("skips the runtimeKind feature probe by default (boot-loop hot path)", async () => {
+    // The boot-loop poller (findSerialByAvdName) calls listAndroidDevices every
+    // 1.5s and never reads runtimeKind, so the default must NOT issue the
+    // `pm list features` probe — which mid-boot can block up to the enrichment
+    // timeout — nor populate the field.
+    mockDevice("emulator-5554", { features: LEANBACK_FEATURES });
+    const devices = await listAndroidDevices();
+    expect(devices[0]!.runtimeKind).toBeUndefined();
+    const probedFeatures = execFileMock.mock.calls.some(
+      (c) => c[0] === "adb" && (c[1] as string[]).includes("pm list features")
+    );
+    expect(probedFeatures).toBe(false);
   });
 });
 
@@ -117,5 +173,43 @@ describe("Android TV discovery — getAndroidRuntimeKind / isAndroidTv", () => {
     // not cached, so this re-lists and finds no match.
     expect(await getAndroidRuntimeKind("emulator-9999")).toBeUndefined();
     expect(await isAndroidTv("emulator-9999")).toBe(false);
+  });
+
+  it("does not cache an indeterminate probe — a slow TV re-probes and self-heals", async () => {
+    // First call: both signals empty (device still booting) → indeterminate.
+    mockDevice("emulator-5554", {});
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBeUndefined();
+    // Now the feature list answers; since the miss wasn't cached as "mobile",
+    // the next call re-probes and correctly resolves "tv" — no restart needed.
+    mockDevice("emulator-5554", { features: LEANBACK_FEATURES });
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBe("tv");
+  });
+
+  it("re-probes when a reused emulator slot boots a different AVD", async () => {
+    // A TV AVD occupies emulator-5554 and gets cached as 'tv'.
+    mockDevice("emulator-5554", { features: LEANBACK_FEATURES });
+    withAvdName("emulator-5554", "Television_1080p");
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBe("tv");
+
+    // It shuts down and a phone AVD reclaims the same console slot. The serial
+    // matches a cached entry, but the avdName differs → re-probe, not a stale
+    // 'tv' verdict that would route the phone to the focus/leanback backends.
+    mockDevice("emulator-5554", { features: PHONE_FEATURES });
+    withAvdName("emulator-5554", "Pixel_7_API_34");
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBe("mobile");
+  });
+
+  it("evicts the cached verdict once the serial leaves the device list", async () => {
+    mockDevice("emulator-5554", { features: LEANBACK_FEATURES });
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBe("tv");
+    // Serial no longer attached → undefined, and the cache entry is dropped so
+    // the slot's next occupant doesn't inherit 'tv'.
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices" && args.length === 1) {
+        return { stdout: "List of devices attached\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBeUndefined();
   });
 });
