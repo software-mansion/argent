@@ -25,24 +25,44 @@ describe("formatLensFeedback", () => {
     expect(formatLensFeedback(outcome({ round: 7 }))).toContain("round 7");
   });
 
-  it("lists chosen variants with their element and variant names", () => {
+  it("lists chosen variants with element, selector, variant, summary, source, and note", () => {
     const out = formatLensFeedback(
       outcome({
         selections: [
           {
             element: "Login button",
             match: { by: "text", value: "Login" },
-            chosenVariant: { name: "Bold primary" },
+            chosenVariant: {
+              name: "Bold primary",
+              summary: "filled CTA",
+              filePath: "src/Login.tsx",
+            },
             comment: "make it bigger",
           },
         ],
       })
     );
-    expect(out).toContain('"Login button" → "Bold primary"');
+    expect(out).toContain('"Login button" [text=Login] → "Bold primary"');
+    expect(out).toContain("(filled CTA)");
+    expect(out).toContain("[src: src/Login.tsx]");
     expect(out).toContain("make it bigger");
   });
 
-  it("separates element notes (comment but no pick) from chosen variants", () => {
+  it("surfaces proposed-but-untouched elements as left-as-is (excluding chosen/noted)", () => {
+    const out = formatLensFeedback(
+      outcome({
+        selections: [
+          { element: "CTA", match: { by: "text", value: "Go" }, chosenVariant: { name: "A" } },
+        ],
+        unselected: [{ element: "Footer" }, { element: "CTA" }],
+      })
+    );
+    expect(out).toContain('Left as-is (reviewed, no change) — "Footer"');
+    // CTA was chosen, so it must not be reported as left-as-is.
+    expect(out).not.toMatch(/Left as-is[^.]*CTA/);
+  });
+
+  it("separates element notes (comment but no pick) from chosen variants, with selector", () => {
     const out = formatLensFeedback(
       outcome({
         selections: [
@@ -56,7 +76,7 @@ describe("formatLensFeedback", () => {
       })
     );
     expect(out).toContain("Element notes");
-    expect(out).toContain('"Header": darker');
+    expect(out).toContain('"Header" [text=Header]: darker');
     expect(out).not.toContain("Chosen variants");
   });
 
@@ -77,7 +97,7 @@ describe("formatLensFeedback", () => {
 
   it("includes the global comment", () => {
     expect(formatLensFeedback(outcome({ globalComment: "tighten spacing" }))).toContain(
-      "Overall — tighten spacing"
+      "Overall direction — tighten spacing"
     );
   });
 

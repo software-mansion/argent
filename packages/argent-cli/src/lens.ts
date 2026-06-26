@@ -30,6 +30,8 @@ import {
   resolveTerminal,
   spawnTerminalSession,
   writeToSession,
+  readSessionText,
+  pressEnter,
   isSessionAlive,
   shellQuote,
   flattenLine,
@@ -49,7 +51,7 @@ interface LensOutcome {
   selections: Array<{
     element: string;
     match: { by: string; value: string };
-    chosenVariant: { name: string; summary?: string } | null;
+    chosenVariant: { name: string; summary?: string; filePath?: string } | null;
     comment?: string;
   }>;
   unselected: Array<{ element: string }>;
@@ -68,6 +70,35 @@ const DEATH_CONFIRMATIONS = 3;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// A first-run agent often opens on a "trust this folder?" confirmation whose
+// default option is "Yes, I trust" — match its on-screen text so we only press
+// Enter when it's actually showing (never on the agent's own later output).
+const TRUST_PROMPT_RE = /trust this folder|do you trust|yes,? i trust|trust the files in this/i;
+
+/**
+ * Briefly watch the spawned session for a first-run "trust this folder?" prompt
+ * and press Enter (its default is the trust-and-continue option) so the seeded
+ * session starts without the user babysitting it. No-op when no such prompt
+ * shows. If the terminal's text can't be read, falls back to a single best-
+ * effort Enter once (harmless on an idle composer). Bounded so it never lingers.
+ */
+async function dismissTrustPrompt(session: TerminalSession): Promise<void> {
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    await sleep(700);
+    const text = readSessionText(session);
+    if (text == null) {
+      // Can't introspect this terminal — one blind Enter, then stop.
+      pressEnter(session);
+      return;
+    }
+    if (TRUST_PROMPT_RE.test(text)) {
+      pressEnter(session);
+      return;
+    }
+  }
 }
 
 /** The instruction the spawned `claude` starts with, establishing CLI-Lens
@@ -94,6 +125,9 @@ export function buildSeedPrompt(): string {
  * round. Pure + exported for testing. */
 export function formatLensFeedback(o: LensOutcome): string {
   const parts: string[] = [];
+  // The element's match selector — how the agent locates it on screen and in
+  // source (e.g. [text=Sign in]). Always include it so feedback is actionable.
+  const sel = (m: { by: string; value: string }): string => `[${m.by}=${m.value}]`;
 
   const chosen = o.selections.filter((s) => s.chosenVariant);
   if (chosen.length) {
@@ -101,8 +135,11 @@ export function formatLensFeedback(o: LensOutcome): string {
       "Chosen variants — " +
         chosen
           .map((s) => {
+            const v = s.chosenVariant!;
+            const summary = v.summary ? ` (${v.summary})` : "";
+            const where = v.filePath ? ` [src: ${v.filePath}]` : "";
             const note = s.comment ? ` (note: ${s.comment})` : "";
-            return `"${s.element}" → "${s.chosenVariant!.name}"${note}`;
+            return `"${s.element}" ${sel(s.match)} → "${v.name}"${summary}${where}${note}`;
           })
           .join("; ")
     );
@@ -111,20 +148,28 @@ export function formatLensFeedback(o: LensOutcome): string {
   const notedNoPick = o.selections.filter((s) => !s.chosenVariant && s.comment);
   if (notedNoPick.length) {
     parts.push(
-      "Element notes — " + notedNoPick.map((s) => `"${s.element}": ${s.comment}`).join("; ")
+      "Element notes — " +
+        notedNoPick.map((s) => `"${s.element}" ${sel(s.match)}: ${s.comment}`).join("; ")
     );
+  }
+
+  // Elements that were proposed but neither picked nor commented — surfaced so
+  // the agent knows they were reviewed and deliberately left as-is, rather than
+  // re-proposing them blindly.
+  const touched = new Set([...chosen, ...notedNoPick].map((s) => s.element));
+  const leftAsIs = o.unselected.map((u) => u.element).filter((e) => !touched.has(e));
+  if (leftAsIs.length) {
+    parts.push("Left as-is (reviewed, no change) — " + leftAsIs.map((e) => `"${e}"`).join(", "));
   }
 
   if (o.annotations.length) {
     parts.push(
-      "Comments — " +
-        o.annotations
-          .map((a) => `"${a.target}" [${a.match.by}=${a.match.value}]: ${a.comment}`)
-          .join("; ")
+      "Comments on the screen — " +
+        o.annotations.map((a) => `"${a.target}" ${sel(a.match)}: ${a.comment}`).join("; ")
     );
   }
 
-  if (o.globalComment) parts.push("Overall — " + o.globalComment);
+  if (o.globalComment) parts.push("Overall direction — " + o.globalComment);
 
   const body = parts.length
     ? parts.join(". ")
@@ -132,7 +177,8 @@ export function formatLensFeedback(o: LensOutcome): string {
 
   return flattenLine(
     `[Argent Lens] Feedback from the preview window (round ${o.round}). ${body}. ` +
-      "Refine the design with propose_variant (do not call await_user_selection)."
+      "Apply the chosen variants to their source files where given, then refine the design with " +
+      "propose_variant (at least two variants per element; do not call await_user_selection)."
   );
 }
 
@@ -243,6 +289,11 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     );
     process.exit(1);
   }
+
+  // A fresh agent in an un-trusted directory opens on a "trust this folder?"
+  // prompt that blocks it from reading the seed. Dismiss it hands-free in the
+  // background (the user shouldn't have to babysit the spawned terminal).
+  void dismissTrustPrompt(session);
 
   process.stdout.write(
     `\n  Argent Lens is live.\n\n` +

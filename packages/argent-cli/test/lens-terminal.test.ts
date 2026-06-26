@@ -6,6 +6,8 @@ import {
   buildSpawnScript,
   buildWriteScript,
   buildFocusScript,
+  buildReadScript,
+  buildEnterScript,
   parseCapture,
   parseAliveTtys,
   shortTty,
@@ -76,9 +78,11 @@ describe("buildWriteScript", () => {
     tty: "/dev/ttys004",
   };
 
-  it("iTerm targets the session by id, writes the flattened text, then a separate Enter", () => {
+  it("iTerm sends a leading Esc, then the flattened text, then a separate Enter", () => {
     const s = buildWriteScript(iterm, "line one\nline two");
     expect(s).toContain('if (id of s) is "GUID-9" then');
+    // Leading Esc (raw, no newline) interrupts any blocked turn / clears the composer.
+    expect(s).toContain("tell s to write text (character id 27) newline no");
     expect(s).toContain('tell s to write text "line one line two"');
     // A standalone empty write is the submit Enter — a TUI composer ignores the
     // first chunk's trailing newline, so the message stays unsent without it.
@@ -86,13 +90,37 @@ describe("buildWriteScript", () => {
     expect(s).toContain("delay 0.2");
     expect(s).toContain('error "session gone"');
   });
-  it("Terminal writes via do script in the tab, then a separate Enter", () => {
+  it("Terminal sends a leading Esc, the text via do script, then a separate Enter", () => {
     const s = buildWriteScript(term, "do it");
     expect(s).toContain('if (id of w as string) is "42" then');
+    expect(s).toContain("do script (character id 27) in (selected tab of w)");
     expect(s).toContain('do script "do it" in (selected tab of w)');
     expect(s).toContain('do script "" in (selected tab of w)');
     expect(s).toContain("delay 0.2");
     expect(s).toContain('error "window gone"');
+  });
+});
+
+describe("buildReadScript", () => {
+  it("iTerm returns the session text by id", () => {
+    const s = buildReadScript({ app: "iterm", windowId: "1", sessionId: "G", tty: "" });
+    expect(s).toContain('if (id of s) is "G" then return (text of s)');
+  });
+  it("Terminal returns the selected tab contents by window id", () => {
+    const s = buildReadScript({ app: "terminal", windowId: "42", sessionId: "", tty: "" });
+    expect(s).toContain('if (id of w as string) is "42"');
+    expect(s).toContain("contents of selected tab of w");
+  });
+});
+
+describe("buildEnterScript", () => {
+  it("iTerm sends a lone newline to the matching session", () => {
+    const s = buildEnterScript({ app: "iterm", windowId: "1", sessionId: "G", tty: "" });
+    expect(s).toContain('if (id of s) is "G" then tell s to write text ""');
+  });
+  it("Terminal sends a lone return into the selected tab", () => {
+    const s = buildEnterScript({ app: "terminal", windowId: "42", sessionId: "", tty: "" });
+    expect(s).toContain('do script "" in (selected tab of w)');
   });
 });
 
