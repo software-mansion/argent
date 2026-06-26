@@ -116,6 +116,15 @@ export interface AdbRunResult {
 // process blocked on a hung daemon can ignore — leaving the parent waiting
 // past the deadline. SIGKILL guarantees the child is reaped at the timeout
 // boundary so callers' overall budgets actually hold.
+//
+// Unlike `runVega` (which spawns `detached` and reaps the whole process group on
+// timeout), execFile's single-child SIGKILL is sufficient here: an `adb <command>`
+// invocation is a *single-process client* that talks to the persistent, shared
+// `adb server` daemon over a socket — it forks no `python3 → node → vda` worker
+// tree to orphan, so killing the direct child reaps it completely. A group kill
+// would also be wrong: the daemon is deliberately long-lived and shared across all
+// adb calls, so it must survive a single command's timeout. (A wedged *device* is
+// instead bounded by per-call timeouts + the list-devices branch deadline.)
 const ADB_KILL_SIGNAL = "SIGKILL" as const;
 
 function describeAdbFailure(args: string[], err: unknown): Error {
@@ -297,18 +306,25 @@ const ENRICH_TIMEOUT_MS = 5_000;
 /**
  * Resolve the AVD name of a running emulator. The property moved from
  * `ro.kernel.qemu.avd_name` to `ro.boot.qemu.avd_name` in emulator release 30
- * (Android 11+); we probe the newer one first and fall back to the legacy
- * name so both old and new images work.
+ * (Android 11+); we still prefer the newer name and fall back to the legacy one
+ * so both old and new images work.
+ *
+ * The two getprops run concurrently rather than back-to-back: a wedged emulator
+ * (e.g. an unresponsive VVD that also shows on adb) otherwise costs the full
+ * `2 × ENRICH_TIMEOUT_MS` here, doubling the Android branch of the `alwaysLoad`
+ * `list-devices` tool. `.catch(() => "")` handles a rejected probe; the timeout
+ * handles a slow one.
  */
 async function readAvdName(serial: string): Promise<string | null> {
-  const modern = await adbShell(serial, "getprop ro.boot.qemu.avd_name", {
-    timeoutMs: ENRICH_TIMEOUT_MS,
-  }).catch(() => "");
-  if (modern.trim()) return modern.trim();
-  const legacy = await adbShell(serial, "getprop ro.kernel.qemu.avd_name", {
-    timeoutMs: ENRICH_TIMEOUT_MS,
-  }).catch(() => "");
-  return legacy.trim() || null;
+  const [modern, legacy] = await Promise.all([
+    adbShell(serial, "getprop ro.boot.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
+      () => ""
+    ),
+    adbShell(serial, "getprop ro.kernel.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
+      () => ""
+    ),
+  ]);
+  return modern.trim() || legacy.trim() || null;
 }
 
 /**

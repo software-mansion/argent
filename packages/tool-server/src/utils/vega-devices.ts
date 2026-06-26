@@ -1,6 +1,25 @@
+import { getFailureSignal } from "@argent/registry";
 import { runVega, runVegaDevice, resolveVegaBinary } from "./vega-cli";
 import { listVvdImages } from "./vega-sdk";
 import { listRunningVvdConsolePorts } from "./vega-process";
+
+// `list-devices` is `alwaysLoad` and runs at session start, so its Vega probe
+// must stay snappy even when a VVD is wedged. A healthy `vega device list` /
+// `device info` returns in ~1s; cap them tightly here (the interactive Vega
+// tools keep their own, longer timeouts). The values give a generous multiple of
+// the healthy time so a cold-start `vega` launcher (its python/node worker tree
+// has import cost on first use) on a loaded machine isn't spuriously timed out —
+// which would mis-report a genuinely-running VVD as stopped.
+//
+// Crucially these no longer *stack* into a 40s block — the `device info` recovery
+// only fires when `device list` itself returned cleanly (see listVegaDevices), so
+// an unresponsive device costs one short call, not two. Their sum (10s) is kept
+// comfortably below list-devices' BRANCH_DEADLINE_MS (15s) so even the slow
+// recovery path (a fast, non-timeout list failure followed by a full `device info`
+// wait) finishes inside the fan-out's hard backstop rather than being truncated —
+// which would drop a real VVD from the list. Keep that ordering if either changes.
+export const VEGA_DISCOVERY_LIST_TIMEOUT_MS = 6_000;
+export const VEGA_DISCOVERY_INFO_TIMEOUT_MS = 4_000;
 
 /**
  * A Vega (Fire TV) device as surfaced to `list-devices`. A VVD is listed whether
@@ -91,7 +110,7 @@ async function readVegaInfo(): Promise<VegaInfo | null> {
   try {
     // `runVegaDevice` pins `-d emulator-<port>`; without it, `device info` returns an
     // empty `{idme:"", os:"unknown", …}` device when the VVD has a 2nd adb transport.
-    const { stdout } = await runVegaDevice(["info"], { timeoutMs: 20_000 });
+    const { stdout } = await runVegaDevice(["info"], { timeoutMs: VEGA_DISCOVERY_INFO_TIMEOUT_MS });
     return JSON.parse(stdout) as VegaInfo;
   } catch {
     return null;
@@ -113,12 +132,23 @@ export async function listVegaDevices(): Promise<VegaDevice[]> {
   if (!(await resolveVegaBinary())) return [];
 
   // Connected/running devices (these carry the `amazon-` runtime serial).
-  let rows: Array<{ serial: string; type: string }>;
+  let rows: Array<{ serial: string; type: string }> = [];
+  let listTimedOut = false;
   try {
-    const { stdout } = await runVega(["device", "list"], { timeoutMs: 20_000 });
+    const { stdout } = await runVega(["device", "list"], {
+      timeoutMs: VEGA_DISCOVERY_LIST_TIMEOUT_MS,
+    });
     rows = parseVegaDeviceList(stdout);
-  } catch {
-    rows = []; // CLI listing failed; still surface installed images below
+  } catch (err) {
+    // CLI listing failed or timed out; still surface installed images below. Only a
+    // *timeout* means the device agent is wedged — and a wedged agent makes the
+    // `device info` recovery hang too, so the two stack into the ~40s `list-devices`
+    // stall this fix targets. Suppress recovery in *that* case only. A fast,
+    // non-timeout failure (a transient CLI error) does NOT imply an unresponsive
+    // agent, so we still let recovery run below — otherwise a genuinely-running VVD
+    // would be mis-reported as stopped. (runVega now reaps its whole process group on
+    // timeout, so the suppressed second call would no longer *leak* either.)
+    listTimedOut = getFailureSignal(err)?.error_kind === "timeout";
   }
 
   // `vega device list` drops its `VirtualDevice : …` row once a stray
@@ -127,9 +157,12 @@ export async function listVegaDevices(): Promise<VegaDevice[]> {
   // authoritative running-VVD signal, so when the parse is empty but a VVD is running,
   // recover its identity via `device info` (now pinned to the VVD by -d emulator-<port>)
   // — otherwise the running VVD is mis-reported as gone and re-listed as a phantom
-  // stopped image, and its adb shadow rows surface as bare Android devices.
+  // stopped image, and its adb shadow rows surface as bare Android devices. Skip the
+  // recovery only when `device list` *timed out* so a wedged agent doesn't pay for a
+  // second hanging call (the `rows.length === 1` branch is unreachable on a timeout,
+  // since rows stay empty, so it needs no guard).
   let info: VegaInfo | null = null;
-  if (rows.length === 0 && (await listRunningVvdConsolePorts()).size >= 1) {
+  if (!listTimedOut && rows.length === 0 && (await listRunningVvdConsolePorts()).size >= 1) {
     info = await readVegaInfo();
     if (info?.hostname) rows = [{ serial: info.hostname, type: "VirtualDevice" }];
   } else if (rows.length === 1) {
@@ -200,13 +233,27 @@ export async function listVegaDevices(): Promise<VegaDevice[]> {
  * Resolve the `amazon-` runtime serial of the currently-running VVD — e.g. right
  * after `boot-device` starts it. A freshly-started VVD can take a moment to
  * surface in `vega device list`, so retry a few times before giving up.
+ *
+ * Bounded by an overall wall-clock budget on top of the retry count: each
+ * `listVegaDevices()` is already short (its discovery timeouts no longer stack),
+ * but the budget is a hard cap so a wedged device can't drag this out attempt by
+ * attempt. A healthy VVD surfaces well within it (a fast list + 1s backoff per
+ * attempt), so the cap only bites the unhappy path.
  */
+const RESOLVE_VVD_SERIAL_BUDGET_MS = 15_000;
+
 export async function resolveRunningVvdSerial(): Promise<string> {
+  const deadline = Date.now() + RESOLVE_VVD_SERIAL_BUDGET_MS;
+  // The budget is enforced at the one place it matters: after a miss, only sleep +
+  // retry if there's still time left. The first attempt always runs (deadline is set
+  // 15s out), and we never start an attempt past the deadline because we break here
+  // first — so no separate deadline check is needed in the loop header.
   for (let attempt = 0; attempt < 5; attempt++) {
     const vvd = (await listVegaDevices()).find(
       (d) => d.kind === "vvd" && d.state === "running" && d.serial
     );
     if (vvd?.serial) return vvd.serial;
+    if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, 1_000));
   }
   throw new Error("Vega Virtual Device reported running but did not appear in `vega device list`.");

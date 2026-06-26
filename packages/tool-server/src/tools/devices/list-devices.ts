@@ -78,6 +78,48 @@ async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
   return shadows;
 }
 
+// Hard backstop so no single discovery branch can stall this `alwaysLoad` tool,
+// which runs at session start and frequently after. The per-call subprocess
+// timeouts (and the no-stacking fix in listVegaDevices) already bound each
+// branch; this is defence-in-depth against an unforeseen stall — a wedged
+// device, a hung `ps`, a future serial call — so the worst case is a partial
+// list with a logged note, never a 40s "hang". Mirrors the existing
+// `.catch(() => [])` degradation, just for slowness rather than errors.
+//
+// Critically this must sit comfortably ABOVE every branch's own worst case, or it
+// stops being a last-resort backstop and starts truncating branches that would
+// have completed — dropping a real device from the list. The long pole is Vega: a
+// fast (non-timeout) `device list` failure followed by the `device info` recovery
+// is ~10s (its 6s + 4s discovery timeouts; see vega-devices.ts), so 15s keeps a
+// ~5s margin. (Android self-bounds at ~5s, the rest at <1s.) Still far below the
+// ~40s stall this whole fix targets.
+//
+// Note: this is a *deadline*, not cancellation — on timeout it resolves the
+// fallback while the underlying branch keeps running to completion in the
+// background. That's fine here because the per-call subprocess timeouts bound the
+// branch, so it settles shortly after rather than leaking work indefinitely.
+export const BRANCH_DEADLINE_MS = 15_000;
+
+export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => {
+          process.stderr.write(
+            `[list-devices] ${label} discovery exceeded ${BRANCH_DEADLINE_MS}ms; ` +
+              `returning partial results (a wedged device or its CLI is unresponsive)\n`
+          );
+          resolve(fallback);
+        }, BRANCH_DEADLINE_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
@@ -94,12 +136,32 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {
+    // Every branch gets the same hard deadline so no single one can stall this
+    // `alwaysLoad` tool. The Android/Vega branches are the ones that actually shell
+    // out to potentially-wedged devices; iOS / AVD-list / Chromium already self-bound
+    // with their own short subprocess/socket timeouts, but wrapping them too makes the
+    // "no branch can hang the fan-out" guarantee universal at near-zero cost (the
+    // timer is cleared on the fast happy path). The deadline only substitutes a
+    // fallback on *slowness*; a rejection still propagates exactly as before — so the
+    // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
     const [ios, android, avds, chromium, vega] = await Promise.all([
-      listIosSimulators(),
-      listAndroidDevices().catch(() => []),
-      listAvds(),
-      discoverChromiumDevices().catch(() => []),
-      listVegaDevices().catch(() => []),
+      withDeadline(listIosSimulators(), [], "ios"),
+      withDeadline(
+        listAndroidDevices().catch(() => []),
+        [],
+        "android"
+      ),
+      withDeadline(listAvds(), [], "avds"),
+      withDeadline(
+        discoverChromiumDevices().catch(() => []),
+        [],
+        "chromium"
+      ),
+      withDeadline(
+        listVegaDevices().catch(() => []),
+        [],
+        "vega"
+      ),
     ]);
     const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
     iosTagged.sort(sortIos);

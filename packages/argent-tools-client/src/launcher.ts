@@ -167,6 +167,13 @@ export async function isToolsServerHealthy(
       signal: controller.signal,
       headers: authHeaders(token),
     });
+    // Release the response body before returning. /tools is a large (~100KB+)
+    // payload and we only need the status; an unread body keeps undici's
+    // keep-alive socket *ref'd* until the server's idle keepAliveTimeout (~5s)
+    // closes it, which makes every natural-exit CLI command (`argent run …`,
+    // `argent tools`) hang ~6s after it has already printed its result. Cancelling
+    // frees the socket immediately so the event loop can drain and the process exit.
+    await res.body?.cancel().catch(() => {});
     return res.ok;
   } catch {
     return false;
