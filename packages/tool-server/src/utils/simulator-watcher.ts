@@ -6,13 +6,14 @@ import {
   nativeDevtoolsRef,
   type NativeDevtoolsApi,
 } from "../blueprints/native-devtools";
+import { simctlArgs } from "./simctl";
 
 const execFileAsync = promisify(execFile);
 
 const POLL_INTERVAL_MS = 10_000;
 
 async function getBootedUdids(): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"]);
+  const { stdout } = await execFileAsync("xcrun", simctlArgs(["list", "devices", "--json"]));
   const data = JSON.parse(stdout) as {
     devices: Record<string, Array<{ udid: string; state: string }>>;
   };

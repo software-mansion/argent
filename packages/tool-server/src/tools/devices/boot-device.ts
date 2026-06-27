@@ -29,6 +29,7 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { iosDeviceSetPath, simctlArgs } from "../../utils/simctl";
 import { listVvdImages } from "../../utils/vega-sdk";
 import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
 import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
@@ -455,7 +456,7 @@ async function bootIos(
 
   // force=true on a running sim: shut it down so we can pre-write AX prefs.
   if (force && simState === "Booted") {
-    await execFileAsync("xcrun", ["simctl", "shutdown", udid]);
+    await execFileAsync("xcrun", simctlArgs(["shutdown", udid]));
   }
 
   const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
@@ -469,13 +470,13 @@ async function bootIos(
     });
   }
 
-  await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
+  await execFileAsync("xcrun", simctlArgs(["boot", udid])).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-  await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
+  await execFileAsync("xcrun", simctlArgs(["bootstatus", udid, "-b"]));
 
   // Best-effort fallback: no-op on the happy path (pref already cached from
   // pre-boot write). When the sim was already Booted without force, writes
@@ -496,13 +497,15 @@ async function bootIos(
   if (initFailure?.givenUp) {
     return buildInitFailedResult(udid, initFailure);
   }
-  await execFileAsync("defaults", [
-    "write",
-    "com.apple.iphonesimulator",
-    "CurrentDeviceUDID",
-    udid,
-  ]);
-  await execFileAsync("open", ["-a", "Simulator.app"]);
+  if (!iosDeviceSetPath()) {
+    await execFileAsync("defaults", [
+      "write",
+      "com.apple.iphonesimulator",
+      "CurrentDeviceUDID",
+      udid,
+    ]);
+    await execFileAsync("open", ["-a", "Simulator.app"]);
+  }
   return { platform: "ios", udid, booted: true };
 }
 
@@ -1199,7 +1202,7 @@ function bootVega(params: {
   // restart, so it must NOT join an in-flight non-force boot (which would skip
   // the restart and hand back the stale device). Two same-mode boots of the same
   // image still share one promise.
-  const key = `${params.vvdImage} ${params.force ? "force" : "normal"}`;
+  const key = `${params.vvdImage}\0${params.force ? "force" : "normal"}`;
   const existing = inFlightVegaBoots.get(key);
   if (existing) return existing;
   const promise = bootVegaImpl(params).finally(() => {

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { simctlArgs } from "../../../utils/simctl";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -10,7 +11,7 @@ export const iosImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult
   requires: ["xcrun"],
   handler: async (_services, params) => {
     try {
-      await execFileAsync("xcrun", ["simctl", "openurl", params.udid, params.url]);
+      await execFileAsync("xcrun", simctlArgs(["openurl", params.udid, params.url]));
     } catch (err) {
       throw new FailureError(
         `Failed to open URL on iOS simulator ${params.udid}.`,

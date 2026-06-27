@@ -35,6 +35,7 @@ import { BUNDLED_RUNTIME_PATHS } from "./bundled-paths.js";
 import { installFatalHandlers } from "./fatal-handlers.js";
 
 const PACKAGE_NAME = "@swmansion/argent";
+const IOS_DEVICE_SET_ENV = "ARGENT_IOS_DEVICE_SET_PATH";
 
 function getInstalledVersion(): string | null {
   try {
@@ -48,7 +49,37 @@ function getInstalledVersion(): string | null {
   }
 }
 
-const [, , command, ...rest] = process.argv;
+function parseTopLevelArgs(argv: string[]): { command: string | undefined; rest: string[] } {
+  const pending = [...argv];
+  while (pending.length > 0) {
+    const tok = pending[0]!;
+    if (tok === "--ios-device-set") {
+      const value = pending[1];
+      if (!value?.trim()) {
+        console.error("Error: --ios-device-set requires a non-empty path");
+        process.exit(2);
+      }
+      process.env[IOS_DEVICE_SET_ENV] = path.resolve(value.trim());
+      pending.splice(0, 2);
+      continue;
+    }
+    if (tok.startsWith("--ios-device-set=")) {
+      const value = tok.slice("--ios-device-set=".length);
+      if (!value.trim()) {
+        console.error("Error: --ios-device-set requires a non-empty path");
+        process.exit(2);
+      }
+      process.env[IOS_DEVICE_SET_ENV] = path.resolve(value.trim());
+      pending.shift();
+      continue;
+    }
+    break;
+  }
+  const [command, ...rest] = pending;
+  return { command, rest };
+}
+
+const { command, rest } = parseTopLevelArgs(process.argv.slice(2));
 const isMcpServer = command === "mcp";
 
 installFatalHandlers({ isMcpServer });
@@ -78,8 +109,9 @@ Commands:
   telemetry   Manage anonymous opt-out telemetry (status / enable / disable)
 
 Options:
-  --help, -h     Show this help message
-  --version, -v  Show version
+  --ios-device-set <path>  Use this CoreSimulator device set for iOS operations
+  --help, -h               Show this help message
+  --version, -v            Show version
 
 Run \`argent <command> --help\` for command-specific help.
 

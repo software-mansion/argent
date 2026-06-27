@@ -2,17 +2,18 @@ import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { homedir } from "node:os";
+import * as os from "node:os";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, writeFile, readFile, unlink, rename, chmod } from "node:fs/promises";
 
-const STATE_DIR = path.join(homedir(), ".argent");
+const STATE_DIR = path.join(os.homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
 
 const AUTH_TOKEN_BYTES = 32;
 export const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
+export const IOS_DEVICE_SET_ENV = "ARGENT_IOS_DEVICE_SET_PATH";
 
 // Idle-shutdown policy for auto-spawned servers (MCP / `argent run` path). The
 // CLI's `argent server start` overrides this; manual launches default to no
@@ -45,6 +46,13 @@ export interface BuildToolsServerEnvOptions {
    * `argent server start` path, which prints its own no-auth warning.
    */
   token?: string;
+  /** Optional CoreSimulator device set path for iOS-only operations. */
+  iosDeviceSetPath?: string | null;
+}
+
+export function resolveIosDeviceSetPath(raw: string | null | undefined): string | null {
+  if (!raw?.trim()) return null;
+  return path.resolve(raw.trim());
 }
 
 export function buildToolsServerEnv(
@@ -53,12 +61,17 @@ export function buildToolsServerEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
   options: BuildToolsServerEnvOptions = {}
 ): NodeJS.ProcessEnv {
+  const iosDeviceSetPath = resolveIosDeviceSetPath(
+    options.iosDeviceSetPath ?? baseEnv[IOS_DEVICE_SET_ENV]
+  );
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     ARGENT_PORT: String(port),
     ARGENT_SIMULATOR_SERVER_DIR: paths.simulatorServerDir,
     ARGENT_NATIVE_DEVTOOLS_DIR: paths.nativeDevtoolsDir,
   };
+  if (iosDeviceSetPath) env[IOS_DEVICE_SET_ENV] = iosDeviceSetPath;
+  else delete env[IOS_DEVICE_SET_ENV];
   if (options.host !== undefined) env.ARGENT_HOST = options.host;
   if (options.idleTimeoutMinutes !== undefined) {
     env.ARGENT_IDLE_TIMEOUT_MINUTES = String(options.idleTimeoutMinutes);
@@ -81,6 +94,8 @@ export interface ToolsServerState {
    * `argent server start` writes tokenless (auth-disabled) state.
    */
   token?: string;
+  /** CoreSimulator device set path this tool-server was started with, if any. */
+  iosDeviceSetPath?: string;
 }
 
 /** Handle returned to clients: the base URL plus the matching auth token. */
@@ -358,6 +373,7 @@ export async function killToolServer(): Promise<void> {
 }
 
 export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsServerHandle> {
+  const requestedIosDeviceSetPath = resolveIosDeviceSetPath(process.env[IOS_DEVICE_SET_ENV]);
   const state = await readState();
 
   if (state) {
@@ -365,11 +381,16 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     if (alive) {
       const host = state.host ?? "127.0.0.1";
       const healthy = await isToolsServerHealthy(state.port, host, 2000, state.token);
-      if (healthy) {
+      const sameIosDeviceSet =
+        (state.iosDeviceSetPath ?? null) === (requestedIosDeviceSetPath ?? null);
+      if (healthy && sameIosDeviceSet) {
         return {
           url: formatUrl(healthCheckHost(host), state.port),
           token: state.token ?? "",
         };
+      }
+      if (healthy && !sameIosDeviceSet) {
+        await killToolServer();
       }
     }
     await clearState();
@@ -382,6 +403,7 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
   const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
     token,
     idleTimeoutMinutes: AUTOSPAWN_IDLE_TIMEOUT_MINUTES,
+    iosDeviceSetPath: requestedIosDeviceSetPath,
   });
 
   await writeState({
@@ -391,6 +413,7 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     bundlePath: paths.bundlePath,
     host: "127.0.0.1",
     token,
+    ...(requestedIosDeviceSetPath ? { iosDeviceSetPath: requestedIosDeviceSetPath } : {}),
   });
 
   return { url: formatUrl("127.0.0.1", actualPort), token };

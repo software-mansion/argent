@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as path from "node:path";
 import { parseStartFlags, parsePort, parseIdle, StartFlagError } from "../src/server.js";
 
 describe("parseStartFlags", () => {
@@ -10,6 +11,7 @@ describe("parseStartFlags", () => {
       detach: false,
       force: false,
       noAuth: false,
+      iosDeviceSetPath: null,
       help: false,
     });
   });
@@ -33,6 +35,15 @@ describe("parseStartFlags", () => {
     expect(parseStartFlags(["--idle-timeout", "5"]).idleTimeoutMinutes).toBe(5);
     expect(parseStartFlags(["--idle-timeout=10"]).idleTimeoutMinutes).toBe(10);
     expect(parseStartFlags(["--idle-timeout=0"]).idleTimeoutMinutes).toBe(0);
+  });
+
+  it("parses --ios-device-set in space and equals form", () => {
+    expect(parseStartFlags(["--ios-device-set", "tmp/device-set"]).iosDeviceSetPath).toBe(
+      path.resolve("tmp/device-set")
+    );
+    expect(parseStartFlags(["--ios-device-set=/tmp/argent-set"]).iosDeviceSetPath).toBe(
+      "/tmp/argent-set"
+    );
   });
 
   it("parses boolean flags --detach/-d, --force, --no-auth, --help/-h", () => {
@@ -61,6 +72,7 @@ describe("parseStartFlags", () => {
       detach: true,
       force: true,
       noAuth: false,
+      iosDeviceSetPath: null,
       help: false,
     });
   });
@@ -74,6 +86,12 @@ describe("parseStartFlags", () => {
     expect(() => parseStartFlags(["--port"])).toThrow(/--port requires a value/);
     expect(() => parseStartFlags(["--host"])).toThrow(/--host requires a value/);
     expect(() => parseStartFlags(["--idle-timeout"])).toThrow(/--idle-timeout requires a value/);
+    expect(() => parseStartFlags(["--ios-device-set"])).toThrow(
+      /--ios-device-set requires a value/
+    );
+    expect(() => parseStartFlags(["--ios-device-set="])).toThrow(
+      /--ios-device-set requires a non-empty path/
+    );
   });
 
   it("does not consume the next token as a value for boolean flags", () => {

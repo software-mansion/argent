@@ -16,6 +16,8 @@ import {
   formatToolsServerUrl,
   formatLinkUrl,
   generateAuthToken,
+  IOS_DEVICE_SET_ENV,
+  resolveIosDeviceSetPath,
   type ToolsServerPaths,
   type ToolsServerState,
 } from "@argent/tools-client";
@@ -64,6 +66,9 @@ async function statusCmd(json: boolean): Promise<void> {
   console.log(`  startedAt:  ${state.startedAt}`);
   console.log(`  process:    ${alive ? "alive" : "dead"}`);
   console.log(`  health:     ${healthy ? "ok" : "unreachable"}`);
+  if (state.iosDeviceSetPath) {
+    console.log(`  iOS set:    ${state.iosDeviceSetPath}`);
+  }
   if (!alive || !healthy) {
     console.log(`\nState file is stale; next \`argent\` invocation will respawn the server.`);
   }
@@ -102,6 +107,8 @@ export interface StartFlags {
   force: boolean;
   /** Disable auth (no token minted). Server accepts unauthenticated requests. */
   noAuth: boolean;
+  /** Optional CoreSimulator device set path for iOS-only operations. */
+  iosDeviceSetPath: string | null;
   help: boolean;
 }
 
@@ -115,6 +122,7 @@ export function parseStartFlags(argv: string[]): StartFlags {
     detach: false,
     force: false,
     noAuth: false,
+    iosDeviceSetPath: null,
     help: false,
   };
 
@@ -166,6 +174,14 @@ export function parseStartFlags(argv: string[]): StartFlags {
       flags.idleTimeoutMinutes = parseIdle(tok.slice("--idle-timeout=".length));
       continue;
     }
+    if (tok === "--ios-device-set") {
+      flags.iosDeviceSetPath = parseIosDeviceSetPath(takeValue("--ios-device-set"));
+      continue;
+    }
+    if (tok.startsWith("--ios-device-set=")) {
+      flags.iosDeviceSetPath = parseIosDeviceSetPath(tok.slice("--ios-device-set=".length));
+      continue;
+    }
     throw new StartFlagError(`Unknown flag: ${tok}`);
   }
 
@@ -191,6 +207,14 @@ export function parseIdle(raw: string): number {
   return Number(raw);
 }
 
+export function parseIosDeviceSetPath(raw: string): string {
+  const resolved = resolveIosDeviceSetPath(raw);
+  if (!resolved) {
+    throw new StartFlagError(`--ios-device-set requires a non-empty path`);
+  }
+  return resolved;
+}
+
 function printStartHelp(): void {
   console.log(`Usage: argent server start [flags]
 
@@ -203,6 +227,8 @@ Flags:
                           Use 0.0.0.0 to expose on every interface.
   --idle-timeout <m>      Auto-shutdown after <m> idle minutes (0 disables).
                           Default: 0 (never auto-shutdown).
+  --ios-device-set <path> Use this CoreSimulator device set for iOS operations.
+                          Also configurable via ${IOS_DEVICE_SET_ENV}.
   --detach, -d            Run as a detached background process and return.
   --force                 If a tool-server is already running, kill it first.
   --no-auth               Disable authentication (no token). Anyone who can
@@ -331,6 +357,8 @@ async function startCmd(argv: string[], paths: ToolsServerPaths | undefined): Pr
   }
 
   const port = await resolvePort(flags.port);
+  const iosDeviceSetPath =
+    flags.iosDeviceSetPath ?? resolveIosDeviceSetPath(process.env[IOS_DEVICE_SET_ENV]);
 
   // Auth on by default; --no-auth opts out (token stays undefined → the
   // tool-server runs unauthenticated and prints its own warning).
@@ -352,11 +380,11 @@ async function startCmd(argv: string[], paths: ToolsServerPaths | undefined): Pr
   }
 
   if (flags.detach) {
-    await runDetached(paths, port, flags.host, flags.idleTimeoutMinutes, token);
+    await runDetached(paths, port, flags.host, flags.idleTimeoutMinutes, iosDeviceSetPath, token);
     return;
   }
 
-  await runForeground(paths, port, flags.host, flags.idleTimeoutMinutes, token);
+  await runForeground(paths, port, flags.host, flags.idleTimeoutMinutes, iosDeviceSetPath, token);
 }
 
 async function runDetached(
@@ -364,11 +392,13 @@ async function runDetached(
   port: number,
   host: string,
   idleTimeoutMinutes: number,
+  iosDeviceSetPath: string | null,
   token?: string
 ): Promise<void> {
   const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
     host,
     idleTimeoutMinutes,
+    iosDeviceSetPath,
     token,
   });
   await writeToolsServerState({
@@ -377,6 +407,7 @@ async function runDetached(
     startedAt: new Date().toISOString(),
     bundlePath: paths.bundlePath,
     host,
+    ...(iosDeviceSetPath ? { iosDeviceSetPath } : {}),
     ...(token ? { token } : {}),
   });
   const url = formatToolsServerUrl(host, actualPort);
@@ -393,11 +424,13 @@ async function runForeground(
   port: number,
   host: string,
   idleTimeoutMinutes: number,
+  iosDeviceSetPath: string | null,
   token?: string
 ): Promise<void> {
   const env = buildToolsServerEnv(paths, port, process.env, {
     host,
     idleTimeoutMinutes,
+    iosDeviceSetPath,
     token,
   });
 
@@ -432,6 +465,7 @@ async function runForeground(
         startedAt: new Date().toISOString(),
         bundlePath: paths.bundlePath,
         host,
+        ...(iosDeviceSetPath ? { iosDeviceSetPath } : {}),
         ...(token ? { token } : {}),
       });
       stateWritten = true;
