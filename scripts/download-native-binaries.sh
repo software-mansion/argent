@@ -69,34 +69,49 @@ chmod +x "${IOS_BIN_DIR}/ax-service"
 # the directory bootstrapDylibPathTvos() reads from. The two daemons
 # (tvos-ax-service spawned in-sim, tvos-hid-daemon on the host) have unique
 # names and download flat into bin/darwin/.
+#
+# These assets only exist on releases built with TV support. A pre-TV-support
+# tag (the optional [release-tag] arg lets you pull older releases) simply has
+# no tvOS artifacts, so a missing asset is skipped with a warning rather than
+# aborting the whole download (`gh release download` exits non-zero on no match,
+# which under `set -e` would otherwise leave a half-populated tree).
 TVOS_DYLIBS_DIR="${DYLIBS_DIR}/tvos"
 mkdir -p "${TVOS_DYLIBS_DIR}"
 
 echo "  Downloading tvOS dylibs..."
 TMP_TVOS_DYLIBS="$(mktemp -t native-devtools-ios-tvos-dylibs.XXXXXX.tar.gz)"
-gh release download "${TAG}" \
+if gh release download "${TAG}" \
   --repo "${REPO}" \
   --pattern "native-devtools-ios-tvos-dylibs.tar.gz" \
   --output "${TMP_TVOS_DYLIBS}" \
-  --clobber
-tar -xzf "${TMP_TVOS_DYLIBS}" -C "${TVOS_DYLIBS_DIR}"
+  --clobber; then
+  tar -xzf "${TMP_TVOS_DYLIBS}" -C "${TVOS_DYLIBS_DIR}"
+else
+  echo "  Skipping tvOS dylibs: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
+fi
 rm -f "${TMP_TVOS_DYLIBS}"
 
 echo "  Downloading tvos-ax-service..."
-gh release download "${TAG}" \
+if gh release download "${TAG}" \
   --repo "${REPO}" \
   --pattern "tvos-ax-service" \
   --dir "${IOS_BIN_DIR}" \
-  --clobber
-chmod +x "${IOS_BIN_DIR}/tvos-ax-service"
+  --clobber; then
+  chmod +x "${IOS_BIN_DIR}/tvos-ax-service"
+else
+  echo "  Skipping tvos-ax-service: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
+fi
 
 echo "  Downloading tvos-hid-daemon..."
-gh release download "${TAG}" \
+if gh release download "${TAG}" \
   --repo "${REPO}" \
   --pattern "tvos-hid-daemon" \
   --dir "${IOS_BIN_DIR}" \
-  --clobber
-chmod +x "${IOS_BIN_DIR}/tvos-hid-daemon"
+  --clobber; then
+  chmod +x "${IOS_BIN_DIR}/tvos-hid-daemon"
+else
+  echo "  Skipping tvos-hid-daemon: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
+fi
 
 echo "  Downloading argent-android-devtools.apk..."
 # The release publishes the APK under a stable name (no versioning in the
