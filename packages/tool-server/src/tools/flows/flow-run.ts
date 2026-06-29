@@ -101,6 +101,14 @@ export interface FlowPrerequisiteNotice {
 
 const MAX_RUN_DEPTH = 20;
 
+/**
+ * Grace period to let a freshly (re)launched app settle before the first step
+ * runs. A cold start can outlast the first directive's default auto-wait (e.g. a
+ * one-shot `assert`, or a `tap` whose 5s budget is eaten by the launch), so we
+ * give the app a head start here rather than inflating every step's timeout.
+ */
+const POST_LAUNCH_SETTLE_MS = 1500;
+
 interface ExecState {
   registry: Registry;
   ctx?: ToolContext;
@@ -192,6 +200,9 @@ returns a notice with the prerequisite instead of running.`,
           launchTool,
           bindDeviceArgs(registry, launchTool, device.id, { bundleId })
         );
+        // Let the app finish coming up before step 1 reads/acts on the UI, so a
+        // slow cold start doesn't eat into the first step's auto-wait budget.
+        await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
       }
 
       const state: ExecState = {
