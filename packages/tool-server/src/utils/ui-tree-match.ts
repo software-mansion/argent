@@ -129,6 +129,33 @@ export function evaluateCondition(
   }
 }
 
+// ── Settle detection ────────────────────────────────────────────────────────
+
+/**
+ * A stable fingerprint of the tree's visible structure — every node's role,
+ * rounded frame, and text/identifier. Two consecutive identical fingerprints
+ * mean the UI has settled (a scroll's momentum has stopped, an animation has
+ * finished): the flow runner uses this to wait out a fling before reading or
+ * tapping, so a tap can't land mid-deceleration (where a scroll view would
+ * swallow it to halt the scroll) and a resolved frame can't be stale by the time
+ * we act on it. Frames are rounded to 1e-3 so sub-pixel jitter does not read as
+ * motion.
+ */
+export function treeFingerprint(root: DescribeNode): string {
+  const parts: string[] = [];
+  const round = (n: number): number => Math.round(n * 1000) / 1000;
+  const walk = (node: DescribeNode): void => {
+    const f = node.frame;
+    parts.push(
+      `${node.role}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}` +
+        `|${node.label ?? ""}|${node.value ?? ""}|${node.identifier ?? ""}`
+    );
+    for (const child of node.children) walk(child);
+  };
+  walk(root);
+  return parts.join("\n");
+}
+
 // ── Reverse lookup & selector → frame ──────────────────────────────────────
 
 function frameContains(frame: DescribeFrame, x: number, y: number): boolean {

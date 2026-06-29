@@ -22,6 +22,7 @@ Beyond raw `tool:` steps and `echo:`, flows support declarative directives inter
 | --- | --- | --- |
 | `tap` | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }` | tap an element by selector (auto-waits), or a raw normalized point |
 | `type` | `- type: { into: email, text: "a@b.com" }` | focus a field and type |
+| `scroll-to` | `- scroll-to: { target: "Order #1234", direction: down }` | momentum-free scroll until the target is visible |
 | `await` | `- await: { visible: Home }` | wait for a UI condition (sugar over `await-ui-element`) |
 | `assert` | `- assert: { visible: Welcome }` | check a condition, hard-fail if it never holds |
 | `snapshot` | `- snapshot: { name: home, maxMismatch: 0.5 }` | diff a screenshot against a stored baseline |
@@ -35,6 +36,8 @@ For `await`/`assert` the **condition is the key**, and its value is the selector
 - `{ text: { in: <selector>, equals: "Taps: 0" } }` — `text` locates an element (`in`) and checks its rendered content (`equals`). Reach for it only when the locator is an identifier/role; to assert a string is simply on screen, prefer `{ visible: "Taps: 0" }`.
 
 This condition-as-key form is the only spelling. For advanced `await` control beyond it (custom timeout, poll interval, bundleId), drop to an explicit `- tool: await-ui-element` step. **Every directive hard-stops the flow on failure**; later steps are reported `skip`. `flow-execute` returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
+
+`scroll-to` needs a `direction` (`up` | `down` | `left` | `right`) and optionally a `within: <selector>` that anchors the scroll inside a specific container — required to drive a **nested** scroller (e.g. a horizontal carousel inside a vertical list), since the device can't be asked which container to scroll. It scrolls in bounded momentum-free increments, re-checks after each, and stops if a scroll reveals nothing new (end of the container). `tap`/`type` also auto-scroll a target into view (vertical) before resolving, so an explicit `scroll-to` is only needed for a horizontal scroll, a nested container, or to make the intent visible in the flow.
 
 ### Standalone runner
 
@@ -62,6 +65,8 @@ This condition-as-key form is the only spelling. For advanced `await` control be
 5. **Polish**: **Read the saved `.yaml` file** and convert the raw `tool:` steps that have a cleaner directive form (the recorder leaves these as tools):
    - `tool: keyboard` typing into a field → `type: { into: "<field>", text: "…" }`, folding in the `tap` that focused the field.
    - `tool: await-ui-element` gating a transition → `await: { visible: "…" }` / `{ hidden: … }` / `{ text: { in: …, equals: … } }`. Keep the raw `tool: await-ui-element` step only when it sets a custom `timeoutMs`/`pollIntervalMs`/`bundleId` the sugar can't express.
+
+   - A scroll-to-reach-an-element — a `tool: gesture-swipe` used to bring a specific element on screen before interacting with it (a `tap`, `type`, `assert`, …) → `scroll-to: { target: "<that element>", direction: … }`, dropping the swipe. This is far more robust than a fixed-distance swipe: it scrolls momentum-free and stops exactly when the target appears, so it survives layout and content changes. (`tap`/`type` also auto-scroll vertically, so even leaving the raw swipe + tap often works — but `scroll-to` is deterministic and self-documenting.) Keep a `gesture-swipe` as a raw `tool:` step when it isn't scrolling toward a specific element — especially a velocity-dependent gesture like swipe-to-dismiss, edge-swipe-back, or swipe-to-reveal a row action, which a momentum-free `scroll-to` would not reproduce.
 
 Every other recorded tool (`gesture-swipe`, `gesture-scroll`, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, device ids are stripped, text-only selectors are emitted as bare strings, and a leading `restart-app`/`launch-app` is dropped. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
 

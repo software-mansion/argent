@@ -17,7 +17,7 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult, AWAIT_UI_ELEMENT_TOOL_ID } from "../await-ui-element";
 import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-device";
-import { runTap, runType, runAssert } from "./flow-actions";
+import { runTap, runType, runAssert, runScrollTo } from "./flow-actions";
 import { runSnapshot, DEFAULT_MAX_MISMATCH } from "./flow-visual";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -141,8 +141,9 @@ export function createRunFlowTool(
     id: "flow-execute",
     description: `Run a saved flow from the .argent/flows/ directory.
 Steps run in order: \`tool\` calls dispatch through the registry; \`tap\`/\`type\` resolve a selector to
-an element and act on it; \`await\` waits for a UI condition; \`assert\` checks one now; \`snapshot\` diffs a
-screenshot against a stored baseline; \`echo\` annotates; \`run\` executes a referenced fragment inline.
+an element and act on it; \`scroll-to\` scrolls (momentum-free) until a target is visible; \`await\` waits for
+a UI condition; \`assert\` checks one now; \`snapshot\` diffs a screenshot against a stored baseline; \`echo\`
+annotates; \`run\` executes a referenced fragment inline.
 Device id is injected by the runner (flows store none) — pass \`device\` or \`platform\` to pick one, else
 the single booted device is used. Every step hard-stops the flow on failure; later steps are reported as
 skipped. Returns a structured report ({ ok, passed, failed, skipped, errored, steps }).
@@ -386,6 +387,17 @@ async function execLeafStep(
         step.condition,
         step.selector,
         step.expectedText,
+        signal
+      );
+      return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
+    }
+
+    case "scroll-to": {
+      const r = await runScrollTo(
+        registry,
+        ctx,
+        device,
+        { target: step.target, direction: step.direction, within: step.within },
         signal
       );
       return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };

@@ -6,6 +6,7 @@ import {
   deriveSelector,
   evaluateCondition,
   findAll,
+  treeFingerprint,
 } from "../../src/utils/ui-tree-match";
 
 function node(partial: Partial<DescribeNode> & { frame: DescribeNode["frame"] }): DescribeNode {
@@ -70,5 +71,32 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("text", "Login", matches)).toBe(true);
     expect(evaluateCondition("text", "Logout", matches)).toBe(false);
     expect(evaluateCondition("exists", undefined, findAll(root, { text: "Nope" }))).toBe(false);
+  });
+
+  it("treeFingerprint is stable for an unchanged tree and changes when a frame moves", () => {
+    const a = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [node({ label: "Row", frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.1 } })],
+    });
+    const same = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [node({ label: "Row", frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.1 } })],
+    });
+    const moved = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      // same row scrolled up — a fling still in flight
+      children: [node({ label: "Row", frame: { x: 0.1, y: 0.05, width: 0.8, height: 0.1 } })],
+    });
+    expect(treeFingerprint(a)).toBe(treeFingerprint(same));
+    expect(treeFingerprint(a)).not.toBe(treeFingerprint(moved));
+  });
+
+  it("treeFingerprint ignores sub-1e-3 jitter", () => {
+    const a = node({ frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 } });
+    const jittered = node({ frame: { x: 0.10001, y: 0.2, width: 0.3, height: 0.4 } });
+    expect(treeFingerprint(a)).toBe(treeFingerprint(jittered));
   });
 });
