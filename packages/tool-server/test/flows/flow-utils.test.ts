@@ -136,6 +136,96 @@ describe("parseFlow", () => {
     expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
   });
 
+  it("sugars a bare-string selector into { text } for tap", () => {
+    const flow = parseFlow("steps:\n  - tap: Settings\n");
+    expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
+  });
+
+  it("sugars a bare-string selector for type.into", () => {
+    const flow = parseFlow('steps:\n  - type: { into: email, text: "a@b.com" }\n');
+    expect(flow.steps).toEqual([
+      { kind: "type", into: { text: "email" }, text: "a@b.com" },
+    ]);
+  });
+
+  it("parses condition-as-key await/assert sugar (visible/exists/hidden)", () => {
+    const flow = parseFlow(
+      [
+        "steps:",
+        "  - await: { visible: Account }",
+        "  - assert: { exists: { identifier: row } }",
+        "  - await: { hidden: spinner }",
+      ].join("\n")
+    );
+    expect(flow.steps).toEqual([
+      { kind: "await", condition: "visible", selector: { text: "Account" } },
+      { kind: "assert", condition: "exists", selector: { identifier: "row" } },
+      { kind: "await", condition: "hidden", selector: { text: "spinner" } },
+    ]);
+  });
+
+  it("parses the text sugar { in, equals }", () => {
+    const flow = parseFlow(
+      'steps:\n  - assert: { text: { in: { identifier: counter }, equals: "Taps: 0" } }\n'
+    );
+    expect(flow.steps).toEqual([
+      { kind: "assert", condition: "text", selector: { identifier: "counter" }, expectedText: "Taps: 0" },
+    ]);
+  });
+
+  it("rejects the explicit { condition, selector, expectedText } form (sugar only)", () => {
+    expect(() =>
+      parseFlow(
+        [
+          "steps:",
+          "  - assert:",
+          "      condition: text",
+          "      selector: { text: 'Taps:' }",
+          "      expectedText: 'Taps: 0'",
+        ].join("\n")
+      )
+    ).toThrow(/exactly one condition key/);
+  });
+
+  it("rejects an await/assert body with no condition key", () => {
+    expect(() => parseFlow("steps:\n  - assert: { selector: foo }\n")).toThrow(
+      /exactly one condition key/
+    );
+  });
+
+  it("rejects text sugar without a non-empty equals", () => {
+    expect(() => parseFlow("steps:\n  - assert: { text: { in: counter } }\n")).toThrow(
+      /non-empty `equals`/
+    );
+  });
+
+  it("serializes await/assert with the condition-as-key sugar (no condition: field)", () => {
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "assert", condition: "visible", selector: { text: "Welcome" } },
+        { kind: "assert", condition: "text", selector: { identifier: "counter" }, expectedText: "Taps: 0" },
+      ],
+    });
+    expect(yaml).toContain("visible: Welcome");
+    expect(yaml).not.toContain("condition:");
+    expect(yaml).toContain('equals: "Taps: 0"');
+    expect(yaml).toContain("identifier: counter");
+  });
+
+  it("roundtrips the sugared step kinds through YAML", () => {
+    const flow: FlowFile = {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", selector: { text: "Login" } },
+        { kind: "type", into: { text: "email" }, text: "a@b.com" },
+        { kind: "await", condition: "hidden", selector: { identifier: "spinner" } },
+        { kind: "assert", condition: "text", selector: { text: "Taps:" }, expectedText: "Taps: 0" },
+      ],
+    };
+    expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
+  });
+
   it("roundtrips: serialize then parse", () => {
     const flow: FlowFile = {
       executionPrerequisite: "App freshly loaded on home screen",
