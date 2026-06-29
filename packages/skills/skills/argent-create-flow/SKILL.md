@@ -9,10 +9,10 @@ A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` di
 
 Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
 
-**Two flow types** (inferred from `appId`):
+**Two flow types** (inferred from the `launch` block):
 
-- **e2e** — declares `appId`; the runner launches that app from scratch before step 1. No `executionPrerequisite`. The only type `argent flow run` accepts. May `run:` fragments.
-- **fragment** — no `appId`; may declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time. Record one by passing `fragment: true` to `flow-start-recording`.
+- **e2e** — declares a `launch` block; the runner launches that app from scratch before step 1. No `executionPrerequisite`. The only type `argent flow run` accepts. May `run:` fragments.
+- **fragment** — no `launch` block; may declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time. Record one by passing `fragment: true` to `flow-start-recording`.
 
 ### Step directives
 

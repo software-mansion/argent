@@ -45,7 +45,7 @@ describe("flow composition (run:)", () => {
       steps: [{ kind: "echo", message: "logging in" }, { kind: "tool", name: "tap", args: { x: 0.5 } }],
     });
     await writeFlow("main", {
-      appId: "com.acme.app",
+      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "run", flow: "login" }, { kind: "echo", message: "done" }],
     });
@@ -67,9 +67,9 @@ describe("flow composition (run:)", () => {
   });
 
   it("rejects running an e2e flow as a fragment", async () => {
-    await writeFlow("other-e2e", { appId: "com.acme.app", executionPrerequisite: "", steps: [] });
+    await writeFlow("other-e2e", { launch: "com.acme.app", executionPrerequisite: "", steps: [] });
     await writeFlow("main", {
-      appId: "com.acme.app",
+      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "run", flow: "other-e2e" }],
     });
@@ -84,7 +84,7 @@ describe("flow composition (run:)", () => {
     await writeFlow("a", { executionPrerequisite: "", steps: [{ kind: "run", flow: "b" }] });
     await writeFlow("b", { executionPrerequisite: "", steps: [{ kind: "run", flow: "a" }] });
     await writeFlow("main", {
-      appId: "com.acme.app",
+      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "run", flow: "a" }],
     });
@@ -121,7 +121,7 @@ describe("device binding (portability)", () => {
 describe("flow validation", () => {
   it("rejects an e2e flow that declares executionPrerequisite", () => {
     expect(() =>
-      parseFlow("appId: com.acme.app\nexecutionPrerequisite: nope\nsteps: []\n")
+      parseFlow("launch: com.acme.app\nexecutionPrerequisite: nope\nsteps: []\n")
     ).toThrow(/must not declare executionPrerequisite/i);
   });
 
@@ -133,7 +133,7 @@ describe("flow validation", () => {
 
   it("round-trips the new step kinds through YAML", () => {
     const flow = {
-      appId: "com.acme.app",
+      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [
         { kind: "tap" as const, selector: { text: "Login" } },
@@ -146,6 +146,6 @@ describe("flow validation", () => {
     };
     const parsed = parseFlow(serializeFlow(flow));
     expect(parsed.steps).toEqual(flow.steps);
-    expect(parsed.appId).toBe("com.acme.app");
+    expect(parsed.launch).toBe("com.acme.app");
   });
 });

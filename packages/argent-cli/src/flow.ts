@@ -150,10 +150,10 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     process.exit(1);
   }
 
-  // A fragment (no appId) returns a prerequisite notice instead of a report.
+  // A fragment (no launch block) returns a prerequisite notice instead of a report.
   if (!report || !("steps" in report)) {
     console.error(
-      `"${args.name}" is not a runnable e2e flow (it has no appId). Only e2e flows can be run standalone.`
+      `"${args.name}" is not a runnable e2e flow (it has no launch block). Only e2e flows can be run standalone.`
     );
     process.exit(2);
   }

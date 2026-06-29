@@ -173,10 +173,10 @@ returns a notice with the prerequisite instead of running.`,
       // restart (the renderer is always live), so fall back to `launch-app`
       // there. Fragments inherit whatever app the caller already has open.
       if (isE2eFlow(flow)) {
-        const bundleId = appIdForPlatform(flow.appId, device.platform);
+        const bundleId = appIdForPlatform(flow.launch, device.platform);
         if (!bundleId) {
           throw new FailureError(
-            `Flow "${params.name}" declares no app id for platform "${device.platform}". Add an appId entry for it.`,
+            `Flow "${params.name}" declares no app id for platform "${device.platform}". Add a launch entry for it.`,
             {
               error_code: FAILURE_CODES.FLOW_APP_ID_MISSING,
               failure_stage: "flow_app_launch",
@@ -328,7 +328,7 @@ async function execRunStep(
       kind: "run",
       status: "error",
       flow: target,
-      reason: `"${target}" is an e2e flow (declares appId); only fragments can be run from another flow`,
+      reason: `"${target}" is an e2e flow (declares launch); only fragments can be run from another flow`,
     });
     state.stopped = true;
     return;
