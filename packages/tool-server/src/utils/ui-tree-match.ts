@@ -9,9 +9,7 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../blueprints/chromium-cdp"
 /**
  * Shared accessibility/DOM-tree matching, extracted from `await-ui-element` so
  * the flow directives (`tap`, `type`, `assert`) and the recorder's reverse
- * lookup consume the same selector semantics the wait engine uses. The
- * `await-ui-element` tool re-exports `findAll` / `evaluateMatches` from here, so
- * its behaviour (and tests) are unchanged.
+ * lookup consume the same selector semantics the wait engine uses.
  */
 
 // A selector locates a node in the tree returned by `describe`. Every provided
