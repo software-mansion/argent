@@ -58,7 +58,13 @@ This condition-as-key form is the only spelling. For advanced `await` control be
 1. **Start**: Call `flow-start-recording` with a descriptive name, the absolute `project_root`, and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload"). `project_root` is stored for the session — you do **not** need to pass it again to subsequent tools.
 2. **Build step-by-step**: For each action, call `flow-add-step` with the tool name and args. The tool runs immediately — check the result before moving on.
 3. **Add labels**: Use `flow-add-echo` between steps to describe what each section does.
-4. **Finish**: Call `flow-finish-recording` to stop recording. It returns the file path where the flow was saved and a summary of all steps. You can edit the `.yaml` file directly afterwards to remove, reorder, or tweak steps.
+4. **Finish**: Call `flow-finish-recording` to stop recording. It returns the file path where the flow was saved and a summary of all steps.
+5. **Polish**: **Read the saved `.yaml` file** and clean it up to use the declarative directives and selector sugar wherever possible — recordings of raw `tool:` device actions are portable and readable as directives:
+   - `tool: gesture-tap` with a stable element → `tap: "<text>"` (or `tap: { identifier: … }`); keep `tap: { x, y }` only when no stable selector exists.
+   - `tool: keyboard` typing into a field → `type: { into: "<field>", text: "…" }`.
+   - `tool: await-ui-element` gating a transition → `await: { visible: "…" }` / `{ hidden: … }` / `{ text: { in: …, equals: … } }`. Keep the raw `tool: await-ui-element` step only when it sets a custom `timeoutMs`/`pollIntervalMs`/`bundleId` the sugar can't express.
+   - Drop the embedded `udid`/`device_id` args (the runner injects the device) so the flow stays portable, and collapse text-only selectors to bare strings (`{ text: "Login" }` → `"Login"`).
+Only those three tools have a directive equivalent — every other recorded tool (`gesture-swipe`, `gesture-scroll`, `gesture-pinch`, `button`, `screenshot`, …) stays a `tool:` step; just strip its `udid` for portability. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
 
 Every tool during recording returns the current flow file contents so you can track what has been recorded.
 
