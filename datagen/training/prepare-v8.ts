@@ -32,6 +32,9 @@ import type { HarnessName, NativeRecord } from "../harness/renderers.ts";
 import type { ToolSpec } from "../src/types.ts";
 
 process.env.ARGENT_RICH_DESC = "1"; // full verbose tool descriptions (what OpenCode/Codex/Hermes send)
+// v9 experiment: --narration keeps each step's reasoning (step.thought) in the assistant turn, so the
+// completion-only mask trains "think-then-act" instead of bare tool calls. Default off = v8 behavior.
+const NARRATION = process.argv.includes("--narration");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const catalog: ToolSpec[] = JSON.parse(readFileSync(join(HERE, "..", "spec", "tools.json"), "utf8"));
@@ -188,7 +191,7 @@ function buildRow(src: RawTrajectory, rng: RNG): NativeRecord {
   raw.tools = offeredTools(rng, used);
   const stripped = stripStart(raw, sampleStart(rng));
   const capped = capObservations(stripped, describeBudget(rng));
-  return render(capped, sampleHarness(rng), { narration: false });
+  return render(capped, sampleHarness(rng), { narration: NARRATION });
 }
 
 const taskOf = (r: NativeRecord) =>
