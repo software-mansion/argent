@@ -188,6 +188,9 @@ export function clearActiveFlow(): void {
  */
 export type Launch = string | { ios?: string; android?: string; chromium?: string };
 
+/** Axis + sense a `scroll-to` step scrolls in to reveal its target. */
+export type ScrollDirection = "up" | "down" | "left" | "right";
+
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
   | { kind: "echo"; message: string }
@@ -196,6 +199,7 @@ export type FlowStep =
   | { kind: "type"; into: Selector; text: string }
   | { kind: "await"; condition: WaitCondition; selector: Selector; expectedText?: string }
   | { kind: "assert"; condition: WaitCondition; selector: Selector; expectedText?: string }
+  | { kind: "scroll-to"; target: Selector; direction: ScrollDirection; within?: Selector }
   | { kind: "snapshot"; name: string; maxMismatch?: number };
 
 export type FlowFile = {
@@ -244,6 +248,8 @@ type YamlWaitBody =
   | { hidden: YamlSelector }
   | { text: { in: YamlSelector; equals: string } };
 
+type YamlScrollBody = { target: YamlSelector; direction: ScrollDirection; within?: YamlSelector };
+
 type YamlStep =
   | { echo: string }
   | { run: string }
@@ -252,6 +258,7 @@ type YamlStep =
   | { type: { into: YamlSelector; text: string } }
   | { await: YamlWaitBody }
   | { assert: YamlWaitBody }
+  | { "scroll-to": YamlScrollBody }
   | { snapshot: { name: string; maxMismatch?: number } };
 
 type YamlFlowFile = {
@@ -309,6 +316,14 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { await: waitToYaml(step.condition, step.selector, step.expectedText) };
     case "assert":
       return { assert: waitToYaml(step.condition, step.selector, step.expectedText) };
+    case "scroll-to":
+      return {
+        "scroll-to": {
+          target: selectorToYaml(step.target),
+          direction: step.direction,
+          ...(step.within ? { within: selectorToYaml(step.within) } : {}),
+        },
+      };
     case "snapshot":
       return {
         snapshot: {
@@ -346,6 +361,8 @@ function parseSelector(raw: unknown, where: string): Selector {
 }
 
 const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden", "text"];
+
+const SCROLL_DIRECTIONS: readonly ScrollDirection[] = ["up", "down", "left", "right"];
 
 type WaitFields = { condition: WaitCondition; selector: Selector; expectedText?: string };
 
@@ -422,6 +439,27 @@ function fromYamlStep(raw: YamlStep): FlowStep {
 
   if ("assert" in raw) {
     return { kind: "assert", ...parseWaitFields((raw as { assert: unknown }).assert, "assert") };
+  }
+
+  if ("scroll-to" in raw) {
+    const body = (raw as { "scroll-to": unknown })["scroll-to"];
+    if (body === null || typeof body !== "object") {
+      badEntry(raw, "scroll-to needs { target, direction }");
+    }
+    const b = body as Record<string, unknown>;
+    if (
+      typeof b.direction !== "string" ||
+      !SCROLL_DIRECTIONS.includes(b.direction as ScrollDirection)
+    ) {
+      badEntry(raw, `scroll-to needs a direction (${SCROLL_DIRECTIONS.join(", ")})`);
+    }
+    const step: FlowStep = {
+      kind: "scroll-to",
+      target: parseSelector(b.target, "scroll-to.target"),
+      direction: b.direction as ScrollDirection,
+    };
+    if (b.within !== undefined) step.within = parseSelector(b.within, "scroll-to.within");
+    return step;
   }
 
   if ("snapshot" in raw) {

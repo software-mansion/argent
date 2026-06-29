@@ -221,9 +221,34 @@ describe("parseFlow", () => {
         { kind: "type", into: { text: "email" }, text: "a@b.com" },
         { kind: "await", condition: "hidden", selector: { identifier: "spinner" } },
         { kind: "assert", condition: "text", selector: { text: "Taps:" }, expectedText: "Taps: 0" },
+        { kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" },
+        {
+          kind: "scroll-to",
+          target: { text: "Summer Sale" },
+          direction: "right",
+          within: { identifier: "promotions" },
+        },
       ],
     };
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
+  });
+
+  it("sugars a bare-string scroll-to target and keeps the within map", () => {
+    const flow = parseFlow(
+      ["steps:", "  - scroll-to: { target: Account, direction: down }"].join("\n")
+    );
+    expect(flow.steps).toEqual([
+      { kind: "scroll-to", target: { text: "Account" }, direction: "down" },
+    ]);
+  });
+
+  it("rejects a scroll-to without a valid direction", () => {
+    expect(() => parseFlow("steps:\n  - scroll-to: { target: Account }\n")).toThrow(
+      "scroll-to needs a direction"
+    );
+    expect(() =>
+      parseFlow("steps:\n  - scroll-to: { target: Account, direction: sideways }\n")
+    ).toThrow("scroll-to needs a direction");
   });
 
   it("roundtrips: serialize then parse", () => {

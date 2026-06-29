@@ -1,5 +1,5 @@
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
-import { getDescribeTapPoint, type DescribeFrame } from "../describe/contract";
+import { getDescribeTapPoint, type DescribeFrame, type DescribeNode } from "../describe/contract";
 import {
   fetchTree,
   selectorToFrame,
@@ -8,12 +8,14 @@ import {
   firstInReadingOrder,
   isVisible,
   nodeText,
+  treeFingerprint,
   type Selector,
   type WaitCondition,
 } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
+import type { ScrollDirection } from "./flow-utils";
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
 export interface DirectiveOutcome {
@@ -23,6 +25,24 @@ export interface DirectiveOutcome {
 
 const DEFAULT_ACTION_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 300;
+
+// Settle detection: re-read the tree until two consecutive reads match, so a tap
+// never lands mid-fling and a resolved frame can't go stale before we act.
+const SETTLE_POLL_MS = 150;
+const SETTLE_TIMEOUT_MS = 3000;
+
+// `scroll-to`: a bounded number of momentum-free increments. Each travels half a
+// screen — large enough to register as a scroll (not a tap) and not depend on
+// the container's size, yet < 1 viewport, so a target can never be skipped over
+// between two settle checkpoints (consecutive viewports overlap).
+const MAX_SCROLL_ITERATIONS = 25;
+const SCROLL_INCREMENT = 0.5;
+
+const FULL_SCREEN: DescribeFrame = { x: 0, y: 0, width: 1, height: 1 };
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
 
 // `assert` is a correctness check, not an open-ended wait — but UI updates after
 // an action land asynchronously, so a strictly one-shot read races the
@@ -38,8 +58,41 @@ function describeSelector(s: Selector): string {
 }
 
 /**
- * Poll the describe tree until a visible element matches the selector, returning
- * its frame — or undefined if the deadline passes / the run is aborted.
+ * Re-read the describe tree until two consecutive reads are identical — the UI
+ * has settled (a scroll's fling has stopped, an animation finished). Returns the
+ * stable tree, the last tree read on timeout (best effort), or undefined if the
+ * run was aborted. Resolving a frame from a settled tree is what keeps a tap
+ * from landing mid-deceleration (where a scroll view swallows it) or acting on a
+ * frame that has already moved.
+ */
+async function settleTree(
+  registry: Registry,
+  device: DeviceInfo,
+  signal?: AbortSignal
+): Promise<DescribeNode | undefined> {
+  const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+  let prevFp: string | undefined;
+  let prevTree: DescribeNode | undefined;
+  for (;;) {
+    if (signal?.aborted) return undefined;
+    try {
+      const { tree } = await fetchTree(registry, device);
+      const fp = treeFingerprint(tree);
+      if (prevFp !== undefined && fp === prevFp) return tree;
+      prevFp = fp;
+      prevTree = tree;
+    } catch {
+      // transient describe failure mid-navigation — retry until the deadline
+    }
+    if (Date.now() >= deadline) return prevTree;
+    if (!(await sleepOrAbort(SETTLE_POLL_MS, signal))) return undefined;
+  }
+}
+
+/**
+ * Poll until a visible element matches the selector, resolving against a
+ * *settled* tree each round so the returned frame is stable. Returns the frame,
+ * or undefined if the deadline passes / the run is aborted.
  */
 async function waitForFrame(
   registry: Registry,
@@ -50,17 +103,172 @@ async function waitForFrame(
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
   for (;;) {
     if (signal?.aborted) return undefined;
-    try {
-      const { tree } = await fetchTree(registry, device);
+    const tree = await settleTree(registry, device, signal);
+    if (tree) {
       const frame = selectorToFrame(tree, selector);
       if (frame) return frame;
-    } catch {
-      // transient describe failure mid-navigation — retry until the deadline
     }
     if (Date.now() >= deadline) return undefined;
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, signal))) return undefined;
   }
+}
+
+interface ScrollResolve {
+  /** The target's frame once it became visible. */
+  frame?: DescribeFrame;
+  /** Why the scroll stopped without finding the target. */
+  reason?: string;
+}
+
+/**
+ * Dispatch one momentum-free scroll increment anchored at the center of
+ * `region`. The anchor (the touch-down / wheel point) is what selects the scroll
+ * container — the OS routes the gesture to the innermost scroller hit-tested
+ * there — so anchoring inside a `within` region is how nested scrollers are
+ * disambiguated. The travel is a fixed half-screen along the axis (only the end
+ * point is clamped, so the down stays at the anchor and keeps latching to the
+ * right container). Touch platforms use a `settle` swipe (no fling); Chromium
+ * uses wheel events (already momentum-free).
+ */
+async function scrollIncrement(
+  registry: Registry,
+  ctx: ToolContext | undefined,
+  device: DeviceInfo,
+  direction: ScrollDirection,
+  region: DescribeFrame
+): Promise<void> {
+  const cx = clamp01(region.x + region.width / 2);
+  const cy = clamp01(region.y + region.height / 2);
+  const dist = SCROLL_INCREMENT;
+
+  if (device.platform === "chromium") {
+    // Positive deltaY/deltaX reveals content below / to the right (see gesture-scroll).
+    const delta =
+      direction === "down"
+        ? { deltaY: dist }
+        : direction === "up"
+          ? { deltaY: -dist }
+          : direction === "right"
+            ? { deltaX: dist }
+            : { deltaX: -dist };
+    await invokeSubTool(
+      registry,
+      ctx,
+      "gesture-scroll",
+      bindDeviceArgs(registry, "gesture-scroll", device.id, { x: cx, y: cy, ...delta })
+    );
+    return;
+  }
+
+  // To reveal content below the fold the finger travels UP (toY < fromY), etc.
+  let to: { x: number; y: number };
+  switch (direction) {
+    case "down":
+      to = { x: cx, y: clamp01(cy - dist) };
+      break;
+    case "up":
+      to = { x: cx, y: clamp01(cy + dist) };
+      break;
+    case "right":
+      to = { x: clamp01(cx - dist), y: cy };
+      break;
+    case "left":
+      to = { x: clamp01(cx + dist), y: cy };
+      break;
+  }
+  await invokeSubTool(
+    registry,
+    ctx,
+    "gesture-swipe",
+    bindDeviceArgs(registry, "gesture-swipe", device.id, {
+      fromX: cx,
+      fromY: cy,
+      toX: to.x,
+      toY: to.y,
+      settle: true,
+    })
+  );
+}
+
+/**
+ * Scroll until `target` resolves to a visible frame, returning that frame.
+ * Each round settles the tree, checks for the target, then — if absent — does
+ * one momentum-free increment. If a round's settled tree is identical to the
+ * previous round's, the container has hit its end (or the anchor scrolls
+ * nothing), so it stops rather than looping. Per-increment distance need not be
+ * exact: the loop re-checks after every step, so overshoot just means another
+ * round, and a target already on screen returns immediately (no scroll).
+ */
+async function scrollToVisible(
+  registry: Registry,
+  ctx: ToolContext | undefined,
+  device: DeviceInfo,
+  target: Selector,
+  direction: ScrollDirection,
+  within: Selector | undefined,
+  signal?: AbortSignal
+): Promise<ScrollResolve> {
+  let prevFp: string | undefined;
+  for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
+    if (signal?.aborted) return { reason: "scroll cancelled" };
+
+    const tree = await settleTree(registry, device, signal);
+    if (!tree) return { reason: "scroll cancelled" };
+
+    const frame = selectorToFrame(tree, target);
+    if (frame) return { frame };
+
+    // Anchor the gesture inside the container (so the right nested scroller
+    // moves), or over the whole screen when none is named.
+    const region = within ? selectorToFrame(tree, within) : FULL_SCREEN;
+    if (!region) {
+      return { reason: `scroll container ${describeSelector(within!)} is not visible` };
+    }
+
+    const fp = treeFingerprint(tree);
+    if (prevFp !== undefined && fp === prevFp) {
+      return { reason: `reached the end of the scroll without finding ${describeSelector(target)}` };
+    }
+    prevFp = fp;
+
+    await scrollIncrement(registry, ctx, device, direction, region);
+  }
+  return {
+    reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
+  };
+}
+
+/**
+ * Resolve a selector to a frame, auto-scrolling it into view if it isn't in the
+ * current viewport. The fast path is the plain wait (the element is already on
+ * screen, possibly after a transition); only on a miss does it fall back to a
+ * default vertical scroll. Explicit `scroll-to` steps cover other
+ * directions/containers.
+ */
+async function resolveOrScroll(
+  registry: Registry,
+  ctx: ToolContext | undefined,
+  device: DeviceInfo,
+  selector: Selector,
+  signal?: AbortSignal
+): Promise<DescribeFrame | undefined> {
+  const frame = await waitForFrame(registry, device, selector, signal);
+  if (frame) return frame;
+  const scrolled = await scrollToVisible(registry, ctx, device, selector, "down", undefined, signal);
+  return scrolled.frame;
+}
+
+/** Scroll a target into view (the `scroll-to` directive). */
+export async function runScrollTo(
+  registry: Registry,
+  ctx: ToolContext | undefined,
+  device: DeviceInfo,
+  step: { target: Selector; direction: ScrollDirection; within?: Selector },
+  signal?: AbortSignal
+): Promise<DirectiveOutcome> {
+  const r = await scrollToVisible(registry, ctx, device, step.target, step.direction, step.within, signal);
+  return { ok: Boolean(r.frame), reason: r.reason };
 }
 
 /**
@@ -77,7 +285,7 @@ export async function runTap(
 ): Promise<DirectiveOutcome> {
   let point: { x: number; y: number };
   if (target.selector) {
-    const frame = await waitForFrame(registry, device, target.selector, signal);
+    const frame = await resolveOrScroll(registry, ctx, device, target.selector, signal);
     if (!frame) {
       return {
         ok: false,
@@ -108,7 +316,7 @@ export async function runType(
   text: string,
   signal?: AbortSignal
 ): Promise<DirectiveOutcome> {
-  const frame = await waitForFrame(registry, device, into, signal);
+  const frame = await resolveOrScroll(registry, ctx, device, into, signal);
   if (!frame) {
     return { ok: false, reason: `no visible field matched selector ${describeSelector(into)}` };
   }
