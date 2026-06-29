@@ -201,17 +201,36 @@ export function appIdForPlatform(
   return v ?? null;
 }
 
-/** A tap targets an element (selector) or a raw point. */
-type TapBody = Selector | { x: number; y: number };
+/**
+ * A selector in YAML is sugared: a bare string is shorthand for `{ text: <string> }`
+ * (the common case), and the full `{ text?, identifier?, role? }` map is still
+ * accepted for identifier/role locators.
+ */
+type YamlSelector = string | Selector;
+
+/** A tap targets an element (selector, possibly a bare string) or a raw point. */
+type TapBody = YamlSelector | { x: number; y: number };
+
+/**
+ * The body of an `await`/`assert` step. The condition is the key, not a separate
+ * `condition:` field:
+ *   - `{ visible: "Account" }`            ← exists/visible/hidden take a selector
+ *   - `{ text: { in: "Taps:", equals: "Taps: 0" } }`  ← text locates then checks
+ */
+type YamlWaitBody =
+  | { exists: YamlSelector }
+  | { visible: YamlSelector }
+  | { hidden: YamlSelector }
+  | { text: { in: YamlSelector; equals: string } };
 
 type YamlStep =
   | { echo: string }
   | { run: string }
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
-  | { type: { into: Selector; text: string } }
-  | { await: { condition: WaitCondition; selector: Selector; expectedText?: string } }
-  | { assert: { condition: WaitCondition; selector: Selector; expectedText?: string } }
+  | { type: { into: YamlSelector; text: string } }
+  | { await: YamlWaitBody }
+  | { assert: YamlWaitBody }
   | { snapshot: { name: string; maxMismatch?: number } };
 
 type YamlFlowFile = {
@@ -222,6 +241,37 @@ type YamlFlowFile = {
 
 // ── Conversions ──────────────────────────────────────────────────────
 
+/**
+ * Sugar a selector for YAML output: a text-only selector collapses to a bare
+ * string (`{ text: "Login" }` → `"Login"`); an identifier/role selector keeps
+ * the map form. `parseSelector` is the exact inverse.
+ */
+function selectorToYaml(sel: Selector): YamlSelector {
+  if (sel.text !== undefined && sel.identifier === undefined && sel.role === undefined) {
+    return sel.text;
+  }
+  return { ...sel };
+}
+
+/** Sugar an await/assert step into the condition-as-key YAML body. */
+function waitToYaml(
+  condition: WaitCondition,
+  selector: Selector,
+  expectedText: string | undefined
+): YamlWaitBody {
+  const sel = selectorToYaml(selector);
+  switch (condition) {
+    case "exists":
+      return { exists: sel };
+    case "visible":
+      return { visible: sel };
+    case "hidden":
+      return { hidden: sel };
+    case "text":
+      return { text: { in: sel, equals: expectedText ?? "" } };
+  }
+}
+
 function toYamlStep(step: FlowStep): YamlStep {
   switch (step.kind) {
     case "echo":
@@ -229,27 +279,15 @@ function toYamlStep(step: FlowStep): YamlStep {
     case "run":
       return { run: step.flow };
     case "tap": {
-      const body: TapBody = step.selector ? { ...step.selector } : { x: step.x!, y: step.y! };
+      const body: TapBody = step.selector ? selectorToYaml(step.selector) : { x: step.x!, y: step.y! };
       return { tap: body };
     }
     case "type":
-      return { type: { into: step.into, text: step.text } };
+      return { type: { into: selectorToYaml(step.into), text: step.text } };
     case "await":
-      return {
-        await: {
-          condition: step.condition,
-          selector: step.selector,
-          ...(step.expectedText !== undefined ? { expectedText: step.expectedText } : {}),
-        },
-      };
+      return { await: waitToYaml(step.condition, step.selector, step.expectedText) };
     case "assert":
-      return {
-        assert: {
-          condition: step.condition,
-          selector: step.selector,
-          ...(step.expectedText !== undefined ? { expectedText: step.expectedText } : {}),
-        },
-      };
+      return { assert: waitToYaml(step.condition, step.selector, step.expectedText) };
     case "snapshot":
       return {
         snapshot: {
@@ -279,18 +317,59 @@ function badEntry(raw: unknown, detail: string): never {
 }
 
 function parseSelector(raw: unknown, where: string): Selector {
-  const r = selectorSchema.safeParse(raw);
+  // Bare-string sugar: a string is shorthand for a text selector.
+  const candidate = typeof raw === "string" ? { text: raw } : raw;
+  const r = selectorSchema.safeParse(candidate);
   if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
   return r.data;
 }
 
 const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden", "text"];
 
-function parseCondition(raw: unknown): WaitCondition {
-  if (typeof raw === "string" && (WAIT_CONDITIONS as readonly string[]).includes(raw)) {
-    return raw as WaitCondition;
+type WaitFields = { condition: WaitCondition; selector: Selector; expectedText?: string };
+
+/**
+ * Parse the body of an `await`/`assert` step into its condition + selector +
+ * optional expected text. The condition is the key and its value is the
+ * selector (`{ visible: "Home" }`, `{ text: { in, equals } }`). This is the only
+ * accepted spelling; for advanced await control beyond this surface (timeout,
+ * poll interval, bundleId) drop to an explicit `tool: await-ui-element` step.
+ */
+function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
+  if (raw === null || typeof raw !== "object") {
+    badEntry({ [kind]: raw }, `${kind} needs a condition (${WAIT_CONDITIONS.join(", ")})`);
   }
-  badEntry(raw, `condition must be one of ${WAIT_CONDITIONS.join(", ")}`);
+  const b = raw as Record<string, unknown>;
+
+  // The condition is the key; its value is the selector.
+  const present = WAIT_CONDITIONS.filter((c) => c in b);
+  if (present.length !== 1) {
+    badEntry(
+      { [kind]: b },
+      `${kind} needs exactly one condition key (${WAIT_CONDITIONS.join(", ")})`
+    );
+  }
+  const condition = present[0]!;
+
+  // `text` locates an element and checks its rendered content, so it carries
+  // both a locator (`in`) and the expected substring (`equals`).
+  if (condition === "text") {
+    const t = b.text;
+    if (t === null || typeof t !== "object") {
+      badEntry({ [kind]: b }, `${kind} text needs { in: <selector>, equals: <string> }`);
+    }
+    const tb = t as Record<string, unknown>;
+    if (typeof tb.equals !== "string" || tb.equals.length === 0) {
+      badEntry({ [kind]: b }, `${kind} text needs a non-empty \`equals\``);
+    }
+    return {
+      condition: "text",
+      selector: parseSelector(tb.in, `${kind}.text.in`),
+      expectedText: tb.equals,
+    };
+  }
+
+  return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`) };
 }
 
 function fromYamlStep(raw: YamlStep): FlowStep {
@@ -317,35 +396,11 @@ function fromYamlStep(raw: YamlStep): FlowStep {
   }
 
   if ("await" in raw) {
-    const b = (raw as { await: Record<string, unknown> }).await;
-    const condition = parseCondition(b.condition);
-    const step: FlowStep = {
-      kind: "await",
-      condition,
-      selector: parseSelector(b.selector, "await.selector"),
-    };
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    if (b.expectedText !== undefined) step.expectedText = String(b.expectedText);
-    if (condition === "text" && step.expectedText === undefined) {
-      badEntry(raw, "await condition `text` requires expectedText");
-    }
-    return step;
+    return { kind: "await", ...parseWaitFields((raw as { await: unknown }).await, "await") };
   }
 
   if ("assert" in raw) {
-    const b = (raw as { assert: Record<string, unknown> }).assert;
-    const condition = parseCondition(b.condition);
-    const step: FlowStep = {
-      kind: "assert",
-      condition,
-      selector: parseSelector(b.selector, "assert.selector"),
-    };
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    if (b.expectedText !== undefined) step.expectedText = String(b.expectedText);
-    if (condition === "text" && step.expectedText === undefined) {
-      badEntry(raw, "assert condition `text` requires expectedText");
-    }
-    return step;
+    return { kind: "assert", ...parseWaitFields((raw as { assert: unknown }).assert, "assert") };
   }
 
   if ("snapshot" in raw) {

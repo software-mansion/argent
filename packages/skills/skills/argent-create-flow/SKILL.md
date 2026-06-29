@@ -20,14 +20,21 @@ Beyond raw `tool:` steps and `echo:`, flows support declarative directives inter
 
 | Directive | YAML | Meaning |
 | --- | --- | --- |
-| `tap` | `- tap: { text: "Login" }` or `- tap: { x: 0.5, y: 0.57 }` | tap an element by selector (auto-waits), or a raw normalized point |
-| `type` | `- type: { into: { identifier: email }, text: "a@b.com" }` | focus a field and type |
-| `await` | `- await: { condition: visible, selector: { text: Home } }` | wait for a UI condition (sugar over `await-ui-element`) |
-| `assert` | `- assert: { condition: visible, selector: { text: Welcome } }` | check a condition, hard-fail if it never holds |
+| `tap` | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }` | tap an element by selector (auto-waits), or a raw normalized point |
+| `type` | `- type: { into: email, text: "a@b.com" }` | focus a field and type |
+| `await` | `- await: { visible: Home }` | wait for a UI condition (sugar over `await-ui-element`) |
+| `assert` | `- assert: { visible: Welcome }` | check a condition, hard-fail if it never holds |
 | `snapshot` | `- snapshot: { name: home, maxMismatch: 0.5 }` | diff a screenshot against a stored baseline |
 | `run` | `- run: login` | execute a fragment's steps inline |
 
-A selector is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. **Every directive hard-stops the flow on failure**; later steps are reported `skip`. `flow-execute` returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
+A **selector** is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. A bare string is sugar for a text selector: `tap: Login` ≡ `tap: { text: Login }`. Use the map form for identifier/role locators: `tap: { identifier: submit-btn }`.
+
+For `await`/`assert` the **condition is the key**, and its value is the selector:
+
+- `{ visible: Home }`, `{ exists: { identifier: row } }`, `{ hidden: spinner }`
+- `{ text: { in: <selector>, equals: "Taps: 0" } }` — `text` locates an element (`in`) and checks its rendered content (`equals`). Reach for it only when the locator is an identifier/role; to assert a string is simply on screen, prefer `{ visible: "Taps: 0" }`.
+
+This condition-as-key form is the only spelling. For advanced `await` control beyond it (custom timeout, poll interval, bundleId), drop to an explicit `- tool: await-ui-element` step. **Every directive hard-stops the flow on failure**; later steps are reported `skip`. `flow-execute` returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
 
 ### Standalone runner
 

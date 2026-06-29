@@ -62,9 +62,13 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         case "type":
           return `${n}. type: ${JSON.stringify(step.into)} ← "${step.text}"`;
         case "await":
-          return `${n}. await: ${step.condition} ${JSON.stringify(step.selector)}`;
-        case "assert":
-          return `${n}. assert: ${step.condition} ${JSON.stringify(step.selector)}`;
+        case "assert": {
+          const tail =
+            step.condition === "text"
+              ? `text ${JSON.stringify(step.selector)} == "${step.expectedText ?? ""}"`
+              : `${step.condition} ${JSON.stringify(step.selector)}`;
+          return `${n}. ${step.kind}: ${tail}`;
+        }
         case "snapshot":
           return `${n}. snapshot: ${step.name}`;
         case "tool":
