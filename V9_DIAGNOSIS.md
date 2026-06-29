@@ -58,3 +58,20 @@ JSON in ```fences). So the fine-tune did NOT broadly erase general capability �
 nav-specific causes: the train/inference FORMAT mismatch (#1) and the bad/idealized/reasoning-free nav data
 (#2). v9 priority order: fix the format mismatch + de-idealize nav data + reasoning-in-loss, then RL on real
 rollouts. (General-data mixing is now a minor nicety, not a core fix.)
+
+## UPDATE 2 — reasoning-in-loss TEST RESULT (silver-v9rsn): did NOT change inference behavior
+Trained silver-v9rsn = v8 data re-rendered with `--narration` (reasoning kept in the loss; verified 63% of
+turns carry it), r=8, 80 steps, A100 (~$4.4). Loss descended 54→~5 (healthy). BUT:
+- $0 behavioral probe (device already booted, Bluesky open, describe shows the Search tab): silver-v9rsn
+  emits the SAME tap as silver-v8 and STILL produces **no reasoning text** (`content:""`). The narration we
+  trained on does NOT surface at serve time (gemma4 template emits tool_call without the content, and/or 80
+  steps didn't imprint it). So the cheap reasoning-in-loss recipe tweak did NOT change observable behavior.
+- The full nav eval could NOT complete: the iOS simulators were WIPED mid-night (CoreSimulator/Devices has
+  only device_set.plist, 0 device dirs — collateral of the "space cleared" disk cleanup). The benchmark's 80
+  runs finished BEFORE the wipe (data safe); the silverv9 nav eval ran against a dead sim (invalid).
+**Conclusion:** an SFT-recipe tweak (reasoning-in-loss) did not move the model — consistent with the
+literature (SFT at ~10³ rows can't fix this) and the format-mismatch being the dominant, untouched cause.
+This EMPIRICALLY supports skipping further SFT-recipe iteration and going to the v9 plan: (1) fix the
+train↔inference FORMAT mismatch (the dominant, still-untested lever), then (2) scaffold the base + RL on its
+own real rollouts. To re-run any nav eval, the iOS sim surface (device + Bluesky dev-client + login + Metro)
+must be rebuilt first.
