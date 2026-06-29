@@ -49,3 +49,12 @@ correct; our r=8 is on the low side per Biderman α=2r).
 **Bottom line:** stop iterating the SFT-of-synthetic-scripts paradigm. v9 = (a) make training byte-match real
 inference + restore reasoning [cheap, narrows gap], then (b) scaffold the base + RL on its own real rollouts
 [the actual fix]. Treat v8 as the last data-knob iteration; the leverage is in #1, #4, #5.
+
+## UPDATE — catastrophic-forgetting probe (06-29 night, $0 local): REFUTED as the primary cause
+silver-v8 vs gemma on general tasks (no tools, temp 0): reasoning (150=150), knowledge (Canberra=Canberra),
+writing (both clean rhyming couplets) all on par; only a minor instruct-following nuance (silver wrapped
+JSON in ```fences). So the fine-tune did NOT broadly erase general capability — the degradation is
+**NAV-SPECIFIC**. This DOWNWEIGHTS the "mix in general data / anti-forgetting" lever and UPWEIGHTS the
+nav-specific causes: the train/inference FORMAT mismatch (#1) and the bad/idealized/reasoning-free nav data
+(#2). v9 priority order: fix the format mismatch + de-idealize nav data + reasoning-in-loss, then RL on real
+rollouts. (General-data mixing is now a minor nicety, not a core fix.)
