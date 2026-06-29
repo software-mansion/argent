@@ -232,6 +232,44 @@ function extractHostname(host: string): string {
   return colon === -1 ? host : host.slice(0, colon);
 }
 
+// Hostname of an `Origin` request header ("http://127.0.0.1:5173" → "127.0.0.1").
+// Opaque origins (the literal "null" from sandboxed iframes / file:// pages) and
+// malformed values return null so they fail the allow-list check.
+function hostnameFromOrigin(origin: string): string | null {
+  const schemeEnd = origin.indexOf("://");
+  if (schemeEnd === -1) return null;
+  return extractHostname(origin.slice(schemeEnd + 3));
+}
+
+// Authorize a WebSocket upgrade for the browser-facing control channels (e.g.
+// the Chromium-control WS). A WS handshake bypasses the Express Host/auth
+// middleware — the `ws` library owns the upgrade — so the same defenses are
+// re-applied here. The in-process preview UI is browser-loaded and can't carry
+// a Bearer token (like the rest of the /preview surface), so the guard is
+// origin/host-based rather than token-based:
+//   • Host guard — same loopback/bind-host allow-list as HTTP requests, closing
+//     the DNS-rebinding bypass.
+//   • Origin guard (anti-CSWSH) — browsers always send `Origin` on a WS
+//     handshake; accept only our own loopback/bind-host origin. A non-browser
+//     client (Node `ws`) sends no Origin and is already constrained by the Host
+//     guard above.
+// A wildcard bind disables the guard (operator opted into network exposure),
+// matching the HTTP Host-guard behavior.
+export function isWebsocketUpgradeAllowed(
+  headers: { host?: string; origin?: string },
+  policy: { allowedHostnames: ReadonlySet<string>; hostGuardDisabled: boolean }
+): boolean {
+  if (policy.hostGuardDisabled) return true;
+  const host = headers.host;
+  if (!host || !policy.allowedHostnames.has(extractHostname(host))) return false;
+  const origin = headers.origin;
+  if (origin !== undefined) {
+    const originHost = hostnameFromOrigin(origin);
+    if (!originHost || !policy.allowedHostnames.has(originHost)) return false;
+  }
+  return true;
+}
+
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
   // 48mb: file-input wrappers may inline base64 file content (saved PNG
@@ -703,32 +741,37 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     dispose: () => idleTimer.dispose(),
     getLastActivityAt: () => idleTimer.getLastActivityAt(),
     attachChromiumWebsockets: (httpServer: HttpServer) => {
-      attachChromiumServerWebsocket(httpServer, "/chromium-server/", (req) => {
-        // URL shape: /chromium-server/<deviceId>/ws
-        const match = (req.url ?? "").match(/^\/chromium-server\/([^/]+)\/ws(?:[?#]|$)/);
-        if (!match) return null;
-        const deviceId = decodeURIComponent(match[1]!);
-        const device = resolveDeviceForWs(deviceId);
-        if (device.platform !== "chromium") return null;
-        // The CDP session must already be resolved (the per-device REST routes
-        // resolve it lazily on first hit). For the WS endpoint we look at the
-        // current registry snapshot — if no session is open, refuse the
-        // upgrade instead of triggering a slow CDP connect inside the upgrade
-        // handler (which would block the TCP socket).
-        const urn = `${CHROMIUM_CDP_NAMESPACE}:${deviceId}`;
-        const snapshot = registry.getSnapshot();
-        if (!snapshot.services.has(urn)) return null;
-        // Use the synchronous getter on the registry rather than the async
-        // resolveService — by this point the service is guaranteed to exist.
-        const node = (
-          registry as unknown as {
-            services: Map<string, { instance: { api: ChromiumCdpApi } | null }>;
-          }
-        ).services.get(urn);
-        const api = node?.instance?.api;
-        if (!api) return null;
-        return api.server;
-      });
+      attachChromiumServerWebsocket(
+        httpServer,
+        "/chromium-server/",
+        (req) => {
+          // URL shape: /chromium-server/<deviceId>/ws
+          const match = (req.url ?? "").match(/^\/chromium-server\/([^/]+)\/ws(?:[?#]|$)/);
+          if (!match) return null;
+          const deviceId = decodeURIComponent(match[1]!);
+          const device = resolveDeviceForWs(deviceId);
+          if (device.platform !== "chromium") return null;
+          // The CDP session must already be resolved (the per-device REST routes
+          // resolve it lazily on first hit). For the WS endpoint we look at the
+          // current registry snapshot — if no session is open, refuse the
+          // upgrade instead of triggering a slow CDP connect inside the upgrade
+          // handler (which would block the TCP socket).
+          const urn = `${CHROMIUM_CDP_NAMESPACE}:${deviceId}`;
+          const snapshot = registry.getSnapshot();
+          if (!snapshot.services.has(urn)) return null;
+          // Use the synchronous getter on the registry rather than the async
+          // resolveService — by this point the service is guaranteed to exist.
+          const node = (
+            registry as unknown as {
+              services: Map<string, { instance: { api: ChromiumCdpApi } | null }>;
+            }
+          ).services.get(urn);
+          const api = node?.instance?.api;
+          if (!api) return null;
+          return api.server;
+        },
+        (req) => isWebsocketUpgradeAllowed(req.headers, { allowedHostnames, hostGuardDisabled })
+      );
     },
   };
 }

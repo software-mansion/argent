@@ -23,9 +23,39 @@ export function selectTarget(
 ): SelectedTarget {
   let candidates = targets;
 
-  if (options?.deviceId) {
-    const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === options.deviceId);
-    if (filtered.length) candidates = filtered;
+  if (typeof options?.deviceId === "string" && options.deviceId) {
+    const deviceId = options.deviceId;
+    const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === deviceId);
+    if (filtered.length) {
+      candidates = filtered;
+    } else {
+      // No target matches the requested device. Silently falling back to the
+      // first/priority target here would route EVERY unmatched device_id to the
+      // same device — so two debugger sessions opened with different device_ids
+      // would both land on whichever device Metro happens to list first. Only
+      // fall back when there is a single device to fall back to; with multiple
+      // distinct devices connected, refuse to guess and report the valid ids so
+      // the caller can re-target (the logicalDeviceId is what debugger-connect
+      // returns and what subsequent debugger-* calls must pass).
+      const distinctDevices = new Map<string, string | undefined>();
+      for (const t of targets) {
+        const id = t.reactNative?.logicalDeviceId;
+        if (id !== undefined && id !== "" && !distinctDevices.has(id)) {
+          distinctDevices.set(id, t.deviceName);
+        }
+      }
+      if (distinctDevices.size > 1) {
+        const listed = [...distinctDevices.entries()]
+          .map(([id, name]) => (name ? `${name} (${id})` : id))
+          .join(", ");
+        throw new Error(
+          `No debugger target matches device_id "${deviceId}". ` +
+            `${distinctDevices.size} devices are connected to Metro on port ${port}: ` +
+            `${listed}. Pass the logicalDeviceId (in parentheses) of the desired ` +
+            `device as device_id (the logicalDeviceId returned by debugger-connect).`
+        );
+      }
+    }
   }
   if (options?.deviceName) {
     const filtered = candidates.filter((t) => t.deviceName === options.deviceName);

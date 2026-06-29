@@ -1,50 +1,23 @@
 import { z } from "zod";
 
+/**
+ * Convert a tool's Zod input schema to the JSON Schema advertised to MCP / LLM
+ * clients. Delegates to Zod 4's native `z.toJSONSchema` instead of a hand-rolled
+ * type walk: the previous converter silently dropped every `.describe()` text
+ * and `.min/.max/.int/.regex` constraint and emitted a match-anything `{}` for
+ * unions/literals — so the schema the model saw for each tool was lossy.
+ *
+ * - `io: "input"` so a field with `.default()` / `.optional()` is not marked
+ *   `required` (the caller need not supply it) — matching the old behavior.
+ * - `unrepresentable: "any"` degrades an exotic field type to `{}` rather than
+ *   throwing, so a tool carrying such a field still registers.
+ * - The `$schema` dialect tag is stripped; it is noise in the per-tool payload.
+ */
 export function zodObjectToJsonSchema(schema: z.ZodObject<any>): Record<string, unknown> {
-  const shape = schema.shape as Record<string, z.ZodType>;
-  const properties: Record<string, unknown> = {};
-  const required: string[] = [];
-
-  for (const [key, value] of Object.entries(shape)) {
-    properties[key] = zodTypeToJsonSchema(value);
-    if (!isOptional(value)) {
-      required.push(key);
-    }
-  }
-
-  const result: Record<string, unknown> = { type: "object", properties };
-  if (required.length > 0) {
-    result.required = required;
-  }
-  return result;
-}
-
-function zodTypeToJsonSchema(type: z.core.$ZodType): Record<string, unknown> {
-  if (type instanceof z.ZodString) return { type: "string" };
-  if (type instanceof z.ZodNumber) return { type: "number" };
-  if (type instanceof z.ZodBoolean) return { type: "boolean" };
-  if (type instanceof z.ZodOptional) return zodTypeToJsonSchema(type.unwrap());
-  if (type instanceof z.ZodDefault) {
-    return {
-      ...zodTypeToJsonSchema(type.def.innerType),
-      default: type.def.defaultValue,
-    };
-  }
-  if (type instanceof z.ZodArray) {
-    return { type: "array", items: zodTypeToJsonSchema(type.def.element) };
-  }
-  if (type instanceof z.ZodObject) {
-    return zodObjectToJsonSchema(type);
-  }
-  if (type instanceof z.ZodRecord) {
-    return { type: "object" };
-  }
-  if (type instanceof z.ZodEnum) {
-    return { type: "string", enum: type.options };
-  }
-  return {};
-}
-
-function isOptional(type: z.ZodType): boolean {
-  return type instanceof z.ZodOptional || type instanceof z.ZodDefault;
+  const jsonSchema = z.toJSONSchema(schema, {
+    io: "input",
+    unrepresentable: "any",
+  }) as Record<string, unknown>;
+  delete jsonSchema.$schema;
+  return jsonSchema;
 }

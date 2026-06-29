@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Argent E2E smoke</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        font-family: -apple-system, system-ui, sans-serif;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+        /* High-frequency diagonal stripes guarantee the captured PNG clears the
+           ~20 KB "real pixels" floor — a flat colour would compress under it. */
+        background: repeating-linear-gradient(
+          45deg,
+          #ff006e 0 24px,
+          #fb5607 24px 48px,
+          #ffbe0b 48px 72px,
+          #8338ec 72px 96px,
+          #3a86ff 96px 120px
+        );
+      }
+      h1 {
+        font-size: 48px;
+        margin: 0 0 16px;
+      }
+      button {
+        font-size: 24px;
+        padding: 16px 40px;
+        border: 0;
+        border-radius: 12px;
+        background: #fff;
+        color: #111;
+        cursor: pointer;
+      }
+      #count {
+        margin-top: 16px;
+        font-size: 28px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Argent E2E smoke</h1>
+    <!-- Centred so a gesture-tap at (0.5, 0.5) lands on it. -->
+    <button id="tap">Tap me</button>
+    <div id="count">taps: 0</div>
+    <script>
+      let n = 0;
+      document.getElementById("tap").addEventListener("click", () => {
+        n += 1;
+        document.getElementById("count").textContent = "taps: " + n;
+      });
+    </script>
+  </body>
+</html>

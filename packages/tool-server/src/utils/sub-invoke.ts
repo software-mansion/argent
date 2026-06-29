@@ -19,6 +19,11 @@ import type { Registry, ToolContext } from "@argent/registry";
  * When there is nothing to propagate (direct invocations, unit tests, or a
  * request with no AI-client / platform context), this is a thin pass-through
  * that invokes exactly as before.
+ *
+ * The outer request's abort `signal` is always forwarded (both paths) so a
+ * client disconnect cancels a long-running sub-tool — e.g. an await-ui-element
+ * step blocking on a UI condition — instead of letting it poll on to its own
+ * timeout.
  */
 export async function invokeSubTool<T = unknown>(
   registry: Registry,
@@ -26,17 +31,11 @@ export async function invokeSubTool<T = unknown>(
   toolId: string,
   args: unknown
 ): Promise<T> {
-  // Forward the outer request's abort signal so a cancelled/disconnected client
-  // stops an in-flight sub-step too — not just the gap between steps. An
-  // orchestrator like run-sequence is `longRunning` and a single step (e.g. a
-  // long `tv-remote` path) can run for minutes; without this the sub-tool's own
-  // `options.signal.throwIfAborted()` is a no-op and the step runs to completion
-  // at the held device after the caller is gone.
   const signal = ctx?.signal;
   const recordChildInvocation = ctx?.recordChildInvocation;
   if (!recordChildInvocation) {
-    // Nothing to attribute — pass through. Only attach options when there's a
-    // signal to forward, so the no-context case stays a plain 2-arg invoke.
+    // No attribution to propagate — invoke exactly as before, but still forward
+    // the abort signal when one is present so cancellation reaches the sub-tool.
     return signal
       ? registry.invokeTool<T>(toolId, args, { signal })
       : registry.invokeTool<T>(toolId, args);
@@ -46,7 +45,7 @@ export async function invokeSubTool<T = unknown>(
   const release = recordChildInvocation(toolInvocationId, args);
   try {
     return await registry.invokeTool<T>(toolId, args, {
-      ...(signal ? { signal } : {}),
+      signal,
       toolInvocationId,
       recordChildInvocation,
     });

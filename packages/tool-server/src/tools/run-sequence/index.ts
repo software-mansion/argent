@@ -1,9 +1,10 @@
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
 const ALLOWED_TOOLS = new Set([
   "gesture-tap",
@@ -19,6 +20,7 @@ const ALLOWED_TOOLS = new Set([
   // `tv-remote` drives the D-pad on a TV target (Apple TV / Android TV / Vega);
   // `keyboard` types into the focused field there.
   "tv-remote",
+  AWAIT_UI_ELEMENT_TOOL_ID,
 ]);
 
 const zodSchema = z.object({
@@ -33,7 +35,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate, tv-remote. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -105,6 +107,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
                   buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute — work on Android TV and Vega; rejected on the Apple TV simulator)
+  await-ui-element: { condition: "exists"|"visible"|"hidden"|"text", selector: {text?,identifier?,role?}, expectedText?, timeoutMs?, pollIntervalMs? }  [ios/android/chromium]
 
 Example — scroll down three times (use gesture-scroll with positive deltaY on Chromium):
   { "udid": "<UDID>", "steps": [
@@ -124,7 +127,16 @@ Example — TV: move focus right twice then activate (one tv-remote step with a 
     { "tool": "tv-remote", "args": { "button": ["right", "right", "select"] } }
   ]}
 
-Stops on the first error and returns partial results.`,
+Example — tap, wait for the next screen's element, then tap it:
+  { "udid": "<UDID>", "steps": [
+    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.9 } },
+    { "tool": "await-ui-element", "args": { "condition": "visible", "selector": { "text": "Continue" } } },
+    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.5 } }
+  ]}
+If the await-ui-element condition is not met before its timeout, the sequence stops there and the
+following steps do NOT run — so the tap above only fires once "Continue" is actually on screen.
+
+Stops on the first error (or unmet await-ui-element condition) and returns partial results.`,
     alwaysLoad: true,
     longRunning: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
@@ -140,7 +152,7 @@ Stops on the first error and returns partial results.`,
     // first-step spawn cost, and `ctx` is threaded through so nested steps keep
     // the outer request's telemetry attribution.
     services: () => ({}),
-    async execute(_services, params, ctx) {
+    async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
@@ -154,6 +166,7 @@ Stops on the first error and returns partial results.`,
 
       for (const step of steps) {
         if (signal?.aborted) break;
+
         if (!ALLOWED_TOOLS.has(step.tool)) {
           results.push({
             tool: step.tool,
@@ -183,6 +196,14 @@ Stops on the first error and returns partial results.`,
         try {
           const toolArgs = { ...step.args, udid };
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
+          if (isUnmetUiWaitResult(step.tool, result)) {
+            const note = (result as { note?: string }).note;
+            results.push({
+              tool: step.tool,
+              error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+            });
+            break;
+          }
           results.push({ tool: step.tool, result });
         } catch (err) {
           results.push({

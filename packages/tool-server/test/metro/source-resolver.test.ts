@@ -44,6 +44,22 @@ describe("parseDebugStack", () => {
     expect(frames[1].fn).toBe("ParentComponent");
     expect(frames[1].line).toBe(120);
   });
+
+  it("parses a frame that has a line but no column", () => {
+    // The previous regex required `:line:col`; a `:line`-only location (which
+    // Hermes/JSC can emit) produced an unusable "unknown" frame.
+    const frames = parseDebugStack(`Error\n    at App (http://localhost:8081/index.bundle:50)`);
+    expect(frames[0].fn).toBe("App");
+    expect(frames[0].line).toBe(50);
+    expect(frames[0].col).toBe(0);
+  });
+
+  it("trims a method name padded by an extra space before the paren", () => {
+    const frames = parseDebugStack(
+      `Error\n    at anonymous  (http://localhost:8081/index.bundle:1:2)`
+    );
+    expect(frames[0].fn).toBe("anonymous");
+  });
 });
 
 describe("normalizeBundleUrl", () => {
