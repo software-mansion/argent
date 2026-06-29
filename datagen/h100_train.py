@@ -73,7 +73,7 @@ def _hybrid_attn(module, query, key, value, attention_mask, scaling=None, dropou
 AttentionInterface.register("flash_attention_2", _hybrid_attn)
 assert torch.cuda.is_available(), "FATAL: no CUDA device"
 
-MAXLEN  = 40960
+MAXLEN  = int(os.environ.get("MAXLEN", "40960"))  # v8 long-context rows reach ~77K -> set MAXLEN=81920
 MODEL   = "unsloth/gemma-4-E4B-it"
 EPOCHS  = float(os.environ.get("EPOCHS", "2"))  # v6 worked at ~600 seqs; 2 epochs = ~6.5k seqs w/ focused mask
 MAX_STEPS = int(os.environ.get("MAX_STEPS", "-1"))  # >0 caps total optim steps (overrides EPOCHS) for a bounded run
@@ -164,7 +164,9 @@ for p in model.parameters():
     p.requires_grad = False  # base frozen; LoRA adapters (created below) are the only trainable params
 model.enable_input_require_grads()
 model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-lora = LoraConfig(r=16, lora_alpha=16, lora_dropout=0, bias="none", task_type="CAUSAL_LM",
+_R = int(os.environ.get("LORA_R", "16"))          # v8 uses r=8 (less capacity to memorize -> less overfit)
+_ALPHA = int(os.environ.get("LORA_ALPHA", "16"))
+lora = LoraConfig(r=_R, lora_alpha=_ALPHA, lora_dropout=0, bias="none", task_type="CAUSAL_LM",
                   target_modules=r".*language_model.*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$")
 model = get_peft_model(model, lora); model.print_trainable_parameters()
 _LCE = LigerFusedLinearCrossEntropyLoss()  # ignore_index=-100 -> masked (prompt/tool-result) tokens skipped

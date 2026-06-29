@@ -5,9 +5,9 @@ from transformers import AutoModelForImageTextToText, AutoTokenizer
 from peft import PeftModel
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ADAPTER = os.path.join(HERE, "fused/silver-v7-adapter")
+ADAPTER = os.environ.get("ADAPTER", os.path.join(HERE, "fused/silver-v7-adapter"))
 BASE = "unsloth/gemma-4-E4B-it"
-MERGED = os.path.join(HERE, "fused/silver-v7-merged")
+MERGED = os.environ.get("MERGED", os.path.join(HERE, "fused/silver-v7-merged"))
 
 print("=== loading base fp16 (downloads ~15GB first time) ===", flush=True)
 base = AutoModelForImageTextToText.from_pretrained(BASE, torch_dtype=torch.float16, low_cpu_mem_usage=True)
