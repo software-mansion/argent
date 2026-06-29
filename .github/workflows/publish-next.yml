@@ -1,12 +1,26 @@
 name: Publish prerelease to npm (next)
 
 on:
+  # Every push to main ships a canary prerelease under the `next` dist-tag, so
+  # `next` always tracks the tip of main. The version is derived + stamped at
+  # publish time (see "Compute and stamp canary version" below).
+  push:
+    branches:
+      - main
+  # Manual prerelease of a specific ref, publishing that ref's package.json
+  # version verbatim.
   workflow_dispatch:
     inputs:
       ref:
         description: "Branch, tag, or SHA to publish (e.g. v0.6.0-next.0)"
         required: true
         type: string
+
+concurrency:
+  # Serialize canary publishes so versions land in run-number order; manual
+  # dispatches get their own lane. Never cancel an in-flight publish.
+  group: publish-next-${{ github.event_name }}
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -17,7 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
+          # push → the pushed commit; dispatch → the requested ref.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
       - uses: actions/setup-node@v6
         with:
@@ -25,7 +40,11 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
 
+      # Dispatch publishes the ref's package.json version verbatim, so it must
+      # already be a prerelease. The push path derives + stamps its own version
+      # below, so this guard doesn't apply there.
       - name: Verify package version is a prerelease
+        if: github.event_name == 'workflow_dispatch'
         run: |
           VERSION=$(node -p "require('./packages/argent/package.json').version")
           echo "Resolved version: $VERSION"
@@ -38,8 +57,13 @@ jobs:
       - name: Resolve native binaries tag
         id: binaries_tag
         run: |
-          REF="${{ inputs.ref }}"
-          echo "tag=argent-${REF//\//-}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Canary builds source the floating main build of the signed binaries.
+            echo "tag=argent-main" >> "$GITHUB_OUTPUT"
+          else
+            REF="${{ inputs.ref }}"
+            echo "tag=argent-${REF//\//-}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Download signed simulator-server binary
         run: bash scripts/download-simulator-server.sh
@@ -100,6 +124,33 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
+
+      # Canary version: <patch-bump of highest published>-next.<run-number>,
+      # stamped into package.json so the published build reports it. Done after
+      # `npm ci` (the checked-out lockfile still matches the original version at
+      # install time) and after the build (the CLI reads its version from
+      # package.json at runtime — nothing bakes it in), but before pack/publish.
+      - name: Compute and stamp canary version
+        if: github.event_name == 'push'
+        id: canary
+        run: |
+          VERSION="$(node scripts/next-canary-version.mjs "${{ github.run_number }}")"
+          export VERSION
+          echo "Canary version: ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          node -e 'const fs=require("fs");const p="packages/argent/package.json";const j=JSON.parse(fs.readFileSync(p,"utf8"));j.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(j,null,2)+"\n");'
+
+      # The shipped CLI reads its version from package.json at runtime, so this
+      # is exactly what `argent --version` prints after install. Fail loudly if
+      # they ever diverge.
+      - name: Verify argent --version reports the canary version
+        if: github.event_name == 'push'
+        run: |
+          REPORTED="$(node packages/argent/dist/cli.js --version)"
+          EXPECTED="${{ steps.canary.outputs.version }}"
+          echo "argent --version → ${REPORTED} (expected ${EXPECTED})"
+          [ "${REPORTED}" = "${EXPECTED}" ] || { echo "::error::argent --version (${REPORTED}) != published version (${EXPECTED})"; exit 1; }
+
       - run: npm pack --dry-run -w @swmansion/argent
 
       - run: npm publish -w @swmansion/argent --tag next
