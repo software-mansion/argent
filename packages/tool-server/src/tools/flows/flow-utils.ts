@@ -3,6 +3,11 @@ import * as fs from "node:fs/promises";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import { CLIENT_FILE_MARKER, type ClientFileDirective } from "@argent/registry";
+import {
+  selectorSchema,
+  type Selector,
+  type WaitCondition,
+} from "../../utils/ui-tree-match";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
@@ -154,56 +159,246 @@ export function clearActiveFlow(): void {
 
 // ── Types ────────────────────────────────────────────────────────────
 
+/**
+ * The app the standalone runner launches before an e2e flow. A bare string
+ * applies to every platform; the map form targets a specific bundle id /
+ * package per platform. Presence of `appId` is what makes a flow an e2e flow
+ * (vs a reusable fragment).
+ */
+export type AppId = string | { ios?: string; android?: string; chromium?: string };
+
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
-  | { kind: "echo"; message: string };
+  | { kind: "echo"; message: string }
+  | { kind: "run"; flow: string }
+  | { kind: "tap"; selector?: Selector; x?: number; y?: number }
+  | { kind: "type"; into: Selector; text: string }
+  | { kind: "await"; condition: WaitCondition; selector: Selector; expectedText?: string }
+  | { kind: "assert"; condition: WaitCondition; selector: Selector; expectedText?: string }
+  | { kind: "snapshot"; name: string; maxMismatch?: number };
 
 export type FlowFile = {
+  /** Present ⇒ e2e flow (launchable, standalone-runnable). Absent ⇒ fragment. */
+  appId?: AppId;
+  /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
   steps: FlowStep[];
 };
 
+/** A flow is end-to-end iff it declares an app to launch. */
+export function isE2eFlow(flow: FlowFile): boolean {
+  return flow.appId !== undefined;
+}
+
+/** Resolve the launch id for a platform, or null when none is declared for it. */
+export function appIdForPlatform(
+  appId: AppId | undefined,
+  platform: string
+): string | null {
+  if (appId === undefined) return null;
+  if (typeof appId === "string") return appId;
+  const v = (appId as Record<string, string | undefined>)[platform];
+  return v ?? null;
+}
+
+/** A tap targets an element (selector) or a raw point. */
+type TapBody = Selector | { x: number; y: number };
+
 type YamlStep =
   | { echo: string }
-  | { tool: string; args?: Record<string, unknown>; delayMs?: number };
+  | { run: string }
+  | { tool: string; args?: Record<string, unknown>; delayMs?: number }
+  | { tap: TapBody }
+  | { type: { into: Selector; text: string } }
+  | { await: { condition: WaitCondition; selector: Selector; expectedText?: string } }
+  | { assert: { condition: WaitCondition; selector: Selector; expectedText?: string } }
+  | { snapshot: { name: string; maxMismatch?: number } };
 
 type YamlFlowFile = {
-  executionPrerequisite: string;
+  appId?: AppId;
+  executionPrerequisite?: string;
   steps: YamlStep[];
 };
 
 // ── Conversions ──────────────────────────────────────────────────────
 
 function toYamlStep(step: FlowStep): YamlStep {
-  if (step.kind === "echo") {
-    return { echo: step.message };
+  switch (step.kind) {
+    case "echo":
+      return { echo: step.message };
+    case "run":
+      return { run: step.flow };
+    case "tap": {
+      const body: TapBody = step.selector ? { ...step.selector } : { x: step.x!, y: step.y! };
+      return { tap: body };
+    }
+    case "type":
+      return { type: { into: step.into, text: step.text } };
+    case "await":
+      return {
+        await: {
+          condition: step.condition,
+          selector: step.selector,
+          ...(step.expectedText !== undefined ? { expectedText: step.expectedText } : {}),
+        },
+      };
+    case "assert":
+      return {
+        assert: {
+          condition: step.condition,
+          selector: step.selector,
+          ...(step.expectedText !== undefined ? { expectedText: step.expectedText } : {}),
+        },
+      };
+    case "snapshot":
+      return {
+        snapshot: {
+          name: step.name,
+          ...(step.maxMismatch !== undefined ? { maxMismatch: step.maxMismatch } : {}),
+        },
+      };
+    case "tool":
+    default: {
+      const y: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
+        tool: step.name,
+      };
+      if (Object.keys(step.args).length > 0) y.args = step.args;
+      if (step.delayMs !== undefined) y.delayMs = step.delayMs;
+      return y;
+    }
   }
-  const yaml: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
-    tool: step.name,
-  };
-  if (Object.keys(step.args).length > 0) yaml.args = step.args;
-  if (step.delayMs !== undefined) yaml.delayMs = step.delayMs;
-  return yaml;
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw new FailureError(`Unrecognized flow entry (${detail}): ${JSON.stringify(raw)}`, {
+    error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+    failure_stage: "flow_file_parse_step",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+function parseSelector(raw: unknown, where: string): Selector {
+  const r = selectorSchema.safeParse(raw);
+  if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
+  return r.data;
+}
+
+const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden", "text"];
+
+function parseCondition(raw: unknown): WaitCondition {
+  if (typeof raw === "string" && (WAIT_CONDITIONS as readonly string[]).includes(raw)) {
+    return raw as WaitCondition;
+  }
+  badEntry(raw, `condition must be one of ${WAIT_CONDITIONS.join(", ")}`);
 }
 
 function fromYamlStep(raw: YamlStep): FlowStep {
-  if ("echo" in raw) {
-    return { kind: "echo", message: raw.echo };
+  if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
+  if ("run" in raw) return { kind: "run", flow: String(raw.run) };
+
+  if ("tap" in raw) {
+    const body = (raw as { tap: unknown }).tap;
+    const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    // A tap targets either an element (selector) or a raw point (x/y).
+    if (typeof obj.x === "number" && typeof obj.y === "number") {
+      return { kind: "tap", x: obj.x, y: obj.y };
+    }
+    return { kind: "tap", selector: parseSelector(body, "tap") };
   }
-  const step: FlowStep = { kind: "tool", name: raw.tool, args: raw.args ?? {} };
-  if (raw.delayMs !== undefined) step.delayMs = raw.delayMs;
-  return step;
+
+  if ("type" in raw) {
+    const body = (raw as { type: { into?: unknown; text?: unknown } }).type;
+    if (!body || typeof body !== "object") badEntry(raw, "type needs { into, text }");
+    if (typeof body.text !== "string" || body.text.length === 0) {
+      badEntry(raw, "type needs a non-empty text");
+    }
+    return { kind: "type", into: parseSelector(body.into, "type.into"), text: body.text };
+  }
+
+  if ("await" in raw) {
+    const b = (raw as { await: Record<string, unknown> }).await;
+    const condition = parseCondition(b.condition);
+    const step: FlowStep = {
+      kind: "await",
+      condition,
+      selector: parseSelector(b.selector, "await.selector"),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    if (b.expectedText !== undefined) step.expectedText = String(b.expectedText);
+    if (condition === "text" && step.expectedText === undefined) {
+      badEntry(raw, "await condition `text` requires expectedText");
+    }
+    return step;
+  }
+
+  if ("assert" in raw) {
+    const b = (raw as { assert: Record<string, unknown> }).assert;
+    const condition = parseCondition(b.condition);
+    const step: FlowStep = {
+      kind: "assert",
+      condition,
+      selector: parseSelector(b.selector, "assert.selector"),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    if (b.expectedText !== undefined) step.expectedText = String(b.expectedText);
+    if (condition === "text" && step.expectedText === undefined) {
+      badEntry(raw, "assert condition `text` requires expectedText");
+    }
+    return step;
+  }
+
+  if ("snapshot" in raw) {
+    const b = (raw as { snapshot: { name?: unknown; maxMismatch?: number } }).snapshot;
+    if (!b || typeof b !== "object" || typeof b.name !== "string" || !b.name) {
+      badEntry(raw, "snapshot needs a { name }");
+    }
+    // The name becomes a baseline filename, so it must be path-safe (no
+    // separators or "..") — same constraint as a flow name.
+    if (!FLOW_NAME_PATTERN.test(b.name)) {
+      badEntry(
+        raw,
+        `snapshot name "${b.name}" must match ${FLOW_NAME_PATTERN} (letters, digits, underscore, hyphen)`
+      );
+    }
+    const step: FlowStep = { kind: "snapshot", name: b.name };
+    if (b.maxMismatch !== undefined) step.maxMismatch = Number(b.maxMismatch);
+    return step;
+  }
+
+  if ("tool" in raw) {
+    const r = raw as { tool: string; args?: Record<string, unknown>; delayMs?: number };
+    const step: FlowStep = { kind: "tool", name: r.tool, args: r.args ?? {} };
+    if (r.delayMs !== undefined) step.delayMs = r.delayMs;
+    return step;
+  }
+
+  return badEntry(raw, "unrecognized step kind");
 }
 
 // ── Serialisation ────────────────────────────────────────────────────
 
-/** Serialize a full flow file to YAML. */
+/** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
 export function serializeFlow(flow: FlowFile): string {
-  const doc: YamlFlowFile = {
-    executionPrerequisite: flow.executionPrerequisite,
-    steps: flow.steps.map(toYamlStep),
-  };
+  const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
+  if (flow.appId !== undefined) doc.appId = flow.appId;
+  if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   return yamlStringify(doc);
+}
+
+/** Validate cross-field invariants that are checkable without other files. */
+export function validateFlow(flow: FlowFile): void {
+  if (isE2eFlow(flow) && flow.executionPrerequisite) {
+    throw new FailureError(
+      "An e2e flow (one with appId) must not declare executionPrerequisite — it launches its own app and controls its start state. Remove appId to make it a fragment, or drop executionPrerequisite.",
+      {
+        error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
+        failure_stage: "flow_file_validate",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
 }
 
 /** Parse a YAML flow file into a FlowFile. */
@@ -230,22 +425,17 @@ export function parseFlow(content: string): FlowFile {
   }
 
   const steps = parsed.steps.map((raw) => {
-    if (raw !== null && typeof raw === "object") {
-      if ("echo" in raw) return fromYamlStep(raw);
-      if ("tool" in raw) return fromYamlStep(raw);
-    }
-    throw new FailureError(`Unrecognized flow entry: ${JSON.stringify(raw)}`, {
-      error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
-      failure_stage: "flow_file_parse_step",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    });
+    if (raw !== null && typeof raw === "object") return fromYamlStep(raw as YamlStep);
+    return badEntry(raw, "step must be an object");
   });
 
-  return {
+  const flow: FlowFile = {
+    appId: parsed.appId,
     executionPrerequisite: parsed.executionPrerequisite ?? "",
     steps,
   };
+  validateFlow(flow);
+  return flow;
 }
 
 // ── File helpers ─────────────────────────────────────────────────────

@@ -5,7 +5,33 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 ## 1. Overview
 
-A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/flows/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
+A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` directory. Each recorded step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`, or — for an e2e flow — headlessly with `argent flow run <name>`.
+
+Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
+
+**Two flow types** (inferred from `appId`):
+
+- **e2e** — declares `appId`; the runner launches that app from scratch before step 1. No `executionPrerequisite`. The only type `argent flow run` accepts. May `run:` fragments.
+- **fragment** — no `appId`; may declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time. Record one by passing `fragment: true` to `flow-start-recording`.
+
+### Step directives
+
+Beyond raw `tool:` steps and `echo:`, flows support declarative directives interpreted by the runner (they are **not** agent-callable tools):
+
+| Directive | YAML | Meaning |
+| --- | --- | --- |
+| `tap` | `- tap: { text: "Login" }` or `- tap: { x: 0.5, y: 0.57 }` | tap an element by selector (auto-waits), or a raw normalized point |
+| `type` | `- type: { into: { identifier: email }, text: "a@b.com" }` | focus a field and type |
+| `await` | `- await: { condition: visible, selector: { text: Home } }` | wait for a UI condition (sugar over `await-ui-element`) |
+| `assert` | `- assert: { condition: visible, selector: { text: Welcome } }` | check a condition, hard-fail if it never holds |
+| `snapshot` | `- snapshot: { name: home, maxMismatch: 0.5 }` | diff a screenshot against a stored baseline |
+| `run` | `- run: login` | execute a fragment's steps inline |
+
+A selector is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. **Every directive hard-stops the flow on failure**; later steps are reported `skip`. `flow-execute` returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
+
+### Standalone runner
+
+`argent flow run <name> [--device <id>] [--platform ios|android|chromium] [--update-baselines] [--json]` runs an e2e flow with no LLM in the loop and exits non-zero on any failure — suitable for CI. `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`; the status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs.
 
 ## 2. Tools
 

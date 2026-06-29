@@ -79,16 +79,19 @@ describe("flow-execute honors the registry feature-flag gate", () => {
     const runFlow = createRunFlowTool(registry);
     await writeFlow("gated-off");
 
-    const result = await runFlow.execute({}, { name: "gated-off", project_root: tmpDir });
+    const result = await runFlow.execute(
+      {},
+      { name: "gated-off", project_root: tmpDir, device: "00000000-0000-0000-0000-0000000000ab" }
+    );
 
     expect(result).toHaveProperty("steps");
-    const steps = (result as { steps: Array<{ kind: string; tool?: string; error?: string }> })
+    const steps = (result as { steps: Array<{ kind: string; status: string; tool?: string; reason?: string }> })
       .steps;
     expect(steps).toHaveLength(1);
-    expect(steps[0]).toMatchObject({ kind: "tool", tool: "propose_variant" });
+    expect(steps[0]).toMatchObject({ kind: "tool", status: "error", tool: "propose_variant" });
     // "not found" surfaces because the disabled flag-gated tool is treated as
     // unregistered by the registry (mirrors the HTTP 404).
-    expect(steps[0]!.error).toMatch(/not found/i);
+    expect(steps[0]!.reason).toMatch(/not found/i);
     // The bypass is closed: the gated tool's body never ran.
     expect(sideEffect.ran).toBe(false);
   });
@@ -98,17 +101,21 @@ describe("flow-execute honors the registry feature-flag gate", () => {
     const runFlow = createRunFlowTool(registry);
     await writeFlow("gated-on");
 
-    const result = await runFlow.execute({}, { name: "gated-on", project_root: tmpDir });
+    const result = await runFlow.execute(
+      {},
+      { name: "gated-on", project_root: tmpDir, device: "00000000-0000-0000-0000-0000000000ab" }
+    );
 
-    const steps = (result as { steps: Array<{ kind: string; tool?: string; result?: unknown }> })
+    const steps = (result as { steps: Array<{ kind: string; status: string; tool?: string; result?: unknown }> })
       .steps;
     expect(steps).toHaveLength(1);
     expect(steps[0]).toMatchObject({
       kind: "tool",
+      status: "pass",
       tool: "propose_variant",
       result: { ok: true },
     });
-    expect(steps[0]).not.toHaveProperty("error");
+    expect(steps[0]).not.toHaveProperty("reason");
     expect(sideEffect.ran).toBe(true);
   });
 });

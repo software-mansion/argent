@@ -130,11 +130,16 @@ describe("flow replay with a boundary-resolved flow_file", () => {
       const runFlow = createRunFlowTool(createMockRegistry());
       const result = await runFlow.execute(
         {},
-        { name: "remote-flow", project_root: CLIENT_ROOT, flow_file: uploaded }
+        {
+          name: "remote-flow",
+          project_root: CLIENT_ROOT,
+          flow_file: uploaded,
+          device: "00000000-0000-0000-0000-0000000000ab",
+        }
       );
       expect(result).toMatchObject({
         flow: "remote-flow",
-        steps: [{ kind: "echo", message: "from upload" }],
+        steps: [{ kind: "echo", status: "pass", message: "from upload" }],
       });
     } finally {
       await fs.rm(uploaded, { force: true });

@@ -51,10 +51,26 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
     const flow = parseFlow(flowFile);
 
     const summary = flow.steps.map((step, i) => {
-      if (step.kind === "echo") {
-        return `${i + 1}. echo: ${step.message}`;
+      const n = i + 1;
+      switch (step.kind) {
+        case "echo":
+          return `${n}. echo: ${step.message}`;
+        case "run":
+          return `${n}. run: ${step.flow}`;
+        case "tap":
+          return `${n}. tap: ${JSON.stringify(step.selector)}`;
+        case "type":
+          return `${n}. type: ${JSON.stringify(step.into)} ← "${step.text}"`;
+        case "await":
+          return `${n}. await: ${step.condition} ${JSON.stringify(step.selector)}`;
+        case "assert":
+          return `${n}. assert: ${step.condition} ${JSON.stringify(step.selector)}`;
+        case "snapshot":
+          return `${n}. snapshot: ${step.name}`;
+        case "tool":
+        default:
+          return `${n}. tool: ${step.name} ${JSON.stringify(step.args)}`;
       }
-      return `${i + 1}. tool: ${step.name} ${JSON.stringify(step.args)}`;
     });
 
     clearActiveFlow();
