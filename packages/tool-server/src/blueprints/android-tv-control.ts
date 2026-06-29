@@ -6,6 +6,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { adbExecOutBinary, adbShell, shellQuote, getAndroidRuntimeKind } from "../utils/adb";
+import { UnsupportedOperationError } from "../utils/capability";
 import {
   parseUiAutomatorXml,
   attrIsTrue,
@@ -187,9 +188,13 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       );
     }
     if (kind !== "tv") {
-      throw new Error(
-        `${ANDROID_TV_CONTROL_NAMESPACE} is Android-TV-only. Serial '${serial}' is a ${kind} device, ` +
-          `not a leanback TV — use the standard gesture/keyboard tools for it.`
+      // Wrong device class — UnsupportedOperationError so http.ts maps it to 400,
+      // not 500 (which invites retries of a wrong target). Mirrors the tvOS twin.
+      throw new UnsupportedOperationError(
+        "tv-remote",
+        device,
+        `${ANDROID_TV_CONTROL_NAMESPACE} is Android-TV-only — serial '${serial}' is a ${kind} ` +
+          `device, not a leanback TV; use the standard gesture/keyboard tools for it`
       );
     }
 

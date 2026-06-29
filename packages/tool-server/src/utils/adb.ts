@@ -334,12 +334,12 @@ async function readAvdName(serial: string): Promise<string | null> {
  * misclassifies every TV AVD as a phone. We keep the characteristics token as a
  * secondary fallback for the rare image where `pm list features` is unavailable.
  *
- * Returns undefined — NOT "mobile" — when neither probe yields data (device
- * mid-boot, under load, or past the enrichment timeout). An empty `pm list
- * features` is indistinguishable from a genuine phone, so collapsing it to
- * "mobile" would let a slow-to-answer Android TV get mislabelled (and then
- * cached) as a phone. An indeterminate result is left uncached so the next call
- * re-probes instead of pinning the wrong verdict for the process lifetime.
+ * Returns "mobile" only on a populated, non-leanback `pm list features`. An
+ * empty feature list returns undefined (not "mobile"), even when
+ * `ro.build.characteristics` answers: that property can only confirm a TV (its
+ * `tv` token), never a phone (the ATV emulator reports `emulator`, no `tv`).
+ * Indeterminate results are left uncached so a still-booting TV re-probes
+ * instead of being pinned to "mobile" for the process lifetime.
  */
 async function readRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
   const features = await adbShell(serial, "pm list features", {
@@ -368,10 +368,10 @@ async function readRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefi
     .includes("tv");
   if (isTv) return "tv";
 
-  // Determinate "mobile" only when the characteristics probe actually answered.
-  // Both probes empty means we never got a reading — report indeterminate rather
-  // than a false "mobile".
-  return characteristics.trim() ? "mobile" : undefined;
+  // No `tv` token here proves nothing: the ATV emulator reports
+  // `characteristics=emulator` while its feature list (still empty above) is the
+  // only place leanback shows. Stay indeterminate rather than caching "mobile".
+  return undefined;
 }
 
 // A device's form factor is fixed for the life of its boot (a phone image can't
@@ -424,8 +424,10 @@ async function resolveRuntimeKindCached(
  * `getSimulatorRuntimeKind` on the iOS side.
  *
  * The readiness check goes through the cheap `adb devices` listing (no getprops)
- * rather than the full `listAndroidDevices` enrichment; only the avdName getprop
- * and — on a cache miss or a slot whose AVD changed — the feature probe run.
+ * rather than the full `listAndroidDevices` enrichment. The avdName getprop is
+ * read only for `emulator-NNNN` serials, where it detects a reused console slot;
+ * a physical serial is never reclaimed and has no qemu avd_name, so it keys on
+ * null directly instead of paying two getprops per call.
  */
 export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
   const serials = await listAndroidSerials();
@@ -436,7 +438,8 @@ export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | 
     androidRuntimeKindCache.delete(serial);
     return undefined;
   }
-  return resolveRuntimeKindCached(serial, await readAvdName(serial));
+  const avdName = serial.startsWith("emulator-") ? await readAvdName(serial) : null;
+  return resolveRuntimeKindCached(serial, avdName);
 }
 
 /** True when the given Android serial is an Android TV (leanback) target. */

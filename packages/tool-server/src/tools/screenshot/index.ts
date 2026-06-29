@@ -84,18 +84,36 @@ async function tvScreenshot(
     `argent-tv-screenshot-${udid.slice(0, 8)}-${process.hrtime.bigint()}.png`
   );
   await execFileAsync("xcrun", ["simctl", "io", udid, "screenshot", file], { signal });
-  // tvOS captures are 4K (3840x2160). Downscale in place unless full-res was
-  // explicitly requested, mirroring the default 0.3 scale the iOS/Android path
-  // applies server-side.
+  // Downscale in place unless full-res was requested, mirroring the iOS/Android
+  // default. `sips -Z` caps the longest *actual* side, and capture size isn't
+  // fixed (4K sim is 3840 wide, non-4K is 1920), so scale against the real
+  // dimensions — a hardcoded 3840 would double the scale on a 1920 capture.
   if (scale < 1.0) {
-    await execFileAsync("sips", ["-Z", String(Math.round(3840 * scale)), file], { signal }).catch(
-      () => {
-        // Best-effort downscale: if sips is unavailable or fails, fall back to
-        // the full-resolution capture rather than failing the screenshot.
-      }
-    );
+    await execFileAsync("sips", ["-Z", String(await tvTargetLongSide(file, scale)), file], {
+      signal,
+    }).catch(() => {
+      // Best-effort downscale: if sips is unavailable or fails, fall back to
+      // the full-resolution capture rather than failing the screenshot.
+    });
   }
   return file;
+}
+
+// The `sips -Z` target: capture's longest actual side × scale, falling back to
+// the 4K long side if the dimension probe fails.
+export async function tvTargetLongSide(file: string, scale: number): Promise<number> {
+  let longSide = 3840;
+  try {
+    const { stdout } = await execFileAsync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", file]);
+    const width = Number(/pixelWidth:\s*(\d+)/.exec(stdout)?.[1]);
+    const height = Number(/pixelHeight:\s*(\d+)/.exec(stdout)?.[1]);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      longSide = Math.max(width, height);
+    }
+  } catch {
+    /* probe failed — keep the 4K fallback */
+  }
+  return Math.round(longSide * scale);
 }
 
 export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {

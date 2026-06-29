@@ -26,7 +26,13 @@ const h = vi.hoisted(() => {
   // letting a test pull the socket out from under an in-flight connect (start a
   // concurrent recycle) in the gap between `ensureAxAlive()` and the connect, the
   // window `sendAx` retries.
-  const state = { failHidSpawn: false, axConnectHook: null as null | (() => void) };
+  const state = {
+    failHidSpawn: false,
+    // When set, the host HID daemon emits `error` (a spawn fault) instead of
+    // binding or exiting — the case waitForSocket must surface fast.
+    hidSpawnError: false,
+    axConnectHook: null as null | (() => void),
+  };
 
   function socketArg(args: string[]): string | undefined {
     const i = args.indexOf("--socket");
@@ -60,6 +66,12 @@ vi.mock("node:child_process", async () => {
       // simctl spawn`. Tag by cmd so kill-signal assertions can tell them apart.
       const isHid = cmd === "/fake/tvos-hid-daemon";
       proc.tag = isHid ? "hid" : "ax";
+      if (isHid && h.state.hidSpawnError) {
+        // Emit `error` (not `exit`) — the spawn-fault signal. Never bind the
+        // socket. waitForSocket must catch this and reject fast with the cause.
+        setTimeout(() => proc.emit("error", new Error("spawn /fake/tvos-hid-daemon ENOENT")), 0);
+        return proc;
+      }
       if (isHid && h.state.failHidSpawn) {
         // Never bind the socket; exit so waitForSocket(hidSock) rejects fast.
         setTimeout(() => proc.emit("exit", 1), 0);
@@ -143,6 +155,7 @@ vi.mock("../src/utils/ios-devices", () => ({
 }));
 
 import { tvControlBlueprint, typeTimeoutMs } from "../src/blueprints/tv-control";
+import { UnsupportedOperationError } from "../src/utils/capability";
 
 const UDID = "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD";
 const DEVICE: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
@@ -163,6 +176,7 @@ beforeEach(() => {
   h.killedProcs.length = 0;
   h.unlinked.length = 0;
   h.state.failHidSpawn = false;
+  h.state.hidSpawnError = false;
   h.state.axConnectHook = null;
   listIosSimulatorsMock.mockReset();
   listIosSimulatorsMock.mockResolvedValue([
@@ -272,6 +286,16 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
     expect(h.unlinked.some((p) => p.includes("ax"))).toBe(true);
   });
 
+  it("fails fast with the spawn cause when a daemon emits `error` instead of binding", async () => {
+    // A missing binary fires `error`, never `exit`. The old exit-only wait
+    // polled to the 15s deadline; it must now surface the cause immediately.
+    h.state.hidSpawnError = true;
+    const started = Date.now();
+    await expect(buildService()).rejects.toThrow(/failed to spawn|ENOENT/i);
+    // Well under the 15s socket deadline — proof it didn't poll to timeout.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it("does not leak an ax daemon when dispose() races an in-flight recycle", async () => {
     const instance = await buildService();
 
@@ -316,10 +340,21 @@ describe("tvControlBlueprint — type() timeout scaling", () => {
     await expect(instance.api.type("x".repeat(400))).resolves.toBeUndefined();
     await instance.dispose();
   });
+
+  it("rejects newline-containing text instead of silently truncating it", async () => {
+    const instance = await buildService();
+    // One line per connection: `foo\nbar` would type only `foo` yet resolve
+    // cleanly. type() must reject rather than report the dropped tail as typed.
+    await expect(instance.api.type("foo\nbar")).rejects.toThrow(/newline/i);
+    await expect(instance.api.type("foo\rbar")).rejects.toThrow(/newline/i);
+    // A newline-free string still types fine.
+    await expect(instance.api.type("foobar")).resolves.toBeUndefined();
+    await instance.dispose();
+  });
 });
 
 describe("tvControlBlueprint — target validation", () => {
-  it("rejects a non-tvOS simulator (an iPhone udid that shape-classifies as iOS)", async () => {
+  it("rejects a non-tvOS simulator with an UnsupportedOperationError (→ 400, not 500)", async () => {
     listIosSimulatorsMock.mockResolvedValue([
       {
         udid: UDID,
@@ -329,7 +364,13 @@ describe("tvControlBlueprint — target validation", () => {
         state: "Booted",
       },
     ]);
-    await expect(buildService()).rejects.toThrow(/tvOS-only/);
+    // UnsupportedOperationError so http.ts maps it to 400, not 500.
+    const err = await buildService().then(
+      () => null,
+      (e) => e
+    );
+    expect(err).toBeInstanceOf(UnsupportedOperationError);
+    expect(err.message).toMatch(/tvOS-only/);
   });
 
   it("rejects a tvOS simulator that isn't booted", async () => {

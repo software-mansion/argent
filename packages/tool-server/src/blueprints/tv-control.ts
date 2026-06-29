@@ -11,6 +11,7 @@ import {
 import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators } from "../utils/ios-devices";
+import { UnsupportedOperationError } from "../utils/capability";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
 // Re-export the shared TV contract so existing importers of `tv-control` keep
@@ -158,14 +159,23 @@ async function waitForSocket(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let exited: number | null | undefined;
-  // Track exit only for the duration of this wait. Remove the listener on every
-  // exit path (success or timeout) — otherwise it stays attached to a daemon
-  // that lives ~1h, holding a closure over this resolved call, and a fresh one
-  // accumulates per respawn.
+  // A daemon that fails to *spawn* (missing binary, missing `xcrun`) emits
+  // `error`, not `exit`; without watching for it the wait polls to the full
+  // timeout and hides the real cause. ax-service listens for both too.
+  let spawnError: Error | undefined;
+  // Listeners are scoped to this wait — removed on every exit path so they don't
+  // accumulate on a daemon that lives ~1h.
   const onExit = (code: number | null) => (exited = code);
+  const onError = (err: Error) => (spawnError = err);
   proc.once("exit", onExit);
+  proc.once("error", onError);
   try {
     while (Date.now() < deadline) {
+      if (spawnError) {
+        throw new Error(
+          `tv daemon failed to spawn before its socket was ready: ${spawnError.message}`
+        );
+      }
       if (exited !== undefined) {
         throw new Error(`tv daemon exited with code ${exited} before its socket was ready`);
       }
@@ -186,6 +196,7 @@ async function waitForSocket(
     throw new Error(`Timed out waiting for tv daemon socket ${socketPath}`);
   } finally {
     proc.removeListener("exit", onExit);
+    proc.removeListener("error", onError);
   }
 }
 
@@ -224,8 +235,14 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       );
     }
     if (match.runtimeKind !== "tv") {
-      throw new Error(
-        `${TV_CONTROL_NAMESPACE} is tvOS-only. '${match.name}' (${match.runtime}) is not a tvOS simulator — use the iOS tools for it.`
+      // Wrong device class (an iPhone shape-classifies as iOS and reaches here).
+      // UnsupportedOperationError so http.ts maps it to 400, not 500 — a 500
+      // reads as a transient fault and invites retries of a wrong target.
+      throw new UnsupportedOperationError(
+        "tv-remote",
+        device,
+        `${TV_CONTROL_NAMESPACE} is tvOS-only — '${match.name}' (${match.runtime}) is not a tvOS ` +
+          `simulator; use the iOS tools for it`
       );
     }
     if (match.state !== "Booted") {
@@ -258,6 +275,13 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       axExited = true;
     };
     axProc.on("exit", onAxExit);
+    // Handle a post-init `error` (else Node crashes on the unhandled event);
+    // treat it like an exit so the next `ensureAxAlive` respawns.
+    const onAxError = (_err: Error) => {
+      if (disposed) return;
+      axExited = true;
+    };
+    axProc.on("error", onAxError);
 
     const onHidExit = (code: number | null) => {
       if (disposed) return;
@@ -266,6 +290,12 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       events.emit("terminated", err);
     };
     hidProc.on("exit", onHidExit);
+    // Fatal like exit, and handled so the error event doesn't crash the process.
+    const onHidError = (err: Error) => {
+      if (disposed) return;
+      events.emit("terminated", new Error(`tvOS hid-daemon error: ${err.message}`));
+    };
+    hidProc.on("error", onHidError);
 
     try {
       await Promise.all([
@@ -278,7 +308,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       // listeners before killing the procs so the kill doesn't fire a
       // `terminated` emit on an instance that was never returned.
       axProc.removeListener("exit", onAxExit);
+      axProc.removeListener("error", onAxError);
       hidProc.removeListener("exit", onHidExit);
+      hidProc.removeListener("error", onHidError);
       // SIGKILL the ax daemon to match dispose()/spawnFreshAx: it runs via
       // `simctl spawn`, where SIGTERM doesn't reliably propagate to the in-sim
       // process, so a SIGTERM here would orphan the in-sim ax daemon when one
@@ -306,6 +338,7 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     async function spawnFreshAx(): Promise<void> {
       if (axProc && !axProc.killed) {
         axProc.removeListener("exit", onAxExit);
+        axProc.removeListener("error", onAxError);
         axProc.kill("SIGKILL");
       }
       axExited = false;
@@ -317,6 +350,7 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       }
       axProc = spawnAxDaemon(udid, axSock);
       axProc.on("exit", onAxExit);
+      axProc.on("error", onAxError);
       try {
         await waitForSocket(axSock, axProc, 15_000);
       } catch (err) {
@@ -328,6 +362,7 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         axExited = true;
         if (!axProc.killed) {
           axProc.removeListener("exit", onAxExit);
+          axProc.removeListener("error", onAxError);
           axProc.kill("SIGKILL");
         }
         throw err;
@@ -340,6 +375,7 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       if (disposed) {
         if (!axProc.killed) {
           axProc.removeListener("exit", onAxExit);
+          axProc.removeListener("error", onAxError);
           axProc.kill("SIGKILL");
         }
         try {
@@ -424,6 +460,12 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       },
 
       async type(text: string): Promise<void> {
+        // The daemon reads one line per connection, so an embedded newline would
+        // type only the first line while resolving cleanly (reporting the whole
+        // string as typed). Reject it, like the Vega `send_text` backend.
+        if (/[\n\r]/.test(text)) {
+          throw new Error("Apple TV keyboard text must not contain newlines");
+        }
         // Scale the socket timeout to the input length (see typeTimeoutMs) so a
         // long string doesn't time out mid-type and report a false failure.
         await sendJson(hidSock, `type ${text}`, typeTimeoutMs(text.length));

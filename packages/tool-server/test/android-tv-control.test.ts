@@ -15,6 +15,7 @@ import {
 } from "../src/blueprints/android-tv-control";
 import type { TvControlApi } from "../src/blueprints/tv-control-types";
 import { adbShell, adbExecOutBinary, getAndroidRuntimeKind } from "../src/utils/adb";
+import { UnsupportedOperationError } from "../src/utils/capability";
 
 const mockShell = vi.mocked(adbShell);
 const mockExecOut = vi.mocked(adbExecOutBinary);
@@ -60,9 +61,14 @@ describe("android-tv-control — ref + factory gating", () => {
     expect(ref.options.device).toBe(device);
   });
 
-  it("rejects a non-TV (mobile) device", async () => {
+  it("rejects a non-TV (mobile) device with an UnsupportedOperationError (→ 400, not 500)", async () => {
     mockRuntimeKind.mockResolvedValue("mobile");
-    await expect(makeApi()).rejects.toThrow(/Android-TV-only/);
+    const err = await makeApi().then(
+      () => null,
+      (e) => e
+    );
+    expect(err).toBeInstanceOf(UnsupportedOperationError);
+    expect(err.message).toMatch(/Android-TV-only/);
   });
 
   it("rejects an offline / unknown serial", async () => {

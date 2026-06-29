@@ -36,6 +36,12 @@ export interface DescribeIosParams {
   bundleId?: string;
 }
 
+export interface DescribeIosOptions {
+  // Pre-resolved tvOS verdict, passed by poll/retry callers so the hot path
+  // skips re-shelling `xcrun` each iteration. Omitted callers probe once.
+  isTvOs?: boolean;
+}
+
 // describe on iOS resolves the ax-service via Registry; the blueprint factory
 // shells out to `xcrun simctl spawn` (spawnDaemon).
 // Without xcrun on PATH the spawn ENOENTs deep inside the factory and the
@@ -47,13 +53,15 @@ export const iosRequires: ToolDependency[] = ["xcrun"];
 export async function describeIos(
   registry: Registry,
   device: DeviceInfo,
-  params: DescribeIosParams
+  params: DescribeIosParams,
+  options: DescribeIosOptions = {}
 ): Promise<DescribeTreeData> {
   // tvOS short-circuit: the focus-engine accessibility tree is served by the
   // tv-control daemons, not the iOS ax-service. Without this, describe would
   // try to spawn ax-service inside the Apple TV sim, time out on the daemon
   // connection, and degrade with the wrong (boot-device) hint.
-  if (await isTvOsSimulator(device.id)) {
+  const isTvOs = options.isTvOs ?? (await isTvOsSimulator(device.id));
+  if (isTvOs) {
     return { tree: emptyTree(), source: "ax-service", hint: TVOS_HINT };
   }
 

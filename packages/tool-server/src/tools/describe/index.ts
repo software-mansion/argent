@@ -101,9 +101,10 @@ function makeDescribeExecute(
     ios: {
       requires: iosRequires,
       handler: async (_services, params, device) =>
+        // Probe tvOS once here, then pass the verdict into describeIos.
         (await isTvOsSimulator(device.id))
           ? describeTv(registry, device)
-          : withDescription(await describeIos(registry, device, params)),
+          : withDescription(await describeIos(registry, device, params, { isTvOs: false })),
     },
     android: {
       requires: androidRequires,

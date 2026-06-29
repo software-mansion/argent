@@ -116,11 +116,16 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
   const api: TvControlApi = await resolveTvApi(registry, device.id);
 
   // Ride out a brief post-launch / transition window where the focus engine
-  // hasn't populated yet (see EMPTY_RETRY_* / EMPTY_HINT).
+  // hasn't populated yet (see EMPTY_RETRY_* / EMPTY_HINT). Apple TV only: on
+  // Android TV an empty focus set is steady state for react-native-tvos screens,
+  // not a transition, so retrying just burns uiautomator dumps before the
+  // empty-focus fallback below. Take one probe and go straight there.
   let res = await api.describe();
-  for (let attempt = 1; attempt < EMPTY_RETRY_ATTEMPTS && isEmpty(res); attempt++) {
-    await sleep(EMPTY_RETRY_DELAY_MS);
-    res = await api.describe();
+  if (device.platform !== "android") {
+    for (let attempt = 1; attempt < EMPTY_RETRY_ATTEMPTS && isEmpty(res); attempt++) {
+      await sleep(EMPTY_RETRY_DELAY_MS);
+      res = await api.describe();
+    }
   }
 
   // Still empty after the transition window: on Apple TV the daemon may be

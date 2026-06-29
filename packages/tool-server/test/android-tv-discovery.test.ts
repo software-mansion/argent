@@ -125,6 +125,15 @@ describe("Android TV discovery — runtimeKind", () => {
     expect(devices[0]!.runtimeKind).toBeUndefined();
   });
 
+  it("regression: empty feature list + characteristics='emulator' is indeterminate, NOT 'mobile'", async () => {
+    // ATV emulator boot window: feature list empty, characteristics='emulator'
+    // (non-empty, no `tv` token). Must stay indeterminate, not collapse to
+    // "mobile" — that would mislabel and cache the TV as a phone.
+    mockDevice("emulator-5554", { features: "", characteristics: "emulator" });
+    const devices = await listAndroidDevices({ runtimeKind: true });
+    expect(devices[0]!.runtimeKind).toBeUndefined();
+  });
+
   it("characteristics fallback does not false-match a non-'tv' token like 'atv'", async () => {
     mockDevice("emulator-5554", { features: PHONE_FEATURES, characteristics: "atv,nosdcard" });
     const devices = await listAndroidDevices({ runtimeKind: true });
@@ -185,6 +194,16 @@ describe("Android TV discovery — getAndroidRuntimeKind / isAndroidTv", () => {
     expect(await getAndroidRuntimeKind("emulator-5554")).toBe("tv");
   });
 
+  it("regression: ATV emulator mid-boot (features empty, characteristics='emulator') self-heals to 'tv'", async () => {
+    // Boot window must be indeterminate AND uncached — otherwise the "mobile"
+    // verdict is pinned for the process lifetime, even after PMS comes up.
+    mockDevice("emulator-5554", { features: "", characteristics: "emulator" });
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBeUndefined();
+    // PMS up: the uncached miss re-probes and resolves "tv".
+    mockDevice("emulator-5554", { features: LEANBACK_FEATURES, characteristics: "emulator" });
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBe("tv");
+  });
+
   it("re-probes when a reused emulator slot boots a different AVD", async () => {
     // A TV AVD occupies emulator-5554 and gets cached as 'tv'.
     mockDevice("emulator-5554", { features: LEANBACK_FEATURES });
@@ -197,6 +216,37 @@ describe("Android TV discovery — getAndroidRuntimeKind / isAndroidTv", () => {
     mockDevice("emulator-5554", { features: PHONE_FEATURES });
     withAvdName("emulator-5554", "Pixel_7_API_34");
     expect(await getAndroidRuntimeKind("emulator-5554")).toBe("mobile");
+  });
+
+  it("does not read avd_name getprops for a physical (non-emulator) serial", async () => {
+    // A physical serial is never reclaimed and has no qemu avd_name, so the hot
+    // path must not spend two getprops to always get null — it keys on null.
+    mockDevice("A1B2C3D4", { features: PHONE_FEATURES });
+    expect(await getAndroidRuntimeKind("A1B2C3D4")).toBe("mobile");
+    const probedAvdName = execFileMock.mock.calls.some(
+      (c) =>
+        c[0] === "adb" &&
+        Array.isArray(c[1]) &&
+        (c[1] as string[]).some((a) => typeof a === "string" && a.includes("avd_name"))
+    );
+    expect(probedAvdName).toBe(false);
+  });
+
+  it("re-uses the cached verdict on a second call without re-probing features", async () => {
+    // The per-interaction callers (describe / keyboard / launch / restart) hit
+    // this repeatedly; a cache hit must skip the `pm list features` round-trip.
+    mockDevice("emulator-5556", { features: LEANBACK_FEATURES });
+    expect(await getAndroidRuntimeKind("emulator-5556")).toBe("tv");
+    const featureProbesBefore = execFileMock.mock.calls.filter(
+      (c) =>
+        c[0] === "adb" && Array.isArray(c[1]) && (c[1] as string[]).includes("pm list features")
+    ).length;
+    expect(await getAndroidRuntimeKind("emulator-5556")).toBe("tv");
+    const featureProbesAfter = execFileMock.mock.calls.filter(
+      (c) =>
+        c[0] === "adb" && Array.isArray(c[1]) && (c[1] as string[]).includes("pm list features")
+    ).length;
+    expect(featureProbesAfter).toBe(featureProbesBefore);
   });
 
   it("evicts the cached verdict once the serial leaves the device list", async () => {

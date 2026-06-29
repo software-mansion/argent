@@ -25,6 +25,11 @@ export async function pressFocusRemote(
 ): Promise<TvRemoteResult> {
   const buttons = expandButtons(params.button, params.repeat);
 
+  // Resolve first — this validates the target is a TV (the factory rejects a
+  // non-TV device). Otherwise the unsupported-button check below would tell an
+  // iPhone it's "not supported on the Apple TV simulator", asserting a wrong kind.
+  const api = await resolveTvApi(registry, device.id);
+
   if (unsupported?.size) {
     const bad = [...new Set(buttons.filter((b) => unsupported.has(b)))];
     if (bad.length) {
@@ -38,7 +43,6 @@ export async function pressFocusRemote(
     }
   }
 
-  const api = await resolveTvApi(registry, device.id);
   const pressed: RemoteButton[] = [];
   // A path of up to 64 buttons × repeat 50 is one press per daemon / adb
   // round-trip, so the loop can run for minutes — and `tv-remote` is
