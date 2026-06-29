@@ -162,10 +162,10 @@ export function clearActiveFlow(): void {
 /**
  * The app the standalone runner launches before an e2e flow. A bare string
  * applies to every platform; the map form targets a specific bundle id /
- * package per platform. Presence of `appId` is what makes a flow an e2e flow
- * (vs a reusable fragment).
+ * package per platform. Presence of a `launch` value is what makes a flow an
+ * e2e flow (vs a reusable fragment).
  */
-export type AppId = string | { ios?: string; android?: string; chromium?: string };
+export type Launch = string | { ios?: string; android?: string; chromium?: string };
 
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
@@ -179,7 +179,7 @@ export type FlowStep =
 
 export type FlowFile = {
   /** Present ⇒ e2e flow (launchable, standalone-runnable). Absent ⇒ fragment. */
-  appId?: AppId;
+  launch?: Launch;
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
   steps: FlowStep[];
@@ -187,17 +187,17 @@ export type FlowFile = {
 
 /** A flow is end-to-end iff it declares an app to launch. */
 export function isE2eFlow(flow: FlowFile): boolean {
-  return flow.appId !== undefined;
+  return flow.launch !== undefined;
 }
 
-/** Resolve the launch id for a platform, or null when none is declared for it. */
+/** Resolve the launch app id for a platform, or null when none is declared for it. */
 export function appIdForPlatform(
-  appId: AppId | undefined,
+  launch: Launch | undefined,
   platform: string
 ): string | null {
-  if (appId === undefined) return null;
-  if (typeof appId === "string") return appId;
-  const v = (appId as Record<string, string | undefined>)[platform];
+  if (launch === undefined) return null;
+  if (typeof launch === "string") return launch;
+  const v = (launch as Record<string, string | undefined>)[platform];
   return v ?? null;
 }
 
@@ -215,7 +215,7 @@ type YamlStep =
   | { snapshot: { name: string; maxMismatch?: number } };
 
 type YamlFlowFile = {
-  appId?: AppId;
+  launch?: Launch;
   executionPrerequisite?: string;
   steps: YamlStep[];
 };
@@ -381,7 +381,7 @@ function fromYamlStep(raw: YamlStep): FlowStep {
 /** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
-  if (flow.appId !== undefined) doc.appId = flow.appId;
+  if (flow.launch !== undefined) doc.launch = flow.launch;
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   return yamlStringify(doc);
 }
@@ -390,7 +390,7 @@ export function serializeFlow(flow: FlowFile): string {
 export function validateFlow(flow: FlowFile): void {
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
-      "An e2e flow (one with appId) must not declare executionPrerequisite — it launches its own app and controls its start state. Remove appId to make it a fragment, or drop executionPrerequisite.",
+      "An e2e flow (one with a launch block) must not declare executionPrerequisite — it launches its own app and controls its start state. Remove launch to make it a fragment, or drop executionPrerequisite.",
       {
         error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
         failure_stage: "flow_file_validate",
@@ -430,7 +430,7 @@ export function parseFlow(content: string): FlowFile {
   });
 
   const flow: FlowFile = {
-    appId: parsed.appId,
+    launch: parsed.launch,
     executionPrerequisite: parsed.executionPrerequisite ?? "",
     steps,
   };
