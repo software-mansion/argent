@@ -74,9 +74,11 @@ Call `flow-execute` with the flow name. If the flow has an execution prerequisit
 
 1. The tool returns a **notice** with the prerequisite text instead of running. It asks you to verify the prerequisite is met and call `flow-execute` again with `prerequisiteAcknowledged: true`.
 2. You can also call `flow-read-prerequisite` beforehand to inspect the prerequisite without triggering a run.
-3. Once you pass `prerequisiteAcknowledged: true`, the flow runs all steps in order and returns every tool call result (including screenshots) merged into a single response.
+3. Once you pass `prerequisiteAcknowledged: true`, the flow runs all steps in order and returns a structured report `{ ok, passed, failed, skipped, errored, steps }`.
 
 If the flow has no prerequisite, it runs immediately without needing acknowledgment.
+
+**What each step reports.** Raw `tool:` and `await:` steps include the underlying tool's full `result` (screenshots and other outputs render as usual). The directive steps are summarized: `tap`/`type`/`assert` report only `status` + `reason`, and `snapshot` adds `artifacts` (diff image paths). So converting a `tool: gesture-tap` into a `tap:` directive during cleanup drops only that tap's (uninteresting) raw result — output-bearing tools like `screenshot` have no directive form and stay `tool:` steps, so their results keep flowing through.
 
 ## 4. flow-add-step Usage
 
