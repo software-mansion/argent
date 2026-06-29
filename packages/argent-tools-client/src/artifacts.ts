@@ -39,9 +39,24 @@ const execFileAsync = promisify(execFile);
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
 export const ARTIFACT_MARKER = "__argentArtifact" as const;
 
+export type ArtifactKind =
+  | "screenshot"
+  | "screenshot-diff"
+  | "screenshot-diff-context"
+  | "native-profile-trace"
+  | "native-profile-cpu"
+  | "native-profile-hangs"
+  | "native-profile-leaks"
+  | "native-profile-report"
+  | "react-profile-cpu"
+  | "react-profile-commits"
+  | "react-profile-report";
+
 export interface ArtifactHandle {
   [ARTIFACT_MARKER]: true;
   id: string;
+  /** Semantic artifact category, distinct from MIME type. */
+  kind: ArtifactKind;
   filename: string;
   mimeType: string;
   size: number;

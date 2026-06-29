@@ -69,7 +69,10 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
     return {
       ...result,
       reportFile: result.reportFile
-        ? await requireArtifacts(ctx).register(result.reportFile)
+        ? await requireArtifacts(ctx).register({
+            hostPath: result.reportFile,
+            kind: "native-profile-report",
+          })
         : null,
     };
   },
