@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
-import { createAwaitUiElementTool, findAll, evaluateMatches } from "../src/tools/await-ui-element";
+import { createAwaitUiElementTool, evaluateMatches } from "../src/tools/await-ui-element";
+import { findAll } from "../src/utils/ui-tree-match";
 import type { DescribeNode } from "../src/tools/describe/contract";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 

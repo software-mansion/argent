@@ -25,10 +25,6 @@ import {
   evaluateCondition,
 } from "../../utils/ui-tree-match";
 
-// Re-exported for callers/tests that imported them from this module before the
-// matching engine was extracted into utils/ui-tree-match.
-export { findAll };
-
 // Tool id. Exported so run-sequence can both allow this tool and recognise its
 // result shape (it returns { success: false } instead of throwing on an unmet
 // condition) without hard-coding the string in two places.
