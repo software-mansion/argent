@@ -68,17 +68,22 @@ describe("flow-execute with await-ui-element gating", () => {
     const tool = createRunFlowTool(registry);
 
     const result = asRun(
-      await tool.execute({}, { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile })
+      await tool.execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+      )
     );
 
-    // gesture-tap + await-ui-element ran; the trailing tap did NOT.
+    // gesture-tap + await-ui-element ran; the trailing tap did NOT (skipped).
     expect(registry.invokeTool).toHaveBeenCalledTimes(2);
-    const toolSteps = result.steps.filter((s) => s.kind === "tool");
-    expect(toolSteps).toHaveLength(2);
-    const last = toolSteps[1] as { tool: string; error?: string };
+    const executed = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip");
+    expect(executed).toHaveLength(2);
+    const last = executed[1];
     expect(last.tool).toBe("await-ui-element");
-    expect(last.error).toMatch(/condition not met/i);
-    expect(last.error).toMatch(/no element matched/i);
+    expect(last.status).toBe("fail");
+    expect(last.reason).toMatch(/condition not met/i);
+    expect(last.reason).toMatch(/no element matched/i);
+    expect(result.ok).toBe(false);
   });
 
   it("runs the whole flow when the gating await-ui-element step is met", async () => {
@@ -90,11 +95,15 @@ describe("flow-execute with await-ui-element gating", () => {
     const tool = createRunFlowTool(registry);
 
     const result = asRun(
-      await tool.execute({}, { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile })
+      await tool.execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+      )
     );
 
     expect(registry.invokeTool).toHaveBeenCalledTimes(3);
     expect(result.steps.filter((s) => s.kind === "tool")).toHaveLength(3);
+    expect(result.ok).toBe(true);
   });
 
   it("forwards the request abort signal into each step invocation", async () => {
@@ -103,9 +112,11 @@ describe("flow-execute with await-ui-element gating", () => {
     const tool = createRunFlowTool(registry);
     const controller = new AbortController();
 
-    await tool.execute({}, { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile }, {
-      signal: controller.signal,
-    } as never);
+    await tool.execute(
+      { },
+      { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+      { signal: controller.signal } as never
+    );
 
     const opts = (registry.invokeTool as any).mock.calls[0][2];
     expect(opts.signal).toBe(controller.signal);
@@ -118,9 +129,11 @@ describe("flow-execute with await-ui-element gating", () => {
     const controller = new AbortController();
     controller.abort();
 
-    await tool.execute({}, { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile }, {
-      signal: controller.signal,
-    } as never);
+    await tool.execute(
+      {},
+      { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+      { signal: controller.signal } as never
+    );
 
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });

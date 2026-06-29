@@ -441,6 +441,10 @@ describe("flow-finish-recording", () => {
 // ── flow-execute ─────────────────────────────────────────────────────
 
 describe("flow-execute", () => {
+  // An iOS-shaped id so resolveDevice classifies it without listing devices,
+  // and the runner never shells out to a real status bar (no `expect` steps).
+  const DEVICE = "00000000-0000-0000-0000-0000000000ab";
+
   it("executes all steps in order", async () => {
     const registry = createMockRegistry({
       tap: { result: { tapped: true } },
@@ -469,31 +473,30 @@ describe("flow-execute", () => {
     // Run the flow
     const result = await runFlow.execute(
       {},
-      { name: "run-test", project_root: tmpDir, prerequisiteAcknowledged: true }
+      { name: "run-test", project_root: tmpDir, prerequisiteAcknowledged: true, device: DEVICE }
     );
     assertFlowRunResult(result);
 
     expect(result.flow).toBe("run-test");
     expect(result.executionPrerequisite).toBe(PREREQ);
+    expect(result.ok).toBe(true);
     expect(result.steps).toHaveLength(4);
 
     // Echoes
-    expect(result.steps[0]).toEqual({ kind: "echo", message: "Tap button" });
-    expect(result.steps[2]).toEqual({
-      kind: "echo",
-      message: "Take screenshot",
-    });
+    expect(result.steps[0]).toMatchObject({ kind: "echo", status: "pass", message: "Tap button" });
+    expect(result.steps[2]).toMatchObject({ kind: "echo", status: "pass", message: "Take screenshot" });
 
     // Tool calls
-    expect(result.steps[1]).toEqual({
+    expect(result.steps[1]).toMatchObject({
       kind: "tool",
+      status: "pass",
       tool: "tap",
       result: { tapped: true },
-      outputHint: undefined,
       args: { x: 0.5 },
     });
-    expect(result.steps[3]).toEqual({
+    expect(result.steps[3]).toMatchObject({
       kind: "tool",
+      status: "pass",
       tool: "screenshot",
       result: { url: "http://img", path: "/tmp/img.png" },
       outputHint: "image",
@@ -528,7 +531,7 @@ describe("flow-execute", () => {
     const recordChildInvocation = vi.fn((_id: string, _args?: unknown) => release);
     const ctx = { artifacts: {}, recordChildInvocation } as unknown as ToolContext;
 
-    await runFlow.execute({}, { name: "tele-run", project_root: tmpDir }, ctx);
+    await runFlow.execute({}, { name: "tele-run", project_root: tmpDir, device: DEVICE }, ctx);
 
     // Only the two tool steps dispatch; the echo step records nothing.
     expect(recordChildInvocation).toHaveBeenCalledTimes(2);
@@ -570,15 +573,19 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "error-test.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "error-test", project_root: tmpDir });
+    const result = await runFlow.execute({}, { name: "error-test", project_root: tmpDir, device: DEVICE });
     assertFlowRunResult(result);
 
-    expect(result.steps).toHaveLength(1);
+    // tap errors (recorded), the trailing echo is skipped.
+    expect(result.steps).toHaveLength(2);
     expect(result.steps[0]).toMatchObject({
       kind: "tool",
+      status: "error",
       tool: "tap",
-      error: expect.stringContaining("failed"),
+      reason: expect.stringContaining("failed"),
     });
+    expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
+    expect(result.ok).toBe(false);
   });
 
   it("throws when flow file does not exist", async () => {
@@ -609,7 +616,7 @@ describe("flow-execute", () => {
 
     const result = await runFlow.execute(
       {},
-      { name: "hint-test", project_root: tmpDir, prerequisiteAcknowledged: true }
+      { name: "hint-test", project_root: tmpDir, prerequisiteAcknowledged: true, device: DEVICE }
     );
     assertFlowRunResult(result);
 
@@ -633,7 +640,7 @@ describe("flow-execute", () => {
 
     const result = await runFlow.execute(
       {},
-      { name: "prereq-test", project_root: tmpDir, prerequisiteAcknowledged: true }
+      { name: "prereq-test", project_root: tmpDir, prerequisiteAcknowledged: true, device: DEVICE }
     );
 
     expect(result.executionPrerequisite).toBe("App freshly reloaded");
@@ -678,7 +685,7 @@ describe("flow-execute", () => {
 
     const result = await runFlow.execute(
       {},
-      { name: "ack-test", project_root: tmpDir, prerequisiteAcknowledged: true }
+      { name: "ack-test", project_root: tmpDir, prerequisiteAcknowledged: true, device: DEVICE }
     );
 
     expect(result).toHaveProperty("steps");
@@ -700,7 +707,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "no-gate.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "no-gate", project_root: tmpDir });
+    const result = await runFlow.execute({}, { name: "no-gate", project_root: tmpDir, device: DEVICE });
 
     expect(result).toHaveProperty("steps");
     expect((result as { steps: unknown[] }).steps).toHaveLength(1);
@@ -744,7 +751,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "empty-flow.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "empty-flow", project_root: tmpDir });
+    const result = await runFlow.execute({}, { name: "empty-flow", project_root: tmpDir, device: DEVICE });
 
     expect(result).toHaveProperty("steps");
     expect((result as { steps: unknown[] }).steps).toEqual([]);
@@ -767,15 +774,15 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "echo-only.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "echo-only", project_root: tmpDir });
+    const result = await runFlow.execute({}, { name: "echo-only", project_root: tmpDir, device: DEVICE });
 
     expect(result).toHaveProperty("steps");
-    const steps = (result as { steps: unknown[] }).steps;
+    const steps = (result as { steps: { kind: string; status: string; message?: string }[] }).steps;
     expect(steps).toHaveLength(3);
-    expect(steps).toEqual([
-      { kind: "echo", message: "First" },
-      { kind: "echo", message: "Second" },
-      { kind: "echo", message: "Third" },
+    expect(steps.map((s) => ({ kind: s.kind, status: s.status, message: s.message }))).toEqual([
+      { kind: "echo", status: "pass", message: "First" },
+      { kind: "echo", status: "pass", message: "Second" },
+      { kind: "echo", status: "pass", message: "Third" },
     ]);
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
@@ -800,23 +807,26 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "mid-error.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "mid-error", project_root: tmpDir });
+    const result = await runFlow.execute({}, { name: "mid-error", project_root: tmpDir, device: DEVICE });
 
     expect(result).toHaveProperty("steps");
     const steps = (result as { steps: { kind: string }[] }).steps;
-    // Should include: echo, tap success, swipe error — then stop
-    expect(steps).toHaveLength(3);
-    expect(steps[0]).toEqual({ kind: "echo", message: "Start" });
+    // echo, tap success, swipe error — then the trailing echo is skipped.
+    expect(steps).toHaveLength(4);
+    expect(steps[0]).toMatchObject({ kind: "echo", status: "pass", message: "Start" });
     expect(steps[1]).toMatchObject({
       kind: "tool",
+      status: "pass",
       tool: "tap",
       result: { tapped: true },
     });
     expect(steps[2]).toMatchObject({
       kind: "tool",
+      status: "error",
       tool: "swipe",
-      error: expect.stringContaining("failed"),
+      reason: expect.stringContaining("failed"),
     });
+    expect(steps[3]).toMatchObject({ kind: "echo", status: "skip" });
   });
 
   it("sleeps the step's delayMs before executing it", async () => {
@@ -837,7 +847,7 @@ describe("flow-execute", () => {
       })
     );
     const start = Date.now();
-    await runFlow.execute({}, { name: "pre-delay", project_root: tmpDir });
+    await runFlow.execute({}, { name: "pre-delay", project_root: tmpDir, device: DEVICE });
     expect(Date.now() - start).toBeGreaterThanOrEqual(delayMs - 5);
   });
 
@@ -863,7 +873,7 @@ describe("flow-execute", () => {
     );
 
     // Execute a saved flow — this should NOT affect the active recording
-    await runFlow.execute({}, { name: "side-effect", project_root: tmpDir });
+    await runFlow.execute({}, { name: "side-effect", project_root: tmpDir, device: DEVICE });
 
     // We should still be able to add steps to the recording
     const result = await flowInsertEchoTool.execute({}, { message: "still recording" });

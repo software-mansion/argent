@@ -81,7 +81,7 @@ export async function toMcpContent(
       return legacyImageContent(rewritten, suppressImage);
     }
 
-    const blocks: ContentBlock[] = [{ type: "text", text: JSON.stringify(rewritten, null, 2) }];
+    const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
     // Surface any images that rode along on a non-image result.
     if (!suppressImage) for (const img of images) blocks.push(imageBlock(img.data, img.mimeType));
     return blocks;
@@ -91,7 +91,16 @@ export async function toMcpContent(
     return legacyImageContent(result, suppressImage);
   }
 
-  return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
+  return [{ type: "text" as const, text: stringifyForText(result) }];
+}
+
+/**
+ * JSON.stringify(undefined) returns undefined, which would produce an invalid
+ * MCP content block ({ type: "text", text: undefined }). Coerce to "null" so a
+ * result with no value still serializes to a valid text block.
+ */
+function stringifyForText(value: unknown): string {
+  return JSON.stringify(value ?? null, null, 2);
 }
 
 /**
@@ -192,23 +201,54 @@ export async function screenshotDiffToMcpContent(
 
 // ── flow-execute adapter ─────────────────────────────────────────────
 
-export type FlowExecuteResult = {
-  flow: string;
-  executionPrerequisite?: string;
-  steps: {
-    kind: string;
-    tool?: string;
-    message?: string;
-    result?: unknown;
-    outputHint?: string;
-    args?: unknown;
-    error?: string;
-  }[];
+export type FlowStepResult = {
+  index?: number;
+  kind: string;
+  status?: "pass" | "fail" | "skip" | "error";
+  reason?: string;
+  tool?: string;
+  message?: string;
+  result?: unknown;
+  outputHint?: string;
+  args?: unknown;
+  flow?: string;
+  artifacts?: string[];
+  /** Legacy field from pre-report flow-execute results. */
+  error?: string;
 };
 
+export type FlowExecuteResult = {
+  flow: string;
+  device?: string;
+  executionPrerequisite?: string;
+  ok?: boolean;
+  passed?: number;
+  failed?: number;
+  skipped?: number;
+  errored?: number;
+  steps: FlowStepResult[];
+};
+
+const STATUS_GLYPH: Record<string, string> = {
+  pass: "✓",
+  fail: "✗",
+  error: "✗",
+  skip: "·",
+};
+
+function stepLabel(step: FlowStepResult): string {
+  if (step.kind === "echo") return step.message ?? "";
+  if (step.kind === "run") return `run ${step.flow ?? ""}`.trim();
+  if (step.tool) return step.tool;
+  return step.kind;
+}
+
 /**
- * Unpack flow-execute's structured step results into MCP content blocks.
- * Each step carries its own outputHint so toMcpContent handles images correctly.
+ * Unpack flow-execute's structured step report into MCP content blocks. Only
+ * steps that carry a tool result surface their (image-bearing) content inline;
+ * directive steps (tap/assert/expect/run/skip) render as a status line. This
+ * never calls toMcpContent on an undefined result, which would serialize to an
+ * invalid (text: undefined) content block.
  */
 export async function flowRunToMcpContent(
   result: FlowExecuteResult,
@@ -217,35 +257,39 @@ export async function flowRunToMcpContent(
   const blocks: ContentBlock[] = [];
 
   if (result.executionPrerequisite) {
-    blocks.push({
-      type: "text",
-      text: `Prerequisite: ${result.executionPrerequisite}`,
-    });
+    blocks.push({ type: "text", text: `Prerequisite: ${result.executionPrerequisite}` });
   }
 
   blocks.push({
     type: "text",
-    text: `Running flow "${result.flow}" (${result.steps.length} steps)`,
+    text: `Running flow "${result.flow}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
   });
 
   for (let i = 0; i < result.steps.length; i++) {
     const step = result.steps[i]!;
-    const num = i + 1;
+    const num = step.index !== undefined ? step.index + 1 : i + 1;
+    // Glyph only when a status is present (the new report). Legacy status-less
+    // results render without one.
+    const glyph = step.status ? `${STATUS_GLYPH[step.status] ?? "•"} ` : "";
+    // `reason` is the new field; `error` is the legacy one.
+    const reason = step.reason ?? step.error;
+    const suffix = reason ? ` — ${reason}` : "";
+    blocks.push({ type: "text", text: `[${num}] ${glyph}${stepLabel(step)}${suffix}` });
 
-    if (step.kind === "echo") {
-      blocks.push({ type: "text", text: `[${num}] ${step.message}` });
-    } else if ("error" in step && step.error) {
-      blocks.push({
-        type: "text",
-        text: `[${num}] ${step.tool} ERROR: ${step.error}`,
-      });
-    } else {
-      blocks.push({ type: "text", text: `[${num}] ${step.tool}` });
-      const stepContent = await toMcpContent(step.result, step.outputHint, ctx, step.args);
-      blocks.push(...stepContent);
+    // Surface a step's own content (e.g. a screenshot) only when it actually
+    // returned one.
+    if (step.result !== undefined) {
+      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
     }
   }
 
-  blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
+  if (result.ok !== undefined) {
+    blocks.push({
+      type: "text",
+      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped`,
+    });
+  } else {
+    blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
+  }
   return blocks;
 }

@@ -304,7 +304,7 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] Hello" });
   });
 
-  it("renders tool error steps", async () => {
+  it("renders legacy tool error steps (status-less)", async () => {
     const input: FlowExecuteResult = {
       flow: "f",
       steps: [{ kind: "tool", tool: "gesture-tap", error: "connection lost" }],
@@ -313,8 +313,39 @@ describe("flowRunToMcpContent", () => {
 
     expect(blocks[1]).toEqual({
       type: "text",
-      text: "[1] gesture-tap ERROR: connection lost",
+      text: "[1] gesture-tap — connection lost",
     });
+  });
+
+  it("renders the new report shape: status glyphs, reasons, directive kinds, and summary", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      device: "SIM",
+      ok: false,
+      passed: 2,
+      failed: 1,
+      errored: 0,
+      skipped: 1,
+      steps: [
+        { index: 0, kind: "tap", status: "pass" },
+        { index: 1, kind: "assert", status: "pass" },
+        { index: 2, kind: "snapshot", status: "fail", reason: "diff 3.10% > 0.5% (home)" },
+        { index: 3, kind: "echo", status: "skip", message: "done" },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+    const texts = blocks
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text);
+
+    expect(texts[0]).toBe('Running flow "checkout" on SIM (4 steps)');
+    expect(texts[1]).toBe("[1] ✓ tap");
+    expect(texts[2]).toBe("[2] ✓ assert");
+    expect(texts[3]).toBe("[3] ✗ snapshot — diff 3.10% > 0.5% (home)");
+    expect(texts[4]).toBe("[4] · done");
+    expect(texts[texts.length - 1]).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
+    // No invalid (text: undefined) blocks even though directive steps carry no result.
+    expect(blocks.every((b) => b.type !== "text" || typeof b.text === "string")).toBe(true);
   });
 
   it("renders tool success as JSON text", async () => {
