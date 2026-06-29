@@ -59,12 +59,11 @@ This condition-as-key form is the only spelling. For advanced `await` control be
 2. **Build step-by-step**: For each action, call `flow-add-step` with the tool name and args. The tool runs immediately — check the result before moving on.
 3. **Add labels**: Use `flow-add-echo` between steps to describe what each section does.
 4. **Finish**: Call `flow-finish-recording` to stop recording. It returns the file path where the flow was saved and a summary of all steps.
-5. **Polish**: **Read the saved `.yaml` file** and clean it up to use the declarative directives and selector sugar wherever possible — recordings of raw `tool:` device actions are portable and readable as directives:
-   - `tool: gesture-tap` with a stable element → `tap: "<text>"` (or `tap: { identifier: … }`); keep `tap: { x, y }` only when no stable selector exists.
-   - `tool: keyboard` typing into a field → `type: { into: "<field>", text: "…" }`.
+5. **Polish**: **Read the saved `.yaml` file** and convert the raw `tool:` steps that have a cleaner directive form (the recorder leaves these as tools):
+   - `tool: keyboard` typing into a field → `type: { into: "<field>", text: "…" }`, folding in the `tap` that focused the field.
    - `tool: await-ui-element` gating a transition → `await: { visible: "…" }` / `{ hidden: … }` / `{ text: { in: …, equals: … } }`. Keep the raw `tool: await-ui-element` step only when it sets a custom `timeoutMs`/`pollIntervalMs`/`bundleId` the sugar can't express.
-   - Drop the embedded `udid`/`device_id` args (the runner injects the device) so the flow stays portable, and collapse text-only selectors to bare strings (`{ text: "Login" }` → `"Login"`).
-Only those three tools have a directive equivalent — every other recorded tool (`gesture-swipe`, `gesture-scroll`, `gesture-pinch`, `button`, `screenshot`, …) stays a `tool:` step; just strip its `udid` for portability. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
+
+Every other recorded tool (`gesture-swipe`, `gesture-scroll`, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, device ids are stripped, text-only selectors are emitted as bare strings, and a leading `restart-app`/`launch-app` is dropped. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
 
 Every tool during recording returns the current flow file contents so you can track what has been recorded.
 
