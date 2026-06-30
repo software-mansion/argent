@@ -32,6 +32,7 @@ const SENTINEL_OVERFLOW = "69103";
 const SENTINEL_LINGER = "69104";
 const SENTINEL_OVERFLOW_ERR = "69105";
 const SENTINEL_LINGER_NEAR_DEADLINE = "69106";
+const SENTINEL_LINGER_GROUPED = "69107";
 let dir: string;
 let prevPath: string | undefined;
 
@@ -88,6 +89,18 @@ if (cmd === "linger") {
   process.stdout.write("OK-linger");
   // No process.exit: with the worker unref'd nothing keeps our loop alive, so we exit
   // 0 naturally (flushing stdout) while the detached worker keeps the pipe open.
+  return;
+}
+if (cmd === "linger-grouped") {
+  // Like \`linger\`, but the worker is NOT detached — so it stays in the launcher's
+  // process group (pgid == launcher pid) while still inheriting our stdout (delaying
+  // \`close\`) and being unref'd so the launcher exits 0 naturally. This is the COMMON
+  // pipe-inheritance case (the detached \`linger\` worker deliberately escapes into its
+  // own group): a live group member pins the launcher's pid as a pgid, so runVega can
+  // reap it post-exit via a pgid-membership group kill. \`secs\` is the per-test sentinel.
+  const worker = spawn("sleep", [secs], { stdio: ["ignore", "inherit", "ignore"] });
+  worker.unref();
+  process.stdout.write("OK-linger");
   return;
 }
 process.stdout.write("OK-" + cmd);
@@ -157,9 +170,18 @@ async function waitForClear(sentinel: string, timeoutMs = 3_000): Promise<number
 describe("runVega timeout (real subprocess)", () => {
   it("rejects on its own deadline when the CLI never returns", async () => {
     const start = Date.now();
-    await expect(runVega(["hang", SENTINEL_DEADLINE], { timeoutMs: 400 })).rejects.toThrow(
-      /timed out/i
+    const err = await runVega(["hang", SENTINEL_DEADLINE], { timeoutMs: 400 }).catch(
+      (e: unknown) => e
     );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/timed out/i);
+    // The message alone proves nothing about classification — `rejectTimeout` builds
+    // it unconditionally. What listVegaDevices keys its recovery-skip off is
+    // `error_kind: "timeout"`, so assert it here, derived from a REAL runVega timeout
+    // (not a fabricated FailureError). A regression that dropped killed/signal from the
+    // rejection shape — so a genuine timeout classified as `subprocess` — would pass the
+    // message match but re-introduce the stacked ~40s stall; this assertion catches it.
+    expect(getFailureSignal(err)?.error_kind).toBe("timeout");
     const elapsed = Date.now() - start;
     // Settles right around the 400ms deadline — proving it does NOT wait on the
     // worker that holds the stdout pipe open.
@@ -214,6 +236,22 @@ describe("runVega timeout (real subprocess)", () => {
     await expect(
       runVega(["linger", SENTINEL_LINGER_NEAR_DEADLINE], { timeoutMs: 600 })
     ).resolves.toEqual({ stdout: "OK-linger", stderr: "" });
+  });
+
+  it("reaps a pipe-holding worker that stayed in the launcher's process group (drain path)", async () => {
+    // The clean-exit drain path with the COMMON pipe-inheritance worker: it inherited our
+    // stdout (so `close` is delayed past the launcher's clean exit) but stayed in the
+    // launcher's process group. Once the launcher exits, reapVegaGroup's mechanisms can't
+    // reach it (ppid sweep → reparented to init; group kill → gated on the launcher being
+    // alive), BUT a live group member pins the launcher's pid as a pgid, so a pgid-
+    // membership-gated `-pid` group kill is both safe and effective. runVega must resolve
+    // with the captured output AND leave NO orphan — proving it doesn't resolve-and-leak on
+    // this path. (The detached `linger` worker above escapes into its own group and is the
+    // rare genuinely-unreapable case, deliberately not covered by this reap.)
+    await expect(
+      runVega(["linger-grouped", SENTINEL_LINGER_GROUPED], { timeoutMs: 10_000 })
+    ).resolves.toEqual({ stdout: "OK-linger", stderr: "" });
+    expect(await waitForClear(SENTINEL_LINGER_GROUPED)).toBe(0);
   });
 
   it("rejects a non-zero exit as a `subprocess` failure (not `timeout`)", async () => {

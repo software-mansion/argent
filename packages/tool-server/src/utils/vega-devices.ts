@@ -11,13 +11,16 @@ import { listRunningVvdConsolePorts } from "./vega-process";
 // has import cost on first use) on a loaded machine isn't spuriously timed out —
 // which would mis-report a genuinely-running VVD as stopped.
 //
-// Crucially these no longer *stack* into a 40s block — the `device info` recovery
-// only fires when `device list` itself returned cleanly (see listVegaDevices), so
-// an unresponsive device costs one short call, not two. Their sum (10s) is kept
-// comfortably below list-devices' BRANCH_DEADLINE_MS (15s) so even the slow
-// recovery path (a fast, non-timeout list failure followed by a full `device info`
-// wait) finishes inside the fan-out's hard backstop rather than being truncated —
-// which would drop a real VVD from the list. Keep that ordering if either changes.
+// Crucially the two device timeouts no longer *stack* into a 40s block against a
+// wedged agent: the `device info` recovery is skipped when `device list` *timed
+// out* (see listVegaDevices), so an unresponsive device costs one short call (~6s),
+// not two. A *non-timeout* list failure (or a clean-but-empty list) still runs the
+// recovery, whose full cost is `device list` + two serial `ps` probes + `device
+// info` ≈ 20s worst case; that stays under list-devices' BRANCH_DEADLINE_MS (25s)
+// so even the slow recovery path finishes inside the fan-out's backstop rather than
+// being truncated — which would drop a real VVD from the list. The full accounting
+// (and the invariant test that guards it) lives in list-devices.ts; keep the sum
+// under the deadline with margin if any of these timeouts change.
 export const VEGA_DISCOVERY_LIST_TIMEOUT_MS = 6_000;
 export const VEGA_DISCOVERY_INFO_TIMEOUT_MS = 4_000;
 
@@ -234,11 +237,17 @@ export async function listVegaDevices(): Promise<VegaDevice[]> {
  * after `boot-device` starts it. A freshly-started VVD can take a moment to
  * surface in `vega device list`, so retry a few times before giving up.
  *
- * Bounded by an overall wall-clock budget on top of the retry count: each
- * `listVegaDevices()` is already short (its discovery timeouts no longer stack),
- * but the budget is a hard cap so a wedged device can't drag this out attempt by
- * attempt. A healthy VVD surfaces well within it (a fast list + 1s backoff per
- * attempt), so the cap only bites the unhappy path.
+ * Bounded by an overall wall-clock budget on top of the retry count. The budget
+ * gates whether to START another attempt — it is checked *between* attempts, not
+ * as cancellation, and `listVegaDevices()` is never interrupted mid-flight. So the
+ * true upper bound is the budget plus one in-flight attempt's worst case: a single
+ * `listVegaDevices()` can take up to ~20s against a non-timeout-failing-but-running
+ * VVD (see its discovery-timeout accounting), so an attempt that starts just under
+ * the deadline pushes total wall time to ~budget + 20s. That looser bound is fine
+ * here: unlike `list-devices`, this runs post-`boot-device` (not on the alwaysLoad
+ * hot path), and a healthy VVD surfaces in the first attempt or two (a fast list +
+ * 1s backoff), so the budget only bites the unhappy path — it just caps the number
+ * of *additional* attempts rather than acting as a precise wall-clock ceiling.
  */
 const RESOLVE_VVD_SERIAL_BUDGET_MS = 15_000;
 

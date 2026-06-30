@@ -207,6 +207,71 @@ async function collectDescendantPids(rootPid: number): Promise<number[]> {
 }
 
 /**
+ * Live pids whose process-group id equals `pgid` (excluding the group-leader pid
+ * itself). Used by reapLingeringGroupMembers; returns [] if `ps` is unavailable.
+ */
+async function pgidMembers(pgid: number): Promise<number[]> {
+  const { stdout } = await execFileAsync("ps", ["-A", "-o", "pid=,pgid="], {
+    timeout: 1_500,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const members: number[] = [];
+  for (const line of stdout.split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (!m) continue;
+    const memberPid = parseInt(m[1]!, 10);
+    const memberPgid = parseInt(m[2]!, 10);
+    if (memberPgid === pgid && memberPid !== pgid) members.push(memberPid);
+  }
+  return members;
+}
+
+/**
+ * Reap a worker still holding our stdout pipe open after the launcher's *own clean
+ * exit* — the exit-drain path (see VEGA_EXIT_DRAIN_GRACE_MS). reapVegaGroup can't help
+ * once the launcher is gone: its ppid descendant sweep returns nothing (an outliving
+ * worker is immediately reparented to init — its ppid is 1, verified empirically), and
+ * its group kill is gated on the launcher still being alive.
+ *
+ * But a worker that merely *inherited* our pipe (the common case) stayed in the
+ * launcher's process group, so its pgid still equals the launcher pid — and it is
+ * reapable here. The safety guarantee is the *call-site invariant*, not the snapshot in
+ * isolation: this runs ONLY from the drain timer, which fires precisely because `close`
+ * never arrived within the grace; had the pipe-holding worker exited, the pipe would have
+ * EOF'd and `close` would have settled + cleared this timer. So when we run, that worker
+ * is still alive — and POSIX does not recycle a pid as a pgid while any member of its
+ * group lives, so the launcher pid cannot have been recycled into an unrelated group's
+ * pgid: `-pid` provably targets only our own group. SIGKILLing it reaps the worker
+ * (verified empirically). The membership snapshot is a best-effort secondary check that
+ * skips a pointless `-pid` when the worker raced to exit just before it; the only residual
+ * is the snapshot→kill window (tens of ms, no `await` between), the same pid-reuse class
+ * collectDescendantPids' sweep already accepts.
+ *
+ * A worker that `setsid()`d into its OWN group escaped here (group `pid` is empty); having
+ * outlived the launcher it has no live handle and is left to exit on its own. That case
+ * is rare — a clean exit whose grandchild both escaped the group AND outlived it — and
+ * bounded (one leftover per finished call, not the accumulating wedged tree the timeout
+ * path reaps). Best-effort throughout: a slow/failed `ps` just skips the reap.
+ */
+async function reapLingeringGroupMembers(pid: number | undefined): Promise<void> {
+  // pid > 1 guard mirrors reapVegaGroup: never pass -0 / -1 to process.kill (which would
+  // broadcast to the whole process group / every process).
+  if (pid == null || pid <= 1) return;
+  let members: number[];
+  try {
+    members = await pgidMembers(pid);
+  } catch {
+    return; // `ps` unavailable — best-effort, skip.
+  }
+  if (members.length === 0) return; // group empty (escaped/already gone) — nothing to reap.
+  try {
+    process.kill(-pid, VEGA_KILL_SIGNAL);
+  } catch {
+    // The last member exited between the snapshot and the kill — group already gone.
+  }
+}
+
+/**
  * Resolve a guaranteed-live working directory for the spawned `vega`/`kepler`
  * child. The tool-server is a long-lived singleton; if it was started from a
  * directory that is later removed (e.g. a git worktree torn down mid-session),
@@ -424,9 +489,10 @@ export async function runVega(
         // this path is reached only when WE didn't force the kill (timeout/overflow
         // settle first), so a terminating `signal` here is external and must NOT
         // masquerade as a wedged-agent "timeout" (which would wrongly suppress the
-        // listVegaDevices recovery call). No group reap here either: the launcher
-        // already exited, so its workers went with it, and group-killing a
-        // since-recycled pgid by pid would be unsafe.
+        // listVegaDevices recovery call). `finish` itself does no reaping: on the normal
+        // `close` path none is needed (`close` means every stdio end EOF'd, so no worker
+        // still holds the pipe), and on the exit-drain fallback the caller already kicked
+        // off reapLingeringGroupMembers before invoking us.
         settle(() =>
           reject(
             describeVegaFailure(
@@ -468,6 +534,12 @@ export async function runVega(
         // have and destroy our read ends so the lingering worker can't keep us pending.
         child.stdout?.destroy();
         child.stderr?.destroy();
+        // Reap that worker if it stayed in the launcher's process group (the common
+        // pipe-inheritance case — still safely reapable post-exit because a live group
+        // member pins the pgid; see reapLingeringGroupMembers). Fire-and-forget so it
+        // can't delay resolution; a worker that escaped into its own group is left to
+        // exit on its own (rare, bounded — see the function doc).
+        void reapLingeringGroupMembers(child.pid);
         finish(code, signal);
       }, VEGA_EXIT_DRAIN_GRACE_MS);
     });

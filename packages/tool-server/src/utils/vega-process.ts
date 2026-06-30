@@ -42,6 +42,15 @@ function consolePortFromVvdArgs(line: string): number | null {
   return null;
 }
 
+// Timeout for the `ps` process-table read. This is a LOCAL read (it never talks
+// to a device), so it is near-instant in practice; the timeout is a backstop
+// against a pathologically-loaded host, not a wedged device. Exported so
+// list-devices' BRANCH_DEADLINE_MS accounting can include it: a single
+// `listVegaDevices()` recovery can run two of these serially (the recovery gate
+// plus the `-d emulator-<port>` selector probe), and that budget has to stay
+// under the branch deadline so the backstop never truncates a completing branch.
+export const VVD_PS_PROBE_TIMEOUT_MS = 5_000;
+
 /**
  * Console ports of all running VVDs (empty if none / `ps` unavailable). `>1` ⇒
  * multiple VVDs — callers that target one surface `MultipleVegaDevicesError`.
@@ -49,7 +58,7 @@ function consolePortFromVvdArgs(line: string): number | null {
 export async function listRunningVvdConsolePorts(): Promise<Set<number>> {
   try {
     const { stdout } = await execFileAsync("ps", [...PS_ARGS], {
-      timeout: 5_000,
+      timeout: VVD_PS_PROBE_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
     });
     return parseVvdConsolePorts(stdout);
