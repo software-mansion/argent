@@ -57,6 +57,7 @@ export interface AXDescribeElement {
   tapPoint?: { x: number; y: number };
   traits?: string[];
   value?: string;
+  identifier?: string;
 }
 
 export interface AXDescribeResponse {
