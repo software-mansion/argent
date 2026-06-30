@@ -263,10 +263,15 @@ export class VariantProposalStore {
     }
   }
 
-  private autoRollIfConsumed(): void {
-    // A completed round that has already been handed to the agent is closed —
-    // the next proposal starts a clean round automatically.
-    if (this.completed && this.consumed) this.reset();
+  private autoRollIfCompleted(): void {
+    // A completed round is closed — the next proposal starts a clean round
+    // automatically. This rolls whether or not the outcome was already consumed:
+    // a round can be `completed && !consumed` when the user submits with no await
+    // parked (the fast path in awaitSelection consumes it later). Staging a new
+    // element onto such a round would append it after the frozen `lastOutcome`,
+    // so the next await would return the pre-submit outcome and silently drop the
+    // new element. Rolling here guarantees a post-completed proposal is presented.
+    if (this.completed) this.reset();
   }
 
   proposeVariant(input: {
@@ -289,7 +294,7 @@ export class VariantProposalStore {
     variantCount: number;
     totalElements: number;
   } {
-    this.autoRollIfConsumed();
+    this.autoRollIfCompleted();
 
     // Remember which device these variants are for, so the window streams it
     // directly. Last non-empty value wins; usually set once on the first call.
