@@ -35,6 +35,13 @@ export interface ToolsServerPaths {
   simulatorServerDir: string;
   /** Directory containing the native devtools dylibs */
   nativeDevtoolsDir: string;
+  /**
+   * Installed package version. Optional. When present, the launcher refuses to
+   * reuse a tracked server recorded under a different version — even at the same
+   * bundlePath — so an in-place devDependency bump self-heals on the next call
+   * without relying on the (often-disabled) postinstall kill.
+   */
+  version?: string;
 }
 
 export interface BuildToolsServerEnvOptions {
@@ -76,6 +83,12 @@ export interface ToolsServerState {
   pid: number;
   startedAt: string;
   bundlePath: string;
+  /**
+   * Version of the package that spawned this server. Optional for backward-compat
+   * with state files written by older versions (treated as "unknown" — reused
+   * rather than forcing a respawn). See reusableHandle.
+   */
+  version?: string;
   /** Bind host. Optional for backward-compat with state files written by older versions. */
   host?: string;
   /**
@@ -564,10 +577,19 @@ async function acquireSpawnLock(): Promise<SpawnLock | null> {
  */
 async function reusableHandle(
   state: ToolsServerState | null,
-  wantBundlePath?: string
+  wantBundlePath?: string,
+  wantVersion?: string
 ): Promise<ToolsServerHandle | null> {
   if (!state || !isProcessAlive(state.pid)) return null;
   if (wantBundlePath !== undefined && state.bundlePath !== wantBundlePath) return null;
+  // Same path, different version → an in-place bump (e.g. a local devDependency
+  // update) rewrote the bundle; the running server still holds the old code.
+  // Refuse reuse so the caller respawns the new version. Only when BOTH versions
+  // are known — a legacy server with no recorded version is reused rather than
+  // forced to respawn on the upgrade boundary.
+  if (wantVersion !== undefined && state.version !== undefined && state.version !== wantVersion) {
+    return null;
+  }
   const host = state.host ?? "127.0.0.1";
   const healthy = await isToolsServerHealthy(state.port, host, 2000, state.token);
   if (!healthy) return null;
@@ -579,7 +601,7 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
   // without paying the cost (or contention) of the spawn lock. This is the
   // overwhelmingly common case. A server from a different bundle (version) is not
   // reused — see reusableHandle.
-  const fast = await reusableHandle(await readState(), paths.bundlePath);
+  const fast = await reusableHandle(await readState(), paths.bundlePath, paths.version);
   if (fast) return fast;
 
   // Slow path: a spawn is likely needed. Serialize it across processes so the
@@ -590,7 +612,7 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     // Double-checked: a peer may have spawned a healthy server (of our bundle)
     // while we waited for the lock. Reuse it rather than spawning a second one.
     const state = await readState();
-    const reuse = await reusableHandle(state, paths.bundlePath);
+    const reuse = await reusableHandle(state, paths.bundlePath, paths.version);
     if (reuse) return reuse;
 
     // No usable server. If the tracked pid is a wedged/unhealthy server WE
@@ -628,6 +650,7 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
       pid,
       startedAt: new Date().toISOString(),
       bundlePath: paths.bundlePath,
+      version: paths.version,
       host: "127.0.0.1",
       token,
       managed: "autospawn",

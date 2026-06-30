@@ -318,4 +318,41 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
       expect(state!.pid).toBe(existing.pid);
     }
   );
+
+  it(
+    "respawns when the SAME bundle is tracked under a different version (in-place devDep bump self-heals, no postinstall needed)",
+    { timeout: 30_000 },
+    async () => {
+      // A healthy server is running from this bundle, but recorded under an older
+      // version — the shape after a local `argent update` (or teammate `npm
+      // install`) rewrites tool-server.cjs in place. The next call must retire it
+      // and spawn the new version, without relying on the postinstall kill.
+      const old = await launcher.spawnToolsServer(fakePaths(), await launcher.findFreePort(), {
+        token: "old-token",
+      });
+      spawnedPids.push(old.pid);
+      await launcher.writeToolsServerState({
+        port: old.port,
+        pid: old.pid,
+        startedAt: new Date().toISOString(),
+        bundlePath: FAKE_BUNDLE,
+        version: "1.0.0",
+        host: "127.0.0.1",
+        token: "old-token",
+        managed: "autospawn",
+      });
+
+      const handle = await launcher.ensureToolsServer({ ...fakePaths(), version: "2.0.0" });
+
+      // Old-version server retired; a fresh one tracked under the new version.
+      await waitForDeath(old.pid);
+      expect(launcher.isToolsServerProcessAlive(old.pid)).toBe(false);
+      const state = await launcher.readToolsServerState();
+      expect(state).not.toBeNull();
+      expect(state!.pid).not.toBe(old.pid);
+      expect(state!.version).toBe("2.0.0");
+      spawnedPids.push(state!.pid);
+      expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", state!.port));
+    }
+  );
 });
