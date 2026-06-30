@@ -42,7 +42,17 @@ export class ScreencastManager {
     this.activeCount += 1;
     if (this.activeCount === 1) {
       this.currentOpts = opts;
-      await this.cdp.send("Page.startScreencast", this.toCdpStartArgs(opts));
+      try {
+        await this.cdp.send("Page.startScreencast", this.toCdpStartArgs(opts));
+      } catch (err) {
+        // Roll the refcount back so a transient failure doesn't wedge the
+        // manager: the caller never receives a session handle to undo the
+        // increment, so the next start() must see activeCount back at 0 and
+        // re-issue Page.startScreencast instead of assuming a live session.
+        this.activeCount = Math.max(0, this.activeCount - 1);
+        this.currentOpts = null;
+        throw err;
+      }
     } else if (this.optsDiffer(opts, this.currentOpts)) {
       // Subsequent callers join the existing session and accept whatever
       // format / quality / size the first caller chose. Forcing a restart
