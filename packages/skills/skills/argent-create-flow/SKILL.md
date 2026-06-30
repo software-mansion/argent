@@ -5,7 +5,7 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 ## 1. Overview
 
-A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/flows/` directory. Each step is **executed live** as you add it, then recorded only if `flow-add-step` succeeds. Inspect the returned result before moving on. Replay a finished flow with `flow-execute`.
+A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/flows/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
 
 ## 2. Tools
 
@@ -70,7 +70,7 @@ For tools with no arguments, omit `args` entirely.
 ## 5. Important Rules
 
 - **Every step runs live.** You will see the real tool result (including screenshots). Use this to verify the step worked before continuing.
-- **Rejected steps are not recorded.** If `flow-add-step` returns an error, correct the app state or arguments and retry the step.
+- **Only successful steps are recorded.** If a tool call fails, nothing is written to the flow file — fix the issue and try again.
 - **Pass `project_root` only to `flow-start-recording`.** It is stored for the session and automatically used by all subsequent flow tools. An error is returned if the path is not absolute.
 - **You do NOT need to pass a flow name** to `flow-add-step`, `flow-add-echo`, or `flow-finish-recording`. The active flow is tracked automatically after `flow-start-recording`.
 - **Start before adding.** Calling `flow-add-step`, `flow-add-echo`, or `flow-finish-recording` without an active recording returns an error: _"No active flow. Call flow-start-recording first."_
