@@ -43,11 +43,17 @@ function isScalarType(type: string | undefined): boolean {
 
 function coerceScalar(raw: string, type: string | undefined, field: string): unknown {
   if (type === "number") {
+    // Number("") and Number("   ") are 0, so reject empty/whitespace explicitly.
+    if (raw.trim() === "")
+      throw new FlagParseException(`--${field} expected a number, got "${raw}"`);
     const n = Number(raw);
     if (Number.isNaN(n)) throw new FlagParseException(`--${field} expected a number, got "${raw}"`);
     return n;
   }
   if (type === "integer") {
+    // Number("") and Number("   ") are 0, so reject empty/whitespace explicitly.
+    if (raw.trim() === "")
+      throw new FlagParseException(`--${field} expected an integer, got "${raw}"`);
     const n = Number(raw);
     if (!Number.isInteger(n))
       throw new FlagParseException(`--${field} expected an integer, got "${raw}"`);
@@ -189,8 +195,14 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       if (!seenArrayFields.has(flag)) {
         args[flag] = [coerced];
         seenArrayFields.add(flag);
-      } else {
+      } else if (Array.isArray(args[flag])) {
         (args[flag] as unknown[]).push(coerced);
+      } else {
+        // --${flag}-json replaced the array with a non-array value in between
+        // two array-form occurrences; appending would throw a raw TypeError.
+        throw new FlagParseException(
+          `--${flag} and --${flag}-json cannot be mixed for the same field; pass it entirely as --${flag}-json '<json>' or --args '<json>'`
+        );
       }
       if (inlineValue === undefined) i = nextIndex;
       continue;
