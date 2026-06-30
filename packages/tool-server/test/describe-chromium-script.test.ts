@@ -18,10 +18,33 @@ import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
 const W = 1000;
 const H = 1000;
 
-class MockElement {}
+class MockNode {}
+class MockElement extends MockNode {}
 class MockHTMLInputElement extends MockElement {}
 class MockHTMLTextAreaElement extends MockElement {}
 class MockHTMLImageElement extends MockElement {}
+
+// The script reads childNodes / tagName / children through the native prototype getter
+// (Object.getOwnPropertyDescriptor(proto, prop).get.call(el)) so a DOM-clobbering <form>
+// can't shadow them. Mirror that here: expose each as a prototype accessor backed by a
+// field, so a test can shadow the *public* property (see `clobberStructural`) while the
+// prototype getter still returns the real value — exactly the real [LegacyOverrideBuiltins]
+// behaviour the fix relies on. childNodes lives on Node.prototype, tagName/children on
+// Element.prototype, matching where the script captures each getter.
+function defineNative(proto: object, prop: string, field: string): void {
+  Object.defineProperty(proto, prop, {
+    get(this: Record<string, unknown>) {
+      return this[field];
+    },
+    set(this: Record<string, unknown>, v: unknown) {
+      this[field] = v;
+    },
+    configurable: true,
+  });
+}
+defineNative(MockNode.prototype, "childNodes", "__childNodes");
+defineNative(MockElement.prototype, "tagName", "__tagName");
+defineNative(MockElement.prototype, "children", "__children");
 
 type Rect = { x: number; y: number; w: number; h: number };
 type Opts = {
@@ -33,6 +56,7 @@ type Opts = {
   attrs?: Record<string, string>;
   children?: MockElement[];
   clobber?: boolean; // set .title/.id to non-string objects (DOM-clobbering)
+  clobberStructural?: boolean; // shadow .children/.childNodes/.tagName with named controls (LegacyOverrideBuiltins)
 };
 
 function el(opts: Opts = {}): MockElement {
@@ -59,6 +83,16 @@ function el(opts: Opts = {}): MockElement {
     node.title = node;
     node.id = node;
   }
+  if (opts.clobberStructural) {
+    // simulate a <form> with [LegacyOverrideBuiltins] whose controls are named
+    // children / childNodes / tagName: the public property returns the control element
+    // (not iterable / not a string), while the native prototype getter still returns the
+    // real DOM value (preserved in the backing fields set above).
+    const kids = opts.children ?? [];
+    Object.defineProperty(node, "children", { value: kids[0], configurable: true });
+    Object.defineProperty(node, "childNodes", { value: kids[1], configurable: true });
+    Object.defineProperty(node, "tagName", { value: kids[2], configurable: true });
+  }
   const baseStyle: Record<string, string> = {
     display: "block",
     visibility: "visible",
@@ -83,6 +117,7 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
   const saved = {
     window: g.window,
     document: g.document,
+    Node: g.Node,
     Element: g.Element,
     HTMLInputElement: g.HTMLInputElement,
     HTMLTextAreaElement: g.HTMLTextAreaElement,
@@ -117,6 +152,7 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
       };
     },
   };
+  g.Node = MockNode;
   g.Element = MockElement;
   g.HTMLInputElement = MockHTMLInputElement;
   g.HTMLTextAreaElement = MockHTMLTextAreaElement;
@@ -209,6 +245,43 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     const tree = JSON.stringify(result!.tree);
     expect(tree).toContain("realid");
     expect(valuesOf(result!.tree)).toContain("CLOBBER");
+  });
+
+  it("does not crash on a <form> whose controls clobber children/childNodes/tagName (LegacyOverrideBuiltins)", () => {
+    // Named controls shadow the form's inherited DOM properties: el.children returns a
+    // single control (not iterable), el.childNodes / el.tagName likewise return elements.
+    // Reading any of them directly aborts the whole walk; the fix routes through the
+    // native prototype getter, so the form and its controls still surface.
+    const fieldChildren = el({
+      tag: "input",
+      attrs: { name: "children", id: "field-children" },
+      rect: { x: 0, y: 100, w: 200, h: 20 },
+    });
+    const fieldChildNodes = el({
+      tag: "input",
+      attrs: { name: "childNodes", id: "field-childnodes" },
+      rect: { x: 0, y: 130, w: 200, h: 20 },
+    });
+    const fieldTagName = el({
+      tag: "input",
+      attrs: { name: "tagName", id: "field-tagname" },
+      rect: { x: 0, y: 160, w: 200, h: 20 },
+    });
+    let result: { tree: unknown } | undefined;
+    expect(() => {
+      result = run([
+        el({
+          tag: "form",
+          rect: { x: 0, y: 100, w: 200, h: 100 },
+          children: [fieldChildren, fieldChildNodes, fieldTagName],
+          clobberStructural: true,
+        }),
+      ]);
+    }).not.toThrow();
+    const serialized = JSON.stringify(result!.tree);
+    expect(serialized).toContain("field-children");
+    expect(serialized).toContain("field-childnodes");
+    expect(serialized).toContain("field-tagname");
   });
 
   it("leaves an ordinary visible element unchanged", () => {

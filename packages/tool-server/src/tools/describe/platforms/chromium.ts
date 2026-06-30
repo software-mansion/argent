@@ -42,10 +42,20 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   const h = window.innerHeight;
   if (!w || !h) return JSON.stringify({ tree: null, error: "viewport is zero" });
 
+  // Native prototype accessors, captured once. HTMLFormElement is [LegacyOverrideBuiltins]:
+  // a control named "children"/"childNodes"/"tagName" shadows the matching inherited
+  // property on the <form>, so el.children there returns the control element (not iterable)
+  // and the throw aborts the whole walk — the exact crash class this walker must avoid.
+  // The prototype getter is never shadowed by a form's named properties, so route every
+  // read of these three through it via .call(el).
+  const getChildNodes = Object.getOwnPropertyDescriptor(Node.prototype, "childNodes").get;
+  const getTagName = Object.getOwnPropertyDescriptor(Element.prototype, "tagName").get;
+  const getChildrenEls = Object.getOwnPropertyDescriptor(Element.prototype, "children").get;
+
   function nodeRole(el) {
     const r = el.getAttribute("role");
     if (r) return r;
-    const t = el.tagName.toLowerCase();
+    const t = getTagName.call(el).toLowerCase();
     return t;
   }
 
@@ -77,14 +87,14 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
 
   function ownText(el) {
     let s = "";
-    for (const child of el.childNodes) {
+    for (const child of getChildNodes.call(el)) {
       if (child.nodeType === 3) s += child.nodeValue;
     }
     return s.replace(/\\s+/g, " ").trim();
   }
 
   function isInteractive(el) {
-    const tag = el.tagName.toLowerCase();
+    const tag = getTagName.call(el).toLowerCase();
     if (tag === "a" && el.href) return true;
     if (tag === "button") return true;
     if (tag === "input" || tag === "textarea" || tag === "select") return true;
@@ -215,7 +225,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     nodeBudget--;
 
     const childResults = [];
-    for (const child of el.children) {
+    for (const child of getChildrenEls.call(el)) {
       const c = walk(child, depth + 1);
       if (c) childResults.push(c);
     }
@@ -234,7 +244,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     // Same-origin iframes: pierce contentDocument if accessible. Cross-origin
     // contentDocument access throws SecurityError — swallowed silently so the
     // walker doesn't abort the whole tree.
-    if (el.tagName === "IFRAME") {
+    if (getTagName.call(el) === "IFRAME") {
       try {
         const doc = el.contentDocument;
         if (doc && doc.documentElement) {
