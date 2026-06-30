@@ -65,6 +65,7 @@ export const buttonTool: ToolDefinition<Params, Result> = {
 Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
+On a physical iPhone, button presses route over CoreDevice (home, power, volumeUp, volumeDown).
 Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,

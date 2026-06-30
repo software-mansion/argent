@@ -201,11 +201,18 @@ describe("iOS-27 host-input gate (CoreDeviceError 9021) is translated, screensho
     expect(e.message).not.toMatch(/iOS 27/);
   });
 
-  it("does NOT mistranslate a HID coordinate that merely contains 9021 in the echoed argv", async () => {
-    // execFile's error `message` echoes the argv; a coordinate like 29021 must
-    // not trip the gate detection (which only inspects stderr/stdout).
+  it("does NOT mistranslate a standalone 9021 HID coordinate echoed in the argv message", async () => {
+    // execFile's error `message` echoes the full argv, and a HID coordinate maps
+    // [0,1]→[0,65535], so a real tap can produce the *standalone* token 9021
+    // (toHid(0.13765) === 9021). The gate detector must inspect pmd3's stderr/stdout
+    // only — never `message` — or this non-gated handshake failure would be
+    // mislabeled "upgrade to iOS 27". The token here is a bare `9021` (not 29021),
+    // so this test genuinely fails if the detector ever starts scanning `message`.
     const coordErr = Object.assign(
-      new Error("Command failed: pymobiledevice3 developer core-device … 29021"),
+      new Error(
+        "Command failed: pymobiledevice3 developer core-device universal-hid-service " +
+          "drag --rsd fd00::1 50000 --duration 0.05 9021 32768 9021 40000"
+      ),
       { stderr: "the device handshake failed", stdout: "", code: 1 }
     );
     const { api } = await makeApi(() => ({ error: coordErr }));
