@@ -98,7 +98,7 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 PLATFORM DETECTION
-If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-vega`
+If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
@@ -109,7 +109,7 @@ Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
 VEGA / AMAZON FIRE TV APP CONTROL
-Skill: `argent-vega`
+Skill: `argent-tv-interact`
 When: Any task involving a Vega / Amazon Fire TV device (a `platform:"vega"` / `kind:"vvd"` entry in `list-devices`, or the user mentions Vega / Fire TV / VVD). Covers list/launch/restart/reinstall apps, on-screen element discovery via `describe`, D-pad navigation with the `tv-remote` tool (Vega is remote-driven, not touch), typing, screenshots, Fast Refresh setup, and VVD lifecycle (start/stop via the `vega` CLI — argent has no Vega stop tool).
 Prompt keywords: vega, fire tv, vvd, virtual device, d-pad
 
@@ -119,7 +119,7 @@ When: Performing touch interactions, typing, pressing hardware buttons, launchin
 
 TV (APPLE TV / ANDROID TV) INTERACTION
 Skill: `argent-tv-interact`
-When: Any task involving a TV target (a `list-devices` entry with `runtimeKind: "tv"` — an Apple TV simulator or an Android TV emulator) — booting the target, moving focus with the remote / D-pad, activating elements, typing into search fields, or reading TV focus state. A TV UI is focus-driven, not touch-driven: the `gesture-*` tools do NOT apply. Use `describe` to read focus, `tv-remote` for remote presses (up/down/left/right/select/back/menu/home), and `keyboard` to type (the same tools drive both platforms). For Amazon Fire TV (Vega) use `argent-vega` instead.
+When: Any task involving a TV target (a `list-devices` entry with `runtimeKind: "tv"` — an Apple TV simulator or an Android TV emulator) — booting the target, moving focus with the remote / D-pad, activating elements, typing into search fields, or reading TV focus state. A TV UI is focus-driven, not touch-driven: the `gesture-*` tools do NOT apply. Use `describe` to read focus, `tv-remote` for remote presses (up/down/left/right/select/back/menu/home), and `keyboard` to type (the same tools drive all three platforms).
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
