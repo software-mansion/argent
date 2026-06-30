@@ -292,6 +292,53 @@ describe("flow-add-step", () => {
     expect(flow.steps).toEqual([]);
   });
 
+  it("does not record when find returns found:false", async () => {
+    const registry = createMockRegistry({
+      find: { result: { found: false, note: 'no element matched text="Login"' } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "find-miss-recording", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    await expect(
+      tool.execute({}, { command: "find", args: '{"query":"Login","by":"text","action":"tap"}' })
+    ).rejects.toThrow(/find did not locate an element.*Login/i);
+
+    const content = await readFlowFile("find-miss-recording");
+    const flow = parseFlow(content);
+    expect(flow.steps).toEqual([]);
+  });
+
+  it("records find steps when the element is found", async () => {
+    const registry = createMockRegistry({
+      find: { result: { found: true, matchCount: 1 } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "find-hit-recording", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      { command: "find", args: '{"query":"Login","by":"text","action":"tap"}' }
+    );
+
+    expect(result.toolResult).toEqual({ found: true, matchCount: 1 });
+    const flow = parseFlow(result.flowFile);
+    expect(flow.steps).toEqual([
+      {
+        kind: "tool",
+        name: "find",
+        args: { query: "Login", by: "text", action: "tap" },
+      },
+    ]);
+  });
+
   it("handles omitted args", async () => {
     const registry = createMockRegistry({
       screenshot: { result: { url: "http://..." } },
@@ -578,6 +625,36 @@ describe("flow-execute", () => {
       kind: "tool",
       tool: "tap",
       error: expect.stringContaining("failed"),
+    });
+  });
+
+  it("stops when a recorded find step returns found:false", async () => {
+    const registry = createMockRegistry({
+      find: { result: { found: false, note: 'no element matched text="Continue"' } },
+      tap: { result: { tapped: true } },
+    });
+    const runFlow = createRunFlowTool(registry);
+
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    const content = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "find", args: { query: "Continue", by: "text", action: "tap" } },
+        { kind: "tool", name: "tap", args: { x: 0.5 } },
+      ],
+    });
+    await fs.writeFile(path.join(dir, "find-miss-replay.yaml"), content);
+
+    const result = await runFlow.execute({}, { name: "find-miss-replay", project_root: tmpDir });
+    assertFlowRunResult(result);
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]).toMatchObject({
+      kind: "tool",
+      tool: "find",
+      error: expect.stringMatching(/find did not locate an element.*Continue/i),
     });
   });
 

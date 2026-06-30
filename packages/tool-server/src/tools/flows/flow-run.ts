@@ -8,6 +8,7 @@ import {
   setActiveProjectRoot,
   type FlowStep,
 } from "./flow-utils";
+import { isMissedFindResult, missedFindError } from "./flow-step-results";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
@@ -71,9 +72,10 @@ echo steps print a message. A tool step may carry \`delayMs: <ms>\` to sleep
 that long before the step runs. Returns the result of every step, including images.
 Use when you want to replay a recorded flow or run a scripted sequence of device actions.
 Fails if the flow file does not exist or a step tool raises an error (execution stops at that step).
-Tool results that report failure as data do not stop replay automatically.
 An \`await-ui-element\` step whose condition is not met before its timeout also stops the flow there
 (its later steps were recorded assuming the condition held), so use one to gate a step on a screen transition.
+A \`find\` step that returns \`{ found: false }\` also stops the flow there, so replay never silently
+continues after a missed locate-and-act step.
 
 If the flow has an execution prerequisite and prerequisiteAcknowledged is not
 set to true, the tool returns a notice with the prerequisite instead of running.
@@ -129,6 +131,14 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
               kind: "tool",
               tool: step.name,
               error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+            });
+            break;
+          }
+          if (isMissedFindResult(step.name, result)) {
+            steps.push({
+              kind: "tool",
+              tool: step.name,
+              error: missedFindError(result),
             });
             break;
           }
