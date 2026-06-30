@@ -1,4 +1,9 @@
 import express, { Request, Response } from "express";
+import bytesUtil from "bytes";
+import { createWriteStream } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID } from "node:crypto";
 import {
@@ -18,7 +23,7 @@ import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./ut
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
 import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
-import { FileInputError, resolveFileInputs } from "./file-inputs";
+import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
@@ -270,12 +275,31 @@ export function isWebsocketUpgradeAllowed(
   return true;
 }
 
+const UPLOAD_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// Bounds the tar-upload so a bad client can't fill the host disk.
+const MAX_UPLOAD_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
+
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
   // 48mb: file-input wrappers may inline base64 file content (saved PNG
   // baselines, flow YAMLs) when the client is remote. Bounds the whole encoded
   // request; the decoded per-file ceiling is enforced in file-inputs.ts.
   app.use(express.json({ limit: "48mb" }));
+
+  // Registry for tar-upload uploads: uploadId → { tarPath, expireAt }.
+  // Entries are consumed by the first tool call that references them; the TTL
+  // sweeper handles any orphans from aborted or failed calls.
+  const uploads = new Map<string, UploadEntry & { expireAt: number }>();
+  const uploadSweeper = setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of uploads) {
+      if (entry.expireAt < now) {
+        uploads.delete(id);
+        rm(entry.tarPath, { force: true }).catch(() => {});
+      }
+    }
+  }, 60_000);
+  uploadSweeper.unref();
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
@@ -422,6 +446,37 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     });
   });
 
+  // Streaming upload for tar-upload inputs: the client tars a file or dir and
+  // streams it here before the tool call. express.json() ignores this body
+  // (wrong Content-Type), so we pipe it straight to disk.
+  app.post("/upload", (req: Request, res: Response) => {
+    idleTimer.touch();
+    const id = randomUUID();
+    const tarPath = join(tmpdir(), `argent-upload-${id}.tar.gz`);
+    const ws = createWriteStream(tarPath);
+
+    const abort = (status: number, message: string): void => {
+      ws.destroy();
+      rm(tarPath, { force: true }).catch(() => {});
+      if (!res.headersSent) res.status(status).json({ error: message });
+    };
+
+    let received = 0;
+    req.on("data", (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > MAX_UPLOAD_STREAM_BYTES) {
+        abort(413, `Upload exceeds the ${bytesUtil(MAX_UPLOAD_STREAM_BYTES, { unitSeparator: " " })} limit.`);
+      }
+    });
+    req.pipe(ws);
+    ws.on("finish", () => {
+      if (res.headersSent) return;
+      uploads.set(id, { tarPath, expireAt: Date.now() + UPLOAD_TTL_MS });
+      res.json({ uploadId: id });
+    });
+    ws.on("error", (err: Error) => abort(500, err.message));
+  });
+
   app.get("/tools", (_req: Request, res: Response) => {
     idleTimer.touch();
     const snapshot = registry.getSnapshot();
@@ -513,7 +568,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
       try {
-        const resolved = await resolveFileInputs(def, req.body);
+        const resolved = await resolveFileInputs(def, req.body, (id) => {
+          const entry = uploads.get(id);
+          if (entry) uploads.delete(id);
+          return entry;
+        });
         bodyArgs = resolved.args;
         resolvedFileInputs = resolved.fileInputs;
         // Materialized uploads are call-scoped: remove them once the response

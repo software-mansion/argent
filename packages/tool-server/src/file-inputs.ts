@@ -19,9 +19,11 @@
  * behavior.
  */
 
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { promisify } from "node:util";
 import bytesUtil from "bytes";
 import {
   isFileInputWire,
@@ -39,8 +41,17 @@ import {
  */
 const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
 
+const execFileAsync = promisify(execFile);
+
 /** Typed so the HTTP layer can map it to a 422 instead of a generic 500. */
 export class FileInputError extends Error {}
+
+/** Resolved tar-upload entry, keyed by uploadId. */
+export interface UploadEntry {
+  tarPath: string;
+}
+
+export type UploadLookup = (uploadId: string) => UploadEntry | undefined;
 
 export interface ResolveFileInputsResult {
   /** The request body with every wrapper replaced by a plain path string. */
@@ -71,7 +82,9 @@ async function probeHostPath(wire: FileInputWire, kind: FileInputSpec["kind"]): 
   try {
     const st = await stat(wire.path);
     if (kind === "directory") return st.isDirectory();
-    if (kind === "probe") return true;
+    // "probe" is advisory and "tar-upload" accepts a file or directory, so any
+    // existing path counts as present on the host.
+    if (kind === "probe" || kind === "tar-upload") return true;
     if (!st.isFile()) return false;
     if (wire.size != null && st.size !== wire.size) return false;
     if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) return false;
@@ -118,7 +131,8 @@ async function materializeUpload(wire: FileInputWire): Promise<{ filePath: strin
 async function resolveOne(
   spec: FileInputSpec,
   wire: FileInputWire,
-  tempDirs: string[]
+  tempDirs: string[],
+  lookupUpload: UploadLookup | undefined
 ): Promise<{ value: string; meta: ResolvedFileInput }> {
   const meta: ResolvedFileInput = {
     clientPath: wire.path,
@@ -137,6 +151,36 @@ async function resolveOne(
         `uploaded with the call — when the tool-server runs on a different machine, pass a ` +
         `path that exists on that machine (e.g. the server-side checkout of the project).`
     );
+  }
+
+  if (spec.kind === "tar-upload") {
+    if (!wire.uploadId) {
+      throw new FileInputError(
+        `Path "${wire.path}" does not exist on the tool-server host and no upload was provided. ` +
+          `Update argent to a version that supports uploads for remote sessions.`
+      );
+    }
+    const entry = lookupUpload?.(wire.uploadId);
+    if (!entry) {
+      throw new FileInputError(
+        `Upload "${wire.uploadId}" was not found on the tool-server — it may have expired. ` +
+          `Re-run the tool to upload the path again.`
+      );
+    }
+    const extractDir = await mkdtemp(join(tmpdir(), "argent-tar-upload-"));
+    tempDirs.push(extractDir);
+    await execFileAsync("tar", ["-xzf", entry.tarPath, "-C", extractDir]);
+    await rm(entry.tarPath, { force: true }).catch(() => {});
+    // The client tars a single top-level member named after the path's basename.
+    // Prefer that exact entry — readdir order isn't guaranteed and sidecar files
+    // (e.g. macOS "._" AppleDouble) may extract alongside it.
+    const entries = await readdir(extractDir);
+    const expected = basename(wire.path);
+    const uploaded = entries.find((e) => e === expected) ?? entries.find((e) => !e.startsWith("._"));
+    if (!uploaded) {
+      throw new FileInputError(`Extracted archive for "${wire.path}" is empty.`);
+    }
+    return { value: join(extractDir, uploaded), meta: { ...meta, viaUpload: true } };
   }
 
   if (typeof wire.content === "string") {
@@ -170,7 +214,8 @@ async function resolveOne(
  */
 export async function resolveFileInputs(
   def: Pick<ToolDefinition<unknown, unknown>, "fileInputs">,
-  body: unknown
+  body: unknown,
+  lookupUpload?: UploadLookup
 ): Promise<ResolveFileInputsResult> {
   const tempDirs: string[] = [];
   const cleanup = async () => {
@@ -191,7 +236,7 @@ export async function resolveFileInputs(
     for (const spec of specs) {
       const value = args[spec.target];
       if (!isFileInputWire(value)) continue;
-      const { value: path, meta } = await resolveOne(spec, value, tempDirs);
+      const { value: path, meta } = await resolveOne(spec, value, tempDirs, lookupUpload);
       args[spec.target] = path;
       resolved = { ...(resolved ?? {}), [spec.target]: meta };
     }

@@ -44,6 +44,7 @@ Use for a full reinstall after rebuilding, or to start from a clean app state.
 Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .apk for Android, .vpkg for Vega).`,
   zodSchema,
   capability,
+  fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
   services: () => ({}),
   execute: dispatchByPlatform<
     ReinstallAppServices,
