@@ -1,6 +1,7 @@
 import { readFile, readdir, stat, access } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
+import { parse as parseDotenv } from "dotenv";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -125,19 +126,12 @@ export function extractMetroPort(configText: string): number | null {
 // ── .env key extraction ──────────────────────────────────────────────
 
 export function extractEnvKeys(content: string): string[] {
-  const keys: string[] = [];
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx > 0) {
-      const key = trimmed.slice(0, eqIdx).trim();
-      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-        keys.push(key);
-      }
-    }
-  }
-  return keys;
+  // dotenv handles the .env grammar the previous hand-rolled split missed:
+  // `export` prefixes, quoted values containing `=`, and multi-line quoted
+  // values whose continuation lines would otherwise be mistaken for keys.
+  // We only surface the variable *names*, and keep the identifier filter so
+  // dotenv's looser key grammar (dots, dashes) can't leak non-env names.
+  return Object.keys(parseDotenv(content)).filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
 }
 
 // ── Makefile target extraction ───────────────────────────────────────

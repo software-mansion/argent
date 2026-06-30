@@ -1,0 +1,36 @@
+name: Sync 'next' dist-tag
+
+# Re-points the `next` npm dist-tag at the highest published version of
+# @swmansion/argent (prerelease or stable). The publish workflows run this
+# automatically; this manual trigger repairs `next` without republishing —
+# e.g. when it has drifted behind `latest`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would change without mutating the dist-tag"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@swmansion"
+
+      # Dependency-free script — no `npm ci` needed.
+      - name: Sync 'next' dist-tag to highest published version
+        run: node scripts/sync-next-dist-tag.mjs ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

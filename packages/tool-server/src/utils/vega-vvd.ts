@@ -1,6 +1,6 @@
 import { runVega } from "./vega-cli";
 import { runAdb, parseAdbDevices } from "./adb";
-import { listRunningVvdConsolePorts } from "./vega-process";
+import { listRunningVvdConsolePorts, listRunningVvdPids } from "./vega-process";
 
 /**
  * VVD lifecycle — start / stop / liveness. Running-VVD console-port discovery lives
@@ -94,8 +94,71 @@ export async function startVvd(params: {
   });
 }
 
-export async function stopVvd(options: { timeoutMs?: number } = {}): Promise<void> {
-  await runVega(["virtual-device", "stop"], { timeoutMs: options.timeoutMs ?? 60_000 });
+const STOP_KILL_GRACE_MS = 4_000;
+const STOP_VERIFY_POLL_MS = 300;
+
+export async function stopVvd(
+  options: { timeoutMs?: number; killGraceMs?: number; verifyPollMs?: number } = {}
+): Promise<void> {
+  // Graceful first — ask the CLI to stop the VVD it tracks — but best-effort: when
+  // the CLI has lost track of a running VVD it exits non-zero with "virtual device
+  // not running" (the same staleness that makes `vega virtual-device status`
+  // misreport). An argent-booted VVD — started via `vega virtual-device start -t N`,
+  // which returns once boot completes rather than staying foreground — is routinely
+  // in this state, so a throwing stop must not abort the caller (e.g. a force reboot
+  // in boot-device, which would otherwise fail outright and leave the VVD running).
+  await runVega(["virtual-device", "stop"], { timeoutMs: options.timeoutMs ?? 60_000 }).catch(
+    (err) => {
+      // Tolerated (the ps probe below tears the device down regardless), but logged so a
+      // genuine stop failure for a VVD the CLI *was* tracking is diagnosable, not silent.
+      process.stderr.write(`[vega-vvd] \`vega virtual-device stop\` failed: ${String(err)}\n`);
+    }
+  );
+  // Detection already trusts the OS process table over the CLI (see `isVvdRunning`);
+  // make stop symmetric. Terminate any VVD emulator process the ps probe still
+  // finds — SIGTERM, then SIGKILL the stragglers — so a stop the CLI no-oped (or
+  // refused) still tears the device down instead of leaking the qemu process.
+  await terminateStrayVvdProcesses(
+    options.killGraceMs ?? STOP_KILL_GRACE_MS,
+    options.verifyPollMs ?? STOP_VERIFY_POLL_MS
+  );
+}
+
+async function terminateStrayVvdProcesses(graceMs: number, pollMs: number): Promise<void> {
+  const pids = await listRunningVvdPids();
+  if (pids.length === 0) return;
+  for (const pid of pids) signalQuietly(pid, "SIGTERM");
+  // Give SIGTERM a chance to bring the emulator down cleanly, then escalate.
+  if (await waitForVvdGone(graceMs, pollMs)) return;
+  for (const pid of await listRunningVvdPids()) signalQuietly(pid, "SIGKILL");
+  // Mirror the post-SIGTERM grace poll: don't return while a just-killed qemu could still
+  // be in the ps probe, or the next force-reboot's start would read it as a second VVD and
+  // trip `MultipleVegaDevicesError`. (Orphaned qemu reparents to launchd and reaps fast.)
+  await waitForVvdGone(graceMs, pollMs);
+}
+
+// Poll the ps probe until no VVD process is left, up to `graceMs`. Returns whether the VVD
+// went away within the window.
+async function waitForVvdGone(graceMs: number, pollMs: number): Promise<boolean> {
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline) {
+    if (!(await isVvdRunning())) return true;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return !(await isVvdRunning());
+}
+
+// `process.kill` throws ESRCH if the pid already exited and EPERM if it isn't ours;
+// either way there's nothing left to do for that pid, so swallow just those. Anything
+// else (e.g. EINVAL from a bad signal) is a real bug — let it surface.
+function signalQuietly(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && code !== "EPERM") throw err;
+    /* already gone or not ours */
+  }
 }
 
 const VVD_RUNNING_POLL_INTERVAL_MS = 1_000;

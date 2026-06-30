@@ -20,6 +20,7 @@ import {
   editJsoncFile,
 } from "./utils.js";
 import { isMap } from "yaml";
+import escapeStringRegexp from "escape-string-regexp";
 
 const TOOL_SERVER_BUNDLE = path.join(import.meta.dirname, "tool-server.cjs");
 
@@ -827,6 +828,90 @@ const openCodeAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Kiro adapter ─────────────────────────────────────────────────────────────
+// MARK: Kiro
+// Format: { mcpServers: { argent: { command, args, env } } }
+// Project: <root>/.kiro/settings/mcp.json   Global: ~/.kiro/settings/mcp.json
+//
+// The same .kiro/settings/mcp.json is read by both the Kiro IDE and the Kiro
+// CLI (the rebranded Amazon Q Developer CLI), so one entry serves both.
+//
+// Allowlist: autoApprove: ["*"] on the argent entry — the Kiro IDE's documented
+// "approve every tool" syntax. The Kiro CLI's server-config struct has no
+// autoApprove field and is NOT deny_unknown_fields, so the CLI silently ignores
+// the key (verified against kiro-cli 2.9.0 / upstream CustomToolConfig). Net:
+// honored by the IDE, harmless to the CLI, which carries its own trust model.
+// IDE: https://kiro.dev/docs/mcp/configuration/  CLI: https://kiro.dev/docs/cli/mcp/
+
+const KIRO_AUTO_APPROVE_ALL = ["*"];
+
+const kiroAdapter: McpConfigAdapter = {
+  name: "Kiro",
+
+  detect(): boolean {
+    return dirExists(path.join(homedir(), ".kiro")) || dirExists(path.join(process.cwd(), ".kiro"));
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".kiro", "settings", "mcp.json");
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".kiro", "settings", "mcp.json");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
+    };
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJsonOrRemove(configPath, config);
+    return true;
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
+  },
+
+  addAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+    if (!configPath) return;
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
+    const entry = servers[MCP_SERVER_KEY];
+    if (!entry) return;
+    entry.autoApprove = [...KIRO_AUTO_APPROVE_ALL];
+    writeJson(configPath, config);
+  },
+
+  removeAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+    if (!configPath || !fs.existsSync(configPath)) return;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
+    const entry = servers?.[MCP_SERVER_KEY];
+    if (!entry?.autoApprove) return;
+    delete entry.autoApprove;
+    writeJsonOrRemove(configPath, config);
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 // MARK: Registry
 
@@ -840,6 +925,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   codexAdapter,
   hermesAdapter,
   openCodeAdapter,
+  kiroAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {
@@ -1090,7 +1176,7 @@ function injectArgentSection(existing: string | undefined, rules: string): strin
   if (!existing) return section;
   // Replace existing argent section if present
   const re = new RegExp(
-    `${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}`
+    `${escapeStringRegexp(ARGENT_RULES_START)}[\\s\\S]*?${escapeStringRegexp(ARGENT_RULES_END)}`
   );
   if (re.test(existing)) return existing.replace(re, section);
   // Append after user content
@@ -1099,13 +1185,9 @@ function injectArgentSection(existing: string | undefined, rules: string): strin
 
 function removeArgentSection(existing: string): string {
   const re = new RegExp(
-    `\\n*${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}\\n*`
+    `\\n*${escapeStringRegexp(ARGENT_RULES_START)}[\\s\\S]*?${escapeStringRegexp(ARGENT_RULES_END)}\\n*`
   );
   return existing.replace(re, "").trim();
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function injectCodexRules(configPath: string, rulesDir: string): string | null {

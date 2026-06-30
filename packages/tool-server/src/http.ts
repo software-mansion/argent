@@ -136,15 +136,31 @@ function extractInvocationMeta(
 ): InvocationMeta | null {
   const meta: InvocationMeta = { ...aiMeta };
   if (hasCapability && data && typeof data === "object") {
-    const record = data as Record<string, unknown>;
-    const deviceArg = extractDeviceArg(record);
-    if (deviceArg) {
-      meta.platform = resolveDevice(deviceArg).platform;
-    } else if (typeof record.avdName === "string") {
-      meta.platform = "android";
-    }
+    const platform = platformFromArgs(data);
+    if (platform) meta.platform = platform;
   }
   return Object.keys(meta).length > 0 ? meta : null;
+}
+
+/** Coarse platform from a tool call's device arg (`udid` / `device_id` / `avdName`), or null. */
+function platformFromArgs(data: unknown): Platform | null {
+  if (!data || typeof data !== "object") return null;
+  const deviceArg = extractDeviceArg(data);
+  if (deviceArg) return inferPlatform(deviceArg) ?? null;
+  if (typeof (data as Record<string, unknown>).avdName === "string") return "android";
+  return null;
+}
+
+/**
+ * Attribution for a sub-tool an orchestrator dispatches: the outer request's AI
+ * client is inherited unchanged, but the platform is re-derived from the child's
+ * OWN device arg. Orchestrators like flow-execute carry no platform (and a flow
+ * can span several devices), so the child's `udid` is the only correct source;
+ * the parent's platform is the fallback when the child has no device arg.
+ */
+function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknown): InvocationMeta {
+  const childPlatform = platformFromArgs(childArgs);
+  return childPlatform ? { ...parentMeta, platform: childPlatform } : parentMeta;
 }
 
 // ── HTTP app ────────────────────────────────────────────────────────
@@ -214,6 +230,44 @@ function extractHostname(host: string): string {
   }
   const colon = host.indexOf(":");
   return colon === -1 ? host : host.slice(0, colon);
+}
+
+// Hostname of an `Origin` request header ("http://127.0.0.1:5173" → "127.0.0.1").
+// Opaque origins (the literal "null" from sandboxed iframes / file:// pages) and
+// malformed values return null so they fail the allow-list check.
+function hostnameFromOrigin(origin: string): string | null {
+  const schemeEnd = origin.indexOf("://");
+  if (schemeEnd === -1) return null;
+  return extractHostname(origin.slice(schemeEnd + 3));
+}
+
+// Authorize a WebSocket upgrade for the browser-facing control channels (e.g.
+// the Chromium-control WS). A WS handshake bypasses the Express Host/auth
+// middleware — the `ws` library owns the upgrade — so the same defenses are
+// re-applied here. The in-process preview UI is browser-loaded and can't carry
+// a Bearer token (like the rest of the /preview surface), so the guard is
+// origin/host-based rather than token-based:
+//   • Host guard — same loopback/bind-host allow-list as HTTP requests, closing
+//     the DNS-rebinding bypass.
+//   • Origin guard (anti-CSWSH) — browsers always send `Origin` on a WS
+//     handshake; accept only our own loopback/bind-host origin. A non-browser
+//     client (Node `ws`) sends no Origin and is already constrained by the Host
+//     guard above.
+// A wildcard bind disables the guard (operator opted into network exposure),
+// matching the HTTP Host-guard behavior.
+export function isWebsocketUpgradeAllowed(
+  headers: { host?: string; origin?: string },
+  policy: { allowedHostnames: ReadonlySet<string>; hostGuardDisabled: boolean }
+): boolean {
+  if (policy.hostGuardDisabled) return true;
+  const host = headers.host;
+  if (!host || !policy.allowedHostnames.has(extractHostname(host))) return false;
+  const origin = headers.origin;
+  if (origin !== undefined) {
+    const originHost = hostnameFromOrigin(origin);
+    if (!originHost || !policy.allowedHostnames.has(originHost)) return false;
+  }
+  return true;
 }
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
@@ -587,10 +641,24 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // Hashing happens in the telemetry listener, not in the HTTP layer.
       const toolInvocationId = randomUUID();
       let releaseInvocationMeta: (() => void) | undefined;
-      if (options?.recordInvocation) {
+      // A recorder bound to THIS request's attribution, handed to orchestrator
+      // tools (run-sequence, flow-execute) so the sub-tools they dispatch
+      // directly through the registry inherit the same ai_client / platform
+      // instead of being recorded as anonymous. Only present when there is
+      // attribution worth propagating.
+      let recordChildInvocation:
+        | ((childInvocationId: string, childArgs?: unknown) => () => void)
+        | undefined;
+      const recordInvocation = options?.recordInvocation;
+      if (recordInvocation) {
         const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
         if (invocationMeta) {
-          releaseInvocationMeta = options.recordInvocation(toolInvocationId, invocationMeta);
+          releaseInvocationMeta = recordInvocation(toolInvocationId, invocationMeta);
+          recordChildInvocation = (childInvocationId, childArgs) =>
+            recordInvocation(
+              childInvocationId,
+              deriveChildInvocationMeta(invocationMeta, childArgs)
+            );
         }
       }
 
@@ -599,6 +667,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           signal: controller.signal,
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
           toolInvocationId,
+          ...(recordChildInvocation ? { recordChildInvocation } : {}),
         });
         // Gate on `updateInstallable` (not `updateAvailable`) and advertise the
         // version the resolver would install — both account for the release-age policy.
@@ -669,32 +738,37 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     dispose: () => idleTimer.dispose(),
     getLastActivityAt: () => idleTimer.getLastActivityAt(),
     attachChromiumWebsockets: (httpServer: HttpServer) => {
-      attachChromiumServerWebsocket(httpServer, "/chromium-server/", (req) => {
-        // URL shape: /chromium-server/<deviceId>/ws
-        const match = (req.url ?? "").match(/^\/chromium-server\/([^/]+)\/ws(?:[?#]|$)/);
-        if (!match) return null;
-        const deviceId = decodeURIComponent(match[1]!);
-        const device = resolveDeviceForWs(deviceId);
-        if (device.platform !== "chromium") return null;
-        // The CDP session must already be resolved (the per-device REST routes
-        // resolve it lazily on first hit). For the WS endpoint we look at the
-        // current registry snapshot — if no session is open, refuse the
-        // upgrade instead of triggering a slow CDP connect inside the upgrade
-        // handler (which would block the TCP socket).
-        const urn = `${CHROMIUM_CDP_NAMESPACE}:${deviceId}`;
-        const snapshot = registry.getSnapshot();
-        if (!snapshot.services.has(urn)) return null;
-        // Use the synchronous getter on the registry rather than the async
-        // resolveService — by this point the service is guaranteed to exist.
-        const node = (
-          registry as unknown as {
-            services: Map<string, { instance: { api: ChromiumCdpApi } | null }>;
-          }
-        ).services.get(urn);
-        const api = node?.instance?.api;
-        if (!api) return null;
-        return api.server;
-      });
+      attachChromiumServerWebsocket(
+        httpServer,
+        "/chromium-server/",
+        (req) => {
+          // URL shape: /chromium-server/<deviceId>/ws
+          const match = (req.url ?? "").match(/^\/chromium-server\/([^/]+)\/ws(?:[?#]|$)/);
+          if (!match) return null;
+          const deviceId = decodeURIComponent(match[1]!);
+          const device = resolveDeviceForWs(deviceId);
+          if (device.platform !== "chromium") return null;
+          // The CDP session must already be resolved (the per-device REST routes
+          // resolve it lazily on first hit). For the WS endpoint we look at the
+          // current registry snapshot — if no session is open, refuse the
+          // upgrade instead of triggering a slow CDP connect inside the upgrade
+          // handler (which would block the TCP socket).
+          const urn = `${CHROMIUM_CDP_NAMESPACE}:${deviceId}`;
+          const snapshot = registry.getSnapshot();
+          if (!snapshot.services.has(urn)) return null;
+          // Use the synchronous getter on the registry rather than the async
+          // resolveService — by this point the service is guaranteed to exist.
+          const node = (
+            registry as unknown as {
+              services: Map<string, { instance: { api: ChromiumCdpApi } | null }>;
+            }
+          ).services.get(urn);
+          const api = node?.instance?.api;
+          if (!api) return null;
+          return api.server;
+        },
+        (req) => isWebsocketUpgradeAllowed(req.headers, { allowedHostnames, hostGuardDisabled })
+      );
     },
   };
 }

@@ -1,6 +1,16 @@
 import { app, BrowserWindow } from "electron";
 import * as readline from "node:readline";
 
+// Name the app so app.getName() and the default menu items ("Quit Argent
+// Lens", the About panel) report "Argent Lens" instead of "Electron". Set
+// before `app` is ready so the default menu picks it up. NOTE: this does NOT
+// change the bold macOS menu-bar / app-switcher title — that's the unpackaged
+// Electron.app bundle's CFBundleName, which no runtime call can override (only
+// shipping the helper as its own .app bundle would). The window's OWN title is
+// set to "Argent Lens" below, which is what shows in Mission Control / the
+// Window menu / screen-share window pickers.
+app.setName("Argent Lens");
+
 // One-window-at-a-time host for the Argent Lens preview UI. The
 // tool-server spawns this process when `await_user_selection` parks, then
 // pipes single-line JSON commands ({cmd:"foreground"|"close",url?}) over
@@ -127,7 +137,17 @@ async function createWindow(): Promise<void> {
   win = new BrowserWindow({
     width: TARGET_WIDTH,
     height: TARGET_HEIGHT,
-    frame: false,
+    title: "Argent Lens",
+    // Native window controls (the macOS traffic lights) instead of a
+    // handcrafted close button: `titleBarStyle: "hidden"` keeps the real OS
+    // buttons in the top-left while hiding the rest of the title bar, so the
+    // window still reads as frameless. (`frame: false` would suppress the
+    // buttons entirely — that's what we used to do.)
+    titleBarStyle: "hidden",
+    // Inset the traffic lights to share the same 14px padding the in-window
+    // corner panels use (theme toggle, status pill), so the native buttons and
+    // the handcrafted chrome read as one consistent margin.
+    trafficLightPosition: { x: 14, y: 18 },
     show: false,
     // Transparent + no native shadow: the OS window is just a passthrough
     // for the renderer. The visible "card" is whatever <html> + <body>
@@ -141,6 +161,11 @@ async function createWindow(): Promise<void> {
       sandbox: true,
     },
   });
+  // Belt-and-suspenders for the traffic lights on a transparent window:
+  // some macOS/Electron combinations hide the buttons when `transparent` is
+  // set, so force them visible. No-op / undefined off macOS.
+  win.setWindowButtonVisibility?.(true);
+  win.setTitle("Argent Lens");
   win.on("closed", () => {
     win = null;
     app.quit();

@@ -170,7 +170,7 @@ describe("resolveFileInputs", () => {
           }),
         }
       )
-    ).rejects.toThrow(/36\.0 MB — larger than the 32\.0 MB file-input transfer limit/);
+    ).rejects.toThrow(/36 MB — larger than the 32 MB file-input transfer limit/);
   });
 
   it("still resolves an oversize file in place when it matches on this host", async () => {

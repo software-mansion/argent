@@ -53,18 +53,20 @@ describe("makeNetworkDetailReadScript", () => {
     expect(script).toContain("rn-net-42");
   });
 
-  it("escapes single quotes in requestId to prevent injection", () => {
-    const script = makeNetworkDetailReadScript("rn-net-'test");
-    expect(script).toContain("rn-net-\\'test");
-    expect(script).not.toContain("rn-net-'test'");
+  it("embeds the requestId as a JSON string literal (safe against quotes/backslashes/injection)", () => {
+    // The requestId is interpolated via JSON.stringify, so for any input the
+    // byId lookup is exactly `byId[<json-literal>]` — no break-out is possible.
+    for (const rid of ["rn-net-1", "rn-net-'q", 'rn-net-"x', "rn-net-\\b", `x"]; evil(); //`]) {
+      const script = makeNetworkDetailReadScript(rid);
+      expect(script).toContain(`byId[${JSON.stringify(rid)}]`);
+    }
   });
 
-  it("escapes backslashes before quotes to prevent injection", () => {
-    // A requestId like rn-net-\' should become rn-net-\\' in the script,
-    // not rn-net-\\' which would terminate the string early.
-    const script = makeNetworkDetailReadScript("rn-net-\\'");
-    // The backslash should be doubled, then the quote escaped
-    expect(script).toContain("rn-net-\\\\\\'");
+  it("encodes a control character instead of injecting it raw (the hand-escaper crashed the parse)", () => {
+    const script = makeNetworkDetailReadScript("rn-net-\n5");
+    expect(script).toContain('byId["rn-net-\\n5"]');
+    // never a raw newline inside the string literal (which would be a SyntaxError)
+    expect(script).not.toMatch(/byId\["rn-net-\n/);
   });
 
   it("escapes standalone backslashes in requestId", () => {

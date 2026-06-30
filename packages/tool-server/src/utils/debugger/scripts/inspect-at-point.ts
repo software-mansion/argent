@@ -56,9 +56,13 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
   const noHookMsg = JSON.stringify(INSPECT_NO_DEVTOOLS_HOOK_ERROR);
   const noRendererMsg = JSON.stringify(INSPECT_NO_RENDERER_ERROR);
   const noRootMsg = JSON.stringify(INSPECT_NO_FIBER_ROOT_ERROR);
+  // JSON.stringify yields a valid JS string literal — escapes quotes/newlines
+  // that a bare '${requestId}' would inject raw (consistent with the network
+  // detail script; requestId is a randomUUID today, so this is defense-in-depth).
+  const ridLiteral = JSON.stringify(requestId);
   return `(function() {
   function __argent_fail(msg) {
-    __argent_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:msg}));
+    __argent_callback(JSON.stringify({requestId:${ridLiteral},type:'inspect_result',error:msg}));
   }
   try {
   var hook = (typeof globalThis !== 'undefined' ? globalThis : window).__REACT_DEVTOOLS_GLOBAL_HOOK__;
@@ -219,7 +223,7 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
     var hostFiber = findHostFiber(root.current.child, 0);
     if (hostFiber) { inspectRef = getInspectRef(hostFiber); foundAnchor = true; }
   }
-  if (!foundAnchor) { __argent_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:'no host fiber'})); return; }
+  if (!foundAnchor) { __argent_callback(JSON.stringify({requestId:${ridLiteral},type:'inspect_result',error:'no host fiber'})); return; }
 
   renderer.rendererConfig.getInspectorDataForViewAtPoint(
     inspectRef, ${Math.round(x)}, ${Math.round(y)},
@@ -247,7 +251,7 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
         }
       }
 
-      __argent_callback(JSON.stringify({ requestId:'${requestId}', type:'inspect_result', x:${Math.round(x)}, y:${Math.round(y)}, items:items }));
+      __argent_callback(JSON.stringify({ requestId:${ridLiteral}, type:'inspect_result', x:${Math.round(x)}, y:${Math.round(y)}, items:items }));
     }
   );
   return 'ok';
