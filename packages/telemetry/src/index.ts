@@ -55,18 +55,36 @@ export {
 
 const SHORT_FLUSH_TIMEOUT_MS = 1_500;
 
+/** Lazy host-fingerprint resolver, injected by callers that own the binary. */
+export type FingerprintResolver = () => string | null;
+
+export interface TelemetryInitOptions {
+  /**
+   * Resolves the host machine fingerprint used to derive a stable per-machine
+   * `distinct_id`. Injected (rather than resolved inside telemetry) so this
+   * package stays a leaf — only callers that own the simulator-server binary
+   * provide it. Called at most once per process, lazily, on the first event;
+   * must return a fingerprint string or null, and may throw (treated as null).
+   */
+  resolveFingerprint?: FingerprintResolver;
+}
+
 interface RuntimeState {
   runtime: Runtime;
   initialized: boolean;
+  resolveFingerprint?: FingerprintResolver;
 }
 
 let state: RuntimeState | null = null;
 
-export function init(runtime: Runtime): void {
-  if (state && state.runtime === runtime) return;
+// init() is a once-per-process startup call (CLI / installer / tool-server each
+// call it exactly once). Set the full state every time so the latest runtime
+// and resolver win and nothing leaks from a prior init.
+export function init(runtime: Runtime, options?: TelemetryInitOptions): void {
   state = {
     runtime,
     initialized: true,
+    resolveFingerprint: options?.resolveFingerprint,
   };
 }
 
@@ -81,10 +99,11 @@ function buildPayload(
   distinctId: string;
   properties: Record<string, unknown>;
 } | null {
-  // Lazy id creation: only on the first event we send.
+  // Lazy id creation: only on the first event we send. The fingerprint
+  // resolver (if injected) is invoked here, once, when the id is first minted.
   let distinctId: string;
   try {
-    distinctId = readOrCreateAnonId();
+    distinctId = readOrCreateAnonId(state?.resolveFingerprint);
   } catch (err) {
     emitDebugError("buildPayload: identity creation failed", err);
     return null;
