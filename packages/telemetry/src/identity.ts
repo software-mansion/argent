@@ -9,11 +9,13 @@ import { uuidv5 } from "./uuidv5.js";
 // would re-bucket every machine as a brand-new user.
 const TELEMETRY_ID_NAMESPACE = "a8f1d3c2-6b04-4e7a-9d51-2c8e0f3a7b6d";
 
-// A host fingerprint is a long hex string (the simulator-server `fingerprint`
-// subcommand emits 64 hex chars). Require hex-only and a sane minimum length so
-// an unexpected non-fingerprint stdout (e.g. an error banner) is rejected and
-// we fall back to a random id rather than hashing garbage into a "stable" id.
-const FINGERPRINT_PATTERN = /^[0-9a-fA-F]{16,}$/;
+// The simulator-server `fingerprint` subcommand emits exactly 64 lowercase hex
+// chars. Require that exact shape (after lower-casing) so a truncated/partial
+// read, a bare hex token (git SHA, all-zeros), or an error banner is rejected
+// and we fall back to a random id rather than hashing garbage into a "stable"
+// id. uuidv5 is case-sensitive, so we lower-case before both matching and
+// hashing — a future binary that emitted upper-case hex must map to the same id.
+const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
 // In-memory cache of the resolved id. The anon id is stable once resolved, so
 // the long-lived tool-server (which calls this on every tracked event) avoids
@@ -21,6 +23,12 @@ const FINGERPRINT_PATTERN = /^[0-9a-fA-F]{16,}$/;
 // Keyed by the resolved path so a process whose home dir changes (e.g. tests
 // scoping HOME) doesn't serve a stale id.
 let cached: { path: string; id: string } | null = null;
+
+// Memoize the fingerprint resolution (including a failed/absent one as null)
+// independently of the id cache, so the binary is spawned AT MOST ONCE per
+// process even if id-file persistence keeps failing (a broken ~/.argent would
+// otherwise re-enter readOrCreateAnonId — and re-spawn — on every event).
+let fingerprintResolved: { value: string | null } | null = null;
 
 /**
  * Resolve the anonymous telemetry id.
@@ -63,6 +71,24 @@ export function readOrCreateAnonId(resolveFingerprint?: () => string | null): st
     return stored;
   }
 
+  // No fingerprint and no valid stored id. If a regular file already occupies
+  // the path but holds invalid content (corrupt / empty / unreadable), atomically
+  // overwrite it — mintRandomId's link-based create can't publish over an occupied
+  // path and would otherwise throw on every event, silently killing telemetry. A
+  // symlink / non-regular file is left untouched so the symlink-rejection guard
+  // still fails closed (mintRandomId throws rather than following it).
+  if (isCorruptIdFile(finalPath)) {
+    const replacement = crypto.randomUUID();
+    try {
+      writeIdFileAtomic(finalPath, replacement);
+      cached = { path: finalPath, id: replacement };
+      return replacement;
+    } catch {
+      // Overwrite failed (e.g. unwritable home dir); fall through to the create
+      // path, which surfaces the failure after its own retries.
+    }
+  }
+
   // Brand-new install with no fingerprint available: mint a random id.
   return mintRandomId(finalPath);
 }
@@ -73,17 +99,48 @@ export function readOrCreateAnonId(resolveFingerprint?: () => string | null): st
  * nothing, or the value doesn't look like a fingerprint.
  */
 function deriveFingerprintId(resolveFingerprint?: () => string | null): string | null {
+  const fingerprint = resolveFingerprintOnce(resolveFingerprint);
+  return fingerprint ? uuidv5(fingerprint, TELEMETRY_ID_NAMESPACE) : null;
+}
+
+/**
+ * Invoke the injected resolver at most once per process and cache the validated
+ * fingerprint (or null). Returns the normalized (trimmed, lower-cased) 64-hex
+ * fingerprint, or null when no resolver is injected, it throws/returns nothing,
+ * or the value isn't a well-formed fingerprint.
+ */
+function resolveFingerprintOnce(resolveFingerprint?: () => string | null): string | null {
+  // No resolver -> nothing to spawn or cache; callers without the binary always
+  // pass undefined, so this can't poison a later resolver-bearing call.
   if (!resolveFingerprint) return null;
-  let fingerprint: string | null;
+  if (fingerprintResolved) return fingerprintResolved.value;
+
+  let value: string | null = null;
+  let raw: string | null;
   try {
-    fingerprint = resolveFingerprint();
+    raw = resolveFingerprint();
   } catch {
-    return null;
+    raw = null;
   }
-  if (!fingerprint) return null;
-  const normalized = fingerprint.trim();
-  if (!FINGERPRINT_PATTERN.test(normalized)) return null;
-  return uuidv5(normalized, TELEMETRY_ID_NAMESPACE);
+  if (raw) {
+    const normalized = raw.trim().toLowerCase();
+    if (FINGERPRINT_PATTERN.test(normalized)) value = normalized;
+  }
+  fingerprintResolved = { value };
+  return value;
+}
+
+// True iff a regular file exists at filePath whose contents tryReadId rejects —
+// a corrupt id file safe to overwrite. Symlinks / non-regular files return false
+// so they are never followed or clobbered.
+function isCorruptIdFile(filePath: string): boolean {
+  let isRegularFile: boolean;
+  try {
+    isRegularFile = fs.lstatSync(filePath).isFile();
+  } catch {
+    return false; // absent (ENOENT) or unstatable
+  }
+  return isRegularFile && tryReadId(filePath) === null;
 }
 
 // Atomically replace the id file with `id` (mode 0600). Write to a temp file in
@@ -192,9 +249,10 @@ export function deleteAnonId(): void {
   }
 }
 
-/** Test seam: drop the in-memory id cache. */
+/** Test seam: drop the in-memory id and fingerprint caches. */
 export function _resetIdentityCacheForTest(): void {
   cached = null;
+  fingerprintResolved = null;
 }
 
 function tryReadId(filePath: string): string | null {
