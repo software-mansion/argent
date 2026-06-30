@@ -27,6 +27,13 @@ const posthogMock = vi.hoisted(() => ({
   flushImpl: () => Promise.resolve(),
 }));
 
+// Telemetry resolves the host fingerprint internally for every entry point.
+// Stub it to a fixed 64-hex value so track() derives a deterministic v5 id
+// without spawning the real simulator-server binary.
+vi.mock("../src/fingerprint.js", () => ({
+  resolveHostFingerprint: () => "f".repeat(64),
+}));
+
 vi.mock("posthog-node", () => {
   return {
     PostHog: vi.fn().mockImplementation(function (_key: string, opts: unknown) {
@@ -118,12 +125,9 @@ describe("telemetry public surface", () => {
     expect(client.opts).toEqual(expect.objectContaining({ flushAt: 20, flushInterval: 10_000 }));
   });
 
-  it("uses the injected fingerprint resolver to derive a stable v5 distinctId", () => {
-    // Re-init with a resolver so the id becomes fingerprint-derived (v5) rather
-    // than a random v4.
-    resetClient();
-    init("tool_server", { resolveFingerprint: () => "f".repeat(64) });
-
+  it("derives a stable v5 distinctId from the host fingerprint", () => {
+    // The fingerprint module is stubbed (top of file) to a fixed 64-hex value,
+    // so the id is fingerprint-derived (v5) rather than a random v4.
     track("toolserver:start", {});
 
     const client = posthogMock.instances[0]!;

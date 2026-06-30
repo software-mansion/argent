@@ -1,8 +1,7 @@
 /**
- * `resolveHostFingerprint` is the seam the telemetry leaf uses to obtain the
- * host fingerprint without depending on `@argent/native-devtools-ios`. It must
+ * `resolveHostFingerprint` shells out to `simulator-server fingerprint`. It must
  * be best-effort: any failure (binary missing, non-zero exit, timeout, empty
- * output) returns null so telemetry falls back to a random id and never throws.
+ * output) returns null so identity falls back to a random id and never throws.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -17,7 +16,7 @@ vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryPath: () => binaryPathMock(),
 }));
 
-import { resolveHostFingerprint } from "../src/utils/host-fingerprint";
+import { resolveHostFingerprint } from "../src/fingerprint.js";
 
 describe("resolveHostFingerprint", () => {
   beforeEach(() => {

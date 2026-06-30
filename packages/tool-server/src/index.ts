@@ -7,7 +7,6 @@ import {
   aiTelemetryFromMeta,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
-import { resolveHostFingerprint } from "./utils/host-fingerprint";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
@@ -125,9 +124,7 @@ export function start(): void {
   attachRegistryLogger(registry);
 
   // Tool events use the queued client; shutdown gets a bounded final flush.
-  // Inject the host-fingerprint resolver so the distinct_id becomes a stable
-  // per-machine id (resolved lazily, once, on the first event).
-  telemetryInit("tool_server", { resolveFingerprint: resolveHostFingerprint });
+  telemetryInit("tool_server");
   const telemetryHandle = attachRegistryTelemetry(registry);
   const serverStartedAt = Date.now();
   let shutdownReason: "idle" | "signal" | "crash" = "signal";

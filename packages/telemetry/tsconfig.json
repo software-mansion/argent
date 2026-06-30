@@ -6,7 +6,11 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "references": [{ "path": "../configuration-core" }, { "path": "../registry" }],
+  "references": [
+    { "path": "../configuration-core" },
+    { "path": "../registry" },
+    { "path": "../native-devtools-ios" }
+  ],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
