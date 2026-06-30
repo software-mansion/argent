@@ -49,8 +49,10 @@ Returns { message, flowFile, savedTo } and optionally { previousFlow } if a prio
 Fails if the .argent/flows/ directory cannot be created or the flow file cannot be written.
 
 After starting, use flow-add-step to append tool calls — each step is executed
-LIVE so you can verify it works before it gets recorded. Use flow-add-echo
-to add labels. Call flow-finish-recording when done.
+LIVE and then recorded unless the tool throws. Inspect each returned result
+before continuing; remove or replace recorded steps whose result reports a
+non-throwing failure. Use flow-add-echo to add labels. Call
+flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, you can edit the .yaml file directly
 to remove or reorder steps.`,
