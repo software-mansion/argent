@@ -30,7 +30,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`.
 4. **Tap a text field before typing**, then use `keyboard` to enter text.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
+6. **For direct locate-then-act interactions, prefer `find`.** It uses the same tree as `describe` and taps/types without you reading coordinates. Use `describe` first when you need the whole screen, need to disambiguate multiple matches, or `find` reports an ambiguous `matchCount`. Do not navigate from screenshots on regular in-app screens unless tree-based discovery failed. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
 ## 3. Opening Apps
 
@@ -81,6 +81,7 @@ IMPORTANT. When moved to a different screen after an action or do not know the c
 
 | App type                          | Discovery tool            | What it returns                                                                                                                                                                                                                                     |
 | --------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Locate-and-act shortcut           | `find`                    | Matches the current accessibility/DOM tree by text/label/value/role/id and can tap/type/fill/read in one call. Prefer this for a specific visible target; use `describe` when you need the full screen or must disambiguate several matches         |
 | Target app discovery              | `describe`                | Accessibility element tree for the current device screen (iOS AX-service, Android uiautomator, or Chromium DOM walker) with normalized frame coordinates. Works on any app, system dialogs, and Home screen — no app restart or `bundleId` required |
 | React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                                                                                                                                       |
 | App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                                                                                                                                |

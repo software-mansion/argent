@@ -5,14 +5,14 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 ## 1. Overview
 
-A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/flows/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
+A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/flows/` directory. Each step is **executed live** as you add it, then recorded unless the tool throws. Inspect the returned result before moving on; if the result shows a non-throwing failure, remove or replace the recorded step. Replay a finished flow with `flow-execute`.
 
 ## 2. Tools
 
 | Tool                     | Purpose                                                                    |
 | ------------------------ | -------------------------------------------------------------------------- |
 | `flow-start-recording`   | Start recording — takes a name and executionPrerequisite, creates the file |
-| `flow-add-step`          | Execute a tool call live and record it if it succeeds                      |
+| `flow-add-step`          | Execute a tool call live and record it unless the tool throws              |
 | `flow-add-echo`          | Add a label/comment that prints during replay                              |
 | `flow-finish-recording`  | Stop recording and get a summary                                           |
 | `flow-read-prerequisite` | Read a flow's execution prerequisite without running it                    |
@@ -65,12 +65,14 @@ args: "{\"udid\": \"<UDID>\", \"condition\": \"visible\", \"selector\": {\"text\
 
 Record an `await-ui-element` step to **gate** the next step on a screen transition — it blocks until the element is `visible`/`hidden` (or contains `text`), so the following step runs only once the screen has actually settled. If its condition is not met before the timeout, replay **stops at that step** (the steps after it assume the transition happened). Prefer this over a fixed `delayMs`. See the `await-ui-element` section of `argent-device-interact` for the full condition/selector reference.
 
+Do **not** record `find` steps in v1 flows. `find` returns `{ found: false }` when it misses instead of throwing, so `flow-add-step` can record a missed lookup and `flow-execute` can continue past it. Use `await-ui-element` to gate, then record `gesture-tap` / `keyboard` steps from discovered coordinates until flow replay treats `find` misses as stopping failures.
+
 For tools with no arguments, omit `args` entirely.
 
 ## 5. Important Rules
 
 - **Every step runs live.** You will see the real tool result (including screenshots). Use this to verify the step worked before continuing.
-- **Only successful steps are recorded.** If a tool call fails, nothing is written to the flow file — fix the issue and try again.
+- **Only thrown tool failures are rejected.** If a tool call fails by returning a status object, inspect that result before continuing. In particular, do not keep a recorded `find` step unless replay has explicit stop-on-`found:false` support.
 - **Pass `project_root` only to `flow-start-recording`.** It is stored for the session and automatically used by all subsequent flow tools. An error is returned if the path is not absolute.
 - **You do NOT need to pass a flow name** to `flow-add-step`, `flow-add-echo`, or `flow-finish-recording`. The active flow is tracked automatically after `flow-start-recording`.
 - **Start before adding.** Calling `flow-add-step`, `flow-add-echo`, or `flow-finish-recording` without an active recording returns an error: _"No active flow. Call flow-start-recording first."_
@@ -225,4 +227,4 @@ Apply these when recording new flows to reduce future breakage:
 - **Add screenshot steps after critical navigation.** Insert `screenshot` steps after screen transitions. These produce images in the flow result you can inspect during diagnosis.
 - **Write specific executionPrerequisites.** `"App on home tab, user logged in, simulator UDID is <X>"` — not `"App running"`. Verify with `screenshot` + `describe` before acknowledging.
 - **Prefer launch-app / open-url over navigation chains.** Deep links are more resilient to layout changes than tap sequences.
-- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `describe` to find the element by label and update coordinates. Only use `screenshot` for permission or system overlays when `describe` cannot expose the target reliably.
+- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `find` with `action: "exists"` for a quick presence check, or use `find`'s `match.tapPoint`, `describe`, or `debugger-component-tree` to read the target's current coordinates, then edit the YAML tap step. Run these as interactive discovery calls; do not record `find` steps in v1 flows. Only use `screenshot` for permission or system overlays when tree-based discovery cannot expose the target reliably.

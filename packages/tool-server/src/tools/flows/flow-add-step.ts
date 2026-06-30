@@ -4,7 +4,7 @@ import { getActiveFlow, appendStepToActiveFlow, type FlowSavedTo } from "./flow-
 import { invokeSubTool } from "../../utils/sub-invoke";
 
 const zodSchema = z.object({
-  command: z.string().describe('MCP tool name (e.g. "tap", "screenshot", "launch-app")'),
+  command: z.string().describe('MCP tool name (e.g. "gesture-tap", "screenshot", "launch-app")'),
   args: z
     .string()
     .optional()
@@ -27,7 +27,7 @@ export function createFlowAddStepTool(
 > {
   return {
     id: "flow-add-step",
-    description: `Execute a tool call and record it as a step in the active flow. Use when recording a flow with flow-start-recording and you want to run and capture each action. Returns { message, toolResult, flowFile } on success. If it fails an error is returned and nothing is recorded. Error if the tool name is not found in the registry or arguments are invalid JSON.\nIf a step was recorded by mistake, edit the .yaml file directly to remove it.`,
+    description: `Execute a tool call live and record it as a step in the active flow unless the tool throws. Use when recording a flow with flow-start-recording and you want to run and capture each action. Returns { message, toolResult, flowFile } after recording. Tool results that report failure as data, such as find returning { found: false }, are still recorded; inspect toolResult before continuing and edit the .yaml file to remove mistaken steps. If the tool throws, an error is returned and nothing is recorded. Error if the tool name is not found in the registry or arguments are invalid JSON.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, ctx) {
