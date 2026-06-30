@@ -15,12 +15,19 @@ import {
 import {
   AGENTS_DIR,
   detectPackageManager,
+  detectProjectPackageManager,
   formatShellCommand,
   globalUninstallCommand,
+  localUninstallCommand,
   isGloballyInstalled,
+  isLocallyInstalled,
+  resolveInstallMode,
+  removeInstallRecord,
   resolveProjectRoot,
   RULES_DIR,
   SKILLS_DIR,
+  type InstallMode,
+  type ShellCommand,
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServer } from "@argent/tools-client";
@@ -323,6 +330,9 @@ export async function uninstall(args: string[]): Promise<void> {
   track("installation:cli_uninstall_start", {});
 
   let telemetryFinalized = false;
+  // Resolved inside the try once the project root is known; reported on the
+  // terminal event so the uninstall funnel is split by install mode.
+  let installMode: InstallMode = "global";
   const finalizeUninstallTelemetry = async (
     hasPrunedContent: boolean,
     hasUninstalledPackage: boolean,
@@ -334,6 +344,7 @@ export async function uninstall(args: string[]): Promise<void> {
       track("installation:cli_uninstall_complete", {
         has_pruned_content: hasPrunedContent,
         has_uninstalled_package: hasUninstalledPackage,
+        install_mode: installMode,
         ...(failureSignal ?? {}),
       });
     });
@@ -363,6 +374,7 @@ export async function uninstall(args: string[]): Promise<void> {
     }
 
     const projectRoot = resolveProjectRoot(process.cwd());
+    installMode = resolveInstallMode(projectRoot);
     const results: string[] = [];
 
     // ── Remove MCP entries ──────────────────────────────────────────────────────
@@ -492,6 +504,15 @@ export async function uninstall(args: string[]): Promise<void> {
         }
       }
 
+      // Remove the committed local-mode marker (.argent/install.json).
+      try {
+        if (removeInstallRecord(projectRoot)) {
+          pruneResults.push(`${pc.green("+")} Removed .argent/install.json`);
+        }
+      } catch (err) {
+        pruneResults.push(`${pc.red("x")} Could not remove .argent/install.json: ${err}`);
+      }
+
       if (pruneResults.length > 0) {
         p.note(pruneResults.join("\n"), "Pruned Argent Content");
       } else {
@@ -502,43 +523,70 @@ export async function uninstall(args: string[]): Promise<void> {
       p.log.info(pc.dim("Kept Argent-owned skills, rules, and agents."));
     }
 
-    // ── Uninstall the global package ────────────────────────────────────────────
+    // ── Uninstall the package ───────────────────────────────────────────────────
+    // Scope removal to the project's install MODE. `argent uninstall` in a
+    // local-mode project removes the repo-local devDependency and must NEVER
+    // reach out and uninstall the shared GLOBAL install (which would be a
+    // surprising, machine-wide side effect — especially under --yes); a
+    // global-mode uninstall behaves as before. A coexisting install in the other
+    // mode is left alone — removing it is a separate, explicit decision.
 
-    const globallyInstalled = isGloballyInstalled();
-    let shouldUninstallPackage = nonInteractive && globallyInstalled;
+    interface RemovableInstall {
+      kind: "local" | "global";
+      cmd: ShellCommand;
+      cwd?: string;
+      prompt: string;
+      // Interactive default: a local devDep in the project the user ran
+      // uninstall in is likely meant to go; a global install is shared, so
+      // default off (preserves the prior global-mode behavior).
+      defaultRemove: boolean;
+    }
 
-    // In --yes mode we only remove a global install we can actually see on PATH,
-    // mirroring the interactive flow (which prompts only when detected) and
-    // avoiding a spurious `uninstall -g` error for a package that isn't there.
-    // The probe is PATH-based, so surface the skip in case a global install
-    // lives under a toolchain not on this shell's PATH (nvm/pnpm/etc.).
-    if (nonInteractive && !globallyInstalled) {
+    let removable: RemovableInstall | null = null;
+    if (installMode === "local") {
+      if (isLocallyInstalled(projectRoot)) {
+        removable = {
+          kind: "local",
+          cmd: localUninstallCommand(detectProjectPackageManager(projectRoot), PACKAGE_NAME),
+          cwd: projectRoot,
+          prompt: `Remove the local ${PACKAGE_NAME} devDependency from this project?`,
+          defaultRemove: true,
+        };
+      }
+    } else if (isGloballyInstalled()) {
+      removable = {
+        kind: "global",
+        cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
+        prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
+        defaultRemove: false,
+      };
+    }
+
+    // In --yes mode, surface when there is nothing to remove for this mode — the
+    // probe is PATH/node_modules based, so an install under a different toolchain
+    // (or the other mode) is intentionally left untouched.
+    if (nonInteractive && !removable) {
       p.log.info(
         pc.dim(
-          `Skipped global package removal: ${PACKAGE_NAME} was not detected on PATH. ` +
-            `If it is installed under a different toolchain, remove it manually.`
+          `Skipped package removal: no ${installMode} ${PACKAGE_NAME} install detected. ` +
+            `If it is installed elsewhere, remove it manually.`
         )
       );
     }
 
-    if (!nonInteractive && globallyInstalled) {
+    let shouldRemove = nonInteractive && removable !== null;
+    if (!nonInteractive && removable) {
       p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-      const uninstallPkg = await p.confirm({
-        message: `Uninstall the global ${PACKAGE_NAME} package?`,
-        initialValue: false,
+      const choice = await p.confirm({
+        message: removable.prompt,
+        initialValue: removable.defaultRemove,
       });
-
-      if (!p.isCancel(uninstallPkg)) {
-        shouldUninstallPackage = uninstallPkg as boolean;
-      }
+      if (!p.isCancel(choice)) shouldRemove = choice as boolean;
     }
 
-    if (shouldUninstallPackage) {
-      const pm = detectPackageManager();
-      const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
-      p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
-
+    if (shouldRemove && removable) {
+      // Stop the tool-server before touching the install so no binary is held
+      // open during removal.
       try {
         await killToolServer();
       } catch (err) {
@@ -547,13 +595,21 @@ export async function uninstall(args: string[]): Promise<void> {
         throw err;
       }
 
+      p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
-        execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
-        p.log.success("Package uninstalled.");
+        execFileSync(removable.cmd.bin, removable.cmd.args, {
+          stdio: "inherit",
+          ...(removable.cwd ? { cwd: removable.cwd } : {}),
+        });
+        p.log.success(`Removed ${removable.kind} package.`);
         hasUninstalledPackage = true;
       } catch (err) {
-        p.log.error(`Uninstall failed: ${err}`);
-        await finalizeUninstallTelemetry(hasPrunedContent, false, UNINSTALL_PACKAGE_ACTION_FAILED);
+        p.log.error(`${removable.kind} uninstall failed: ${err}`);
+        await finalizeUninstallTelemetry(
+          hasPrunedContent,
+          hasUninstalledPackage,
+          UNINSTALL_PACKAGE_ACTION_FAILED
+        );
         return;
       }
     }

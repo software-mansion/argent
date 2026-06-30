@@ -538,3 +538,196 @@ export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCo
       return { bin: "npm", args: ["uninstall", "-g", pkg] };
   }
 }
+
+// ── Local (repo-local / committable) install mode ─────────────────────────────
+// The committable install mode adds @swmansion/argent to the project's
+// devDependencies instead of installing it globally, and commits MCP configs
+// that run the project-local copy. These helpers are the local-mode siblings of
+// the global-* commands above; every command that mutates the project's package
+// manifest MUST run with `cwd` set to the project root.
+
+export function localInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
+  switch (pm) {
+    case "yarn":
+      return { bin: "yarn", args: ["add", "--dev", pkg] };
+    case "pnpm":
+      return { bin: "pnpm", args: ["add", "-D", pkg] };
+    case "bun":
+      return { bin: "bun", args: ["add", "-d", pkg] };
+    default:
+      return { bin: "npm", args: ["install", "--save-dev", pkg] };
+  }
+}
+
+export function localUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
+  switch (pm) {
+    case "yarn":
+      return { bin: "yarn", args: ["remove", pkg] };
+    case "pnpm":
+      return { bin: "pnpm", args: ["remove", pkg] };
+    case "bun":
+      return { bin: "bun", args: ["remove", pkg] };
+    default:
+      return { bin: "npm", args: ["uninstall", pkg] };
+  }
+}
+
+// Detect the package manager a *project* uses by sniffing its lockfile, falling
+// back to the runner-based detectPackageManager(). The runner heuristic reads
+// npm_config_user_agent, which reflects whoever launched `argent` (often npx /
+// npm), not the host project — wrong for the local-install commands, which must
+// match the project's own lockfile so the right one is updated.
+export function detectProjectPackageManager(projectRoot: string): PackageManager {
+  const has = (file: string): boolean => fs.existsSync(path.join(projectRoot, file));
+  if (has("pnpm-lock.yaml")) return "pnpm";
+  if (has("yarn.lock")) return "yarn";
+  if (has("bun.lock") || has("bun.lockb")) return "bun";
+  if (has("package-lock.json") || has("npm-shrinkwrap.json")) return "npm";
+  return detectPackageManager();
+}
+
+export function hasProjectPackageJson(projectRoot: string): boolean {
+  return fs.existsSync(path.join(projectRoot, "package.json"));
+}
+
+// Yarn Plug'n'Play installs have NO node_modules, so a `node node_modules/...`
+// command can never resolve. Detect PnP so local mode can emit a `yarn argent
+// mcp` entry instead.
+export function isYarnPnp(projectRoot: string): boolean {
+  return (
+    fs.existsSync(path.join(projectRoot, ".pnp.cjs")) ||
+    fs.existsSync(path.join(projectRoot, ".pnp.loader.mjs"))
+  );
+}
+
+function getLocalArgentDir(projectRoot: string): string {
+  return path.join(projectRoot, "node_modules", PACKAGE_NAME);
+}
+
+// True iff @swmansion/argent is installed in the project's node_modules. Used to
+// infer local mode when no install record exists, and to decide whether `update`
+// should bump the devDep vs the global binary.
+export function isLocallyInstalled(projectRoot: string): boolean {
+  return fs.existsSync(path.join(getLocalArgentDir(projectRoot), "package.json"));
+}
+
+// Version of the project-local @swmansion/argent. Distinct from
+// getInstalledVersion (the running package) and getGloballyInstalledVersion:
+// under `npx`/local mode the running package is the npx cache, so the project's
+// own node_modules copy is the version `update` must compare against.
+export function getLocallyInstalledVersion(projectRoot: string): string | null {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(getLocalArgentDir(projectRoot), "package.json"), "utf8")
+    ) as { version?: string };
+    return pkg.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Project-relative POSIX path to the locally-installed argent CLI entrypoint
+// (e.g. "node_modules/@swmansion/argent/dist/cli.js"), or null when the package
+// isn't installed locally or its bin can't be resolved. Derived from the
+// installed package.json `bin` (and existence-checked) rather than hardcoded, so
+// it survives a future entrypoint move and never writes a dead command. Forward
+// slashes keep the committed command valid on every OS (Node accepts them on
+// Windows too).
+export function getLocalArgentBinRelPath(projectRoot: string): string | null {
+  const pkgDir = getLocalArgentDir(projectRoot);
+  let binSub: string | undefined;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as {
+      bin?: string | Record<string, string>;
+    };
+    if (typeof pkg.bin === "string") binSub = pkg.bin;
+    else if (pkg.bin && typeof pkg.bin === "object")
+      binSub = pkg.bin[MCP_BINARY_NAME] ?? Object.values(pkg.bin)[0];
+  } catch {
+    return null;
+  }
+  if (!binSub) return null;
+  const abs = path.join(pkgDir, binSub);
+  if (!fs.existsSync(abs)) return null;
+  return path.relative(projectRoot, abs).split(path.sep).join("/");
+}
+
+// ── Install-mode record (.argent/install.json) ───────────────────────────────
+// Committed marker recording that a project uses local (devDependency) mode, so
+// `update`/`uninstall` and teammates act on the repo-local install rather than a
+// global one. Only written for local mode — global mode stays zero-footprint.
+
+export type InstallMode = "global" | "local";
+
+export interface InstallRecord {
+  mode: InstallMode;
+  package: string;
+  writtenBy?: string;
+}
+
+export function getInstallRecordPath(projectRoot: string): string {
+  return path.join(projectRoot, ".argent", "install.json");
+}
+
+export function readInstallRecord(projectRoot: string): InstallRecord | null {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(getInstallRecordPath(projectRoot), "utf8")
+    ) as InstallRecord;
+    if (parsed && (parsed.mode === "local" || parsed.mode === "global")) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeInstallRecord(projectRoot: string, record: InstallRecord): void {
+  const recordPath = getInstallRecordPath(projectRoot);
+  fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+  fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + "\n");
+}
+
+export function removeInstallRecord(projectRoot: string): boolean {
+  const recordPath = getInstallRecordPath(projectRoot);
+  try {
+    if (!fs.existsSync(recordPath)) return false;
+    fs.rmSync(recordPath, { force: true });
+    const dir = path.dirname(recordPath);
+    try {
+      if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+    } catch {
+      // non-fatal — sibling files (flags.json, …) keep .argent alive
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Effective install mode for a project: the committed record wins; otherwise
+// infer from an on-disk local install; default global (every pre-record install
+// predates this feature and was global).
+export function resolveInstallMode(projectRoot: string): InstallMode {
+  const record = readInstallRecord(projectRoot);
+  if (record) return record.mode;
+  return isLocallyInstalled(projectRoot) ? "local" : "global";
+}
+
+export class InstallModeFlagError extends Error {}
+
+// Resolve the install mode from `argent init` flags. Returns "global"/"local"
+// when fixed by a flag or the non-interactive default; null means "ask the user
+// interactively". Throws InstallModeFlagError on conflicting flags.
+export function resolveInstallModeFromFlags(opts: {
+  local: boolean;
+  global: boolean;
+  nonInteractive: boolean;
+}): InstallMode | null {
+  if (opts.local && opts.global) {
+    throw new InstallModeFlagError("--local and --global are mutually exclusive.");
+  }
+  if (opts.local) return "local";
+  if (opts.global) return "global";
+  if (opts.nonInteractive) return "global";
+  return null;
+}

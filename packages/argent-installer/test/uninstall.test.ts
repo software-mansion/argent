@@ -110,6 +110,7 @@ describe("uninstall — telemetry consent preservation", () => {
     expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
       has_pruned_content: false,
       has_uninstalled_package: false,
+      install_mode: "global",
     });
     expect(telemetryMock.forget).not.toHaveBeenCalled();
   });
@@ -135,6 +136,7 @@ describe("uninstall — telemetry consent preservation", () => {
     expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
       has_pruned_content: false,
       has_uninstalled_package: true,
+      install_mode: "global",
     });
 
     const shutdownOrder = telemetryMock.shutdown.mock.invocationCallOrder[0]!;
@@ -444,5 +446,79 @@ describe("uninstall — prune bundled content", () => {
   it("handles missing source or target directories gracefully", () => {
     const result = removeBundledContent(path.join(tmpDir, "missing"), path.join(tmpDir, "target"));
     expect(result).toEqual({ removedPaths: [], removedRoot: false });
+  });
+});
+
+describe("uninstall — local (committable) mode package removal", () => {
+  let savedHome: string | undefined;
+  let savedUserProfile: string | undefined;
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tmpDir;
+    process.env.USERPROFILE = tmpDir;
+  });
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+  });
+
+  function stageLocalProject(): void {
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent" })
+    );
+    const pkgDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    fs.writeFileSync(path.join(tmpDir, "package-lock.json"), "{}");
+  }
+
+  it("removes the local devDependency and NEVER the global package", async () => {
+    stageLocalProject();
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    const calls = childProcessMock.execFileSync.mock.calls as Array<
+      [string, string[], { cwd?: string }?]
+    >;
+    // Local devDep removal happened: `npm uninstall <pkg>` with cwd, no -g.
+    const localCall = calls.find(
+      ([bin, args]) =>
+        bin === "npm" &&
+        Array.isArray(args) &&
+        args.includes("uninstall") &&
+        args.includes("@swmansion/argent") &&
+        !args.includes("-g")
+    );
+    expect(localCall).toBeTruthy();
+    expect(localCall![2]?.cwd).toBeTruthy();
+
+    // The global package is NEVER touched in local mode — even though the
+    // (mocked) PATH probe reports a global install present. This is the guard
+    // against `argent uninstall` in a repo nuking the user's shared global tool.
+    const globalCall = calls.find(([, args]) => Array.isArray(args) && args.includes("-g"));
+    expect(globalCall).toBeFalsy();
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({ install_mode: "local", has_uninstalled_package: true })
+    );
+  });
+
+  it("removes the local-mode install record (.argent/install.json) during prune", async () => {
+    stageLocalProject();
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(tmpDir, ".argent", "install.json"))).toBe(false);
   });
 });

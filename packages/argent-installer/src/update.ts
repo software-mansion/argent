@@ -8,19 +8,26 @@ import {
   ALL_ADAPTERS,
   findConfiguredAdapterScopes,
   getMcpEntry,
+  resolveLocalCommandMode,
   copyRulesAndAgents,
   type McpConfigAdapter,
+  type McpServerEntry,
 } from "./mcp-configs.js";
 import {
   getGloballyInstalledVersion,
   isGloballyInstalled,
   isNewerVersion,
   detectPackageManager,
+  detectProjectPackageManager,
   globalInstallCommand,
+  localInstallCommand,
+  getLocallyInstalledVersion,
+  resolveInstallMode,
   formatShellCommand,
   resolveProjectRoot,
   RULES_DIR,
   AGENTS_DIR,
+  type InstallMode,
 } from "./utils.js";
 import {
   refreshArgentSkills,
@@ -120,6 +127,8 @@ export async function update(args: string[]): Promise<void> {
   telemetryInit("installer");
   const updateStartTime = performance.now();
   let telemetryFinalized = false;
+  // Resolved once Step 0 begins; reported on every terminal update event.
+  let installMode: InstallMode = "global";
 
   const trackPackageAction = async (
     action: UpdatePackageAction | "no_update" | "update_skipped" | "update_failed",
@@ -142,6 +151,7 @@ export async function update(args: string[]): Promise<void> {
     await finalizeTelemetry(() => {
       track("installation:cli_update_fail", {
         duration_ms: performance.now() - updateStartTime,
+        install_mode: installMode,
         ...(failureSignal ?? {}),
       });
     });
@@ -153,6 +163,7 @@ export async function update(args: string[]): Promise<void> {
     await finalizeTelemetry(() => {
       track("installation:cli_update_complete", {
         duration_ms: performance.now() - updateStartTime,
+        install_mode: installMode,
       });
     });
   };
@@ -167,17 +178,26 @@ export async function update(args: string[]): Promise<void> {
 
     track("installation:cli_update_start", {});
 
-    // When invoked via `npx @swmansion/argent update`, the running package is
-    // the npx cache and will always be at the latest published version. Reading the
-    // version from PACKAGE_ROOT would falsely report "already on the latest"
-    // both when no global install exists AND when the global install is
-    // outdated. getGloballyInstalledVersion() resolves the *real* global
-    // binary's package.json, so the compare reflects what the user has
-    // installed rather than what npx just downloaded.
-    const globallyInstalled = isGloballyInstalled();
-    const installed = globallyInstalled ? getGloballyInstalledVersion() : null;
+    // Mode decides what we update: the global PATH binary, or the project's
+    // devDependency. The committed .argent/install.json wins; otherwise we infer
+    // from an on-disk local install (resolveInstallMode), defaulting to global.
+    const projectRoot = resolveProjectRoot(process.cwd());
+    installMode = resolveInstallMode(projectRoot);
 
-    if (globallyInstalled && !installed) {
+    // When invoked via `npx @swmansion/argent update`, the running package is the
+    // npx cache and always at the latest published version. Reading PACKAGE_ROOT
+    // would falsely report "already on the latest". We resolve the *real* install
+    // the user has: the project's node_modules copy in local mode, or the global
+    // binary's package.json in global mode.
+    const globallyInstalled = installMode === "global" && isGloballyInstalled();
+    const installed =
+      installMode === "local"
+        ? getLocallyInstalledVersion(projectRoot)
+        : globallyInstalled
+          ? getGloballyInstalledVersion()
+          : null;
+
+    if (installMode === "global" && globallyInstalled && !installed) {
       await trackPackageAction(
         "update_failed",
         updateStartTime,
@@ -192,7 +212,8 @@ export async function update(args: string[]): Promise<void> {
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
-    const pm = detectPackageManager();
+    const pm =
+      installMode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
     let latest: string | null = null;
     let target: string | null = null;
     let minReleaseAgeMs = 0;
@@ -251,7 +272,11 @@ export async function update(args: string[]): Promise<void> {
     if (installed) {
       p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
     } else {
-      p.log.warn(`${PACKAGE_NAME} is not installed globally.`);
+      p.log.warn(
+        installMode === "local"
+          ? `${PACKAGE_NAME} is not installed in this project.`
+          : `${PACKAGE_NAME} is not installed globally.`
+      );
     }
     if (latest) {
       p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
@@ -270,7 +295,10 @@ export async function update(args: string[]): Promise<void> {
         p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${target}`)}`);
       }
 
-      const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${target}`);
+      const cmd =
+        installMode === "local"
+          ? localInstallCommand(pm, `${PACKAGE_NAME}@${target}`)
+          : globalInstallCommand(pm, `${PACKAGE_NAME}@${target}`);
       const cmdStr = formatShellCommand(cmd);
 
       if (!nonInteractive) {
@@ -279,7 +307,9 @@ export async function update(args: string[]): Promise<void> {
         const proceed = await p.confirm({
           message: installed
             ? `Update to v${target}?`
-            : `Install ${PACKAGE_NAME}@${target} globally?`,
+            : installMode === "local"
+              ? `Add ${PACKAGE_NAME}@${target} to this project's devDependencies?`
+              : `Install ${PACKAGE_NAME}@${target} globally?`,
           initialValue: true,
         });
 
@@ -313,6 +343,8 @@ export async function update(args: string[]): Promise<void> {
         execFileSync(cmd.bin, cmd.args, {
           stdio: "inherit",
           env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
+          // Local installs must rewrite the project's manifest/lockfile.
+          ...(installMode === "local" ? { cwd: projectRoot } : {}),
         });
       } catch (err) {
         await trackPackageAction(
@@ -343,9 +375,16 @@ export async function update(args: string[]): Promise<void> {
     // Refresh configuration
     spinner.start("Refreshing workspace configuration...");
 
-    const projectRoot = resolveProjectRoot(process.cwd());
-    const mcpEntry = getMcpEntry();
     const results: string[] = [];
+
+    // Per scope: project-scope entries in local mode run the repo-local copy
+    // (the bin path may have moved across versions); global scopes and global
+    // mode keep the bare `argent` command.
+    const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
+    const entryFor = (scope: "local" | "global"): McpServerEntry =>
+      installMode === "local" && scope === "local" && localCmdMode
+        ? getMcpEntry(localCmdMode)
+        : getMcpEntry({ kind: "global" });
 
     // Only refresh adapter scopes that already contain an argent entry. A
     // present editor dir (`.gemini`, `.cursor`, ...) is not consent — issue
@@ -357,13 +396,14 @@ export async function update(args: string[]): Promise<void> {
     ]);
 
     for (const { adapter, scope, configPath } of configuredScopes) {
+      const normScope = scope === "project" ? "local" : "global";
       try {
-        adapter.write(configPath, mcpEntry);
+        adapter.write(configPath, entryFor(normScope));
         results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
       } catch {
         // Skip paths that can't be written.
       }
-      adaptersByScope.get(scope === "project" ? "local" : "global")!.add(adapter);
+      adaptersByScope.get(normScope)!.add(adapter);
     }
 
     // Refresh allowlists only for scopes that already had argent configured —

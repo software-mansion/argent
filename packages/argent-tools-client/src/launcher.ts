@@ -553,9 +553,21 @@ async function acquireSpawnLock(): Promise<SpawnLock | null> {
  * Resolve a usable handle for the server described by `state`, or null when it
  * is absent, dead, or fails its health check. Side-effect free so both the
  * lock-free fast path and the double-check inside the lock can reuse it.
+ *
+ * When `wantBundlePath` is given, only a server running that SAME bundle is
+ * reused. A different bundlePath means a different argent install — a global
+ * binary vs a repo-local devDependency, or two repos pinning different versions
+ * — and reusing it would silently run the wrong version against the caller's
+ * MCP. We return null instead, so the caller spawns its own; the other server is
+ * left running (another session may depend on it, and the tools-client does not
+ * recover from a killed server) and idle-times-out on its own.
  */
-async function reusableHandle(state: ToolsServerState | null): Promise<ToolsServerHandle | null> {
+async function reusableHandle(
+  state: ToolsServerState | null,
+  wantBundlePath?: string
+): Promise<ToolsServerHandle | null> {
   if (!state || !isProcessAlive(state.pid)) return null;
+  if (wantBundlePath !== undefined && state.bundlePath !== wantBundlePath) return null;
   const host = state.host ?? "127.0.0.1";
   const healthy = await isToolsServerHealthy(state.port, host, 2000, state.token);
   if (!healthy) return null;
@@ -563,9 +575,11 @@ async function reusableHandle(state: ToolsServerState | null): Promise<ToolsServ
 }
 
 export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsServerHandle> {
-  // Fast path: a healthy server is already tracked — reuse it without paying the
-  // cost (or contention) of the spawn lock. This is the overwhelmingly common case.
-  const fast = await reusableHandle(await readState());
+  // Fast path: a healthy server running OUR bundle is already tracked — reuse it
+  // without paying the cost (or contention) of the spawn lock. This is the
+  // overwhelmingly common case. A server from a different bundle (version) is not
+  // reused — see reusableHandle.
+  const fast = await reusableHandle(await readState(), paths.bundlePath);
   if (fast) return fast;
 
   // Slow path: a spawn is likely needed. Serialize it across processes so the
@@ -573,23 +587,26 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
   // their own detached tool-server and orphan all but the last.
   const lock = await acquireSpawnLock();
   try {
-    // Double-checked: a peer may have spawned a healthy server while we waited
-    // for the lock. Reuse it rather than spawning a second one.
+    // Double-checked: a peer may have spawned a healthy server (of our bundle)
+    // while we waited for the lock. Reuse it rather than spawning a second one.
     const state = await readState();
-    const reuse = await reusableHandle(state);
+    const reuse = await reusableHandle(state, paths.bundlePath);
     if (reuse) return reuse;
 
     // No usable server. If the tracked pid is a wedged/unhealthy server WE
-    // auto-spawned, terminate it BEFORE spawning the replacement so it is never
-    // left running, untracked, on a leaked port. Three guards keep this from
-    // signalling the wrong process:
+    // auto-spawned FROM OUR OWN BUNDLE, terminate it BEFORE spawning the
+    // replacement so it is never left running, untracked, on a leaked port. Four
+    // guards keep this from signalling the wrong process:
     //   • managed === "autospawn" — never touch a `argent server start` (cli)
     //     server, which may be supervisor-managed and is just slow to start;
+    //   • bundlePath === ours — never kill a *different* argent version's server
+    //     (it may be healthy and serving another project's session);
     //   • a command-line identity match against the recorded bundle path;
     //   • terminatePid re-confirms that identity right before each signal.
     if (
       state &&
       state.managed === "autospawn" &&
+      state.bundlePath === paths.bundlePath &&
       isProcessAlive(state.pid) &&
       processCommandMatches(state.pid, state.bundlePath)
     ) {

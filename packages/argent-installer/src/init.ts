@@ -9,8 +9,11 @@ import {
   detectAdapters,
   ALL_ADAPTERS,
   getMcpEntry,
+  resolveLocalCommandMode,
   copyRulesAndAgents,
   type McpConfigAdapter,
+  type McpCommandMode,
+  type McpServerEntry,
 } from "./mcp-configs.js";
 import {
   SKILLS_DIR,
@@ -29,6 +32,16 @@ import {
   resolveProjectRoot,
   withNpmForce,
   type ShellCommand,
+  type InstallMode,
+  resolveInstallModeFromFlags,
+  InstallModeFlagError,
+  localInstallCommand,
+  detectProjectPackageManager,
+  hasProjectPackageJson,
+  isLocallyInstalled,
+  getLocallyInstalledVersion,
+  isYarnPnp,
+  writeInstallRecord,
 } from "./utils.js";
 import {
   refreshArgentSkills,
@@ -46,6 +59,20 @@ const INSTALL_GLOBAL_PACKAGE_FAILED: InstallerFailureSignal = {
   failure_stage: "installer_global_package_install",
   failure_area: "installer",
   error_kind: "subprocess",
+};
+
+const INSTALL_LOCAL_PACKAGE_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_LOCAL_PACKAGE_FAILED,
+  failure_stage: "installer_local_package_install",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+const INSTALL_LOCAL_PRECONDITION_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_LOCAL_PRECONDITION_FAILED,
+  failure_stage: "installer_local_precondition",
+  failure_area: "installer",
+  error_kind: "validation",
 };
 
 const INSTALL_FROM_TAR_PACKAGE_FAILED: InstallerFailureSignal = {
@@ -79,12 +106,13 @@ const INSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
   error_kind: "unknown",
 };
 
-function runShellCommand(cmd: ShellCommand): Promise<void> {
+function runShellCommand(cmd: ShellCommand, opts: { cwd?: string } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
     const isWin = process.platform === "win32";
     const child = spawn(isWin ? `${cmd.bin}.cmd` : cmd.bin, cmd.args, {
       stdio: ["ignore", "pipe", "pipe"],
       shell: isWin,
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
     });
 
     let stderr = "";
@@ -107,10 +135,93 @@ function extractFlag(args: string[], flag: string): string | null {
   return args[idx + 1]!;
 }
 
+type PackageActionTracker = (
+  action:
+    | "fresh_install"
+    | "already_installed"
+    | "init_triggered_update"
+    | "no_update"
+    | "update_skipped"
+    | "update_failed",
+  startedAt: number,
+  isSuccess: boolean,
+  failureSignal?: InstallerFailureSignal
+) => Promise<void>;
+
+// Add @swmansion/argent to the project's devDependencies. Exits the process on a
+// missing package.json or a failed/empty install — the caller proceeds only once
+// the dep is verified on disk (or is a known PnP layout).
+async function installLocally(opts: {
+  fromTar: string | null;
+  trackPackageAction: PackageActionTracker;
+  finalizeInitTelemetry: (failureSignal?: InstallerFailureSignal) => Promise<void>;
+}): Promise<void> {
+  const { fromTar, trackPackageAction, finalizeInitTelemetry } = opts;
+  const projectRoot = resolveProjectRoot(process.cwd());
+
+  if (!hasProjectPackageJson(projectRoot)) {
+    p.log.error(
+      `Local install needs a package.json at ${pc.cyan(projectRoot)}.\n` +
+        `  Run ${pc.cyan("npm init -y")} there first, or use ${pc.cyan("argent init --global")}.`
+    );
+    await trackPackageAction(
+      "fresh_install",
+      performance.now(),
+      false,
+      INSTALL_LOCAL_PRECONDITION_FAILED
+    );
+    await finalizeInitTelemetry(INSTALL_LOCAL_PRECONDITION_FAILED);
+    process.exit(1);
+  }
+
+  // Already a devDependency and not a developer `--from` reinstall → reuse it.
+  if (isLocallyInstalled(projectRoot) && !fromTar) {
+    const startedAt = performance.now();
+    p.log.info(`${PACKAGE_NAME} is already a devDependency ${pc.dim(`(${projectRoot})`)}.`);
+    await trackPackageAction("already_installed", startedAt, true);
+    return;
+  }
+
+  const pm = detectProjectPackageManager(projectRoot);
+  const installTarget = fromTar ?? PACKAGE_NAME;
+  const cmd = localInstallCommand(pm, installTarget);
+  const cmdStr = formatShellCommand(cmd);
+  const spinner = p.spinner();
+  spinner.start(`Adding ${PACKAGE_NAME} to devDependencies (${pm})...`);
+  const startedAt = performance.now();
+  try {
+    await runShellCommand(cmd, { cwd: projectRoot });
+  } catch (err) {
+    spinner.stop(pc.red("Local install failed."));
+    p.log.error(`${err}`);
+    p.log.info(`Install manually with: ${pc.cyan(`cd ${projectRoot} && ${cmdStr}`)}`);
+    await trackPackageAction("fresh_install", startedAt, false, INSTALL_LOCAL_PACKAGE_FAILED);
+    await finalizeInitTelemetry(INSTALL_LOCAL_PACKAGE_FAILED);
+    process.exit(1);
+  }
+
+  // Verify the dep actually landed. A non-PnP layout with no node_modules entry
+  // means the install silently no-op'd; don't proceed to write a dead command.
+  if (!isLocallyInstalled(projectRoot) && !isYarnPnp(projectRoot)) {
+    spinner.stop(pc.red("Local install did not produce a node_modules entry."));
+    p.log.error(
+      `The install reported success but ${pc.cyan(PACKAGE_NAME)} is not in node_modules.`
+    );
+    await trackPackageAction("fresh_install", startedAt, false, INSTALL_LOCAL_PACKAGE_FAILED);
+    await finalizeInitTelemetry(INSTALL_LOCAL_PACKAGE_FAILED);
+    process.exit(1);
+  }
+
+  spinner.stop(pc.green(`Added ${PACKAGE_NAME} to devDependencies.`));
+  await trackPackageAction("fresh_install", startedAt, true);
+}
+
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
   const noTelemetry = args.includes("--no-telemetry");
   const fromTar = extractFlag(args, "--from");
+  const wantsLocal = args.includes("--local");
+  const wantsGlobal = args.includes("--global");
   const initStartTime = performance.now();
 
   telemetryInit("installer");
@@ -118,6 +229,8 @@ export async function init(args: string[]): Promise<void> {
   let editorsConfiguredCount = 0;
   let initSucceeded = false;
   let telemetryFinalized = false;
+  // Resolved before Step 0; the closure below reports it on every terminal event.
+  let installMode: InstallMode = "global";
   const finalizeInitTelemetry = async (failureSignal?: InstallerFailureSignal): Promise<void> => {
     if (telemetryFinalized) return;
     telemetryFinalized = true;
@@ -126,6 +239,7 @@ export async function init(args: string[]): Promise<void> {
         duration_ms: performance.now() - initStartTime,
         is_success: initSucceeded,
         editors_configured_count: editorsConfiguredCount,
+        install_mode: installMode,
         ...(failureSignal ?? {}),
       });
     });
@@ -174,185 +288,247 @@ export async function init(args: string[]): Promise<void> {
       is_non_interactive: nonInteractive,
     });
 
+    // ── Install mode: global (default) vs local (committable devDependency) ──────
+
+    let modeFromFlags: InstallMode | null;
+    try {
+      modeFromFlags = resolveInstallModeFromFlags({
+        local: wantsLocal,
+        global: wantsGlobal,
+        nonInteractive,
+      });
+    } catch (err) {
+      if (err instanceof InstallModeFlagError) {
+        p.log.error(err.message);
+        await finalizeInitTelemetry(INSTALL_LOCAL_PRECONDITION_FAILED);
+        process.exit(2);
+      }
+      throw err;
+    }
+
+    if (modeFromFlags !== null) {
+      installMode = modeFromFlags;
+    } else {
+      const modeChoice = await p.select({
+        message: "How should argent be installed?",
+        options: [
+          {
+            value: "global" as const,
+            label: "Globally (recommended)",
+            hint: "Installs the argent command on your PATH; shared across every project",
+          },
+          {
+            value: "local" as const,
+            label: "This project only",
+            hint: "Adds @swmansion/argent to devDependencies and commits MCP config that runs the local copy — best for teams",
+          },
+        ],
+        initialValue: "global",
+      });
+
+      if (p.isCancel(modeChoice)) {
+        track("installation:cli_init_cancel", { step: "install_mode" });
+        await finalizeInitTelemetry();
+        p.cancel("Initialization cancelled.");
+        process.exit(0);
+      }
+
+      installMode = modeChoice as InstallMode;
+    }
+
+    track("installation:install_mode_decision", { install_mode: installMode });
+
     // ── Step 0: Install / Update Check ──────────────────────────────────────────
 
-    const globallyInstalled = isGloballyInstalled();
-
-    if (!globallyInstalled) {
-      if (!nonInteractive) {
-        const installChoice = await p.select({
-          message: "Argent is not installed globally. Would you like to install it?",
-          options: [
-            {
-              value: "global" as const,
-              label: "Install globally",
-              hint: "Makes the argent command available everywhere",
-            },
-            {
-              value: "cancel" as const,
-              label: "Cancel installation",
-            },
-          ],
-        });
-
-        if (p.isCancel(installChoice) || installChoice === "cancel") {
-          track("installation:global_install_decision", { decision: "cancel" });
-          track("installation:cli_init_cancel", { step: "global_install" });
-          await finalizeInitTelemetry();
-          p.cancel("Installation cancelled.");
-          process.exit(0);
-        }
-      }
-
-      track("installation:global_install_decision", { decision: "install" });
-
-      const pm = detectPackageManager();
-      const installTarget = fromTar ?? PACKAGE_NAME;
-      const cmd = globalInstallCommand(pm, installTarget);
-      const cmdStr = formatShellCommand(cmd);
-      const spinner = p.spinner();
-      spinner.start(`Installing ${PACKAGE_NAME} globally...`);
-      const packageActionStartedAt = performance.now();
-      try {
-        await runShellCommand(cmd);
-        spinner.stop(pc.green("Installed globally."));
-        version = getInstalledVersion() ?? version;
-        await trackPackageAction("fresh_install", packageActionStartedAt, true);
-      } catch (err) {
-        spinner.stop(pc.red("Installation failed."));
-        p.log.error(`${err}`);
-        p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
-        await trackPackageAction(
-          "fresh_install",
-          packageActionStartedAt,
-          false,
-          INSTALL_GLOBAL_PACKAGE_FAILED
-        );
-        await finalizeInitTelemetry(INSTALL_GLOBAL_PACKAGE_FAILED);
-        process.exit(1);
-      }
-    } else if (fromTar) {
-      // Developer-only reinstall path; it is not a product install decision.
-      const pm = detectPackageManager();
-      const cmd = globalInstallCommand(pm, fromTar);
-      const cmdStr = formatShellCommand(cmd);
-      const spinner = p.spinner();
-      spinner.start(`Installing from ${fromTar}...`);
-      try {
-        await runShellCommand(cmd);
-        spinner.stop(pc.green("Installed from tarball."));
-        version = getInstalledVersion() ?? version;
-      } catch (err) {
-        spinner.stop(pc.red("Installation failed."));
-        p.log.error(`${err}`);
-        p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
-        await finalizeInitTelemetry(INSTALL_FROM_TAR_PACKAGE_FAILED);
-        process.exit(1);
-      }
+    if (installMode === "local") {
+      await installLocally({
+        fromTar,
+        trackPackageAction,
+        finalizeInitTelemetry,
+      });
+      version = getLocallyInstalledVersion(resolveProjectRoot(process.cwd())) ?? version;
     } else {
-      const packageActionStartedAt = performance.now();
-      track("installation:global_install_decision", { decision: "already_installed" });
-      await trackPackageAction("already_installed", packageActionStartedAt, true);
-      let latest: string | null = null;
-      const spinner = p.spinner();
-      spinner.start("Checking for updates...");
-      try {
-        latest = getLatestVersion();
-      } catch {
-        // Registry unreachable — silently skip.
-      }
-      spinner.stop(pc.dim("Version check complete."));
+      const globallyInstalled = isGloballyInstalled();
 
-      if (latest && isNewerVersion(latest, version)) {
-        const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
-        const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
-        if (nonInteractive) {
-          // A --yes/CI install with an available update implicitly skips it.
-          // Emit the same update_decision the interactive and no-update branches
-          // do, so the upgrade funnel isn't blind for non-interactive installs.
-          track("installation:update_decision", {
-            from_major: fromMajor,
-            to_major: toMajor,
-            decision: "skip",
-          });
-          await trackPackageAction("update_skipped", packageActionStartedAt, true);
-        } else {
-          const updateChoice = await p.select({
-            message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,
+      if (!globallyInstalled) {
+        if (!nonInteractive) {
+          const installChoice = await p.select({
+            message: "Argent is not installed globally. Would you like to install it?",
             options: [
               {
-                value: "update" as const,
-                label: `Update to v${latest} (recommended)`,
+                value: "global" as const,
+                label: "Install globally",
+                hint: "Makes the argent command available everywhere",
               },
               {
-                value: "skip" as const,
-                label: "Skip",
-                hint: "Continue with current version",
+                value: "cancel" as const,
+                label: "Cancel installation",
               },
             ],
           });
 
+          if (p.isCancel(installChoice) || installChoice === "cancel") {
+            track("installation:global_install_decision", { decision: "cancel" });
+            track("installation:cli_init_cancel", { step: "global_install" });
+            await finalizeInitTelemetry();
+            p.cancel("Installation cancelled.");
+            process.exit(0);
+          }
+        }
+
+        track("installation:global_install_decision", { decision: "install" });
+
+        const pm = detectPackageManager();
+        const installTarget = fromTar ?? PACKAGE_NAME;
+        const cmd = globalInstallCommand(pm, installTarget);
+        const cmdStr = formatShellCommand(cmd);
+        const spinner = p.spinner();
+        spinner.start(`Installing ${PACKAGE_NAME} globally...`);
+        const packageActionStartedAt = performance.now();
+        try {
+          await runShellCommand(cmd);
+          spinner.stop(pc.green("Installed globally."));
+          version = getInstalledVersion() ?? version;
+          await trackPackageAction("fresh_install", packageActionStartedAt, true);
+        } catch (err) {
+          spinner.stop(pc.red("Installation failed."));
+          p.log.error(`${err}`);
+          p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
+          await trackPackageAction(
+            "fresh_install",
+            packageActionStartedAt,
+            false,
+            INSTALL_GLOBAL_PACKAGE_FAILED
+          );
+          await finalizeInitTelemetry(INSTALL_GLOBAL_PACKAGE_FAILED);
+          process.exit(1);
+        }
+      } else if (fromTar) {
+        // Developer-only reinstall path; it is not a product install decision.
+        const pm = detectPackageManager();
+        const cmd = globalInstallCommand(pm, fromTar);
+        const cmdStr = formatShellCommand(cmd);
+        const spinner = p.spinner();
+        spinner.start(`Installing from ${fromTar}...`);
+        try {
+          await runShellCommand(cmd);
+          spinner.stop(pc.green("Installed from tarball."));
+          version = getInstalledVersion() ?? version;
+        } catch (err) {
+          spinner.stop(pc.red("Installation failed."));
+          p.log.error(`${err}`);
+          p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
+          await finalizeInitTelemetry(INSTALL_FROM_TAR_PACKAGE_FAILED);
+          process.exit(1);
+        }
+      } else {
+        const packageActionStartedAt = performance.now();
+        track("installation:global_install_decision", { decision: "already_installed" });
+        await trackPackageAction("already_installed", packageActionStartedAt, true);
+        let latest: string | null = null;
+        const spinner = p.spinner();
+        spinner.start("Checking for updates...");
+        try {
+          latest = getLatestVersion();
+        } catch {
+          // Registry unreachable — silently skip.
+        }
+        spinner.stop(pc.dim("Version check complete."));
+
+        if (latest && isNewerVersion(latest, version)) {
+          const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
+          const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
+          if (nonInteractive) {
+            // A --yes/CI install with an available update implicitly skips it.
+            // Emit the same update_decision the interactive and no-update branches
+            // do, so the upgrade funnel isn't blind for non-interactive installs.
+            track("installation:update_decision", {
+              from_major: fromMajor,
+              to_major: toMajor,
+              decision: "skip",
+            });
+            await trackPackageAction("update_skipped", packageActionStartedAt, true);
+          } else {
+            const updateChoice = await p.select({
+              message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,
+              options: [
+                {
+                  value: "update" as const,
+                  label: `Update to v${latest} (recommended)`,
+                },
+                {
+                  value: "skip" as const,
+                  label: "Skip",
+                  hint: "Continue with current version",
+                },
+              ],
+            });
+
+            track("installation:update_decision", {
+              from_major: fromMajor,
+              to_major: toMajor,
+              decision: p.isCancel(updateChoice) ? "skip" : (updateChoice as "update" | "skip"),
+            });
+
+            if (p.isCancel(updateChoice) || updateChoice === "skip") {
+              await trackPackageAction("update_skipped", packageActionStartedAt, true);
+            } else if (updateChoice === "update") {
+              const pm = detectPackageManager();
+              const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
+              const cmdStr = formatShellCommand(cmd);
+              const updateSpinner = p.spinner();
+              updateSpinner.start(`Updating to v${latest}...`);
+              const updateStartedAt = performance.now();
+              try {
+                await runShellCommand(cmd);
+                updateSpinner.stop(pc.green(`Updated to v${latest}.`));
+                version = getInstalledVersion() ?? version;
+                await trackPackageAction("init_triggered_update", updateStartedAt, true);
+
+                // The user just bumped to a newer argent. Re-sync and prune
+                // argent skills in every scope that already tracks them — this
+                // is the only point in init where we can surface orphans
+                // (skills removed from a previous argent version) before
+                // Step 2's single-scope `skills add`.
+                const skillRefreshResults = refreshArgentSkills(resolveProjectRoot(process.cwd()));
+                const skillSummary = formatSkillRefreshSummary(skillRefreshResults);
+                if (skillSummary) {
+                  p.note(skillSummary, "Skills Updated");
+                }
+                const skillTelemetrySummary =
+                  summarizeSkillRefreshForTelemetry(skillRefreshResults);
+                if (skillTelemetrySummary.scope_count > 0) {
+                  track("installation:skill_refresh_result", {
+                    is_success: skillTelemetrySummary.failed_count === 0,
+                    ...skillTelemetrySummary,
+                    ...(skillTelemetrySummary.failed_count > 0
+                      ? INSTALL_SKILLS_REFRESH_FAILED
+                      : {}),
+                  });
+                }
+              } catch (err) {
+                updateSpinner.stop(pc.red("Update failed."));
+                p.log.error(`${err}`);
+                p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
+                await trackPackageAction(
+                  "update_failed",
+                  updateStartedAt,
+                  false,
+                  INSTALL_INIT_TRIGGERED_UPDATE_FAILED
+                );
+              }
+            }
+          }
+        } else if (latest) {
+          const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
+          const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
           track("installation:update_decision", {
             from_major: fromMajor,
             to_major: toMajor,
-            decision: p.isCancel(updateChoice) ? "skip" : (updateChoice as "update" | "skip"),
+            decision: "no_update",
           });
-
-          if (p.isCancel(updateChoice) || updateChoice === "skip") {
-            await trackPackageAction("update_skipped", packageActionStartedAt, true);
-          } else if (updateChoice === "update") {
-            const pm = detectPackageManager();
-            const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
-            const cmdStr = formatShellCommand(cmd);
-            const updateSpinner = p.spinner();
-            updateSpinner.start(`Updating to v${latest}...`);
-            const updateStartedAt = performance.now();
-            try {
-              await runShellCommand(cmd);
-              updateSpinner.stop(pc.green(`Updated to v${latest}.`));
-              version = getInstalledVersion() ?? version;
-              await trackPackageAction("init_triggered_update", updateStartedAt, true);
-
-              // The user just bumped to a newer argent. Re-sync and prune
-              // argent skills in every scope that already tracks them — this
-              // is the only point in init where we can surface orphans
-              // (skills removed from a previous argent version) before
-              // Step 2's single-scope `skills add`.
-              const skillRefreshResults = refreshArgentSkills(resolveProjectRoot(process.cwd()));
-              const skillSummary = formatSkillRefreshSummary(skillRefreshResults);
-              if (skillSummary) {
-                p.note(skillSummary, "Skills Updated");
-              }
-              const skillTelemetrySummary = summarizeSkillRefreshForTelemetry(skillRefreshResults);
-              if (skillTelemetrySummary.scope_count > 0) {
-                track("installation:skill_refresh_result", {
-                  is_success: skillTelemetrySummary.failed_count === 0,
-                  ...skillTelemetrySummary,
-                  ...(skillTelemetrySummary.failed_count > 0 ? INSTALL_SKILLS_REFRESH_FAILED : {}),
-                });
-              }
-            } catch (err) {
-              updateSpinner.stop(pc.red("Update failed."));
-              p.log.error(`${err}`);
-              p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
-              await trackPackageAction(
-                "update_failed",
-                updateStartedAt,
-                false,
-                INSTALL_INIT_TRIGGERED_UPDATE_FAILED
-              );
-            }
-          }
+          await trackPackageAction("no_update", packageActionStartedAt, true);
         }
-      } else if (latest) {
-        const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
-        const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
-        track("installation:update_decision", {
-          from_major: fromMajor,
-          to_major: toMajor,
-          decision: "no_update",
-        });
-        await trackPackageAction("no_update", packageActionStartedAt, true);
       }
     }
 
@@ -411,7 +587,11 @@ export async function init(args: string[]): Promise<void> {
     let scope: "local" | "global" | "custom";
     let customRoot: string | undefined;
 
-    if (nonInteractive) {
+    if (installMode === "local") {
+      // Local mode commits project files; a global-scope MCP config makes no
+      // sense for a repo-local install, so the project root is always the target.
+      scope = "local";
+    } else if (nonInteractive) {
       scope = "local";
     } else {
       p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
@@ -473,13 +653,43 @@ export async function init(args: string[]): Promise<void> {
     const effectiveRoot = scope === "custom" ? customRoot! : projectRoot;
     const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
 
+    // Local mode writes project-scoped entries that run the repo-local argent.
+    // Global-only adapters (no project config file) can't carry that, so drop
+    // them with a note rather than writing a global `argent` entry that would
+    // depend on the global install the user opted out of.
+    let localCmdMode: McpCommandMode | null = null;
+    if (installMode === "local") {
+      localCmdMode = resolveLocalCommandMode(effectiveRoot);
+      const unsupported = selectedAdapters.filter((a) => a.projectPath(effectiveRoot) == null);
+      if (unsupported.length > 0) {
+        p.log.warn(
+          `Skipping ${unsupported.map((a) => a.name).join(", ")} — ` +
+            `no project-level config file (local mode commits project files only).`
+        );
+        selectedAdapters = selectedAdapters.filter((a) => a.projectPath(effectiveRoot) != null);
+        editorsConfiguredCount = selectedAdapters.length;
+      }
+      if (localCmdMode.kind === "local-npx") {
+        p.log.warn(
+          `Could not resolve a project-local argent binary; committing ` +
+            `${pc.cyan("npx --no-install argent mcp")}. Run ${pc.cyan("npm install")} so it resolves.`
+        );
+      }
+    }
+
     track("installation:editors_select", {
       editors: selectedAdapters.map((a) => sanitizeEditorName(a.name)),
       detected_editor_count: detected.length,
       scope,
+      install_mode: installMode,
     });
 
-    const mcpEntry = getMcpEntry();
+    // Global scope (and global install mode) always gets the bare `argent`
+    // command; only a local-mode project-scope entry runs the repo-local copy.
+    const entryFor = (configScope: "local" | "global"): McpServerEntry =>
+      installMode === "local" && configScope === "local" && localCmdMode
+        ? getMcpEntry(localCmdMode)
+        : getMcpEntry({ kind: "global" });
     const mcpResults: string[] = [];
 
     for (const adapter of selectedAdapters) {
@@ -490,7 +700,7 @@ export async function init(args: string[]): Promise<void> {
         if (scope === "global" && adapter.projectPath(projectRoot)) {
           const fallback = adapter.projectPath(projectRoot)!;
           try {
-            adapter.write(fallback, mcpEntry);
+            adapter.write(fallback, entryFor("local"));
             mcpResults.push(
               `${pc.green("+")} ${adapter.name} ${pc.dim(`(local fallback: ${fallback})`)}`
             );
@@ -500,7 +710,7 @@ export async function init(args: string[]): Promise<void> {
         } else if (scope !== "global" && adapter.globalPath()) {
           const fallback = adapter.globalPath()!;
           try {
-            adapter.write(fallback, mcpEntry);
+            adapter.write(fallback, entryFor("global"));
             mcpResults.push(
               `${pc.green("+")} ${adapter.name} ${pc.dim(`(global fallback: ${fallback})`)}`
             );
@@ -516,7 +726,7 @@ export async function init(args: string[]): Promise<void> {
       }
 
       try {
-        adapter.write(configPath, mcpEntry);
+        adapter.write(configPath, entryFor(normalizedScope));
         mcpResults.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
       } catch (err) {
         mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
@@ -524,6 +734,20 @@ export async function init(args: string[]): Promise<void> {
     }
 
     p.note(mcpResults.join("\n"), "MCP Configuration");
+
+    // Record local mode so `update`/`uninstall` and teammates act on the
+    // repo-local install. Global mode stays zero-footprint (writes nothing).
+    if (installMode === "local") {
+      try {
+        writeInstallRecord(effectiveRoot, {
+          mode: "local",
+          package: PACKAGE_NAME,
+          writtenBy: version,
+        });
+      } catch (err) {
+        p.log.warn(`Could not write .argent/install.json: ${err}`);
+      }
+    }
 
     // ── Tool Auto-Approval ────────────────────────────────────────────────────
 
@@ -746,6 +970,7 @@ export async function init(args: string[]): Promise<void> {
     // ── Summary ─────────────────────────────────────────────────────────────────
 
     const summaryLines = [
+      `${pc.green("Install mode")} ${installMode === "local" ? "local (devDependency)" : "global"}`,
       `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scope})`,
       `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
       `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
@@ -753,6 +978,25 @@ export async function init(args: string[]): Promise<void> {
     ];
 
     p.note(summaryLines.join("\n"), "Summary");
+
+    if (installMode === "local") {
+      p.note(
+        [
+          `Argent is installed as a ${pc.bold("devDependency")} of this project.`,
+          "",
+          `${pc.bold("Commit")} so your team shares the same setup:`,
+          `  ${pc.cyan("package.json")} + your lockfile`,
+          `  the written MCP config (.mcp.json, .cursor/mcp.json, …)`,
+          `  ${pc.cyan(".argent/install.json")}, and the skills/rules/agents files`,
+          "",
+          `Teammates then get argent on ${pc.cyan("npm install")} — no global install, no ${pc.cyan("argent init")}.`,
+          pc.dim(
+            "Note: the bare `argent` command will not be on their PATH; the MCP config runs the local copy."
+          ),
+        ].join("\n"),
+        "Team Setup (local mode)"
+      );
+    }
 
     p.note(
       [

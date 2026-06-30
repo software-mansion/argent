@@ -247,4 +247,75 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
       expect(launcher.isToolsServerProcessAlive(childPid)).toBe(false);
     }
   );
+
+  // Committable / repo-local install mode: distinct argent installs (global vs a
+  // repo-local devDependency, or two repos pinning different versions) each have
+  // a distinct bundlePath. A client must only ever reuse a server running ITS
+  // OWN bundle — otherwise it silently runs the wrong version — and must NOT kill
+  // the other (a different session may be using it; the tools-client doesn't
+  // recover from a killed server).
+  it(
+    "does not reuse a healthy server from a DIFFERENT bundle; spawns its own and leaves the other alive",
+    { timeout: 30_000 },
+    async () => {
+      const other = await launcher.spawnToolsServer(fakePaths(), await launcher.findFreePort(), {
+        token: "other-token",
+      });
+      spawnedPids.push(other.pid);
+      // Record it under a DIFFERENT bundlePath (a different install/version).
+      await launcher.writeToolsServerState({
+        port: other.port,
+        pid: other.pid,
+        startedAt: new Date().toISOString(),
+        bundlePath: "/some/OTHER/install/dist/tool-server.cjs",
+        host: "127.0.0.1",
+        token: "other-token",
+        managed: "autospawn",
+      });
+      expect(
+        await launcher.isToolsServerHealthy(other.port, "127.0.0.1", 2000, "other-token")
+      ).toBe(true);
+
+      const handle = await launcher.ensureToolsServer(fakePaths());
+
+      // The other-bundle server is left ALIVE — never killed.
+      expect(launcher.isToolsServerProcessAlive(other.pid)).toBe(true);
+
+      // We spawned our OWN server, tracked under OUR bundlePath, on a new port.
+      const state = await launcher.readToolsServerState();
+      expect(state).not.toBeNull();
+      expect(state!.pid).not.toBe(other.pid);
+      expect(state!.bundlePath).toBe(FAKE_BUNDLE);
+      spawnedPids.push(state!.pid);
+      expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", state!.port));
+      expect(handle.url).not.toBe(launcher.formatToolsServerUrl("127.0.0.1", other.port));
+    }
+  );
+
+  it(
+    "reuses a healthy server from the SAME bundle without respawning",
+    { timeout: 30_000 },
+    async () => {
+      const existing = await launcher.spawnToolsServer(fakePaths(), await launcher.findFreePort(), {
+        token: "same-token",
+      });
+      spawnedPids.push(existing.pid);
+      await launcher.writeToolsServerState({
+        port: existing.port,
+        pid: existing.pid,
+        startedAt: new Date().toISOString(),
+        bundlePath: FAKE_BUNDLE,
+        host: "127.0.0.1",
+        token: "same-token",
+        managed: "autospawn",
+      });
+
+      const handle = await launcher.ensureToolsServer(fakePaths());
+
+      // Same server reused — no new pid, same URL.
+      expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", existing.port));
+      const state = await launcher.readToolsServerState();
+      expect(state!.pid).toBe(existing.pid);
+    }
+  );
 });
