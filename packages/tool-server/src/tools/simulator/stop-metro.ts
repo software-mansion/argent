@@ -3,6 +3,33 @@ import { execFileSync } from "node:child_process";
 import type { ToolDefinition } from "@argent/registry";
 
 /**
+ * Parse the raw output of `netstat -ano` (Windows) into the deduped set of PIDs
+ * *listening* on `port`. Pure string parsing, split out of `listeningPids` so
+ * the win32 row-matching can be unit-tested without a Windows host.
+ *
+ * Each row is `proto localAddr foreignAddr state pid`. A row matches when it is
+ * a TCP row in the LISTENING state whose local address ends in `:<port>`. The
+ * leading colon guards against `:18081` matching port 8081. UDP rows (4 columns,
+ * no state) and ESTABLISHED/other states are skipped, and PIDs are deduplicated
+ * — a listener bound on both IPv4 `0.0.0.0:<port>` and IPv6 `[::]:<port>`
+ * reports the same PID on two rows.
+ */
+export function parseNetstatListeningPids(netstatOutput: string, port: number): number[] {
+  const pids = new Set<number>();
+  for (const line of netstatOutput.split(/\r?\n/)) {
+    const cols = line.trim().split(/\s+/);
+    // cols: [proto, localAddr, foreignAddr, state, pid]
+    if (cols.length < 5 || cols[0].toUpperCase() !== "TCP") continue;
+    if (cols[3].toUpperCase() !== "LISTENING") continue;
+    // The colon guards against `:18081` matching port 8081.
+    if (!cols[1].endsWith(`:${port}`)) continue;
+    const pid = parseInt(cols[4], 10);
+    if (!Number.isNaN(pid) && pid > 0) pids.add(pid);
+  }
+  return [...pids];
+}
+
+/**
  * Resolve the PIDs of processes *listening* on a TCP port, cross-platform.
  * Only the listener (Metro itself) is returned, never processes holding an
  * ESTABLISHED connection to the port — otherwise the Argent tool-server's own
@@ -23,18 +50,7 @@ function listeningPids(port: number): number[] {
       encoding: "utf-8",
       timeout: 5_000,
     });
-    const pids = new Set<number>();
-    for (const line of output.split(/\r?\n/)) {
-      const cols = line.trim().split(/\s+/);
-      // cols: [proto, localAddr, foreignAddr, state, pid]
-      if (cols.length < 5 || cols[0].toUpperCase() !== "TCP") continue;
-      if (cols[3].toUpperCase() !== "LISTENING") continue;
-      // The colon guards against `:18081` matching port 8081.
-      if (!cols[1].endsWith(`:${port}`)) continue;
-      const pid = parseInt(cols[4], 10);
-      if (!Number.isNaN(pid) && pid > 0) pids.add(pid);
-    }
-    return [...pids];
+    return parseNetstatListeningPids(output, port);
   }
   const output = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
     encoding: "utf-8",

@@ -13,9 +13,11 @@ name: Windows E2E
 # the private radon repo, so it can't be built here without a cross-repo token.
 # Its Windows build + smoke-run is verified in radon CI instead — see the
 # build_argent_windows job in radon's simulator-server-ci workflow (companion
-# PR). Booting an Android emulator needs WHPX/HAXM, unavailable on hosted
-# Windows runners, so that piece needs a physical Windows box and is out of
-# scope here.
+# PR). WHPX is available on windows-latest (Server 2025), so an Android emulator
+# does boot on a hosted runner — that is where the boot-device stdio fix was
+# verified. The full Android emulator E2E still lives in radon CI alongside that
+# binary rather than here, because this repo can't build simulator-server.exe
+# without a cross-repo token; that path is therefore out of scope for this job.
 
 on:
   workflow_dispatch:
@@ -25,8 +27,10 @@ on:
     paths:
       - "packages/tool-server/src/utils/command-on-path.ts"
       - "packages/tool-server/src/utils/android-binary.ts"
+      - "packages/tool-server/src/utils/adb.ts"
       - "packages/tool-server/src/utils/check-deps.ts"
       - "packages/tool-server/src/tools/simulator/stop-metro.ts"
+      - "packages/tool-server/src/tools/devices/boot-device.ts"
       - "packages/native-devtools-ios/src/index.ts"
       - "packages/argent/scripts/bundle-tools.cjs"
       - "packages/argent/scripts/argent-simulator-server.cjs"
