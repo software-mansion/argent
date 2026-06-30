@@ -78,6 +78,52 @@ describe("identity – fingerprint-derived id", () => {
     expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(LEGACY_V4);
   });
 
+  it("is case-insensitive: an upper-case fingerprint maps to the same id", () => {
+    const lower = readOrCreateAnonId(() => FP);
+    deleteAnonId();
+    _resetIdentityCacheForTest();
+    const upper = readOrCreateAnonId(() => "A".repeat(64));
+    expect(upper).toBe(lower);
+  });
+
+  it("rejects a truncated/wrong-length hex string and keeps the stored id", () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
+    // 32 hex (too short), 63 hex (truncated), 65 hex (too long), 16 zeros — none
+    // is the 64-hex fingerprint shape, so all fall back to the stored id.
+    for (const bogus of ["a".repeat(32), "a".repeat(63), "a".repeat(65), "0".repeat(16)]) {
+      _resetIdentityCacheForTest();
+      expect(readOrCreateAnonId(() => bogus)).toBe(LEGACY_V4);
+    }
+  });
+
+  it("invokes the resolver at most once per process (common cached path)", () => {
+    const resolver = vi.fn(() => FP);
+    const id1 = readOrCreateAnonId(resolver);
+    const id2 = readOrCreateAnonId(resolver);
+    expect(id1).toBe(id2);
+    expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("self-heals a corrupt id file (no fingerprint) by minting a fresh random id", () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    // Empty file: occupies the path but fails the id validator -> corrupt.
+    fs.writeFileSync(identityFilePath(), "", { mode: 0o600 });
+    const id = readOrCreateAnonId();
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(versionNibble(id)).toBe("4");
+    // The corrupt file was overwritten with the new id.
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
+  });
+
+  it("self-heals a corrupt id file by migrating to the fingerprint id when available", () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), "garbage-not-a-uuid", { mode: 0o600 });
+    const id = readOrCreateAnonId(() => FP);
+    expect(versionNibble(id)).toBe("5");
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
+  });
+
   it("mints a random (v4) id when no resolver is injected", () => {
     const id = readOrCreateAnonId();
     expect(versionNibble(id)).toBe("4");
@@ -162,6 +208,34 @@ describe("identity – fingerprint migration rewrites", () => {
       expect(id).not.toBe(LEGACY_V4);
       // ...and is consistent within the process via the in-memory cache.
       expect(mod.readOrCreateAnonId(() => FP)).toBe(id);
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+    }
+  });
+
+  it("spawns the resolver at most once even when id persistence keeps failing", async () => {
+    // No usable fingerprint AND every publish fails -> readOrCreateAnonId throws
+    // on every call, but the resolver (a binary spawn in production) must run
+    // only once thanks to the fingerprint memoization.
+    vi.resetModules();
+    vi.doMock("node:fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs")>();
+      const enospc = () => {
+        const err = new Error("no space left") as NodeJS.ErrnoException;
+        err.code = "ENOSPC";
+        throw err;
+      };
+      return { ...actual, linkSync: vi.fn(enospc), renameSync: vi.fn(enospc) };
+    });
+    try {
+      const mod = await import("../src/identity.js");
+      // Returns an invalid (non-64-hex) value, so no id is derived, but the
+      // resolver is still invoked the first time.
+      const resolver = vi.fn(() => "not-a-fingerprint");
+      expect(() => mod.readOrCreateAnonId(resolver)).toThrow();
+      expect(() => mod.readOrCreateAnonId(resolver)).toThrow();
+      expect(resolver).toHaveBeenCalledTimes(1);
     } finally {
       vi.doUnmock("node:fs");
       vi.resetModules();

@@ -1,9 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { simulatorServerBinaryPath } from "@argent/native-devtools-ios";
 
-// `simulator-server fingerprint` is fast, but cap it so a wedged binary can't
-// block the first telemetry event indefinitely.
-const FINGERPRINT_TIMEOUT_MS = 5_000;
+// `simulator-server fingerprint` just reads host hardware ids, so it is fast
+// (and the binary is already warm — the simulator watcher spawns it at startup
+// before the first telemetry event). It runs synchronously on the event loop,
+// so cap it tightly: a wedged binary must not stall request handling, and the
+// resolver runs at most once per process so a too-low cap only costs a fallback
+// to a random id, never a repeated stall.
+const FINGERPRINT_TIMEOUT_MS = 2_000;
 
 /**
  * Resolve the host machine fingerprint via `simulator-server fingerprint`.

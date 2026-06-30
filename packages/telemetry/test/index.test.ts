@@ -133,6 +133,13 @@ describe("telemetry public surface", () => {
     expect(distinctId[14]).toBe("5");
     // Persisted to disk as the migrated id.
     expect(status().anonIdPrefix).toBe(distinctId.slice(0, 8));
+    // Migration is local-only: no alias/$identify event is ever emitted.
+    expect(client.capture).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "$identify" })
+    );
+    expect(client.capture).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "$create_alias" })
+    );
   });
 
   it("captures events in CI and annotates payloads with is_ci", () => {
