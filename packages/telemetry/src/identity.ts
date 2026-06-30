@@ -71,21 +71,20 @@ export function readOrCreateAnonId(resolveFingerprint?: () => string | null): st
     return stored;
   }
 
-  // No fingerprint and no valid stored id. If a regular file already occupies
-  // the path but holds invalid content (corrupt / empty / unreadable), atomically
-  // overwrite it — mintRandomId's link-based create can't publish over an occupied
-  // path and would otherwise throw on every event, silently killing telemetry. A
-  // symlink / non-regular file is left untouched so the symlink-rejection guard
-  // still fails closed (mintRandomId throws rather than following it).
+  // No fingerprint and no valid stored id. If a regular file occupies the path
+  // but holds invalid content (corrupt / empty / unreadable), remove it first:
+  // mintRandomId publishes with a no-overwrite link(), which would fail forever
+  // over an occupied path and silently kill telemetry. Routing through
+  // mintRandomId (rather than an unconditional overwrite) keeps its concurrency
+  // guarantee — if a racer publishes a VALID id after our unlink, link() fails
+  // EEXIST and we adopt the racer's value instead of clobbering it. A symlink /
+  // non-regular file is left untouched so mintRandomId still fails closed
+  // (it throws rather than following the symlink).
   if (isCorruptIdFile(finalPath)) {
-    const replacement = crypto.randomUUID();
     try {
-      writeIdFileAtomic(finalPath, replacement);
-      cached = { path: finalPath, id: replacement };
-      return replacement;
+      fs.unlinkSync(finalPath);
     } catch {
-      // Overwrite failed (e.g. unwritable home dir); fall through to the create
-      // path, which surfaces the failure after its own retries.
+      // Couldn't remove it; mintRandomId surfaces the failure after its retries.
     }
   }
 
