@@ -1,12 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { simulatorServerBinaryPath } from "@argent/native-devtools-ios";
 
-// `simulator-server fingerprint` just reads host hardware ids, so it is fast.
-// It runs synchronously and only once per process (the id is memoized in
-// identity.ts), so cap it tightly: a wedged binary must not stall a CLI command
-// or the tool-server's event loop. A too-low cap only costs a fallback to a
-// random id, never a repeated stall.
-const FINGERPRINT_TIMEOUT_MS = 2_000;
+// `simulator-server fingerprint` just reads host hardware ids and is fast once
+// warm (<100ms). It runs synchronously and only once per process (the id is
+// memoized in identity.ts). The cap must be generous enough that the FIRST run
+// on a fresh machine still resolves — e.g. the binary's first execution right
+// after `argent install`, where macOS Gatekeeper assessment of the freshly
+// written binary can add a one-time delay. Timing out there would fall back to
+// a random id for that process's events (until a later run migrates), so we err
+// toward resolving; the cap only exists to bound a genuinely wedged binary.
+const FINGERPRINT_TIMEOUT_MS = 5_000;
 
 /**
  * Resolve the host machine fingerprint via `simulator-server fingerprint`.
