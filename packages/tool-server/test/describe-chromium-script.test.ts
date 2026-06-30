@@ -55,15 +55,17 @@ defineNative(MockElement.prototype, "clientWidth", "__clientWidth");
 // getAttribute / hasAttribute / getBoundingClientRect are methods on Element.prototype.
 // The script invokes them via the captured `Element.prototype.X` so a [LegacyOverrideBuiltins]
 // form can't shadow them to a control element (which would crash with "not a function").
-// Back them with per-element fields, mirroring the real DOM.
-MockElement.prototype.getAttribute = function (this: Record<string, unknown>, n: string) {
+// Back them with per-element fields, mirroring the real DOM. Assigned through a cast
+// because the bare mock classes declare no DOM members.
+const elementProto = MockElement.prototype as unknown as Record<string, unknown>;
+elementProto.getAttribute = function (this: Record<string, unknown>, n: string) {
   const a = (this.__attrs as Record<string, string>) ?? {};
   return n in a ? a[n] : null;
 };
-MockElement.prototype.hasAttribute = function (this: Record<string, unknown>, n: string) {
+elementProto.hasAttribute = function (this: Record<string, unknown>, n: string) {
   return n in ((this.__attrs as Record<string, string>) ?? {});
 };
-MockElement.prototype.getBoundingClientRect = function (this: Record<string, unknown>) {
+elementProto.getBoundingClientRect = function (this: Record<string, unknown>) {
   const r = this.__rect as Rect;
   return { left: r.x, top: r.y, right: r.x + r.w, bottom: r.y + r.h, width: r.w, height: r.h };
 };
