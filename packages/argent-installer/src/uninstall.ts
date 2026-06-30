@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import { parse as parseYaml } from "yaml";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -155,9 +156,13 @@ export function removeBundledContent(sourceDir: string, targetDir: string): Bund
 function readBundledSkillName(skillFilePath: string, fallbackName: string): string {
   try {
     const content = fs.readFileSync(skillFilePath, "utf8");
-    const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    const rawName = frontmatterMatch?.[1].match(/^name:\s*(.+)$/m)?.[1]?.trim();
-    return rawName ? rawName.replace(/^['"]|['"]$/g, "") : fallbackName;
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1];
+    if (!frontmatter) return fallbackName;
+    // Parse the YAML block instead of a nested `name:` regex + quote-strip,
+    // which mishandled quoted values, escapes, and `#` comments.
+    const data = parseYaml(frontmatter) as { name?: unknown } | null;
+    const name = data?.name;
+    return typeof name === "string" && name.trim() ? name.trim() : fallbackName;
   } catch {
     return fallbackName;
   }

@@ -147,13 +147,6 @@ type StoreEvents = {
   awaitParked: () => void;
   /** Emitted after a successful `submitSelection` — the round is done. */
   selectionSubmitted: () => void;
-  /**
-   * Emitted when the user clicks "Close" in the preview window — a request to
-   * dismiss the window (the tool-server owns its lifecycle). Does NOT settle
-   * any parked await; the agent keeps waiting and the window re-opens on the
-   * next round.
-   */
-  closeRequested: () => void;
 };
 
 /** A parked `await_user_selection` call, bound to the round it is waiting on. */
@@ -235,11 +228,6 @@ export class VariantProposalStore {
   findVariant(elementId: string, variantId: string): Variant | null {
     const p = this.proposals.find((x) => x.id === elementId);
     return p?.variants.find((v) => v.id === variantId) ?? null;
-  }
-
-  /** Preview UI's "Close" button — ask listeners to dismiss the window. */
-  requestWindowClose(): void {
-    this.events.emit("closeRequested");
   }
 
   /**

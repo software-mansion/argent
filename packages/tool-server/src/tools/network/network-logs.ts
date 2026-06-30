@@ -1,4 +1,5 @@
 import { z } from "zod";
+import bytesUtil from "bytes";
 import type { ServiceRef, ToolDefinition } from "@argent/registry";
 import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
 import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
@@ -12,10 +13,9 @@ import {
 
 const ITEMS_PER_PAGE = 50;
 
+// `bytes` (base-1024) so a download above 1 GB shows `1.4 GB`, not `1433.6 MB`.
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return bytesUtil(bytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${bytes} B`;
 }
 
 interface LogEntry {

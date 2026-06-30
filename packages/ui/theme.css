@@ -131,7 +131,7 @@
   --pad-code: 2px 6px;
   --pad-pill: 3px 11px;
   --pad-card-head: 7px 10px;
-  --pad-row: 8px 10px;
+  --pad-row: 5px 10px; /* tighter vertical so a 2-variant card fits its column without clipping */
   --pad-cmt: 6px 10px; /* in-card comment box */
   --pad-input: 6px 8px; /* popover textareas */
   --pad-pop: 10px; /* comment / annotation popover */
@@ -168,6 +168,7 @@
   --footbar-bottom: 14px;
   --footbar-right: 14px;
   --resize-edge: 6px; /* drag-layer inset so the frameless window's edges still resize */
+  --traffic-light-gutter: 84px; /* left inset for top-left chrome to clear the native macOS window buttons (Electron only) */
   --footbar-max-width: 70%;
   --select-min-width: 240px;
   --debug-min-width: 220px;
@@ -180,6 +181,18 @@
   --pad-modal: 18px;
   --stream-max-h: 80dvh; /* dvh, not vh: in a browser tab `vh` is the toolbar-retracted (large) viewport, so the centered stream overflowed the %-height container and got clipped at the bottom. `dvh` tracks the visible viewport. In the frameless Electron window (no toolbar) dvh == vh, so production is unchanged. */
   --backdrop-blur: 1.67px; /* light haze over the dimmed stream (3× softer than the former 5px) */
+
+  /* ── Cursors ─────────────────────────────────────────────────────────── */
+  /* Comment-mode cursor — a Figma-style speech bubble that makes "you are
+     placing a comment" unmistakable (replaces the generic crosshair). Accent
+     fill + white outline & dots so it reads on the bright stream AND on the
+     dark spotlight scrim. "7 24" is the hotspot: the tail tip, where the click
+     actually lands. Baked as a data-URI because a cursor image can't reference
+     CSS vars — so the colours live here, in the theme, like every other value. */
+  --cursor-comment:
+    url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2228%22%20height%3D%2228%22%20viewBox%3D%220%200%2028%2028%22%3E%3Cpath%20d%3D%22M6%203h16a3%203%200%200%201%203%203v10a3%203%200%200%201-3%203h-9l-6%205v-5h-1a3%203%200%200%201-3-3V6a3%203%200%200%201%203-3z%22%20fill%3D%22%232f6fd0%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%221.5%22%20stroke-linejoin%3D%22round%22%2F%3E%3Ccircle%20cx%3D%229%22%20cy%3D%2211%22%20r%3D%221.4%22%20fill%3D%22%23ffffff%22%2F%3E%3Ccircle%20cx%3D%2214%22%20cy%3D%2211%22%20r%3D%221.4%22%20fill%3D%22%23ffffff%22%2F%3E%3Ccircle%20cx%3D%2219%22%20cy%3D%2211%22%20r%3D%221.4%22%20fill%3D%22%23ffffff%22%2F%3E%3C%2Fsvg%3E")
+      7 24,
+    crosshair;
 
   /* ── Opacities ───────────────────────────────────────────────────────── */
   --opacity-disabled: 0.45;

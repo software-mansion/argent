@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { parse as parseStackTrace } from "stacktrace-parser";
 
 // Source extensions we are willing to read into a debug response. Anything
 // else (e.g., ~/.zshrc, /etc/passwd, an .env file inside the project, or a
@@ -46,20 +47,19 @@ interface StackFrame {
 /**
  * Parse _debugStack into individual frames.
  * Frame[0] is React internal, frame[1] is the JSX call-site in parent.
+ *
+ * Delegates to `stacktrace-parser`, which handles the V8/Hermes/JSC line
+ * shapes RN emits (and locations buried in a bundle URL with its own `:port`
+ * and query string) far more reliably than a hand-rolled `at fn (file:l:c)`
+ * regex.
  */
 export function parseDebugStack(stack: string): StackFrame[] {
-  const lines = stack.split("\n").filter((l) => l.trim().startsWith("at "));
-
-  return lines.map((line) => {
-    const match = line.trim().match(/at (?:([^\s(]+) \()?([^)]+):(\d+):(\d+)\)?/);
-    if (!match) return { fn: "unknown", file: "", line: 0, col: 0 };
-    return {
-      fn: match[1] || "anonymous",
-      file: match[2]!,
-      line: parseInt(match[3]!, 10),
-      col: parseInt(match[4]!, 10),
-    };
-  });
+  return parseStackTrace(stack).map((frame) => ({
+    fn: frame.methodName?.trim() || "anonymous",
+    file: frame.file ?? "",
+    line: frame.lineNumber ?? 0,
+    col: frame.column ?? 0,
+  }));
 }
 
 /**

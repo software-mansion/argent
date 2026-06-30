@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import * as path from "path";
+import bytesUtil from "bytes";
 import type { TraceProcessorUnavailableError } from "@argent/native-devtools-android";
 import { demangleSymbol } from "../profiler-shared/demangle";
 import type {
@@ -590,10 +591,11 @@ function severitySummary(bottlenecks: Bottleneck[]): string {
   return parts.join("  ");
 }
 
+// Spaced size format (`1.5 MB`) for the iOS analysis report. Uses `bytes`
+// (base-1024) so leak totals above 1 GB render as `2.1 GB` rather than the old
+// hand-rolled helper's MB-capped `2148.0 MB`.
 function formatBytes(sizeBytes: number): string {
-  if (sizeBytes < 1024) return `${sizeBytes} B`;
-  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
-  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+  return bytesUtil(sizeBytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${sizeBytes} B`;
 }
 
 function deriveReportPath(traceFile: string): string {

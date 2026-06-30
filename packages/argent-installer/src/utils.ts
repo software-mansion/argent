@@ -127,6 +127,7 @@ const PROJECT_ROOT_MARKERS = [
   ".codex",
   ".agents",
   ".zed",
+  ".kiro",
   ".opencode",
   "opencode.json",
   "opencode.jsonc",

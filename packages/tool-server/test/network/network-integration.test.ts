@@ -140,9 +140,10 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
 
 function handleLogReadScript(ws: WebSocket, id: number, expr: string) {
   if (expr.includes("__argent_network_by_id")) {
-    // Detail read script — extract the requestId
-    const match = expr.match(/byId\['([^']+)'\]/);
-    const requestId = match ? match[1] : null;
+    // Detail read script — extract the requestId. The script embeds it as a
+    // JSON string literal (`byId["..."]`), so parse that literal back.
+    const match = expr.match(/byId\[("(?:[^"\\]|\\.)*")\]/);
+    const requestId = match ? (JSON.parse(match[1]) as string) : null;
     const entry = networkLog.find((e) => e.requestId === requestId);
 
     if (!interceptorInstalled) {

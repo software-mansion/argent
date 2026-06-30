@@ -3,13 +3,17 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { homedir } from "node:os";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, writeFile, readFile, unlink, rename, chmod } from "node:fs/promises";
 
 const STATE_DIR = path.join(homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
+// Cross-process mutex guarding the "decide whether to spawn, then spawn" critical
+// section of ensureToolsServer (see acquireSpawnLock). Lives next to the state
+// file so it shares the state dir's lifecycle.
+const LOCK_FILE = path.join(STATE_DIR, "tool-server.lock");
 
 const AUTH_TOKEN_BYTES = 32;
 export const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
@@ -81,6 +85,15 @@ export interface ToolsServerState {
    * `argent server start` writes tokenless (auth-disabled) state.
    */
   token?: string;
+  /**
+   * Who owns this server's lifecycle. `autospawn` — spawned on demand by the
+   * MCP / `argent run` path (ensureToolsServer), safe for that path to replace.
+   * `cli` — a long-lived server the user started explicitly with
+   * `argent server start` (possibly under a process supervisor); the auto-spawn
+   * path must NOT terminate it. Absent on legacy state files, which are treated
+   * conservatively as "not ours to kill".
+   */
+  managed?: "autospawn" | "cli";
 }
 
 /** Handle returned to clients: the base URL plus the matching auth token. */
@@ -175,7 +188,34 @@ export async function isToolsServerHealthy(
   }
 }
 
-export type SpawnToolsServerOptions = BuildToolsServerEnvOptions;
+export interface SpawnToolsServerOptions extends BuildToolsServerEnvOptions {
+  /**
+   * Readiness timeout in ms (how long to wait for the "listening" banner before
+   * giving up). Defaults to {@link SPAWN_READY_TIMEOUT_MS}. Exposed for tests so
+   * the kill-on-timeout path can be exercised without a 15s wait.
+   */
+  readyTimeoutMs?: number;
+}
+
+const SPAWN_READY_TIMEOUT_MS = 15_000;
+
+/**
+ * SIGKILL the spawned child's whole process group. The child is started
+ * `detached`, so it is its own group leader (setsid) and `kill(-pid)` reaps it
+ * plus anything it spawned. Best-effort: by the time this runs the child may
+ * already be gone.
+ */
+function killSpawnedChild(child: ReturnType<typeof spawn>, pid: number): void {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+}
 
 export function spawnToolsServer(
   paths: ToolsServerPaths,
@@ -212,6 +252,15 @@ export function spawnToolsServer(
       fn();
     };
 
+    // Reject AND reap: the child is detached + unref'd, so a bare reject would
+    // leave it to bind its port seconds later as an untracked orphan (the very
+    // "two servers alive" failure this module guards against). Kill it first.
+    const rejectAndKill = (err: Error) =>
+      settle(() => {
+        killSpawnedChild(child, pid);
+        reject(err);
+      });
+
     const rl = readline.createInterface({ input: child.stdout! });
 
     rl.on("line", (line) => {
@@ -231,18 +280,21 @@ export function spawnToolsServer(
 
     child.on("error", (err) => {
       rl.close();
-      settle(() => reject(err));
+      // A spawn-level error (ENOENT/EACCES) usually means no child exists; the
+      // kill is a harmless no-op in that case but reaps a half-started one.
+      rejectAndKill(err);
     });
 
     child.on("exit", (code) => {
       rl.close();
+      // Child already exited — nothing to reap, just surface it.
       settle(() => reject(new Error(`tool-server exited with code ${code} before becoming ready`)));
     });
 
     const timer = setTimeout(() => {
       rl.close();
-      settle(() => reject(new Error("Timed out waiting for tools server to become ready")));
-    }, 15_000);
+      rejectAndKill(new Error("Timed out waiting for tools server to become ready"));
+    }, options.readyTimeoutMs ?? SPAWN_READY_TIMEOUT_MS);
 
     rl.on("close", () => clearTimeout(timer));
   });
@@ -324,78 +376,252 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
   return !isProcessAlive(pid);
 }
 
+/**
+ * Stop a process: SIGTERM, wait out the graceful-shutdown window, then SIGKILL
+ * if it's still up. No-op when the pid is already gone. Shared by
+ * {@link killToolServer} and ensureToolsServer's kill-before-respawn so both
+ * escalate identically.
+ *
+ * `stillOurs`, when provided, re-confirms the pid's identity immediately before
+ * each signal. kill-before-respawn passes it so that if the pid is recycled onto
+ * an unrelated process between the gate check and a signal (notably across the
+ * multi-second SIGTERM grace window), we abort instead of killing a bystander.
+ */
+async function terminatePid(pid: number, stillOurs?: () => boolean): Promise<void> {
+  if (!isProcessAlive(pid)) return;
+  if (stillOurs && !stillOurs()) return;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    // Disappeared between the alive check and the signal — done.
+    return;
+  }
+  if (await waitForExit(pid, SIGTERM_GRACE_MS)) return;
+  // SIGTERM ignored or shutdown hung. Re-confirm identity (the pid could have
+  // been recycled during the grace window) before the unconditional hard kill.
+  if (stillOurs && !(isProcessAlive(pid) && stillOurs())) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    return;
+  }
+  await waitForExit(pid, SIGKILL_GRACE_MS);
+}
+
 export async function killToolServer(): Promise<void> {
   const state = await readState();
   if (!state) return;
-
-  let exited = !isProcessAlive(state.pid);
-  if (!exited) {
-    try {
-      process.kill(state.pid, "SIGTERM");
-    } catch {
-      // Process disappeared between the alive check and the signal — fine.
-      exited = true;
-    }
-  }
-
-  if (!exited) {
-    exited = await waitForExit(state.pid, SIGTERM_GRACE_MS);
-  }
-
-  if (!exited) {
-    // SIGTERM ignored or shutdown hung. Force.
-    try {
-      process.kill(state.pid, "SIGKILL");
-    } catch {
-      exited = true;
-    }
-    if (!exited) {
-      await waitForExit(state.pid, SIGKILL_GRACE_MS);
-    }
-  }
-
+  await terminatePid(state.pid);
   await clearState();
 }
 
-export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsServerHandle> {
-  const state = await readState();
-
-  if (state) {
-    const alive = isProcessAlive(state.pid);
-    if (alive) {
-      const host = state.host ?? "127.0.0.1";
-      const healthy = await isToolsServerHealthy(state.port, host, 2000, state.token);
-      if (healthy) {
-        return {
-          url: formatUrl(healthCheckHost(host), state.port),
-          token: state.token ?? "",
-        };
-      }
-    }
-    await clearState();
+/**
+ * Best-effort check that `pid` is one of OUR tool-server processes, by matching
+ * its command line against `marker` (the bundle path recorded in state when we
+ * spawned it). This guards kill-before-respawn against PID reuse: by the time
+ * we respawn, the OS may have recycled a dead server's pid for an unrelated
+ * process, which we must never signal. Returns false when the command line
+ * can't be read (ps missing / unsupported platform) — fail safe, don't kill.
+ */
+function processCommandMatches(pid: number, marker: string | undefined): boolean {
+  if (!marker) return false;
+  try {
+    const cmd = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+      timeout: 2_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!cmd) return false;
+    // Structural match: our servers run `node <bundlePath> start`. Require the
+    // bundle path to appear as its OWN whitespace-delimited argument AND the
+    // `start` subcommand — not a bare substring — so an unrelated process that
+    // merely mentions the path (an editor, a `node --inspect <path>` debug
+    // session, a longer path with the same prefix) is never matched.
+    const argv = cmd.split(/\s+/);
+    return argv.includes(marker) && argv.includes("start");
+  } catch {
+    return false;
   }
-
-  // Spawn a new server with a fresh token. Auto-spawned servers always
-  // authenticate (the token is local to this user and persisted 0600).
-  const token = generateToken();
-  const port = await findFreePort();
-  const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
-    token,
-    idleTimeoutMinutes: AUTOSPAWN_IDLE_TIMEOUT_MINUTES,
-  });
-
-  await writeState({
-    port: actualPort,
-    pid,
-    startedAt: new Date().toISOString(),
-    bundlePath: paths.bundlePath,
-    host: "127.0.0.1",
-    token,
-  });
-
-  return { url: formatUrl("127.0.0.1", actualPort), token };
 }
 
-export const STATE_PATHS = { STATE_DIR, STATE_FILE, LOG_FILE };
+// ── Cross-process spawn lock ──────────────────────────────────────────────
+// ensureToolsServer's "is there a healthy server? no → spawn one" sequence is a
+// read-modify-write across independent processes. Without serialization, two
+// launchers (classically: an nvm node-version switch relaunches `argent mcp`
+// under a new node while the previous MCP's health monitor reconnects) both
+// observe "no server", both spawn a detached tool-server on its own free port,
+// and the last writer to the state file orphans the rest. A simple O_EXCL lock
+// file lets the kernel arbitrate so exactly one launcher spawns.
+// Sized above the worst-case legitimate hold of the critical section, so a
+// waiter never gives up (and proceeds unlocked) while a peer is still doing a
+// real respawn: ~2s health + ~2s ps + 6s SIGTERM grace + 1s SIGKILL grace + 15s
+// spawn ≈ 26s. STALE must exceed WAIT so a live-but-slow holder is never judged
+// stale and stolen from underneath.
+const LOCK_WAIT_TIMEOUT_MS = 30_000;
+const LOCK_STALE_MS = 45_000;
+const LOCK_POLL_MS = 100;
+
+interface SpawnLock {
+  release: () => void;
+}
+
+function spawnLockIsStale(): boolean {
+  try {
+    const { pid, ts } = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8")) as {
+      pid?: number;
+      ts?: number;
+    };
+    if (typeof pid === "number" && pid > 0 && !isProcessAlive(pid)) return true;
+    if (typeof ts === "number" && Date.now() - ts > LOCK_STALE_MS) return true;
+    return false;
+  } catch {
+    // Corrupt / half-written lock — fall back to its age on disk.
+    try {
+      return Date.now() - fs.statSync(LOCK_FILE).mtimeMs > LOCK_STALE_MS;
+    } catch {
+      return true; // vanished underneath us — treat as unlocked
+    }
+  }
+}
+
+/**
+ * Acquire the cross-process spawn lock. Returns a handle whose release() removes
+ * the lock, or null when it can't be taken (unexpected FS error, or a peer held
+ * it past LOCK_WAIT_TIMEOUT_MS). A null result means "proceed without the lock":
+ * best-effort, so a missed lock at worst degrades to the pre-lock behavior and
+ * never deadlocks ensureToolsServer.
+ */
+async function acquireSpawnLock(): Promise<SpawnLock | null> {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+  } catch {
+    return null;
+  }
+  // Per-acquisition nonce so release() can prove the on-disk lock is still the
+  // one we wrote (and not a peer's, after a stale-steal under suspend/clock skew).
+  const nonce = randomBytes(8).toString("hex");
+  const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
+  for (;;) {
+    try {
+      // wx === O_CREAT | O_EXCL | O_WRONLY: atomic "create iff absent".
+      const fd = fs.openSync(LOCK_FILE, "wx");
+      try {
+        fs.writeSync(fd, JSON.stringify({ pid: process.pid, nonce, ts: Date.now() }));
+      } finally {
+        fs.closeSync(fd);
+      }
+      let released = false;
+      return {
+        release: () => {
+          if (released) return;
+          released = true;
+          // Only remove the lock if it is still OURS. A stale-steal by a peer
+          // could have replaced it; deleting that would free a lock we no longer
+          // hold and let a third contender spawn concurrently.
+          try {
+            const cur = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8")) as {
+              pid?: number;
+              nonce?: string;
+            };
+            if (cur.pid === process.pid && cur.nonce === nonce) fs.unlinkSync(LOCK_FILE);
+          } catch {
+            /* unreadable / already gone — nothing safe to remove */
+          }
+        },
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
+      if (spawnLockIsStale()) {
+        // Holder died mid-spawn (or the lock is ancient). Try to reclaim it.
+        try {
+          fs.unlinkSync(LOCK_FILE);
+        } catch {
+          /* couldn't remove (perms / immutable / a peer beat us to it) */
+        }
+        // Reclaimed (file gone) → loop immediately to (re)create it. Still
+        // present → we could NOT reclaim it; fall through to the bounded wait
+        // below so a persistently-unremovable lock can never busy-spin the CPU.
+        if (!fs.existsSync(LOCK_FILE)) continue;
+      }
+      if (Date.now() >= deadline) return null;
+      await new Promise<void>((r) => setTimeout(r, LOCK_POLL_MS));
+    }
+  }
+}
+
+/**
+ * Resolve a usable handle for the server described by `state`, or null when it
+ * is absent, dead, or fails its health check. Side-effect free so both the
+ * lock-free fast path and the double-check inside the lock can reuse it.
+ */
+async function reusableHandle(state: ToolsServerState | null): Promise<ToolsServerHandle | null> {
+  if (!state || !isProcessAlive(state.pid)) return null;
+  const host = state.host ?? "127.0.0.1";
+  const healthy = await isToolsServerHealthy(state.port, host, 2000, state.token);
+  if (!healthy) return null;
+  return { url: formatUrl(healthCheckHost(host), state.port), token: state.token ?? "" };
+}
+
+export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsServerHandle> {
+  // Fast path: a healthy server is already tracked — reuse it without paying the
+  // cost (or contention) of the spawn lock. This is the overwhelmingly common case.
+  const fast = await reusableHandle(await readState());
+  if (fast) return fast;
+
+  // Slow path: a spawn is likely needed. Serialize it across processes so the
+  // churn from an nvm node-version switch can't let two launchers each spawn
+  // their own detached tool-server and orphan all but the last.
+  const lock = await acquireSpawnLock();
+  try {
+    // Double-checked: a peer may have spawned a healthy server while we waited
+    // for the lock. Reuse it rather than spawning a second one.
+    const state = await readState();
+    const reuse = await reusableHandle(state);
+    if (reuse) return reuse;
+
+    // No usable server. If the tracked pid is a wedged/unhealthy server WE
+    // auto-spawned, terminate it BEFORE spawning the replacement so it is never
+    // left running, untracked, on a leaked port. Three guards keep this from
+    // signalling the wrong process:
+    //   • managed === "autospawn" — never touch a `argent server start` (cli)
+    //     server, which may be supervisor-managed and is just slow to start;
+    //   • a command-line identity match against the recorded bundle path;
+    //   • terminatePid re-confirms that identity right before each signal.
+    if (
+      state &&
+      state.managed === "autospawn" &&
+      isProcessAlive(state.pid) &&
+      processCommandMatches(state.pid, state.bundlePath)
+    ) {
+      await terminatePid(state.pid, () => processCommandMatches(state.pid, state.bundlePath));
+    }
+    await clearState();
+
+    // Spawn a new server with a fresh token. Auto-spawned servers always
+    // authenticate (the token is local to this user and persisted 0600).
+    const token = generateToken();
+    const port = await findFreePort();
+    const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
+      token,
+      idleTimeoutMinutes: AUTOSPAWN_IDLE_TIMEOUT_MINUTES,
+    });
+
+    await writeState({
+      port: actualPort,
+      pid,
+      startedAt: new Date().toISOString(),
+      bundlePath: paths.bundlePath,
+      host: "127.0.0.1",
+      token,
+      managed: "autospawn",
+    });
+
+    return { url: formatUrl("127.0.0.1", actualPort), token };
+  } finally {
+    lock?.release();
+  }
+}
+
+export const STATE_PATHS = { STATE_DIR, STATE_FILE, LOG_FILE, LOCK_FILE };
 
 export { formatUrl as formatToolsServerUrl };

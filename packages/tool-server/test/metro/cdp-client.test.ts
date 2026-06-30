@@ -180,4 +180,70 @@ describe("CDPClient", () => {
 
     await client.disconnect();
   });
+
+  it("evaluate requests returnByValue + awaitPromise and returns object results", async () => {
+    const client = new CDPClient(`ws://localhost:${port}`);
+    await client.connect();
+
+    const ws = await waitForServer();
+    let evalParams: Record<string, unknown> | undefined;
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.method === "Runtime.evaluate") {
+        evalParams = msg.params;
+        // A returnByValue response carries the deep-serialized value. Without
+        // returnByValue, Hermes/V8 return a RemoteObject ref with no `value`,
+        // which is exactly the dropped-object bug this guards against.
+        ws.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { result: { type: "object", value: { a: 1, b: [2, 3] } } },
+          })
+        );
+      }
+    });
+
+    const value = await client.evaluate("({ a: 1, b: [2, 3] })");
+
+    expect(evalParams?.returnByValue).toBe(true);
+    expect(evalParams?.awaitPromise).toBe(true);
+    expect(value).toEqual({ a: 1, b: [2, 3] });
+
+    await client.disconnect();
+  });
+
+  it("evaluateWithBinding drives the script with returnByValue + awaitPromise off", async () => {
+    const client = new CDPClient(`ws://localhost:${port}`);
+    await client.connect();
+
+    const ws = await waitForServer();
+    let evalParams: Record<string, unknown> | undefined;
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.method === "Runtime.evaluate") {
+        evalParams = msg.params;
+        ws.send(JSON.stringify({ id: msg.id, result: { result: { value: "ok" } } }));
+        setTimeout(() => {
+          ws.send(
+            JSON.stringify({
+              method: "Runtime.bindingCalled",
+              params: {
+                name: "__argent_callback",
+                payload: JSON.stringify({ requestId: "req-1", data: "x" }),
+              },
+            })
+          );
+        }, 10);
+      }
+    });
+
+    await client.evaluateWithBinding("someScript()", "req-1", { timeout: 5000 });
+
+    // The binding delivers the payload; the script's own return must not be
+    // serialized or awaited, or fire-and-forget binding scripts would hang.
+    expect(evalParams?.returnByValue).toBe(false);
+    expect(evalParams?.awaitPromise).toBe(false);
+
+    await client.disconnect();
+  });
 });
