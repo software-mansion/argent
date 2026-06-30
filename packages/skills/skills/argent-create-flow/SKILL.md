@@ -28,7 +28,7 @@ Beyond raw `tool:` steps and `echo:`, flows support declarative directives inter
 | `snapshot` | `- snapshot: { name: home, maxMismatch: 0.5 }` | diff a screenshot against a stored baseline |
 | `run` | `- run: login` | execute a fragment's steps inline |
 
-A **selector** is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. A bare string is sugar for a text selector: `tap: Login` ≡ `tap: { text: Login }`. Use the map form for identifier/role locators: `tap: { identifier: submit-btn }`.
+A **selector** is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. A bare string is a *loose* selector: it resolves **identifier-first, then falls back to text** (label/value), so `tap: Login` matches a `testID="Login"` or, failing that, visible text "Login" — no need to know which. (Loose fallback applies to `tap`, `type.into`, `assert`, `scroll-to`; `await` delegates to the wait tool and stays text-only.) Use the map form to be strict: `{ identifier: submit-btn }` (identifier only) or `{ text: Login }` (text only, no fallback).
 
 For `await`/`assert` the **condition is the key**, and its value is the selector:
 

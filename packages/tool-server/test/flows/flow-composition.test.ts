@@ -136,10 +136,11 @@ describe("flow validation", () => {
       launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [
-        { kind: "tap" as const, selector: { text: "Login" } },
+        // Text-only selectors serialize to bare strings, which parse back loose.
+        { kind: "tap" as const, selector: { text: "Login", loose: true } },
         { kind: "tap" as const, x: 0.5, y: 0.57 },
         { kind: "type" as const, into: { identifier: "email" }, text: "a@b.com" },
-        { kind: "assert" as const, condition: "visible" as const, selector: { text: "Welcome" } },
+        { kind: "assert" as const, condition: "visible" as const, selector: { text: "Welcome", loose: true } },
         { kind: "snapshot" as const, name: "home", maxMismatch: 0.5 },
         { kind: "run" as const, flow: "login" },
       ],

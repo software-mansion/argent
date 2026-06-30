@@ -8,14 +8,13 @@ import {
   isVisible,
   nodeText,
   treeFingerprint,
-  type Selector,
   type WaitCondition,
 } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-native-tree";
-import type { ScrollDirection } from "./flow-utils";
+import type { FlowSelector, ScrollDirection } from "./flow-utils";
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
 export interface DirectiveOutcome {
@@ -51,10 +50,38 @@ function clamp01(v: number): number {
 // it absorbs that latency; a genuinely-false assertion still fails quickly.
 const DEFAULT_ASSERT_TIMEOUT_MS = 500;
 
-function describeSelector(s: Selector): string {
+function describeSelector(s: FlowSelector): string {
   return Object.entries(s)
+    .filter(([k]) => k !== "loose")
     .map(([k, v]) => `${k}="${v}"`)
     .join(" ");
+}
+
+/**
+ * Resolve a selector's matches honoring the bare-string `loose` flag. A loose
+ * selector (`tap: foo`) tries the identifier locator first and, only if it finds
+ * nothing, falls back to text (label/value) — so a hand-written `foo` matches a
+ * `testID="foo"` as well as visible text. Explicit `{ text }` / `{ identifier }`
+ * selectors carry no flag and match strictly. Lives in the flow runner only; the
+ * shared match engine and the tools that consume it are untouched.
+ */
+function flowFindAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
+  if (sel.loose && sel.text !== undefined) {
+    const byIdentifier = findAll(tree, { identifier: sel.text });
+    if (byIdentifier.length > 0) return byIdentifier;
+    return findAll(tree, { text: sel.text });
+  }
+  return findAll(tree, sel);
+}
+
+/** Identifier-first-then-text frame resolution for a (possibly loose) selector. */
+function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFrame | undefined {
+  if (sel.loose && sel.text !== undefined) {
+    return (
+      selectorToFrame(tree, { identifier: sel.text }) ?? selectorToFrame(tree, { text: sel.text })
+    );
+  }
+  return selectorToFrame(tree, sel);
 }
 
 /**
@@ -97,7 +124,7 @@ async function settleTree(
 async function waitForFrame(
   registry: Registry,
   device: DeviceInfo,
-  selector: Selector,
+  selector: FlowSelector,
   signal?: AbortSignal
 ): Promise<DescribeFrame | undefined> {
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
@@ -105,7 +132,7 @@ async function waitForFrame(
     if (signal?.aborted) return undefined;
     const tree = await settleTree(registry, device, signal);
     if (tree) {
-      const frame = selectorToFrame(tree, selector);
+      const frame = flowSelectorToFrame(tree, selector);
       if (frame) return frame;
     }
     if (Date.now() >= deadline) return undefined;
@@ -204,9 +231,9 @@ async function scrollToVisible(
   registry: Registry,
   ctx: ToolContext | undefined,
   device: DeviceInfo,
-  target: Selector,
+  target: FlowSelector,
   direction: ScrollDirection,
-  within: Selector | undefined,
+  within: FlowSelector | undefined,
   signal?: AbortSignal
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
@@ -216,12 +243,12 @@ async function scrollToVisible(
     const tree = await settleTree(registry, device, signal);
     if (!tree) return { reason: "scroll cancelled" };
 
-    const frame = selectorToFrame(tree, target);
+    const frame = flowSelectorToFrame(tree, target);
     if (frame) return { frame };
 
     // Anchor the gesture inside the container (so the right nested scroller
     // moves), or over the whole screen when none is named.
-    const region = within ? selectorToFrame(tree, within) : FULL_SCREEN;
+    const region = within ? flowSelectorToFrame(tree, within) : FULL_SCREEN;
     if (!region) {
       return { reason: `scroll container ${describeSelector(within!)} is not visible` };
     }
@@ -250,7 +277,7 @@ async function resolveOrScroll(
   registry: Registry,
   ctx: ToolContext | undefined,
   device: DeviceInfo,
-  selector: Selector,
+  selector: FlowSelector,
   signal?: AbortSignal
 ): Promise<DescribeFrame | undefined> {
   const frame = await waitForFrame(registry, device, selector, signal);
@@ -264,7 +291,7 @@ export async function runScrollTo(
   registry: Registry,
   ctx: ToolContext | undefined,
   device: DeviceInfo,
-  step: { target: Selector; direction: ScrollDirection; within?: Selector },
+  step: { target: FlowSelector; direction: ScrollDirection; within?: FlowSelector },
   signal?: AbortSignal
 ): Promise<DirectiveOutcome> {
   const r = await scrollToVisible(registry, ctx, device, step.target, step.direction, step.within, signal);
@@ -280,7 +307,7 @@ export async function runTap(
   registry: Registry,
   ctx: ToolContext | undefined,
   device: DeviceInfo,
-  target: { selector?: Selector; x?: number; y?: number },
+  target: { selector?: FlowSelector; x?: number; y?: number },
   signal?: AbortSignal
 ): Promise<DirectiveOutcome> {
   let point: { x: number; y: number };
@@ -312,7 +339,7 @@ export async function runType(
   registry: Registry,
   ctx: ToolContext | undefined,
   device: DeviceInfo,
-  into: Selector,
+  into: FlowSelector,
   text: string,
   signal?: AbortSignal
 ): Promise<DirectiveOutcome> {
@@ -346,7 +373,7 @@ export async function runAssert(
   registry: Registry,
   device: DeviceInfo,
   condition: WaitCondition,
-  selector: Selector,
+  selector: FlowSelector,
   expectedText: string | undefined,
   signal?: AbortSignal
 ): Promise<DirectiveOutcome> {
@@ -359,7 +386,7 @@ export async function runAssert(
     if (signal?.aborted) return { ok: false, reason: "assertion cancelled" };
     try {
       const { tree } = await fetchFlowTree(registry, device);
-      lastMatches = findAll(tree, selector);
+      lastMatches = flowFindAll(tree, selector);
       fetchError = undefined;
       if (evaluateCondition(condition, expectedText, lastMatches)) return { ok: true };
     } catch (err) {
@@ -376,7 +403,7 @@ export async function runAssert(
 
 function assertReason(
   condition: WaitCondition,
-  selector: Selector,
+  selector: FlowSelector,
   expectedText: string | undefined,
   matches: ReturnType<typeof findAll>
 ): string {

@@ -136,16 +136,22 @@ describe("parseFlow", () => {
     expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
   });
 
-  it("sugars a bare-string selector into { text } for tap", () => {
+  it("sugars a bare-string selector into a loose { text } for tap", () => {
     const flow = parseFlow("steps:\n  - tap: Settings\n");
-    expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
+    // Bare string ⇒ loose: resolves identifier-first, then falls back to text.
+    expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings", loose: true } }]);
   });
 
   it("sugars a bare-string selector for type.into", () => {
     const flow = parseFlow('steps:\n  - type: { into: email, text: "a@b.com" }\n');
     expect(flow.steps).toEqual([
-      { kind: "type", into: { text: "email" }, text: "a@b.com" },
+      { kind: "type", into: { text: "email", loose: true }, text: "a@b.com" },
     ]);
+  });
+
+  it("keeps an explicit { text } map strict (no loose fallback)", () => {
+    const flow = parseFlow("steps:\n  - tap: { text: Settings }\n");
+    expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
   });
 
   it("parses condition-as-key await/assert sugar (visible/exists/hidden)", () => {
@@ -158,9 +164,9 @@ describe("parseFlow", () => {
       ].join("\n")
     );
     expect(flow.steps).toEqual([
-      { kind: "await", condition: "visible", selector: { text: "Account" } },
+      { kind: "await", condition: "visible", selector: { text: "Account", loose: true } },
       { kind: "assert", condition: "exists", selector: { identifier: "row" } },
-      { kind: "await", condition: "hidden", selector: { text: "spinner" } },
+      { kind: "await", condition: "hidden", selector: { text: "spinner", loose: true } },
     ]);
   });
 
@@ -214,17 +220,21 @@ describe("parseFlow", () => {
   });
 
   it("roundtrips the sugared step kinds through YAML", () => {
+    // A text-only selector serializes to a bare string, which parses back as a
+    // loose selector — so the round-trip representation of any text locator
+    // carries `loose: true`. Identifier selectors keep the map form and stay
+    // strict.
     const flow: FlowFile = {
       executionPrerequisite: "",
       steps: [
-        { kind: "tap", selector: { text: "Login" } },
-        { kind: "type", into: { text: "email" }, text: "a@b.com" },
+        { kind: "tap", selector: { text: "Login", loose: true } },
+        { kind: "type", into: { text: "email", loose: true }, text: "a@b.com" },
         { kind: "await", condition: "hidden", selector: { identifier: "spinner" } },
-        { kind: "assert", condition: "text", selector: { text: "Taps:" }, expectedText: "Taps: 0" },
-        { kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" },
+        { kind: "assert", condition: "text", selector: { text: "Taps:", loose: true }, expectedText: "Taps: 0" },
+        { kind: "scroll-to", target: { text: "Order #1234", loose: true }, direction: "down" },
         {
           kind: "scroll-to",
-          target: { text: "Summer Sale" },
+          target: { text: "Summer Sale", loose: true },
           direction: "right",
           within: { identifier: "promotions" },
         },
@@ -238,7 +248,7 @@ describe("parseFlow", () => {
       ["steps:", "  - scroll-to: { target: Account, direction: down }"].join("\n")
     );
     expect(flow.steps).toEqual([
-      { kind: "scroll-to", target: { text: "Account" }, direction: "down" },
+      { kind: "scroll-to", target: { text: "Account", loose: true }, direction: "down" },
     ]);
   });
 

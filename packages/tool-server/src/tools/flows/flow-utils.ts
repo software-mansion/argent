@@ -170,15 +170,27 @@ export type Launch = string | { ios?: string; android?: string; chromium?: strin
 /** Axis + sense a `scroll-to` step scrolls in to reveal its target. */
 export type ScrollDirection = "up" | "down" | "left" | "right";
 
+/**
+ * A selector as a flow step carries it. Extends the shared {@link Selector} with
+ * an internal `loose` flag, set when the selector came from bare-string sugar
+ * (`tap: foo`). A loose selector resolves identifier-first, then falls back to
+ * text (label/value), so a hand-written `foo` matches `testID="foo"` as well as
+ * visible text. The flag is honored only by the flow runner (`flow-actions.ts`)
+ * and is never serialized as a field (it is implied by the bare-string spelling)
+ * nor forwarded into a tool's input — explicit `{ text }` / `{ identifier }`
+ * selectors stay strict everywhere.
+ */
+export type FlowSelector = Selector & { loose?: boolean };
+
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
   | { kind: "echo"; message: string }
   | { kind: "run"; flow: string }
-  | { kind: "tap"; selector?: Selector; x?: number; y?: number }
-  | { kind: "type"; into: Selector; text: string }
-  | { kind: "await"; condition: WaitCondition; selector: Selector; expectedText?: string }
-  | { kind: "assert"; condition: WaitCondition; selector: Selector; expectedText?: string }
-  | { kind: "scroll-to"; target: Selector; direction: ScrollDirection; within?: Selector }
+  | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number }
+  | { kind: "type"; into: FlowSelector; text: string }
+  | { kind: "await"; condition: WaitCondition; selector: FlowSelector; expectedText?: string }
+  | { kind: "assert"; condition: WaitCondition; selector: FlowSelector; expectedText?: string }
+  | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "snapshot"; name: string; maxMismatch?: number };
 
 export type FlowFile = {
@@ -251,13 +263,16 @@ type YamlFlowFile = {
 /**
  * Sugar a selector for YAML output: a text-only selector collapses to a bare
  * string (`{ text: "Login" }` → `"Login"`); an identifier/role selector keeps
- * the map form. `parseSelector` is the exact inverse.
+ * the map form. The internal `loose` flag is never emitted — a bare string is
+ * loose by definition, so the spelling carries it. `parseSelector` is the
+ * inverse (a bare string parses back to a loose text selector).
  */
-function selectorToYaml(sel: Selector): YamlSelector {
+function selectorToYaml(sel: FlowSelector): YamlSelector {
   if (sel.text !== undefined && sel.identifier === undefined && sel.role === undefined) {
     return sel.text;
   }
-  return { ...sel };
+  const { loose: _loose, ...rest } = sel;
+  return { ...rest };
 }
 
 /** Sugar an await/assert step into the condition-as-key YAML body. */
@@ -331,10 +346,17 @@ function badEntry(raw: unknown, detail: string): never {
   });
 }
 
-function parseSelector(raw: unknown, where: string): Selector {
-  // Bare-string sugar: a string is shorthand for a text selector.
-  const candidate = typeof raw === "string" ? { text: raw } : raw;
-  const r = selectorSchema.safeParse(candidate);
+function parseSelector(raw: unknown, where: string): FlowSelector {
+  // Bare-string sugar: a string is shorthand for a text selector, marked
+  // `loose` so the flow runner tries the identifier locator first and falls
+  // back to text — a hand-written `foo` then matches `testID="foo"` too. An
+  // explicit `{ text }` / `{ identifier }` map is strict (no `loose`).
+  if (typeof raw === "string") {
+    const r = selectorSchema.safeParse({ text: raw });
+    if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
+    return { ...r.data, loose: true };
+  }
+  const r = selectorSchema.safeParse(raw);
   if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
   return r.data;
 }
