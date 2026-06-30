@@ -29,14 +29,26 @@ describe("restart-app android activity component", () => {
   });
   for (const [activity, expected] of cases) {
     it(`restart-app builds ${expected} for "${activity}"`, async () => {
-      await restartAndroid.handler({} as never, { udid: "emulator-5554", bundleId: B, activity });
+      await restartAndroid.handler(
+        {} as never,
+        { udid: "emulator-5554", bundleId: B, activity },
+        {} as never
+      );
       expect(startComponent()).toBe(expected);
     });
     it(`restart-app matches launch-app for "${activity}"`, async () => {
-      await launchAndroid.handler({} as never, { udid: "emulator-5554", bundleId: B, activity });
+      await launchAndroid.handler(
+        {} as never,
+        { udid: "emulator-5554", bundleId: B, activity },
+        {} as never
+      );
       const launch = startComponent();
       shellCalls.length = 0;
-      await restartAndroid.handler({} as never, { udid: "emulator-5554", bundleId: B, activity });
+      await restartAndroid.handler(
+        {} as never,
+        { udid: "emulator-5554", bundleId: B, activity },
+        {} as never
+      );
       expect(startComponent()).toBe(launch);
     });
   }
