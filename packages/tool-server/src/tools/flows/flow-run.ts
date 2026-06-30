@@ -462,13 +462,19 @@ async function execLeafStep(
 
     case "snapshot": {
       try {
-        const r = await runSnapshot(registry, ctx, device, {
-          flowsDir: state.flowsDir,
-          flowName: state.topFlowName,
-          name: step.name,
-          maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
-          updateBaselines: state.updateBaselines,
-        });
+        const r = await runSnapshot(
+          registry,
+          ctx,
+          device,
+          {
+            flowsDir: state.flowsDir,
+            flowName: state.topFlowName,
+            name: step.name,
+            maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
+            updateBaselines: state.updateBaselines,
+          },
+          signal
+        );
         return { ...base, status: r.status, reason: r.reason, artifacts: r.artifacts };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
