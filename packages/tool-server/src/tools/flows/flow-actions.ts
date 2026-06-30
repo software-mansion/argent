@@ -1,7 +1,6 @@
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { getDescribeTapPoint, type DescribeFrame, type DescribeNode } from "../describe/contract";
 import {
-  fetchTree,
   selectorToFrame,
   findAll,
   evaluateCondition,
@@ -15,6 +14,7 @@ import {
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
+import { fetchFlowTree } from "./flow-native-tree";
 import type { ScrollDirection } from "./flow-utils";
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -76,7 +76,7 @@ async function settleTree(
   for (;;) {
     if (signal?.aborted) return undefined;
     try {
-      const { tree } = await fetchTree(registry, device);
+      const { tree } = await fetchFlowTree(registry, device);
       const fp = treeFingerprint(tree);
       if (prevFp !== undefined && fp === prevFp) return tree;
       prevFp = fp;
@@ -358,7 +358,7 @@ export async function runAssert(
   for (;;) {
     if (signal?.aborted) return { ok: false, reason: "assertion cancelled" };
     try {
-      const { tree } = await fetchTree(registry, device);
+      const { tree } = await fetchFlowTree(registry, device);
       lastMatches = findAll(tree, selector);
       fetchError = undefined;
       if (evaluateCondition(condition, expectedText, lastMatches)) return { ok: true };
