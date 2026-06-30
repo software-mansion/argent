@@ -168,9 +168,9 @@ export function buildCaptureScript(app: TerminalApp, tty: string): string {
  *
  * Three keystroke beats, not one:
  *
- *  1. A leading Esc. The agent is told NEVER to call `await_user_selection` in a
- *     CLI session, but if it slips and blocks on one (or on any in-flight turn),
- *     the composer isn't accepting a fresh prompt. Esc interrupts the current
+ *  1. A leading Esc. `await_user_selection` is hidden in a CLI session so the
+ *     agent can't block on a pick, but it may still be mid-turn (thinking, or with
+ *     a half-typed composer) when feedback arrives. Esc interrupts the current
  *     turn / clears a half-typed composer so the feedback lands as a clean new
  *     prompt. On an already-idle composer Esc is a harmless no-op. iTerm sends it
  *     raw via `write text … newline no` (ASCII 27, no Enter); Terminal.app has no

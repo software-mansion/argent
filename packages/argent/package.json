@@ -46,7 +46,8 @@
     "tree-sitter-typescript": "^0.23.2"
   },
   "optionalDependencies": {
-    "electron": "^42.5.0"
+    "electron": "^42.5.0",
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",

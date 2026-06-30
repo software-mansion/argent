@@ -105,10 +105,12 @@ describe("formatLensFeedback", () => {
     expect(formatLensFeedback(outcome())).toContain("No specific picks");
   });
 
-  it("steers the agent back to propose_variant and away from awaiting", () => {
+  it("steers the agent back to propose_variant and to end its turn (no blocking await)", () => {
     const out = formatLensFeedback(outcome());
     expect(out).toContain("propose_variant");
-    expect(out).toContain("do not call await_user_selection");
+    expect(out).toContain("end your turn");
+    // The await tool is hidden in a CLI session, so feedback never names it.
+    expect(out).not.toContain("await_user_selection");
   });
 });
 
@@ -117,7 +119,9 @@ describe("buildSeedPrompt", () => {
     const seed = buildSeedPrompt();
     expect(seed).toContain("Argent Lens CLI session");
     expect(seed).toContain("propose_variant");
-    expect(seed).toContain("await_user_selection");
+    expect(seed).toContain("end your turn");
+    // Don't name a tool the agent can't see in this session.
+    expect(seed).not.toContain("await_user_selection");
   });
   it("is a single line so it survives the spawn command unquoted", () => {
     expect(buildSeedPrompt()).not.toContain("\n");

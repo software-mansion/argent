@@ -2545,6 +2545,10 @@
         dragging: false,
         cardDragging: false,
         justCompletedRound: -1,
+        // CLI Lens only: the round whose feedback we've already sent to the agent.
+        // While the server still reports this round (the agent hasn't opened a new
+        // one yet) we hide its proposals/comments so "Request changes" feels final.
+        sentRound: -1,
         inspect: false,
         focus: null, // describe node currently spotlighted
         commentFor: null, // describe node a comment-pop is open for
@@ -2838,6 +2842,7 @@
                   (globalCommentEl && globalCommentEl.value);
                 const prev = vp.round;
                 vp.round = snap.round;
+                vp.sentRound = -1; // a fresh round supersedes any "already sent" hold
                 vp.staged = {};
                 vp.comments = {};
                 vp.annotations = [];
@@ -2853,7 +2858,12 @@
                 } else setNote("");
               }
             }
-            vp.proposals = Array.isArray(snap.proposals) ? snap.proposals : [];
+            // Hold the overlay empty after a CLI "Request changes" until the agent
+            // opens a NEW round — otherwise this poll would immediately re-show the
+            // very proposals the user just sent (the server keeps them live until
+            // the agent re-proposes, which rolls the round number).
+            const sentThisRound = vp.cliSession && vp.sentRound === snap.round;
+            vp.proposals = sentThisRound || !Array.isArray(snap.proposals) ? [] : snap.proposals;
             // In a CLI-driven Lens session (`argent lens`) the window stays open
             // and submissions are piped to the bound agent terminal rather than
             // resolving an await — so the action reads "Request changes".
@@ -4804,12 +4814,27 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
           const picked = selections.filter((s) => s.variantId).length;
+          const annCount = vp.annotations.length;
           vp.justCompletedRound = vp.round;
-          setNote(
-            `Sent ${picked} pick(s) + ${vp.annotations.length} comment(s) to the agent.`,
-            "ok"
-          );
-          showSuccessToast(picked, vp.annotations.length);
+          setNote(`Sent ${picked} pick(s) + ${annCount} comment(s) to the agent.`, "ok");
+          showSuccessToast(picked, annCount);
+          // CLI Lens: the round stays open server-side until the agent proposes
+          // anew, but the user has "sent" this batch — clear it from the overlay
+          // now (and keep it cleared via vp.sentRound in pollVariants, since the
+          // server still returns these proposals until the agent re-proposes) so
+          // the submit feels final instead of leaving the same cards sitting there.
+          if (vp.cliSession) {
+            vp.sentRound = vp.round;
+            vp.proposals = [];
+            vp.staged = {};
+            vp.comments = {};
+            vp.annotations = [];
+            vp.revealOffscreen = false;
+            vp.offscreenPromptCollapsed = false;
+            if (globalCommentEl) globalCommentEl.value = "";
+            closeAnnPop();
+            vpRender();
+          }
         } catch (err) {
           setNote(`Failed: ${err.message || err}`, "err");
         } finally {

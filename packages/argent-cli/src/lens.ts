@@ -16,23 +16,25 @@
  *      (no `await_user_selection` needed). No device is force-booted — the window
  *      streams a running device or offers an in-window picker (which can boot one
  *      headless; see the tool-server's /preview/boot).
- *   3. TAKE OVER the launching terminal: capture its session, then run the agent
- *      as a child with inherited stdio so the agent's TUI appears right here. If
- *      the launching terminal isn't scriptable (tmux / VS Code / ssh), fall back
- *      to spawning a new iTerm/Terminal window for the agent.
+ *   3. TAKE OVER this terminal by running the agent inside a PTY this process
+ *      proxies (see `lens-pty.ts`): stdin → PTY, PTY → stdout, resize → PTY. The
+ *      agent's TUI appears right here in ANY terminal — Warp, VS Code, tmux,
+ *      iTerm, Terminal — because we never depend on the host app being
+ *      scriptable. Fallback (no interactive tty, or native `node-pty` missing):
+ *      spawn a new iTerm/Terminal window via `osascript` (`lens-terminal.ts`).
  *   4. Relay feedback by PUSH: subscribe to the tool-server's SSE stream and, on
- *      each submitted round, type a one-line summary into the agent terminal.
- *      Liveness is the agent child's exit (no polling); the fallback path polls
- *      `ps` only because there is no child to await.
+ *      each submitted round, inject a one-line summary into the agent over the
+ *      same channel as the user's keystrokes (PTY write), or AppleScript
+ *      `write text` in the fallback. Liveness is the agent's exit (the PTY child,
+ *      or a `ps` poll for the fallback window).
  *
- * macOS only: the terminal capture/spawn/write path drives `osascript` (see
- * `lens-terminal.ts`).
+ * macOS only: the new-window fallback drives `osascript`, and the PTY proxy uses
+ * `node-pty` (an optional native dependency that degrades to the fallback).
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
 import { createToolsClient, type ToolsServerPaths } from "@argent/tools-client";
 import {
   isFlagEnabled,
@@ -43,8 +45,6 @@ import {
 import {
   resolveTerminal,
   spawnTerminalSession,
-  captureCurrentSession,
-  detectHostTerminal,
   writeToSession,
   readSessionText,
   pressEnter,
@@ -54,6 +54,7 @@ import {
   type TerminalApp,
   type TerminalSession,
 } from "./lens-terminal.js";
+import { loadNodePty, startPtyProxy, type PtyProxy } from "./lens-pty.js";
 import { lensEvents } from "./lens-stream.js";
 import {
   AGENTS,
@@ -85,8 +86,8 @@ interface LensOutcome {
   completedAt: number;
 }
 
-// Fallback-path liveness poll cadence (used ONLY when the agent runs in a
-// separate window and there is no child process to await).
+// New-window fallback liveness poll cadence (used ONLY there — the PTY path
+// observes the agent child's exit directly, with no poll).
 const LIVENESS_POLL_MS = 1_200;
 // A just-spawned session may not show in `ps` for a beat; don't call it dead
 // inside this window.
@@ -129,6 +130,46 @@ async function dismissTrustPrompt(session: TerminalSession): Promise<void> {
       return;
     }
   }
+}
+
+/**
+ * PTY equivalent of `dismissTrustPrompt`: watch the agent's OUTPUT stream for a
+ * first-run "trust this folder?" prompt and send a lone Enter (its default is
+ * trust-and-continue) so the seeded session starts unattended. Unlike the
+ * AppleScript path, we always have the real output here, so we only ever press
+ * Enter on a clear match — never a blind one. Bounded so it can't linger or fire
+ * on the agent's own later output.
+ */
+function dismissTrustPromptViaPty(proxy: PtyProxy): void {
+  let acc = "";
+  let done = false;
+  const deadline = Date.now() + 12_000;
+  proxy.onData((chunk) => {
+    if (done) return;
+    if (Date.now() > deadline) {
+      done = true;
+      return;
+    }
+    acc += chunk;
+    if (TRUST_PROMPT_RE.test(acc)) {
+      done = true;
+      proxy.write("\r");
+    }
+  });
+}
+
+/** Seed an inject-mode agent running under the PTY proxy: type the CLI-Lens
+ * prompt once its TUI has settled after boot (mirrors `injectSeedAfterBoot`). */
+async function injectSeedViaPty(proxy: PtyProxy): Promise<void> {
+  await sleep(5_000);
+  proxy.inject(buildSeedPrompt());
+}
+
+/** Whether we're attached to a real interactive terminal on both ends — the
+ * precondition for the PTY proxy. Piped/CI/non-tty invocations fall back to a
+ * new window. */
+function isInteractiveTty(): boolean {
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -194,9 +235,9 @@ export function buildSeedPrompt(): string {
     "preview window open and bound to THIS terminal.",
     "",
     "When the user asks you to redesign or restyle UI, use the `propose_variant` Argent",
-    "tool to stage at least two visual variants per element. Do NOT call",
-    "`await_user_selection` — in this session you never block waiting for a pick. After",
-    "proposing, end your turn.",
+    "tool to stage at least two visual variants per element. After proposing every",
+    "element, end your turn — you never block waiting for a pick in this session (their",
+    "feedback comes back to you as a message).",
     "",
     "The user reviews the variants in the Lens window; their feedback arrives here as a",
     'normal message prefixed "[Argent Lens]" (which variants they chose, comments, and',
@@ -263,7 +304,7 @@ export function formatLensFeedback(o: LensOutcome): string {
   return flattenLine(
     `[Argent Lens] Feedback from the preview window (round ${o.round}). ${body}. ` +
       "Apply the chosen variants to their source files where given, then refine the design with " +
-      "propose_variant (at least two variants per element; do not call await_user_selection)."
+      "propose_variant (at least two variants per element), and end your turn."
   );
 }
 
@@ -387,12 +428,6 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     process.exit(1);
   }
 
-  // Capture the terminal we're running in, so the agent can take it over and the
-  // relay can write into it. Null → not a scriptable iTerm/Terminal (tmux, VS
-  // Code, ssh) → we'll spawn a new window instead.
-  const hostApp = detectHostTerminal();
-  const current = hostApp ? captureCurrentSession(hostApp) : null;
-
   // Resolve the agent: a pre-chosen one, or whichever the human clicks in the
   // window's picker (delivered over the SSE stream — no polling).
   let agent = "agent" in plan ? plan.agent : undefined;
@@ -420,18 +455,40 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
   fs.writeFileSync(seedFile, buildSeedPrompt(), "utf8");
   const launchCmd = agent.launch(shellQuote(process.cwd()), shellQuote(seedFile));
 
-  // Spawn the agent: take over this terminal (child with inherited stdio), or a
-  // new window when the host terminal isn't scriptable. `quiet` suppresses our
-  // own stdout once the agent owns the terminal, so we don't corrupt its TUI.
-  let session: TerminalSession;
-  let child: ChildProcess | null = null;
+  // Spawn the agent. Preferred path: a PTY this process proxies, which takes
+  // over THIS terminal in ANY app (Warp / VS Code / tmux / iTerm / Terminal) and
+  // lets the relay inject feedback over the same channel as the user's keys.
+  // Fallback (no interactive tty, or node-pty unavailable): a new iTerm/Terminal
+  // window driven by AppleScript. `quiet` suppresses our own stdout once the
+  // agent owns this terminal, so we don't corrupt its TUI.
+  const ptyMod = isInteractiveTty() ? loadNodePty() : null;
+
+  // The relay's two terminal-specific seams: how feedback is injected, and how
+  // the agent's death is observed. Filled in per spawn path below.
+  let inject: (text: string) => boolean;
+  let registerDeath: (onDeath: () => void) => void;
   let quiet = false;
-  if (current) {
-    session = current;
-    quiet = true;
-    child = spawn("/bin/sh", ["-c", launchCmd], { stdio: "inherit", cwd: process.cwd() });
+  // Bring the agent down with us on a signal, restoring the terminal first.
+  let killAgent: () => void = () => {};
+
+  if (ptyMod) {
+    let proxy: PtyProxy;
+    try {
+      proxy = startPtyProxy({ pty: ptyMod, command: launchCmd, cwd: process.cwd() });
+    } catch (err) {
+      process.stderr.write(`lens: failed to start the agent PTY: ${errMsg(err)}\n`);
+      await endSession(baseUrl);
+      process.exit(1);
+    }
+    quiet = true; // the agent owns this terminal now
+    dismissTrustPromptViaPty(proxy);
+    if (agent.injectSeed) void injectSeedViaPty(proxy);
+    inject = (text) => proxy.inject(text);
+    registerDeath = (onDeath) => proxy.onExit(() => onDeath());
+    killAgent = () => proxy.dispose();
   } else {
     const term = resolveTerminal(preferred);
+    let session: TerminalSession;
     try {
       session = spawnTerminalSession(launchCmd, term);
     } catch (err) {
@@ -447,10 +504,11 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
         `  request changes — they're queued to the agent automatically. End it by\n` +
         `  closing the agent terminal.\n\n`
     );
+    void dismissTrustPrompt(session);
+    if (agent.injectSeed) void injectSeedAfterBoot(session);
+    inject = (text) => writeToSession(session, text);
+    registerDeath = (onDeath) => pollSessionDeath(session, onDeath);
   }
-
-  void dismissTrustPrompt(session);
-  if (agent.injectSeed) void injectSeedAfterBoot(session);
 
   // Teardown is idempotent and reachable from three places: the agent exiting,
   // a fatal relay condition, or a signal. It ends the server-side session (which
@@ -468,16 +526,17 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
       process.exit(code);
     });
   };
-  // A signal should bring the agent down with us; the child-exit path then runs
-  // teardown. If there's no child (new-window fallback) tear down directly.
+  // A signal should bring the agent down with us. `killAgent` synchronously
+  // restores the terminal (PTY path) before we exit; the new-window path is a
+  // no-op here and tears down directly.
   const onSignal = (): void => {
-    if (child && child.exitCode === null) child.kill("SIGTERM");
-    else teardown(0);
+    killAgent();
+    teardown(0);
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 
-  await runRelaySession(baseUrl, session, child, quiet);
+  await runRelaySession(baseUrl, inject, registerDeath, quiet);
   teardown(0);
 }
 
@@ -513,16 +572,38 @@ async function awaitAgentChoiceViaStream(
 }
 
 /**
- * Relay submitted feedback into the agent terminal by PUSH: subscribe to the
- * SSE stream and type each new round's summary in. Returns when the agent exits
- * — detected via the child's `exit` event (no poll) when we took over this
- * terminal, or via a `ps` liveness poll when the agent runs in a separate
- * window. Reconnects the stream if it drops while the agent is still alive.
+ * Watch a new-window fallback session for the agent's death by polling `ps` for
+ * its tty, calling `onDeath` once it's confirmed gone. Used only when the agent
+ * runs in a separate window (the PTY path observes the child's exit directly).
+ */
+function pollSessionDeath(session: TerminalSession, onDeath: () => void): void {
+  const spawnedAt = Date.now();
+  let deathStreak = 0;
+  const timer = setInterval(() => {
+    if (Date.now() - spawnedAt <= SPAWN_GRACE_MS) return;
+    if (!isSessionAlive(session)) {
+      if (++deathStreak >= DEATH_CONFIRMATIONS) {
+        clearInterval(timer);
+        onDeath();
+      }
+    } else {
+      deathStreak = 0;
+    }
+  }, LIVENESS_POLL_MS);
+  timer.unref?.();
+}
+
+/**
+ * Relay submitted feedback into the agent by PUSH: subscribe to the SSE stream
+ * and inject each new round's summary. `inject` and `registerDeath` are the
+ * terminal-specific seams the caller fills (PTY write + child exit, or
+ * AppleScript write + `ps` poll). Returns once the agent dies. Reconnects the
+ * stream if it drops while the agent is still alive.
  */
 export async function runRelaySession(
   baseUrl: string,
-  session: TerminalSession,
-  child: ChildProcess | null,
+  inject: (text: string) => boolean,
+  registerDeath: (onDeath: () => void) => void,
   quiet: boolean
 ): Promise<void> {
   const log = (s: string): void => {
@@ -536,31 +617,10 @@ export async function runRelaySession(
     ac.abort();
   };
 
-  // Liveness → stop. Child path: the agent IS our child, so its exit is the
-  // signal. Fallback path: poll `ps` for the session's tty.
-  if (child) {
-    if (child.exitCode !== null) stop();
-    child.on("exit", () => {
-      log("\n  Agent exited.\n");
-      stop();
-    });
-  } else {
-    const spawnedAt = Date.now();
-    let deathStreak = 0;
-    const timer = setInterval(() => {
-      if (Date.now() - spawnedAt <= SPAWN_GRACE_MS) return;
-      if (!isSessionAlive(session)) {
-        if (++deathStreak >= DEATH_CONFIRMATIONS) {
-          log("\n  Agent terminal closed.\n");
-          stop();
-        }
-      } else {
-        deathStreak = 0;
-      }
-    }, LIVENESS_POLL_MS);
-    timer.unref?.();
-    ac.signal.addEventListener("abort", () => clearInterval(timer));
-  }
+  registerDeath(() => {
+    log("\n  Agent exited.\n");
+    stop();
+  });
 
   // Don't relay anything submitted before now (a stale outcome from a previous
   // session must not fire on launch).
@@ -586,12 +646,12 @@ export async function runRelaySession(
         }
         if (outcome && outcome.status === "completed" && outcome.completedAt > lastCompletedAt) {
           lastCompletedAt = outcome.completedAt;
-          const ok = writeToSession(session, formatLensFeedback(outcome));
+          const ok = inject(formatLensFeedback(outcome));
           if (ok) {
             const n = outcome.selections.filter((s) => s.chosenVariant).length;
             log(`  → relayed feedback to the agent (${n} pick(s)).\n`);
           } else {
-            log("  ! could not reach the agent terminal (it may have closed).\n");
+            log("  ! could not reach the agent (it may have exited).\n");
           }
         }
       }
