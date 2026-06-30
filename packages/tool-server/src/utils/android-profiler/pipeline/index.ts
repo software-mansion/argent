@@ -253,8 +253,11 @@ async function renderHangStacksAndroid(
     return `_Invalid hang_index ${opts.hangIndex}. There are ${hangRows.length} hangs (0-indexed)._`;
   }
   const hang = hangRows[opts.hangIndex]!;
-  const startNs = hang.ts_ns;
-  const endNs = hang.ts_ns + hang.dur_ns;
+  // ts_ns is absolute CLOCK_MONOTONIC ns and can decode as bigint on long-uptime
+  // devices (> 2^53; see readCell). Coerce before arithmetic so adding dur_ns
+  // (a Number) doesn't throw "Cannot mix BigInt and other types".
+  const startNs = Number(hang.ts_ns);
+  const endNs = startNs + Number(hang.dur_ns);
 
   const [stateRows, sampleRows] = await Promise.all([
     runTpQuery<AndroidHangStateRow>({
@@ -277,7 +280,7 @@ async function renderHangStacksAndroid(
     }).catch(() => [] as AndroidHangMainThreadSampleRow[]),
   ]);
 
-  const durationMs = Math.round(hang.dur_ns / 1_000_000);
+  const durationMs = Math.round(Number(hang.dur_ns) / 1_000_000);
   const lines: string[] = [
     `## Hang #${opts.hangIndex} — ${hang.kind} (${durationMs}ms)` +
       (hang.reason ? ` — reason: \`${hang.reason}\`` : ""),
@@ -532,8 +535,12 @@ function cpuRowsToAggregatorRows(
       timestampsNs: [],
       callChains: [{ chain: [dominant], count: row.sample_count }],
       precomputedBursts: parseBurstWindows(row.burst_windows, traceStartMs),
-      firstMs: Math.round((row.first_ts_ns - traceStartNs) / 1_000_000),
-      lastMs: Math.round((row.last_ts_ns - traceStartNs) / 1_000_000),
+      // first/last_ts_ns are absolute CLOCK_MONOTONIC ns: they exceed 2^53 after
+      // ~104 days of device uptime, so the WASM decoder hands them back as bigint
+      // (see readCell). traceStartNs is already a plain Number, so coerce here to
+      // avoid "Cannot mix BigInt and other types" — values stay integral.
+      firstMs: Math.round((Number(row.first_ts_ns) - traceStartNs) / 1_000_000),
+      lastMs: Math.round((Number(row.last_ts_ns) - traceStartNs) / 1_000_000),
       sampleCount: row.sample_count,
     });
   }
@@ -542,8 +549,11 @@ function cpuRowsToAggregatorRows(
 
 function hangRowsToBottlenecks(rows: AndroidJankRow[], traceStartNs: number): UiHang[] {
   return rows.map((row) => {
-    const durationMs = Math.round(row.dur_ns / 1_000_000);
-    const startNs = row.ts_ns - traceStartNs;
+    // ts_ns is an absolute CLOCK_MONOTONIC ns value that can arrive as bigint on a
+    // long-uptime device (> 2^53 ns ≈ 104 days; see readCell). traceStartNs is a
+    // plain Number, so coerce both ts_ns and dur_ns before the arithmetic.
+    const durationMs = Math.round(Number(row.dur_ns) / 1_000_000);
+    const startNs = Number(row.ts_ns) - traceStartNs;
     return {
       type: "ui_hang",
       platform: "android",
@@ -551,7 +561,7 @@ function hangRowsToBottlenecks(rows: AndroidJankRow[], traceStartNs: number): Ui
       durationMs,
       startTimeFormatted: formatTraceTime(startNs),
       startNs,
-      endNs: startNs + row.dur_ns,
+      endNs: startNs + Number(row.dur_ns),
       suspectedFunctions: [],
       appCallChains: [],
       severity: classifyAndroidHangSeverity(row),
