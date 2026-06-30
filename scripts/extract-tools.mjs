@@ -41,10 +41,17 @@ function extractFromFile(filePath) {
   let idMatch;
   while ((idMatch = idPattern.exec(src)) !== null) {
     const id = idMatch[1];
-    const afterId = src.slice(idMatch.index);
 
-    // Look for description within the next 2000 chars (handles multi-line)
-    const descWindow = afterId.slice(0, 2000);
+    // Bound the search to THIS tool's definition: from its `id:` up to the next
+    // `id:` declaration in the file (or end of file). No fixed-size window, so a
+    // long multi-line template-literal description — whose closing delimiter can
+    // sit thousands of chars past the `id:` (run-sequence's is ~3000) — is still
+    // captured in full. The old 2000-char window silently dropped such tools, so
+    // they were never security-scanned by the downstream `spidershield` pass.
+    const boundary = /\bid:\s*["'][^"']+["']/g;
+    boundary.lastIndex = idMatch.index + idMatch[0].length;
+    const next = boundary.exec(src);
+    const descWindow = src.slice(idMatch.index, next ? next.index : src.length);
 
     // Template literal description.
     // Allow escaped backticks (\`) inside the literal so inline code like
@@ -68,6 +75,14 @@ function extractFromFile(filePath) {
         name: id,
         description,
       });
+    } else {
+      // A tool definition has an `id` but no parseable `description`. Don't drop
+      // it silently (that bug hid run-sequence from the scanner) — warn on
+      // stderr so the failure is visible, while keeping stdout valid JSON for
+      // the downstream `spidershield scan --tools-json` consumer.
+      console.error(
+        `extract-tools: WARNING: tool "${id}" in ${filePath} has an id but no parseable description; skipping.`
+      );
     }
   }
 
