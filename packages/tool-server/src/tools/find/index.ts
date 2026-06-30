@@ -524,6 +524,9 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
             params.udid,
             chosen.value?.length ?? 0
           );
+          // clearField stops early on abort but can't signal it; bail before
+          // typing so a cancelled fill doesn't push `text` in and report success.
+          if (signal?.aborted) return cancelled();
           const r = await typeText(registry, ctx, params.udid, params.text!);
           result.actionResult = { kind: "fill", typed: r.typed, keys: r.keys, clearedChars };
           if (chosen.password && !chosen.value) {

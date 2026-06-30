@@ -620,6 +620,49 @@ describe("find tool", () => {
     expect(keyboardCalls(invocations)).toHaveLength(0);
   });
 
+  it("aborts a `fill` when the signal fires mid-clear, before typing the text", async () => {
+    // Abort after the first backspace (during the clear loop, past the focus
+    // settle): find must bail before pushing `text` in and must not report success.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Field", value: "abcdef", frame: FRAME, traits: ["textfield"] }]),
+    ]);
+    const controller = new AbortController();
+    const invocations: SubInvocation[] = [];
+    const registry = {
+      resolveService: async (urn: string) => {
+        if (urn.startsWith("AXService:")) return api;
+        throw new Error(`unexpected service: ${urn}`);
+      },
+      invokeTool: async (toolId: string, args: Record<string, unknown>) => {
+        invocations.push({ toolId, args });
+        if (toolId === "gesture-tap") return { tapped: true, timestampMs: 1 };
+        if (toolId === "keyboard" && args.key === "backspace") {
+          controller.abort(); // abort as soon as the clear loop sends a key
+          return { typed: "backspace", keys: 1 };
+        }
+        if (toolId === "keyboard") {
+          const text = typeof args.text === "string" ? args.text : "";
+          return { typed: text, keys: text.length };
+        }
+        return {};
+      },
+    } as any;
+    const tool = createFindTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Field", by: "label", action: "fill", text: "new", index: 0 },
+      { signal: controller.signal } as never
+    );
+
+    expect(result.found).toBe(false);
+    expect(result.note).toMatch(/cancel/i);
+    // the text was never typed (no keyboard call carrying `text`)
+    expect(invocations.some((i) => i.toolId === "keyboard" && typeof i.args.text === "string")).toBe(
+      false
+    );
+  });
+
   // ── Android branch ──
   it("drives the Android devtools path and taps a node", async () => {
     const xml =
