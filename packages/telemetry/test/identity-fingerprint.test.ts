@@ -105,15 +105,17 @@ describe("identity – fingerprint-derived id", () => {
     expect(resolver).toHaveBeenCalledTimes(1);
   });
 
-  it("self-heals a corrupt id file (no fingerprint) by minting a fresh random id", () => {
+  it("self-heals a corrupt id file (no fingerprint) by minting a fresh 0600 random id", () => {
     fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
-    // Empty file: occupies the path but fails the id validator -> corrupt.
-    fs.writeFileSync(identityFilePath(), "", { mode: 0o600 });
+    // Empty file with a non-0600 mode: occupies the path but fails the id
+    // validator -> corrupt. The self-heal must replace it with a fresh 0600 file.
+    fs.writeFileSync(identityFilePath(), "", { mode: 0o644 });
     const id = readOrCreateAnonId();
     expect(id).toMatch(/^[0-9a-f-]{36}$/);
     expect(versionNibble(id)).toBe("4");
-    // The corrupt file was overwritten with the new id.
+    // The corrupt file was overwritten with the new id, at mode 0600.
     expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
+    expect(fs.lstatSync(identityFilePath()).mode & 0o777).toBe(0o600);
   });
 
   it("self-heals a corrupt id file by migrating to the fingerprint id when available", () => {
