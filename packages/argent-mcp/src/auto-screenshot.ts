@@ -23,6 +23,7 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "restart-app",
   "open-url",
   "describe",
+  "find",
   "run-sequence",
 ]);
 
@@ -46,6 +47,9 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "rotate": 1000,
   "keyboard": 300,
   "describe": 100,
+  // `find`'s headline action is a tap (which can trigger a transition), so match
+  // gesture-tap's settle delay; the read-only actions just over-wait harmlessly.
+  "find": 1500,
 };
 
 const DEFAULT_DELAY_MS = 1400;
