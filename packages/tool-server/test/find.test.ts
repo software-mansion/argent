@@ -12,13 +12,13 @@ const CHROMIUM_ID = "chromium-cdp-9222";
 
 // ── Mocks (mirror await-ui-element.test.ts, plus an invokeTool spy) ───────────
 
-function makeSequencedAXService(responses: AXDescribeResponse[]): {
-  api: AXServiceApi;
-  calls: () => number;
-} {
+function makeSequencedAXService(
+  responses: AXDescribeResponse[],
+  opts: { degraded?: boolean } = {}
+): { api: AXServiceApi; calls: () => number } {
   let i = 0;
   const api: AXServiceApi = {
-    degraded: false,
+    degraded: opts.degraded ?? false,
     describe: async () => responses[Math.min(i++, responses.length - 1)]!,
     alertCheck: async () => false,
     ping: async () => true,
@@ -78,7 +78,21 @@ function makeChromiumApi(treeJson: unknown): ChromiumCdpApi {
   } as unknown as ChromiumCdpApi;
 }
 
+// A Chromium api whose evaluate always throws — the fetch-failure case.
+function makeFailingChromiumApi(): ChromiumCdpApi {
+  return {
+    refreshViewport: async () => ({ width: 1024, height: 768 }),
+    getViewport: () => ({ width: 1024, height: 768 }),
+    cdp: {
+      send: async () => {
+        throw new Error("renderer detached");
+      },
+    },
+  } as unknown as ChromiumCdpApi;
+}
+
 const FRAME = { x: 0.1, y: 0.4, width: 0.8, height: 0.05 };
+const CENTER = { x: FRAME.x + FRAME.width / 2, y: FRAME.y + FRAME.height / 2 };
 
 // ── Pure locator matching (hand-built trees, no platform adapter) ────────────
 
@@ -112,8 +126,7 @@ describe("find — locator matching", () => {
   });
 
   it("is case-insensitive substring", () => {
-    const n = node({ label: "Continue" });
-    expect(locatorField(n, "label", "TINU")).toBe("label");
+    expect(locatorField(node({ label: "Continue" }), "label", "TINU")).toBe("label");
   });
 
   it("`text` matches label OR value, preferring label", () => {
@@ -130,7 +143,6 @@ describe("find — locator matching", () => {
   });
 
   it("findMatches collects every match but never the synthetic root", () => {
-    // Root role is AXGroup; a role:"AXGroup" locator must skip the root itself.
     const t = tree([node({ role: "AXGroup", label: "inner" }), node({ label: "leaf" })]);
     expect(findMatches(t, "role", "AXGroup")).toHaveLength(1); // only the inner AXGroup child
     expect(findMatches(t, "any", "nomatch")).toHaveLength(0);
@@ -149,11 +161,11 @@ describe("find tool", () => {
     const { registry, invocations } = makeMockRegistry({ ax });
     return { tool: createFindTool(registry), invocations, registry };
   };
+  const keyboardCalls = (inv: SubInvocation[]) => inv.filter((i) => i.toolId === "keyboard");
+  const backspaces = (inv: SubInvocation[]) => inv.filter((i) => i.args.key === "backspace");
 
-  it("exposes the find id and required params", () => {
-    const { registry } = makeMockRegistry({ ax: {} as AXServiceApi });
-    const tool = createFindTool(registry);
-    expect(tool.id).toBe("find");
+  it("exposes the find id", () => {
+    expect(createFindTool(makeMockRegistry().registry).id).toBe("find");
   });
 
   // ── tap ──
@@ -169,16 +181,9 @@ describe("find tool", () => {
     );
 
     expect(result.found).toBe(true);
-    expect(result.acted).toBe(true);
     expect(result.actionResult).toMatchObject({ kind: "tap", tapped: true });
-    // gesture-tap dispatched with the frame centre
-    const tap = invocations.find((i) => i.toolId === "gesture-tap");
-    expect(tap).toBeDefined();
-    expect(tap!.args).toMatchObject({
-      udid: IOS_UDID,
-      x: FRAME.x + FRAME.width / 2,
-      y: FRAME.y + FRAME.height / 2,
-    });
+    const tap = invocations.find((i) => i.toolId === "gesture-tap")!;
+    expect(tap.args).toMatchObject({ udid: IOS_UDID, x: CENTER.x, y: CENTER.y });
   });
 
   it("defaults action to tap and by to any", async () => {
@@ -186,8 +191,6 @@ describe("find tool", () => {
       axResponse([{ label: "Hello World", frame: FRAME, traits: [] }]),
     ]);
     const { tool, invocations } = iosTool(api);
-    // omit action/by — schema defaults should apply once parsed; pass through the
-    // parsed schema to mimic the HTTP layer
     const params = tool.zodSchema!.parse({ udid: IOS_UDID, query: "hello" });
     const result = await tool.execute({}, params as never);
     expect(result.action).toBe("tap");
@@ -195,8 +198,25 @@ describe("find tool", () => {
     expect(invocations.some((i) => i.toolId === "gesture-tap")).toBe(true);
   });
 
+  // ── focus ──
+  it("`focus` taps the match centre and reports kind:focus", async () => {
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Email", frame: FRAME, traits: ["textfield"] }]),
+    ]);
+    const { tool, invocations } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Email", by: "label", action: "focus", index: 0 }
+    );
+    expect(result.found).toBe(true);
+    expect(result.actionResult).toMatchObject({ kind: "focus", focused: true });
+    const tap = invocations.find((i) => i.toolId === "gesture-tap")!;
+    expect(tap.args).toMatchObject({ x: CENTER.x, y: CENTER.y });
+    expect(keyboardCalls(invocations)).toHaveLength(0);
+  });
+
   // ── index / ambiguity ──
-  it("acts on the index-th match in reading order and reports matchCount", async () => {
+  it("acts on the index-th match in reading order, reports matchCount and an ambiguity note", async () => {
     const top = { label: "Item", frame: { x: 0.1, y: 0.2, width: 0.5, height: 0.05 }, traits: [] };
     const bottom = {
       label: "Item",
@@ -213,9 +233,22 @@ describe("find tool", () => {
 
     expect(result.matchCount).toBe(2);
     expect(result.found).toBe(true);
-    // index 1 = the lower (bottom) one in reading order
+    expect(result.note).toMatch(/2 elements matched.*acted on index 1/i);
     const tap = invocations.find((i) => i.toolId === "gesture-tap")!;
-    expect(tap.args.y).toBeCloseTo(0.8 + 0.05 / 2);
+    expect(tap.args.y).toBeCloseTo(0.8 + 0.05 / 2); // index 1 = the lower one
+  });
+
+  it("read-only multi-match note says `selected`, not `acted on`", async () => {
+    const a = { label: "Row", frame: { x: 0.1, y: 0.2, width: 0.5, height: 0.05 }, traits: [] };
+    const b = { label: "Row", frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 }, traits: [] };
+    const { api } = makeSequencedAXService([axResponse([a, b])]);
+    const { tool } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Row", by: "label", action: "get-text", index: 0 }
+    );
+    expect(result.note).toMatch(/selected index 0/i);
+    expect(result.note).not.toMatch(/acted on/i);
   });
 
   it("returns found:false with an out-of-range note when index exceeds matches", async () => {
@@ -230,15 +263,11 @@ describe("find tool", () => {
     );
 
     expect(result.found).toBe(false);
-    expect(result.acted).toBe(false);
     expect(result.note).toMatch(/out of range/i);
     expect(invocations.some((i) => i.toolId === "gesture-tap")).toBe(false);
   });
 
-  // ── zero-area / not actionable ──
-  // iOS/Chromium adapters prune zero-area nodes before find sees them, but a raw
-  // tree (e.g. Android uiautomator, or the Chromium mock here which returns the
-  // tree verbatim) can carry one — so the visible-filter guard must hold.
+  // ── zero-area / not actionable (Chromium mock returns the tree verbatim) ──
   it("does not tap a match with a zero-area frame", async () => {
     const tree = {
       role: "html",
@@ -261,8 +290,8 @@ describe("find tool", () => {
     );
 
     expect(result.found).toBe(false);
-    expect(result.matchCount).toBe(1);
-    expect(result.note).toMatch(/none was visible|zero-area/i);
+    expect(result.matchCount).toBe(0); // no actionable (visible) matches
+    expect(result.note).toMatch(/none is visible|zero-area/i);
     expect(invocations.some((i) => i.toolId === "gesture-tap")).toBe(false);
   });
 
@@ -272,14 +301,13 @@ describe("find tool", () => {
       axResponse([{ label: "Present", frame: FRAME, traits: [] }]),
     ]);
     const { tool } = iosTool(api);
-
     const found = await tool.execute(
       {},
       { udid: IOS_UDID, query: "Present", by: "label", action: "exists", index: 0 }
     );
     expect(found.found).toBe(true);
-    expect(found.acted).toBe(false);
     expect(found.actionResult).toBeUndefined();
+    expect(found.match?.label).toBe("Present");
     expect(calls()).toBe(1);
   });
 
@@ -323,7 +351,6 @@ describe("find tool", () => {
       axResponse([{ label: "Loaded", frame: FRAME, traits: [] }]),
     ]);
     const { tool } = iosTool(api);
-
     const result = await tool.execute(
       {},
       {
@@ -337,7 +364,7 @@ describe("find tool", () => {
       }
     );
     expect(result.found).toBe(true);
-    expect(result.acted).toBe(false);
+    expect(result.actionResult).toBeUndefined();
     expect(calls()).toBeGreaterThan(1);
   });
 
@@ -361,7 +388,6 @@ describe("find tool", () => {
     expect(result.elapsed).toBeGreaterThanOrEqual(30);
   });
 
-  // ── opt-in polling for a non-wait action ──
   it("polls before acting when timeoutMs is set on a tap", async () => {
     const { api, calls } = makeSequencedAXService([
       axResponse([]),
@@ -386,46 +412,68 @@ describe("find tool", () => {
   });
 
   // ── type ──
-  it("`type` focuses then types the text", async () => {
+  it("`type` focuses (centre) then types the text", async () => {
     const { api } = makeSequencedAXService([
       axResponse([{ label: "Email", frame: FRAME, traits: ["textfield"] }]),
     ]);
     const { tool, invocations } = iosTool(api);
-
     const result = await tool.execute(
       {},
       { udid: IOS_UDID, query: "Email", by: "label", action: "type", text: "hi", index: 0 }
     );
     expect(result.found).toBe(true);
     expect(result.actionResult).toMatchObject({ kind: "type", typed: "hi" });
-    // tap (focus) first, then keyboard text — and no backspaces
     expect(invocations.map((i) => i.toolId)).toEqual(["gesture-tap", "keyboard"]);
-    expect(invocations.some((i) => i.args.key === "backspace")).toBe(false);
+    // focus tap is the centre, NOT a trailing-edge bias
+    expect(invocations[0]!.args).toMatchObject({ x: CENTER.x, y: CENTER.y });
+    expect(backspaces(invocations)).toHaveLength(0);
   });
 
   // ── fill ──
-  it("`fill` focuses, clears value.length+buffer chars, then types", async () => {
+  it("`fill` focuses (centre), clears value.length+buffer chars, then types", async () => {
     const { api } = makeSequencedAXService([
       axResponse([{ label: "Field", value: "abcd", frame: FRAME, traits: ["textfield"] }]),
     ]);
     const { tool, invocations } = iosTool(api);
-
     const result = await tool.execute(
       {},
       { udid: IOS_UDID, query: "Field", by: "label", action: "fill", text: "new", index: 0 }
     );
     expect(result.found).toBe(true);
-    const backspaces = invocations.filter((i) => i.args.key === "backspace").length;
-    expect(backspaces).toBe(4 + 2); // value "abcd" length 4 + CLEAR_BUFFER 2
+    expect(backspaces(invocations)).toHaveLength(4 + 2); // "abcd" length 4 + CLEAR_BUFFER 2
     expect(result.actionResult).toMatchObject({ kind: "fill", typed: "new", clearedChars: 6 });
-    // order: focus tap, then backspaces, then the text
     expect(invocations[0]!.toolId).toBe("gesture-tap");
+    expect(invocations[0]!.args).toMatchObject({ x: CENTER.x, y: CENTER.y }); // centre focus
     expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "new" } });
   });
 
+  it("`fill` clears CLEAR_BUFFER chars for an empty/undefined-value field, capped at MAX_CLEAR_CHARS", async () => {
+    // empty value → 2 backspaces
+    const empty = makeSequencedAXService([
+      axResponse([{ label: "F", value: "", frame: FRAME, traits: ["textfield"] }]),
+    ]);
+    const t1 = iosTool(empty.api);
+    await t1.tool.execute(
+      {},
+      { udid: IOS_UDID, query: "F", by: "label", action: "fill", text: "x", index: 0 }
+    );
+    expect(backspaces(t1.invocations)).toHaveLength(2);
+
+    // very long value → capped at MAX_CLEAR_CHARS (64)
+    const longVal = "a".repeat(200);
+    const long = makeSequencedAXService([
+      axResponse([{ label: "F", value: longVal, frame: FRAME, traits: ["textfield"] }]),
+    ]);
+    const t2 = iosTool(long.api);
+    const r2 = await t2.tool.execute(
+      {},
+      { udid: IOS_UDID, query: "F", by: "label", action: "fill", text: "x", index: 0 }
+    );
+    expect(backspaces(t2.invocations)).toHaveLength(64);
+    expect((r2.actionResult as { clearedChars: number }).clearedChars).toBe(64);
+  });
+
   it("`fill` warns on a masked password field with an unknown length", async () => {
-    // The `password` flag is an Android-sourced field; inject it via the Chromium
-    // mock (which returns the tree verbatim) to exercise the warning path.
     const tree = {
       role: "html",
       frame: { x: 0, y: 0, width: 1, height: 1 },
@@ -451,7 +499,7 @@ describe("find tool", () => {
   });
 
   // ── get-text / get-attrs ──
-  it("`get-text` returns the label + value, no device action", async () => {
+  it("`get-text` returns label + value, no device action", async () => {
     const { api } = makeSequencedAXService([
       axResponse([{ label: "Title", value: "Subtitle", frame: FRAME, traits: [] }]),
     ]);
@@ -464,22 +512,70 @@ describe("find tool", () => {
     expect(invocations).toHaveLength(0);
   });
 
-  it("`get-attrs` returns role, frame, tapPoint and matchedField", async () => {
+  it("`get-text` joins only the present fields (label only → no trailing space)", async () => {
     const { api } = makeSequencedAXService([
-      axResponse([{ label: "Card", frame: FRAME, traits: ["button"] }]),
+      axResponse([{ label: "JustLabel", frame: FRAME, traits: [] }]),
     ]);
     const { tool } = iosTool(api);
     const result = await tool.execute(
       {},
+      { udid: IOS_UDID, query: "JustLabel", by: "label", action: "get-text", index: 0 }
+    );
+    expect((result.actionResult as { text: string }).text).toBe("JustLabel");
+  });
+
+  it("`get-attrs` returns the attributes in `match` (role, frame, tapPoint, matchedField), no actionResult", async () => {
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Card", frame: FRAME, traits: ["button"] }]),
+    ]);
+    const { tool, invocations } = iosTool(api);
+    const result = await tool.execute(
+      {},
       { udid: IOS_UDID, query: "Card", by: "any", action: "get-attrs", index: 0 }
     );
-    expect(result.actionResult?.kind).toBe("get-attrs");
+    expect(result.actionResult).toBeUndefined();
     expect(result.match).toMatchObject({
       role: "AXButton",
       label: "Card",
       matchedField: "label",
-      tapPoint: { x: FRAME.x + FRAME.width / 2, y: FRAME.y + FRAME.height / 2 },
+      tapPoint: { x: CENTER.x, y: CENTER.y },
     });
+    expect(invocations).toHaveLength(0);
+  });
+
+  // ── diagnostics / errors ──
+  it("surfaces the degraded-AX restart hint on a not-found note", async () => {
+    const { api } = makeSequencedAXService([axResponse([])], { degraded: true });
+    const { tool } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Anything", by: "label", action: "tap", index: 0 }
+    );
+    expect(result.found).toBe(false);
+    expect(result.note).toMatch(/boot-device|restart/i);
+  });
+
+  it("surfaces the degraded-AX hint on an `exists` not-found note too", async () => {
+    const { api } = makeSequencedAXService([axResponse([])], { degraded: true });
+    const { tool } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Anything", by: "label", action: "exists", index: 0 }
+    );
+    expect(result.found).toBe(false);
+    expect(result.note).toMatch(/boot-device|restart/i);
+  });
+
+  it("surfaces a tree-fetch failure in the note (Chromium renderer detached)", async () => {
+    const { registry } = makeMockRegistry({});
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
+      { chromium: makeFailingChromiumApi() },
+      { udid: CHROMIUM_ID, query: "Continue", by: "text", action: "exists", index: 0 }
+    );
+    expect(result.found).toBe(false);
+    expect(result.note).toMatch(/tree fetch failed/i);
+    expect(result.note).toMatch(/renderer detached/);
   });
 
   // ── cancellation ──
@@ -506,6 +602,24 @@ describe("find tool", () => {
     expect(result.elapsed).toBeLessThan(2000);
   });
 
+  it("aborts a `fill` during the focus settle, before any keystroke", async () => {
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Field", value: "abc", frame: FRAME, traits: ["textfield"] }]),
+    ]);
+    const { tool, invocations } = iosTool(api);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 20); // fires during the ~150ms iOS settle
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Field", by: "label", action: "fill", text: "new", index: 0 },
+      { signal: controller.signal } as never
+    );
+    expect(result.found).toBe(false);
+    expect(result.note).toMatch(/cancel/i);
+    // the focus tap may have fired, but no keystrokes (clear/type) ran
+    expect(keyboardCalls(invocations)).toHaveLength(0);
+  });
+
   // ── Android branch ──
   it("drives the Android devtools path and taps a node", async () => {
     const xml =
@@ -521,7 +635,6 @@ describe("find tool", () => {
     } as unknown as AndroidDevtoolsApi;
     const { registry, invocations } = makeMockRegistry({ android });
     const tool = createFindTool(registry);
-
     const result = await tool.execute(
       {},
       { udid: ANDROID_SERIAL, query: "Sign in", by: "text", action: "tap", index: 0 }
