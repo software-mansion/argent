@@ -82,6 +82,8 @@ function parseRunArgs(argv: string[]): {
 function renderReport(report: FlowReport): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}" on ${report.device}`);
+  // Number only real steps so echo narration doesn't leave gaps in the sequence.
+  let n = 0;
   for (const s of report.steps) {
     // Echo is narration, not a pass/fail step — render its message as a plain
     // line with no index or status glyph so it reads as a header between steps.
@@ -89,10 +91,11 @@ function renderReport(report: FlowReport): string {
       if (s.message) lines.push(`  › ${s.message}`);
       continue;
     }
+    n++;
     const where = s.flow && s.flow !== report.flow ? ` [${s.flow}]` : "";
     const label = s.tool ? `${s.kind} ${s.tool}` : s.kind;
     const reason = s.reason ? ` — ${s.reason}` : "";
-    lines.push(`  ${STATUS_GLYPH[s.status]} ${String(s.index).padStart(2)} ${label}${where}${reason}`);
+    lines.push(`  ${STATUS_GLYPH[s.status]} ${String(n).padStart(2)} ${label}${where}${reason}`);
   }
   lines.push(
     `\n${report.ok ? "PASS" : "FAIL"} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped`
