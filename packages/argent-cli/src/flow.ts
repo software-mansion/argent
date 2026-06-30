@@ -16,6 +16,7 @@ interface StepReport {
   reason?: string;
   tool?: string;
   flow?: string;
+  message?: string;
 }
 
 interface FlowReport {
@@ -82,6 +83,12 @@ function renderReport(report: FlowReport): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}" on ${report.device}`);
   for (const s of report.steps) {
+    // Echo is narration, not a pass/fail step — render its message as a plain
+    // line with no index or status glyph so it reads as a header between steps.
+    if (s.kind === "echo") {
+      if (s.message) lines.push(`  › ${s.message}`);
+      continue;
+    }
     const where = s.flow && s.flow !== report.flow ? ` [${s.flow}]` : "";
     const label = s.tool ? `${s.kind} ${s.tool}` : s.kind;
     const reason = s.reason ? ` — ${s.reason}` : "";
