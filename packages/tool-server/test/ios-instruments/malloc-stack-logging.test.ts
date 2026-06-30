@@ -233,4 +233,65 @@ describe("native-profiler-start malloc_stack_logging", () => {
       else process.env.ARGENT_IOS_CAPTURE = prev;
     }
   });
+
+  it("best-effort relaunches the app when the malloc cold launch fails after terminate", async () => {
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      // Non-degraded Xcode → the guard passes and the path reaches the cold launch.
+      const execSyncFn = vi.fn((cmd: string) => {
+        if (cmd.includes("xcodebuild")) return "Xcode 16.4\nBuild version 16F6";
+        if (cmd.includes("listapps")) return LISTAPPS_JSON;
+        if (cmd.includes("launchctl list"))
+          return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n";
+        if (cmd.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
+        if (cmd.includes("terminate")) return "";
+        return "";
+      });
+      const execFileSyncFn = vi.fn();
+      vi.doMock("child_process", () => ({
+        spawn: spawnFn,
+        execSync: execSyncFn,
+        execFile: vi.fn(),
+        execFileSync: execFileSyncFn,
+      }));
+      vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+        getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+      }));
+      vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+        listenForDarwinNotification: vi.fn(() => {
+          throw new Error("notifyutil unavailable in tests");
+        }),
+      }));
+      // Force the capture start to fail *after* the app has been terminated.
+      vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+        waitForXctraceReady: vi.fn(async () => {
+          throw new Error("xctrace exited before recording started");
+        }),
+      }));
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      // The start failed (error surfaced) AND the terminated app was relaunched.
+      expect(err).toBeTruthy();
+      const relaunch = execFileSyncFn.mock.calls.find(
+        (c) => Array.isArray(c[1]) && (c[1] as string[]).includes("launch")
+      );
+      expect(relaunch).toBeTruthy();
+      expect(relaunch![1]).toEqual(["simctl", "launch", "DEVICE-UDID", "com.example.myapp"]);
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
 });
