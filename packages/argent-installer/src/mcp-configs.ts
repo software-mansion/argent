@@ -120,15 +120,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+// After a remover deletes the argent entry, collapse the now-empty container it
+// lived in (e.g. an emptied `mcpServers`) so a config that held only argent
+// reduces to {} and writeJsonOrRemove can delete the file. Only this one key is
+// touched — foreign sibling keys and empty values elsewhere in the tree are
+// preserved byte-for-byte (the contract is "only touch argent").
+function deleteIfEmpty(parent: Record<string, unknown>, key: string): void {
+  const value = parent[key];
+  if (
+    (Array.isArray(value) && value.length === 0) ||
+    (isRecord(value) && Object.keys(value).length === 0)
+  ) {
+    delete parent[key];
+  }
+}
+
+// Writes `data` unchanged, except: when it has no own keys the file (and an
+// empty parent directory) is removed instead. This deliberately does NOT
+// recursively prune empty objects/arrays — the previous deep-prune silently
+// stripped foreign servers' `args: []` / `env: {}` and deleted any user key
+// holding an empty object/array, violating the "only touch argent" contract.
+// Removers collapse their own emptied argent container via deleteIfEmpty before
+// calling here, so "config held only argent" still results in file deletion.
 function writeJsonOrRemove(filePath: string, data: Record<string, unknown>): void {
-  const cleaned = pruneEmptyConfig(data);
-  if (!isRecord(cleaned)) {
+  if (Object.keys(data).length === 0) {
     fs.rmSync(filePath, { force: true });
     removeDirIfEmpty(path.dirname(filePath));
     return;
   }
 
-  writeJson(filePath, cleaned);
+  writeJson(filePath, data);
 }
 
 function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): void {
@@ -181,6 +202,7 @@ const cursorAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
+    deleteIfEmpty(config, "mcpServers");
     writeJsonOrRemove(configPath, config);
     return true;
   },
@@ -213,6 +235,7 @@ const cursorAdapter: McpConfigAdapter = {
     if (idx === -1) return;
     list.splice(idx, 1);
     config.mcpAllowlist = list;
+    deleteIfEmpty(config, "mcpAllowlist");
     writeJsonOrRemove(permPath, config);
   },
 };
@@ -262,6 +285,7 @@ const claudeAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
+    deleteIfEmpty(config, "mcpServers");
     writeJsonOrRemove(configPath, config);
     return true;
   },
@@ -304,32 +328,34 @@ const vscodeAdapter: McpConfigAdapter = {
     return null;
   },
 
+  // .vscode/mcp.json is JSONC — VS Code allows line/block comments and trailing
+  // commas. The previous JSON.parse → mutate → JSON.stringify path ran through
+  // readJson, whose `catch { return {} }` turned any commented file into {} and
+  // then persisted only { servers: { argent } }, destroying every pre-existing
+  // user server (and their comments). All four entry points now go through
+  // readJsonc / editJsoncFile — path-targeted text edits that preserve comments
+  // and foreign servers — matching the Zed and opencode adapters.
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.servers ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["servers", MCP_SERVER_KEY], {
       type: "stdio",
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
-    };
-    config.servers = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["servers", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   hasArgentEntry(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.servers as Record<string, unknown> | undefined;
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
@@ -373,6 +399,7 @@ const windsurfAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
+    deleteIfEmpty(config, "mcpServers");
     writeJsonOrRemove(configPath, config);
     return true;
   },
@@ -526,6 +553,7 @@ const geminiAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
+    deleteIfEmpty(config, "mcpServers");
     writeJsonOrRemove(configPath, config);
     return true;
   },
@@ -878,6 +906,7 @@ const kiroAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
+    deleteIfEmpty(config, "mcpServers");
     writeJsonOrRemove(configPath, config);
     return true;
   },
@@ -1005,11 +1034,14 @@ export function removeClaudePermission(root: string, scope: "local" | "global"):
 
   if (!fs.existsSync(settingsPath)) return;
   const config = readJson(settingsPath);
-  const allow = (config?.permissions as Record<string, unknown>)?.allow as string[];
-  if (!Array.isArray(allow)) return;
+  const permissions = config?.permissions as Record<string, unknown> | undefined;
+  const allow = permissions?.allow as string[] | undefined;
+  if (!permissions || !Array.isArray(allow)) return;
   const idx = allow.indexOf(PERMISSION_RULE);
   if (idx === -1) return;
   allow.splice(idx, 1);
+  deleteIfEmpty(permissions, "allow");
+  deleteIfEmpty(config, "permissions");
   writeJsonOrRemove(settingsPath, config);
 }
 
