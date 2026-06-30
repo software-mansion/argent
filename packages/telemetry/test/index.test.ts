@@ -118,6 +118,23 @@ describe("telemetry public surface", () => {
     expect(client.opts).toEqual(expect.objectContaining({ flushAt: 20, flushInterval: 10_000 }));
   });
 
+  it("uses the injected fingerprint resolver to derive a stable v5 distinctId", () => {
+    // Re-init with a resolver so the id becomes fingerprint-derived (v5) rather
+    // than a random v4.
+    resetClient();
+    init("tool_server", { resolveFingerprint: () => "f".repeat(64) });
+
+    track("toolserver:start", {});
+
+    const client = posthogMock.instances[0]!;
+    expect(client.capture).toHaveBeenCalledTimes(1);
+    const { distinctId } = client.capture.mock.calls[0]![0] as { distinctId: string };
+    // Version nibble (15th hex char) is 5 → fingerprint-derived, not random v4.
+    expect(distinctId[14]).toBe("5");
+    // Persisted to disk as the migrated id.
+    expect(status().anonIdPrefix).toBe(distinctId.slice(0, 8));
+  });
+
   it("captures events in CI and annotates payloads with is_ci", () => {
     const restore = snapshotEnv(["CI"]);
     try {
