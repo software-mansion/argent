@@ -51,6 +51,22 @@ export async function resolveLauncherActivity(udid: string, bundleId: string): P
   return last;
 }
 
+// Normalize an `activity` param into a `pkg/Activity` component for `am start -n`.
+// Four accepted shapes:
+//   "pkg/.X" or "pkg/full.X"   → use as-is (already a component)
+//   ".MainActivity"            → ${pkg}/.MainActivity (relative)
+//   "com.fully.Qualified"      → ${pkg}/com.fully.Qualified (FQCN)
+//   "MainActivity"             → ${pkg}/.MainActivity (bare class name)
+// A bare class name (no dot, no slash) must be dot-prefixed: `${pkg}/MainActivity`
+// is rejected by `am start` because an unqualified class is treated as
+// default-package — i.e. no match.
+export function buildActivityComponent(bundleId: string, activity: string): string {
+  if (activity.includes("/")) return activity;
+  if (activity.startsWith(".")) return `${bundleId}/${activity}`;
+  if (activity.includes(".")) return `${bundleId}/${activity}`;
+  return `${bundleId}/.${activity}`;
+}
+
 export const androidImpl: PlatformImpl<LaunchAppAndroidServices, LaunchAppParams, LaunchAppResult> =
   {
     requires: ["adb"],
@@ -62,24 +78,7 @@ export const androidImpl: PlatformImpl<LaunchAppAndroidServices, LaunchAppParams
       // could race a still-forking process.
       let component: string;
       if (params.activity) {
-        // Three accepted shapes:
-        //   ".MainActivity"            → ${pkg}/.MainActivity (relative)
-        //   "pkg/.X" or "pkg/full.X"   → use as-is
-        //   "com.fully.Qualified"      → ${pkg}/com.fully.Qualified (FQCN)
-        // A bare class name like "MainActivity" (no dot, no slash) used to be
-        // emitted as `${pkg}/MainActivity`, which `am start` rejects because
-        // an unqualified class is treated as default-package — i.e. no match.
-        // Resolve the obvious intent by treating it as relative-to-bundleId.
-        const a = params.activity;
-        if (a.includes("/")) {
-          component = a;
-        } else if (a.startsWith(".")) {
-          component = `${params.bundleId}/${a}`;
-        } else if (a.includes(".")) {
-          component = `${params.bundleId}/${a}`;
-        } else {
-          component = `${params.bundleId}/.${a}`;
-        }
+        component = buildActivityComponent(params.bundleId, params.activity);
       } else {
         component = await resolveLauncherActivity(params.udid, params.bundleId);
       }

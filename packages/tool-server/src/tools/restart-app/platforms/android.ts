@@ -1,7 +1,11 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote } from "../../../utils/adb";
-import { assertAmStartOk, resolveLauncherActivity } from "../../launch-app/platforms/android";
+import {
+  assertAmStartOk,
+  buildActivityComponent,
+  resolveLauncherActivity,
+} from "../../launch-app/platforms/android";
 import type { RestartAppAndroidServices, RestartAppParams, RestartAppResult } from "../types";
 
 export const androidImpl: PlatformImpl<
@@ -20,11 +24,7 @@ export const androidImpl: PlatformImpl<
     // assertion launch-app moved to.
     let component: string;
     if (activity) {
-      component = activity.startsWith(".")
-        ? `${bundleId}/${activity}`
-        : activity.includes("/")
-          ? activity
-          : `${bundleId}/${activity}`;
+      component = buildActivityComponent(bundleId, activity);
     } else {
       component = await resolveLauncherActivity(udid, bundleId);
     }
