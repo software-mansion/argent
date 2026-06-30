@@ -108,18 +108,14 @@ ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
-VEGA / AMAZON FIRE TV APP CONTROL
-Skill: `argent-tv-interact`
-When: Any task involving a Vega / Amazon Fire TV device (a `platform:"vega"` / `kind:"vvd"` entry in `list-devices`, or the user mentions Vega / Fire TV / VVD). Covers list/launch/restart/reinstall apps, on-screen element discovery via `describe`, D-pad navigation with the `tv-remote` tool (Vega is remote-driven, not touch), typing, screenshots, Fast Refresh setup, and VVD lifecycle (start/stop via the `vega` CLI — argent has no Vega stop tool).
-Prompt keywords: vega, fire tv, vvd, virtual device, d-pad
-
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for a TV target (`runtimeKind: "tv"`, Apple TV or Android TV) use `argent-tv-interact` instead.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for any TV target use the TV skill below.
 
-TV (APPLE TV / ANDROID TV) INTERACTION
+TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
-When: Any task involving a TV target (a `list-devices` entry with `runtimeKind: "tv"` — an Apple TV simulator or an Android TV emulator) — booting the target, moving focus with the remote / D-pad, activating elements, typing into search fields, or reading TV focus state. A TV UI is focus-driven, not touch-driven: the `gesture-*` tools do NOT apply. Use `describe` to read focus, `tv-remote` for remote presses (up/down/left/right/select/back/menu/home), and `keyboard` to type (the same tools drive all three platforms).
+When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh.
+Prompt keywords: apple tv, tvos, android tv, leanback, vega, fire tv, vvd, d-pad
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
