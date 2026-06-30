@@ -4,36 +4,47 @@
  * The problem this solves: the Lens preview window and the agent talk through a
  * shared, process-wide tool-server that carries no per-agent identity, so when
  * the user requests changes in the window there is no way to know WHICH agent to
- * route them to. This command sidesteps that entirely by inverting ownership —
- * the human launches Lens, and Lens spawns (and therefore owns) exactly one
- * agent terminal. The binding is 1:1 by construction.
+ * route them to. This command sidesteps that by inverting ownership — the human
+ * launches Lens, and Lens spawns (and therefore owns) exactly one agent. The
+ * binding is 1:1 by construction.
  *
- * Flow — the foreground command does the minimum, then DETACHES so the terminal
- * is freed:
+ * Flow — there is NO detached bridge. The foreground process does everything and
+ * lingers as a thin owner of the agent until it exits:
  *   1. Ensure a tool-server is up; decide the agent (resolved now for `--agent`
- *      or a single install, otherwise the window's picker chooses among the
- *      installed ones; see `lens-agents.ts`).
+ *      or a single install, otherwise the window's picker chooses).
  *   2. Mark a CLI Lens session so the tool-server opens the preview window now
- *      (no `await_user_selection` needed), handing it the picker choices.
- *   3. Fork a detached background BRIDGE and return. The bridge ensures a device
- *      is streaming, resolves the agent (a given one, or whichever the human
- *      clicks in the window), spawns its terminal seeded to use `propose_variant`
- *      without blocking, and watches the tool-server for submitted feedback —
- *      typing a one-line summary into the terminal as the agent's next prompt.
+ *      (no `await_user_selection` needed). No device is force-booted — the window
+ *      streams a running device or offers an in-window picker (which can boot one
+ *      headless; see the tool-server's /preview/boot).
+ *   3. TAKE OVER the launching terminal: capture its session, then run the agent
+ *      as a child with inherited stdio so the agent's TUI appears right here. If
+ *      the launching terminal isn't scriptable (tmux / VS Code / ssh), fall back
+ *      to spawning a new iTerm/Terminal window for the agent.
+ *   4. Relay feedback by PUSH: subscribe to the tool-server's SSE stream and, on
+ *      each submitted round, type a one-line summary into the agent terminal.
+ *      Liveness is the agent child's exit (no polling); the fallback path polls
+ *      `ps` only because there is no child to await.
  *
- * macOS only: the terminal spawn/track/write path drives `osascript` (see
+ * macOS only: the terminal capture/spawn/write path drives `osascript` (see
  * `lens-terminal.ts`).
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createToolsClient, type ToolsServerPaths } from "@argent/tools-client";
-import { isFlagEnabled } from "@argent/configuration-core";
+import {
+  isFlagEnabled,
+  getRememberedAgent,
+  setRememberedAgent,
+  clearRememberedAgent,
+} from "@argent/configuration-core";
 import {
   resolveTerminal,
   spawnTerminalSession,
+  captureCurrentSession,
+  detectHostTerminal,
   writeToSession,
   readSessionText,
   pressEnter,
@@ -43,6 +54,7 @@ import {
   type TerminalApp,
   type TerminalSession,
 } from "./lens-terminal.js";
+import { lensEvents } from "./lens-stream.js";
 import {
   AGENTS,
   detectInstalledAgents,
@@ -52,13 +64,12 @@ import {
   type AgentSpec,
 } from "./lens-agents.js";
 
-type ToolsClient = ReturnType<typeof createToolsClient>;
-
 export interface LensCommandOptions {
   paths: ToolsServerPaths;
 }
 
-/** Shape of the completed-round outcome returned by `GET /preview/outcome`. */
+/** Shape of the completed-round outcome the SSE stream / `GET /preview/outcome`
+ * carry. */
 interface LensOutcome {
   status: "completed";
   round: number;
@@ -74,13 +85,18 @@ interface LensOutcome {
   completedAt: number;
 }
 
-const POLL_INTERVAL_MS = 1_200;
+// Fallback-path liveness poll cadence (used ONLY when the agent runs in a
+// separate window and there is no child process to await).
+const LIVENESS_POLL_MS = 1_200;
 // A just-spawned session may not show in `ps` for a beat; don't call it dead
-// inside this window. Mirrors the applet's grace interval.
+// inside this window.
 const SPAWN_GRACE_MS = 8_000;
 // Require this many consecutive "tty gone" reads (after the grace window) before
 // concluding the terminal closed — guards against a transient `ps` miss.
 const DEATH_CONFIRMATIONS = 3;
+// After an SSE drop while the agent is still alive, wait this long before
+// reconnecting (the tool-server may be briefly restarting).
+const SSE_RECONNECT_MS = 1_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -123,7 +139,9 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
  * or defer to the window's picker when several are present (returning the
  * choices). Exits (nothing is open yet) when there's no usable agent.
  */
-function planAgent(agentId: string | undefined): { agent: AgentSpec } | { choose: AgentSpec[] } {
+export function planAgent(
+  agentId: string | undefined
+): { agent: AgentSpec } | { choose: AgentSpec[] } {
   if (agentId) {
     const want = findAgentById(agentId);
     if (!want) {
@@ -149,77 +167,16 @@ function planAgent(agentId: string | undefined): { agent: AgentSpec } | { choose
     );
     process.exit(1);
   }
+  // A remembered pick (the picker's "Remember this choice") skips the window
+  // picker on later runs — but only if that agent is still installed. Clear
+  // `argent lens --forget` to choose again.
+  const remembered = getRememberedAgent();
+  if (remembered) {
+    const found = installed.find((a) => a.id === remembered);
+    if (found) return { agent: found };
+  }
   if (installed.length === 1) return { agent: installed[0] };
   return { choose: installed };
-}
-
-/** Shape of a `list-devices` entry we care about (the tool returns more). */
-interface ListedDevice {
-  platform?: string;
-  state?: string;
-  udid?: string;
-  name?: string;
-  serial?: string;
-}
-
-function isDeviceReady(d: ListedDevice): boolean {
-  if (d.platform === "ios") return d.state === "Booted";
-  if (d.platform === "android") return d.state === "device";
-  if (d.platform === "vega") return d.state === "running" || d.state === "device";
-  if (d.platform === "chromium") return true; // only listed when its CDP is live
-  return false;
-}
-
-function deviceLabel(d: ListedDevice): string {
-  return d.name || d.udid || d.serial || "device";
-}
-
-/**
- * Ensure a device is running so the preview window can stream. Uses the already
- * up tool-server: if nothing is booted, boots an iOS simulator (or an Android
- * AVD). Entirely best-effort — every failure path just prints a note and lets
- * the session start anyway (the agent can still target a device by udid later).
- */
-async function ensureDevice(client: ToolsClient): Promise<void> {
-  let data: { devices?: ListedDevice[]; avds?: Array<{ name?: string }> } | undefined;
-  try {
-    data = (await client.callTool("list-devices", {})).data as typeof data;
-  } catch (err) {
-    process.stdout.write(
-      `  (couldn't list devices: ${errMsg(err)}; the preview streams once a device is up)\n`
-    );
-    return;
-  }
-  const devices = Array.isArray(data?.devices) ? data.devices : [];
-  const avds = Array.isArray(data?.avds) ? data.avds : [];
-
-  const ready = devices.find(isDeviceReady);
-  if (ready) {
-    process.stdout.write(`  Device ready: ${deviceLabel(ready)}.\n`);
-    return;
-  }
-
-  const iosSim = devices.find((d) => d.platform === "ios" && d.udid);
-  try {
-    if (iosSim) {
-      process.stdout.write(`  Booting iOS simulator "${deviceLabel(iosSim)}"…\n`);
-      await client.callTool("boot-device", { udid: iosSim.udid });
-      process.stdout.write("  Simulator booted.\n");
-    } else if (avds.length && avds[0].name) {
-      process.stdout.write(`  Booting Android emulator "${avds[0].name}"…\n`);
-      await client.callTool("boot-device", { avdName: avds[0].name });
-      process.stdout.write("  Emulator booted.\n");
-    } else {
-      process.stdout.write(
-        "  No simulator or emulator found — start one (or create an iOS simulator) so the\n" +
-          "  preview can stream the device.\n"
-      );
-    }
-  } catch (err) {
-    process.stdout.write(
-      `  (couldn't boot a device: ${errMsg(err)}; continuing — the agent can target one by udid)\n`
-    );
-  }
 }
 
 /** Seed an inject-mode agent (its TUI takes no initial-prompt arg) by typing the
@@ -229,7 +186,7 @@ async function injectSeedAfterBoot(session: TerminalSession): Promise<void> {
   writeToSession(session, buildSeedPrompt());
 }
 
-/** The instruction the spawned `claude` starts with, establishing CLI-Lens
+/** The instruction the spawned agent starts with, establishing CLI-Lens
  * behaviour. Kept short and explicit. */
 export function buildSeedPrompt(): string {
   return [
@@ -314,13 +271,16 @@ function parseArgs(argv: string[]): {
   terminal: TerminalApp | undefined;
   agent: string | undefined;
   help: boolean;
+  forget: boolean;
 } {
   let terminal: TerminalApp | undefined;
   let agent: string | undefined;
   let help = false;
+  let forget = false;
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i];
     if (tok === "--help" || tok === "-h") help = true;
+    else if (tok === "--forget") forget = true;
     else if (tok === "--terminal" || tok === "-t") {
       const v = argv[++i];
       if (v === "iterm" || v === "terminal") terminal = v;
@@ -336,43 +296,51 @@ function parseArgs(argv: string[]): {
       }
     }
   }
-  return { terminal, agent, help };
+  return { terminal, agent, help, forget };
 }
 
 function printHelp(): void {
   process.stdout.write(
     `Usage: argent lens [--agent <id>] [--terminal iterm|terminal]\n\n` +
       `Open Argent Lens bound to a fresh coding-agent session.\n\n` +
-      `  Opens the Lens preview window and runs a detached background bridge (this\n` +
-      `  terminal stays free). Ensures a simulator is running, then spawns your agent\n` +
-      `  in the current directory — you pick it in the window when more than one is\n` +
-      `  installed, or pass --agent. When you request changes in the window they are\n` +
-      `  typed into that agent session as its next prompt. The bridge ends when you\n` +
-      `  close the agent terminal (or kill its pid).\n\n` +
+      `  Opens the Lens preview window and runs your agent IN THIS terminal (it takes\n` +
+      `  over the current window). When you request changes in the preview window they\n` +
+      `  are typed into that agent session as its next prompt. Pick the agent in the\n` +
+      `  window when more than one is installed, or pass --agent. The window streams a\n` +
+      `  running simulator, or offers an in-window picker to boot one. Lens ends when\n` +
+      `  you close the agent.\n\n` +
+      `  If this terminal isn't iTerm or Terminal.app (e.g. tmux / VS Code), the agent\n` +
+      `  opens in a new window instead.\n\n` +
       `Options:\n` +
       `  -a, --agent <id>       Agent to bind: ${agentIds().join(", ")}\n` +
-      `  -t, --terminal <app>   Terminal to spawn (iterm preferred, else terminal)\n` +
+      `  -t, --terminal <app>   Terminal for the new-window fallback (iterm preferred)\n` +
+      `      --forget           Forget the remembered agent, then exit\n` +
       `  -h, --help             Show this help\n`
   );
 }
 
 export async function lens(argv: string[], options: LensCommandOptions): Promise<void> {
-  // Internal re-entry: the detached background bridge runs the rest of the
-  // session (agent pick, spawn, relay) so the foreground command can return.
-  const bridgeIdx = argv.indexOf("--__bridge");
-  if (bridgeIdx !== -1) return runBridge(argv[bridgeIdx + 1], options);
-
-  const { terminal: preferred, agent: agentId, help } = parseArgs(argv);
+  const { terminal: preferred, agent: agentId, help, forget } = parseArgs(argv);
   if (help) {
     printHelp();
     return;
   }
 
+  if (forget) {
+    const had = getRememberedAgent();
+    clearRememberedAgent();
+    process.stdout.write(
+      had
+        ? `  Forgot the remembered agent ("${had}"). The picker will show again next run.\n`
+        : "  No agent was remembered.\n"
+    );
+    return;
+  }
+
   if (process.platform !== "darwin") {
     process.stderr.write(
-      "argent lens is macOS-only — it drives Terminal/iTerm via osascript to spawn and\n" +
-        "feed the agent session. (The preview window itself works elsewhere via the MCP\n" +
-        "propose_variant / await_user_selection flow.)\n"
+      "argent lens is macOS-only — it drives Terminal/iTerm via osascript to run and\n" +
+        "feed the agent session.\n"
     );
     process.exit(1);
   }
@@ -391,9 +359,7 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
   try {
     baseUrl = (await client.baseUrl()).url;
   } catch (err) {
-    process.stderr.write(
-      `lens: could not reach the tool-server: ${err instanceof Error ? err.message : String(err)}\n`
-    );
+    process.stderr.write(`lens: could not reach the tool-server: ${errMsg(err)}\n`);
     process.exit(1);
   }
 
@@ -421,215 +387,224 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     process.exit(1);
   }
 
-  // Hand the rest — device-ensure, the agent pick, spawn, trust dismissal, and
-  // the feedback relay — to a DETACHED background bridge, so this terminal is
-  // freed instead of being held by the watch loop.
-  const term = resolveTerminal(preferred);
-  const state: BridgeState = {
-    baseUrl,
-    cwd: process.cwd(),
-    terminal: term,
-    agentId: "agent" in plan ? plan.agent.id : null,
-  };
-  const stamp = `${process.pid}-${Date.now()}`;
-  const stateFile = path.join(os.tmpdir(), `argent-lens-bridge-${stamp}.json`);
-  const logFile = path.join(os.tmpdir(), `argent-lens-bridge-${stamp}.log`);
-  fs.writeFileSync(stateFile, JSON.stringify(state), "utf8");
+  // Capture the terminal we're running in, so the agent can take it over and the
+  // relay can write into it. Null → not a scriptable iTerm/Terminal (tmux, VS
+  // Code, ssh) → we'll spawn a new window instead.
+  const hostApp = detectHostTerminal();
+  const current = hostApp ? captureCurrentSession(hostApp) : null;
 
-  const logFd = fs.openSync(logFile, "a");
-  const child = spawn(process.execPath, [process.argv[1], "lens", "--__bridge", stateFile], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    cwd: process.cwd(),
-  });
-  child.unref();
-  fs.closeSync(logFd);
-
-  const agentLine =
-    "agent" in plan
-      ? `    • Agent:           ${plan.agent.displayName}\n`
-      : `    • Agent:           choose in the preview window\n`;
-  process.stdout.write(
-    `\n  Argent Lens is live — running in the background (this terminal is free).\n\n` +
-      agentLine +
-      `    • Preview window:  ${previewUrl}\n` +
-      `    • Bridge:          pid ${child.pid ?? "?"}  ·  log ${logFile}\n\n` +
-      ("choose" in plan ? "  Pick an agent in the preview window to start.\n" : "") +
-      `  Ask the agent to redesign something; review the variants in the window and\n` +
-      `  request changes — they're queued to the agent automatically.\n\n` +
-      `  End it by closing the agent terminal${child.pid ? `, or: kill ${child.pid}` : ""}.\n\n`
-  );
-}
-
-/** Persisted hand-off from the foreground command to the detached bridge. */
-interface BridgeState {
-  baseUrl: string;
-  cwd: string;
-  terminal: TerminalApp;
-  /** The pre-chosen agent id, or null when the window's picker decides. */
-  agentId: string | null;
-}
-
-/**
- * The detached background bridge. Ensures a device, resolves the agent (a given
- * one, or whichever the human clicks in the window's picker), spawns its
- * terminal, dismisses the trust prompt, and runs the feedback relay until the
- * terminal closes. Its stdout/stderr go to the log file the parent opened.
- */
-async function runBridge(stateFile: string, options: LensCommandOptions): Promise<void> {
-  let state: BridgeState;
-  try {
-    state = JSON.parse(fs.readFileSync(stateFile, "utf8")) as BridgeState;
-  } catch (err) {
-    process.stderr.write(`lens bridge: unreadable state: ${errMsg(err)}\n`);
+  // Resolve the agent: a pre-chosen one, or whichever the human clicks in the
+  // window's picker (delivered over the SSE stream — no polling).
+  let agent = "agent" in plan ? plan.agent : undefined;
+  if (!agent) {
+    process.stdout.write(
+      `\n  Argent Lens window is open: ${previewUrl}\n  Pick an agent in the window to start…\n`
+    );
+    const picked = await awaitAgentChoiceViaStream(baseUrl);
+    if (picked) {
+      agent = findAgentById(picked.id);
+      // Persist the pick only once it resolved to a real agent, so a bad id
+      // can't poison the remembered value.
+      if (agent && picked.remember) setRememberedAgent(agent.id);
+    }
+  }
+  if (!agent) {
+    process.stderr.write("lens: no agent was chosen — closing the Lens session.\n");
+    await endSession(baseUrl);
     process.exit(1);
   }
-  const { baseUrl, cwd, terminal, agentId } = state;
 
-  let stopping = false;
-  let seedFile = "";
-  const stop = (): void => {
-    if (stopping) return;
-    stopping = true;
-    void endSession(baseUrl).finally(() => {
-      for (const f of [stateFile, seedFile]) {
-        if (!f) continue;
-        try {
-          fs.rmSync(f, { force: true });
-        } catch {
-          /* best-effort */
-        }
-      }
-      process.exit(0);
-    });
-  };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-
-  // Ensure a device is streaming before we spawn (best-effort).
-  await ensureDevice(createToolsClient({ paths: options.paths }));
-
-  // Resolve the agent: a pre-chosen one, or whichever the human clicks.
-  let agent = agentId ? findAgentById(agentId) : undefined;
-  if (!agent) {
-    const id = await awaitAgentChoice(baseUrl, () => stopping);
-    if (id) agent = findAgentById(id);
-  }
-  if (!agent) {
-    stop(); // picker abandoned / server gone — tear the session down
-    return;
-  }
-
-  seedFile = path.join(os.tmpdir(), `argent-lens-seed-${process.pid}-${Date.now()}.txt`);
+  // Seed prompt for the agent (arg-mode CLIs read it on boot; inject-mode CLIs
+  // get it typed in after the TUI is up).
+  const seedFile = path.join(os.tmpdir(), `argent-lens-seed-${process.pid}-${Date.now()}.txt`);
   fs.writeFileSync(seedFile, buildSeedPrompt(), "utf8");
-  const launchCmd = agent.launch(shellQuote(cwd), shellQuote(seedFile));
+  const launchCmd = agent.launch(shellQuote(process.cwd()), shellQuote(seedFile));
 
+  // Spawn the agent: take over this terminal (child with inherited stdio), or a
+  // new window when the host terminal isn't scriptable. `quiet` suppresses our
+  // own stdout once the agent owns the terminal, so we don't corrupt its TUI.
   let session: TerminalSession;
-  try {
-    session = spawnTerminalSession(launchCmd, terminal);
-  } catch (err) {
-    process.stderr.write(`lens bridge: failed to spawn the agent: ${errMsg(err)}\n`);
-    stop();
-    return;
+  let child: ChildProcess | null = null;
+  let quiet = false;
+  if (current) {
+    session = current;
+    quiet = true;
+    child = spawn("/bin/sh", ["-c", launchCmd], { stdio: "inherit", cwd: process.cwd() });
+  } else {
+    const term = resolveTerminal(preferred);
+    try {
+      session = spawnTerminalSession(launchCmd, term);
+    } catch (err) {
+      process.stderr.write(`lens: failed to spawn the agent: ${errMsg(err)}\n`);
+      await endSession(baseUrl);
+      process.exit(1);
+    }
+    process.stdout.write(
+      `\n  Argent Lens is live.\n\n` +
+        `    • Agent:           ${agent.displayName} (new window)\n` +
+        `    • Preview window:  ${previewUrl}\n\n` +
+        `  Ask the agent to redesign something; review the variants in the window and\n` +
+        `  request changes — they're queued to the agent automatically. End it by\n` +
+        `  closing the agent terminal.\n\n`
+    );
   }
 
   void dismissTrustPrompt(session);
   if (agent.injectSeed) void injectSeedAfterBoot(session);
 
-  await watchAndRelay(baseUrl, session, () => stopping);
-  stop(); // the watch loop returns only when the agent terminal closed
+  // Teardown is idempotent and reachable from three places: the agent exiting,
+  // a fatal relay condition, or a signal. It ends the server-side session (which
+  // closes the window and shuts down any Lens-booted simulator) and exits.
+  let tearingDown = false;
+  const teardown = (code: number): void => {
+    if (tearingDown) return;
+    tearingDown = true;
+    void endSession(baseUrl).finally(() => {
+      try {
+        fs.rmSync(seedFile, { force: true });
+      } catch {
+        /* best-effort */
+      }
+      process.exit(code);
+    });
+  };
+  // A signal should bring the agent down with us; the child-exit path then runs
+  // teardown. If there's no child (new-window fallback) tear down directly.
+  const onSignal = (): void => {
+    if (child && child.exitCode === null) child.kill("SIGTERM");
+    else teardown(0);
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+
+  await runRelaySession(baseUrl, session, child, quiet);
+  teardown(0);
 }
 
 /**
- * Poll the window snapshot until the human picks an agent. Returns the picked id,
- * or null when stopping or the server has been unreachable for too long.
+ * Wait for the human to pick an agent in the window, delivered over the SSE
+ * stream. Returns the picked id, or null if the stream ends / errors before a
+ * pick (e.g. the window was closed, or the server went away).
  */
-async function awaitAgentChoice(
-  baseUrl: string,
-  isStopping: () => boolean
-): Promise<string | null> {
-  let failStreak = 0;
-  while (!isStopping()) {
-    await sleep(POLL_INTERVAL_MS);
-    try {
-      const res = await fetch(`${baseUrl}/preview/variants`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const snap = (await res.json()) as { lensAgentChoice?: string | null };
-      failStreak = 0;
-      if (snap.lensAgentChoice) return snap.lensAgentChoice;
-    } catch {
-      if (++failStreak >= 30) return null; // ~36s with no server → give up
+async function awaitAgentChoiceViaStream(
+  baseUrl: string
+): Promise<{ id: string; remember: boolean } | null> {
+  const ac = new AbortController();
+  try {
+    for await (const ev of lensEvents(baseUrl, ac.signal)) {
+      if (ev.event === "session-end") return null;
+      if (ev.event === "agent-choice") {
+        try {
+          const payload = JSON.parse(ev.data) as { id?: unknown; remember?: unknown };
+          if (payload && typeof payload.id === "string" && payload.id) {
+            return { id: payload.id, remember: Boolean(payload.remember) };
+          }
+        } catch {
+          /* malformed frame — keep waiting */
+        }
+      }
     }
+  } catch {
+    /* stream error → give up (caller closes the session) */
+  } finally {
+    ac.abort();
   }
   return null;
 }
 
-/** Poll the tool-server for submitted feedback and type each new round's
- * summary into the agent terminal. Returns when the terminal closes. Exported
- * for integration tests (the relay is the command's core data path). */
-export async function watchAndRelay(
+/**
+ * Relay submitted feedback into the agent terminal by PUSH: subscribe to the
+ * SSE stream and type each new round's summary in. Returns when the agent exits
+ * — detected via the child's `exit` event (no poll) when we took over this
+ * terminal, or via a `ps` liveness poll when the agent runs in a separate
+ * window. Reconnects the stream if it drops while the agent is still alive.
+ */
+export async function runRelaySession(
   baseUrl: string,
   session: TerminalSession,
-  isStopping: () => boolean
+  child: ChildProcess | null,
+  quiet: boolean
 ): Promise<void> {
-  const spawnedAt = Date.now();
-  let lastCompletedAt = 0;
-  let deathStreak = 0;
-  let fetchFailStreak = 0;
+  const log = (s: string): void => {
+    if (!quiet) process.stdout.write(s);
+  };
+  const ac = new AbortController();
+  let alive = true;
+  const stop = (): void => {
+    if (!alive) return;
+    alive = false;
+    ac.abort();
+  };
 
-  // Don't relay anything submitted before this watcher started (a stale outcome
-  // from a previous session shouldn't fire on launch).
-  try {
-    const seed = await fetchOutcome(baseUrl);
-    if (seed) lastCompletedAt = seed.completedAt;
-  } catch {
-    /* tolerate — first real poll will catch up */
-  }
-
-  while (!isStopping()) {
-    await sleep(POLL_INTERVAL_MS);
-    if (isStopping()) return;
-
-    // Liveness: a closed agent terminal ends the bridge.
-    if (Date.now() - spawnedAt > SPAWN_GRACE_MS) {
+  // Liveness → stop. Child path: the agent IS our child, so its exit is the
+  // signal. Fallback path: poll `ps` for the session's tty.
+  if (child) {
+    if (child.exitCode !== null) stop();
+    child.on("exit", () => {
+      log("\n  Agent exited.\n");
+      stop();
+    });
+  } else {
+    const spawnedAt = Date.now();
+    let deathStreak = 0;
+    const timer = setInterval(() => {
+      if (Date.now() - spawnedAt <= SPAWN_GRACE_MS) return;
       if (!isSessionAlive(session)) {
         if (++deathStreak >= DEATH_CONFIRMATIONS) {
-          process.stdout.write("\n  Agent terminal closed.\n");
-          return;
+          log("\n  Agent terminal closed.\n");
+          stop();
         }
       } else {
         deathStreak = 0;
       }
-    }
+    }, LIVENESS_POLL_MS);
+    timer.unref?.();
+    ac.signal.addEventListener("abort", () => clearInterval(timer));
+  }
 
-    let outcome: LensOutcome | null;
+  // Don't relay anything submitted before now (a stale outcome from a previous
+  // session must not fire on launch).
+  let lastCompletedAt = 0;
+  try {
+    const seed = await fetchOutcomeOnce(baseUrl);
+    if (seed) lastCompletedAt = seed.completedAt;
+  } catch {
+    /* tolerate — the first pushed outcome past `now` will still relay */
+  }
+
+  while (alive && !ac.signal.aborted) {
     try {
-      outcome = await fetchOutcome(baseUrl);
-      fetchFailStreak = 0;
+      for await (const ev of lensEvents(baseUrl, ac.signal)) {
+        if (!alive) break;
+        if (ev.event === "session-end") return;
+        if (ev.event !== "outcome") continue;
+        let outcome: LensOutcome | null = null;
+        try {
+          outcome = JSON.parse(ev.data) as LensOutcome;
+        } catch {
+          continue;
+        }
+        if (outcome && outcome.status === "completed" && outcome.completedAt > lastCompletedAt) {
+          lastCompletedAt = outcome.completedAt;
+          const ok = writeToSession(session, formatLensFeedback(outcome));
+          if (ok) {
+            const n = outcome.selections.filter((s) => s.chosenVariant).length;
+            log(`  → relayed feedback to the agent (${n} pick(s)).\n`);
+          } else {
+            log("  ! could not reach the agent terminal (it may have closed).\n");
+          }
+        }
+      }
+      // Stream ended cleanly (server closed it). If the agent is still alive,
+      // reconnect after a short pause.
     } catch {
-      // Tolerate transient errors; give up only if the server is gone for a while.
-      if (++fetchFailStreak >= 10) {
-        process.stderr.write("\n  Lost contact with the tool-server — ending the bridge.\n");
-        return;
-      }
-      continue;
+      // Transient stream/network error — reconnect while the agent lives.
     }
-
-    if (outcome && outcome.completedAt > lastCompletedAt) {
-      lastCompletedAt = outcome.completedAt;
-      const prompt = formatLensFeedback(outcome);
-      const ok = writeToSession(session, prompt);
-      if (ok) {
-        const n = outcome.selections.filter((s) => s.chosenVariant).length;
-        process.stdout.write(`  → relayed feedback to the agent (${n} pick(s)).\n`);
-      } else {
-        process.stderr.write("  ! could not reach the agent terminal (it may have closed).\n");
-      }
-    }
+    if (alive && !ac.signal.aborted) await sleep(SSE_RECONNECT_MS);
   }
 }
 
-async function fetchOutcome(baseUrl: string): Promise<LensOutcome | null> {
+async function fetchOutcomeOnce(baseUrl: string): Promise<LensOutcome | null> {
   const res = await fetch(`${baseUrl}/preview/outcome`, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = (await res.json()) as { outcome: LensOutcome | null };

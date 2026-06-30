@@ -1154,6 +1154,19 @@
         font-weight: 400;
         font-size: var(--fs-note);
       }
+      .ap-remember {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: var(--gap-list);
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+        cursor: pointer;
+        user-select: none;
+      }
+      .ap-remember input {
+        cursor: pointer;
+      }
       .footbar textarea {
         background: var(--color-bg);
         color: var(--color-fg);
@@ -1392,6 +1405,10 @@
             <p class="ap-title">Bind Argent Lens to an agent</p>
             <p class="ap-sub">Pick the coding agent to drive this session.</p>
             <div class="ap-list" id="ap-list"></div>
+            <label class="ap-remember">
+              <input type="checkbox" id="ap-remember" />
+              <span>Remember this choice</span>
+            </label>
           </div>
         </div>
         <div class="footbar" id="footbar" hidden>
@@ -1767,16 +1784,21 @@
           : "Boot a simulator, then refresh.";
         wrap.appendChild(sub);
 
-        const addList = (items, disabled) => {
+        // kind: "connect" (booted → connect), "boot" (stopped iOS sim → boot
+        // headless then connect), or "disabled" (can't act from the preview,
+        // e.g. a stopped Android AVD that adb doesn't even list).
+        const addList = (items, kind) => {
           if (!items.length) return;
           const list = document.createElement("div");
           list.className = "dev-list";
           for (const s of items) {
+            const disabled = kind === "disabled";
             const b = document.createElement("button");
             b.type = "button";
             b.className = "dev-item";
             b.disabled = disabled;
-            if (disabled) b.title = "Not booted — boot it first";
+            if (disabled) b.title = "Not booted — start the emulator first";
+            else if (kind === "boot") b.title = "Boot this simulator";
             const dot = document.createElement("span");
             dot.className = "dot";
             const nm = document.createElement("span");
@@ -1784,20 +1806,33 @@
             nm.textContent = s.name;
             const rt = document.createElement("span");
             rt.className = "rt";
-            rt.textContent = disabled ? s.state || "" : s.runtime || "";
+            rt.textContent =
+              kind === "connect" ? s.runtime || "" : kind === "boot" ? "Boot" : s.state || "";
             b.append(dot, nm, rt);
-            if (!disabled) {
+            if (kind === "connect") {
               b.addEventListener("click", () => {
                 b.blur();
                 connect(s.udid).catch((err) => setStatus(String(err.message || err), "error"));
+              });
+            } else if (kind === "boot") {
+              b.addEventListener("click", () => {
+                b.blur();
+                bootDevice(s.udid, b).catch((err) =>
+                  setStatus(String(err.message || err), "error")
+                );
               });
             }
             list.appendChild(b);
           }
           wrap.appendChild(list);
         };
-        addList(booted, false);
-        addList(others, true);
+        // Stopped iOS simulators boot by udid; anything else non-booted can't be
+        // started from here.
+        const bootableIos = others.filter((s) => s.platform === "ios");
+        const unbootable = others.filter((s) => s.platform !== "ios");
+        addList(booted, "connect");
+        addList(bootableIos, "boot");
+        addList(unbootable, "disabled");
 
         const row = document.createElement("div");
         row.className = "refresh-row";
@@ -1908,6 +1943,37 @@
             connect(udid, true).catch((err) => setStatus(String(err.message || err), "error"));
           }
         }, delay);
+      }
+
+      // Boot a stopped iOS simulator from the picker, then connect to it. The
+      // tool-server boots it headless (no Simulator.app window) and tracks it as
+      // Lens-owned so it's shut down when the session ends.
+      async function bootDevice(udid, btn) {
+        if (btn) {
+          btn.disabled = true;
+          const rt = btn.querySelector(".rt");
+          if (rt) rt.textContent = "Booting…";
+        }
+        setStatus("booting simulator…");
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/boot`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ udid }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `HTTP ${res.status}`);
+          }
+          await connect(udid);
+        } catch (err) {
+          if (btn) {
+            btn.disabled = false;
+            const rt = btn.querySelector(".rt");
+            if (rt) rt.textContent = "Boot";
+          }
+          throw err;
+        }
       }
 
       async function connect(udid, isReconnect = false) {
@@ -2834,11 +2900,13 @@
               `<span class="ap-bin">${escapeHtml(a.id)}</span>`;
             btn.addEventListener("click", () => {
               apPicked = a.id;
+              const rememberEl = document.getElementById("ap-remember");
+              const remember = !!(rememberEl && rememberEl.checked);
               agentPickerEl.hidden = true;
               fetch(`${TOOL_SERVER}/preview/cli-agent`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ id: a.id }),
+                body: JSON.stringify({ id: a.id, remember }),
               }).catch(() => {
                 // Let the user retry if the POST failed to land.
                 apPicked = null;

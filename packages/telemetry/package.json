@@ -12,6 +12,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@argent/configuration-core": "file:../configuration-core",
     "@argent/registry": "file:../registry",
     "ci-info": "^4.4.0",
     "posthog-node": "5.38.6"

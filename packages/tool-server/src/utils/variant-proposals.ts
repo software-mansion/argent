@@ -224,6 +224,21 @@ export class VariantProposalStore {
    */
   private lensAgents: Array<{ id: string; name: string }> = [];
   private lensAgentChoice: string | null = null;
+  /**
+   * Whether the human asked to REMEMBER the agent pick (the picker's "Remember
+   * this choice" checkbox). The `argent lens` process reads this alongside the
+   * choice and persists it to `~/.argent/config.json` so later runs skip the
+   * picker. Tied to `lensAgentChoice`; reset with it.
+   */
+  private lensAgentRemember = false;
+  /**
+   * Devices (iOS udid / Android serial) that Lens BOOTED itself — i.e. the
+   * `POST /preview/boot` route started them because they were not already
+   * running. Tracked so the tool-server can shut them down when the CLI Lens
+   * session ends (`takeOwnedDevices`), without ever touching a device the user
+   * had already booted. Like `cliSession`, NOT cleared by `reset()`.
+   */
+  private ownedDevices = new Set<string>();
   private submitted: SubmittedSelection[] = [];
   private submittedAnnotations: ElementAnnotation[] = [];
   private variantSeq = 0;
@@ -402,13 +417,16 @@ export class VariantProposalStore {
     this.cliSession = active;
     this.lensAgents = active ? agents.map((a) => ({ ...a })) : [];
     this.lensAgentChoice = null;
+    this.lensAgentRemember = false;
     if (transitioned) this.events.emit("cliSessionChanged", active);
     this.events.emit("changed");
   }
 
-  /** Record the agent the human picked in the window's picker. */
-  setLensAgentChoice(id: string): void {
+  /** Record the agent the human picked in the window's picker, and whether they
+   * asked to remember it. */
+  setLensAgentChoice(id: string, remember = false): void {
     this.lensAgentChoice = id;
+    this.lensAgentRemember = remember;
     this.events.emit("changed");
   }
 
@@ -417,9 +435,31 @@ export class VariantProposalStore {
     return this.lensAgentChoice;
   }
 
+  /** Whether the human asked to remember the current agent pick. */
+  getLensAgentRemember(): boolean {
+    return this.lensAgentRemember;
+  }
+
   /** Whether a CLI-driven Lens session currently owns the window. */
   isCliSession(): boolean {
     return this.cliSession;
+  }
+
+  /** Record a device Lens booted itself, so it can be shut down on session end. */
+  markDeviceOwned(id: string): void {
+    if (id.trim()) this.ownedDevices.add(id.trim());
+  }
+
+  /** Whether Lens booted this device itself (and is therefore responsible for it). */
+  isDeviceOwned(id: string): boolean {
+    return this.ownedDevices.has(id.trim());
+  }
+
+  /** Drain and return the devices Lens booted — the caller shuts them down. */
+  takeOwnedDevices(): string[] {
+    const ids = [...this.ownedDevices];
+    this.ownedDevices.clear();
+    return ids;
   }
 
   /**

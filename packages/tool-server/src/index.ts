@@ -12,6 +12,7 @@ import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import { variantProposalStore } from "./utils/variant-proposals";
+import { shutdownOwnedDevices } from "./utils/device-shutdown";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 const DEFAULT_PORT = "3001";
@@ -194,6 +195,16 @@ export function start(): void {
       if (url) previewWindow.ensureOpen(url);
     } else {
       previewWindow.requestClose();
+      // Tear down any simulator Lens booted itself for this session (the picker
+      // "boot it first" action). Devices the user had already running were never
+      // marked owned, so they're left alone. Fire-and-forget — teardown must not
+      // block the session-end response.
+      const owned = variantProposalStore.takeOwnedDevices();
+      if (owned.length) {
+        void shutdownOwnedDevices(owned).catch(() => {
+          /* best-effort: a device already gone must not surface here */
+        });
+      }
     }
   };
   variantProposalStore.events.on("awaitParked", onAwaitParked);

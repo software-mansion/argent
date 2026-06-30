@@ -64,6 +64,18 @@ export function resolveTerminal(
   return "terminal";
 }
 
+/** Which terminal app `argent lens` is itself running inside, from
+ * `$TERM_PROGRAM` — the basis for taking over the launching terminal. Null when
+ * it's something else (tmux, VS Code, plain ssh), where we can't address the
+ * current session and must fall back to spawning a new window. */
+export function detectHostTerminal(
+  termProgram: string | undefined = process.env.TERM_PROGRAM
+): TerminalApp | null {
+  if (termProgram === "iTerm.app") return "iterm";
+  if (termProgram === "Apple_Terminal") return "terminal";
+  return null;
+}
+
 /** Escape a string for embedding inside an AppleScript double-quoted literal. */
 export function escapeAppleScript(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -113,6 +125,39 @@ export function buildSpawnScript(app: TerminalApp, shellCommand: string): string
     "  set _wid to (id of front window) as string",
     "end tell",
     'return _wid & "||" & _tty',
+  ].join("\n");
+}
+
+/**
+ * AppleScript that locates the session whose controlling tty is `tty` and
+ * returns `windowId|sessionId` for it (sessionId is "" for Terminal.app, which
+ * has no stable session id). Returns "" when no session matches — i.e. the
+ * caller isn't running inside this terminal app. Used to TAKE OVER the terminal
+ * `argent lens` was launched in: capture its handle, then run the agent here.
+ */
+export function buildCaptureScript(app: TerminalApp, tty: string): string {
+  const esc = escapeAppleScript(tty);
+  if (app === "iterm") {
+    return [
+      'tell application "iTerm"',
+      "  repeat with w in windows",
+      "    repeat with t in tabs of w",
+      "      repeat with s in sessions of t",
+      `        if (tty of s) is "${esc}" then return ((id of w) as string) & "|" & (id of s)`,
+      "      end repeat",
+      "    end repeat",
+      "  end repeat",
+      '  return ""',
+      "end tell",
+    ].join("\n");
+  }
+  return [
+    'tell application "Terminal"',
+    "  repeat with w in windows",
+    `    if (tty of selected tab of w) is "${esc}" then return ((id of w) as string) & "|"`,
+    "  end repeat",
+    '  return ""',
+    "end tell",
   ].join("\n");
 }
 
@@ -317,6 +362,42 @@ function runOsascript(script: string): string {
 export function spawnTerminalSession(command: string, app: TerminalApp): TerminalSession {
   const out = runOsascript(buildSpawnScript(app, command));
   const { windowId, sessionId, tty } = parseCapture(out);
+  return { app, windowId, sessionId, tty };
+}
+
+/** The controlling tty of THIS process (e.g. "/dev/ttys003"), or null when
+ * stdin isn't a terminal (piped, tmux capture, CI) — in which case there's no
+ * current terminal to take over. Reads via `/usr/bin/tty` on our own stdin. */
+export function currentTty(): string | null {
+  try {
+    const out = execFileSync("/usr/bin/tty", [], {
+      encoding: "utf8",
+      stdio: ["inherit", "pipe", "ignore"],
+    }).trim();
+    return out.startsWith("/dev/") ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Capture the terminal session `argent lens` is running inside, so the agent can
+ * take it over and the relay can write into it. Returns null when we can't —
+ * stdin isn't a tty, the host terminal isn't iTerm/Terminal, or osascript can't
+ * find a session for our tty — and the caller falls back to a new window.
+ */
+export function captureCurrentSession(app: TerminalApp): TerminalSession | null {
+  const tty = currentTty();
+  if (!tty) return null;
+  let out: string;
+  try {
+    out = runOsascript(buildCaptureScript(app, tty)).trim();
+  } catch {
+    return null;
+  }
+  if (!out) return null;
+  const { windowId, sessionId } = parseCapture(out);
+  if (!windowId) return null;
   return { app, windowId, sessionId, tty };
 }
 

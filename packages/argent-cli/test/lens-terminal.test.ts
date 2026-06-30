@@ -8,6 +8,8 @@ import {
   buildFocusScript,
   buildReadScript,
   buildEnterScript,
+  buildCaptureScript,
+  detectHostTerminal,
   parseCapture,
   parseAliveTtys,
   shortTty,
@@ -191,5 +193,38 @@ describe("isITermInstalled", () => {
   });
   it("is false when none exist", () => {
     expect(isITermInstalled(() => false)).toBe(false);
+  });
+});
+
+describe("buildCaptureScript", () => {
+  it("iTerm: matches the session by tty and returns windowId|sessionId", () => {
+    const s = buildCaptureScript("iterm", "/dev/ttys004");
+    expect(s).toContain('tell application "iTerm"');
+    expect(s).toContain('if (tty of s) is "/dev/ttys004"');
+    expect(s).toContain('((id of w) as string) & "|" & (id of s)');
+    expect(s).toContain('return ""'); // sentinel when no session matches
+  });
+
+  it("Terminal: matches the selected tab's tty and returns windowId| (no sid)", () => {
+    const s = buildCaptureScript("terminal", "/dev/ttys009");
+    expect(s).toContain('tell application "Terminal"');
+    expect(s).toContain('if (tty of selected tab of w) is "/dev/ttys009"');
+    expect(s).toContain('((id of w) as string) & "|"');
+  });
+
+  it("escapes the tty value", () => {
+    expect(buildCaptureScript("iterm", 'a"b')).toContain('is "a\\"b"');
+  });
+});
+
+describe("detectHostTerminal", () => {
+  it("maps TERM_PROGRAM to the terminal app", () => {
+    expect(detectHostTerminal("iTerm.app")).toBe("iterm");
+    expect(detectHostTerminal("Apple_Terminal")).toBe("terminal");
+  });
+  it("returns null for unscriptable hosts (tmux / VS Code / unset)", () => {
+    expect(detectHostTerminal("vscode")).toBeNull();
+    expect(detectHostTerminal("tmux")).toBeNull();
+    expect(detectHostTerminal(undefined)).toBeNull();
   });
 });

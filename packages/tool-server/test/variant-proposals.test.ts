@@ -387,11 +387,24 @@ describe("VariantProposalStore — CLI Lens session (`argent lens`)", () => {
     s.setLensAgentChoice("codex");
     expect(s.snapshot().lensAgentChoice).toBe("codex");
     expect(s.getLensAgentChoice()).toBe("codex");
+    expect(s.getLensAgentRemember()).toBe(false);
 
     // Ending the session clears the picker state.
     s.setCliSession(false);
     expect(s.snapshot().lensAgents).toEqual([]);
     expect(s.snapshot().lensAgentChoice).toBeNull();
+  });
+
+  it("records the remember flag with the pick and clears it on session end", () => {
+    const s = new VariantProposalStore();
+    s.setCliSession(true, [{ id: "claude", name: "Claude Code" }]);
+    s.setLensAgentChoice("claude", true);
+    expect(s.getLensAgentChoice()).toBe("claude");
+    expect(s.getLensAgentRemember()).toBe(true);
+
+    s.setCliSession(false);
+    expect(s.getLensAgentChoice()).toBeNull();
+    expect(s.getLensAgentRemember()).toBe(false);
   });
 
   it("a re-begin replaces stale choices and clears a prior pick", () => {
@@ -442,5 +455,31 @@ describe("VariantProposalStore — CLI Lens session (`argent lens`)", () => {
     const r = s.proposeVariant({ element: "Bar", variant: variant("Tall") });
     expect(r.round).toBe(1);
     expect(r.totalElements).toBe(2);
+  });
+});
+
+describe("VariantProposalStore — Lens-owned devices", () => {
+  it("tracks owned devices and drains them once", () => {
+    const s = new VariantProposalStore();
+    expect(s.isDeviceOwned("udid-1")).toBe(false);
+
+    s.markDeviceOwned("udid-1");
+    s.markDeviceOwned("udid-2");
+    s.markDeviceOwned("udid-1"); // dedup
+    expect(s.isDeviceOwned("udid-1")).toBe(true);
+
+    const drained = s.takeOwnedDevices();
+    expect(drained.sort()).toEqual(["udid-1", "udid-2"]);
+    // Drained: a second take is empty, and ownership is cleared.
+    expect(s.takeOwnedDevices()).toEqual([]);
+    expect(s.isDeviceOwned("udid-1")).toBe(false);
+  });
+
+  it("ignores blank ids and trims", () => {
+    const s = new VariantProposalStore();
+    s.markDeviceOwned("   ");
+    s.markDeviceOwned(" udid-3 ");
+    expect(s.isDeviceOwned("udid-3")).toBe(true);
+    expect(s.takeOwnedDevices()).toEqual(["udid-3"]);
   });
 });

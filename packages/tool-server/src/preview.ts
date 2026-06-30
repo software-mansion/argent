@@ -267,17 +267,152 @@ export function createPreviewRouter(registry: Registry): Router {
   // /preview; the id is matched against the offered choices on the bridge side.
   router.post("/cli-agent", (req: Request, res: Response) => {
     const id = typeof req.body?.id === "string" ? req.body.id.slice(0, 64) : "";
-    variantProposalStore.setLensAgentChoice(id);
-    res.json({ ok: true, choice: id });
+    const remember = Boolean(req.body?.remember);
+    variantProposalStore.setLensAgentChoice(id, remember);
+    res.json({ ok: true, choice: id, remember });
+  });
+
+  // Boot a device from the preview window's picker (the "boot it first" rows).
+  // Tokenless like the rest of /preview, but state-changing: it can spawn a
+  // simulator. To keep it from being abused into an unbounded spawn, the :udid
+  // is validated against the live device list (same known-device cache as the
+  // describe/connect routes) before dispatching.
+  //
+  // Headless: booted via `boot-device { headless: true }` so the simulator core
+  // streams through simulator-server WITHOUT popping the Simulator.app GUI.
+  // Ownership: a device this route actually boots (it was not already running)
+  // is recorded as Lens-owned, so the tool-server shuts it down when the CLI
+  // session ends. A device that was already running is left unowned — Lens must
+  // never shut down a simulator the user started themselves.
+  router.post("/boot", async (req: Request, res: Response) => {
+    const udid = typeof req.body?.udid === "string" ? req.body.udid : "";
+    if (!udid) {
+      res.status(400).json({ error: "Missing `udid`." });
+      return;
+    }
+    // Booting is iOS-only here: a stopped iOS simulator still appears in
+    // `list-devices` (state "Shutdown") and boots by udid, but a stopped
+    // Android AVD does not appear at all (adb only lists running emulators) —
+    // it would need an avdName this route never has. So Android entries in the
+    // picker are always already-running; reject any non-iOS boot request loudly.
+    const device = resolveDevice(udid);
+    if (device.platform !== "ios") {
+      res.status(400).json({
+        error: `Booting from the preview is only supported for iOS simulators (got "${device.platform}"). Start other devices via the boot-device MCP tool.`,
+      });
+      return;
+    }
+    try {
+      // One `list-devices` (boot is a rare, user-initiated action, never hot-
+      // polled) serves both the existence guard — this route is auth-exempt and
+      // boot-device spawns a simulator, so a forged id must not amplify into an
+      // unbounded spawn — and the already-running check below.
+      const data = await registry.invokeTool<{
+        devices: Array<{ platform: string; udid?: string; serial?: string; state?: string }>;
+      }>(listDevicesTool.id);
+      rememberDevices(data.devices); // warm the connect/describe validation cache
+      const entry = data.devices.find((d) => (d.platform === "ios" ? d.udid : d.serial) === udid);
+      if (!entry) {
+        res
+          .status(400)
+          .json({ error: `Unknown device "${udid}". Use a udid/serial from /preview/simulators.` });
+        return;
+      }
+      // Skip (and don't take ownership) if it's already running — Lens must
+      // never shut down a simulator the user booted themselves.
+      if (entry.state === "Booted") {
+        res.json({ ok: true, booted: true, alreadyRunning: true, owned: false });
+        return;
+      }
+      await registry.invokeTool("boot-device", { udid, headless: true });
+      variantProposalStore.markDeviceOwned(udid);
+      res.json({ ok: true, booted: true, alreadyRunning: false, owned: true });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   // The frozen outcome of the last submitted round (selections + comments +
-  // annotations + globalComment), or null since the last reset. The `argent
-  // lens` watcher polls this and, on each new `completedAt`, types a flattened
-  // summary of the feedback into the bound agent terminal.
+  // annotations + globalComment), or null since the last reset. `argent lens`
+  // reads this ONCE at startup to seed its baseline `completedAt`; live updates
+  // arrive over /lens-stream (below), so there is no steady-state poll here.
   router.get("/outcome", (_req: Request, res: Response) => {
     res.set("Cache-Control", "no-store");
     res.json({ outcome: variantProposalStore.getLastOutcome() });
+  });
+
+  // Server-sent events for `argent lens`. PUSH replaces the old 1.2s poll: the
+  // foreground `argent lens` process subscribes here and the tool-server emits
+  //   event: agent-choice  data: "<id>"            (human picked an agent)
+  //   event: outcome       data: <completed JSON>  (a round was submitted)
+  //   event: session-end   data: {}                (the CLI session ended)
+  // the instant the underlying store event fires — so feedback reaches the
+  // agent terminal with no fixed-interval latency. The browser UI keeps its own
+  // polling of /variants; this stream is only for the CLI relay.
+  router.get("/lens-stream", (req: Request, res: Response) => {
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-store",
+      "Connection": "keep-alive",
+    });
+    res.flushHeaders?.();
+
+    const send = (event: string, data: unknown): void => {
+      // A dead/backed-up socket must not throw into the event emitter.
+      try {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        /* client gone — the close handler will tear the listeners down */
+      }
+    };
+
+    // Replay the current agent pick on connect so a CLI that subscribes AFTER
+    // the human clicked still learns the choice (the pick is a one-shot event).
+    // The payload carries the remember flag so the CLI can persist it.
+    let lastChoiceSent = variantProposalStore.getLensAgentChoice();
+    if (lastChoiceSent) {
+      send("agent-choice", {
+        id: lastChoiceSent,
+        remember: variantProposalStore.getLensAgentRemember(),
+      });
+    }
+
+    const onChanged = (): void => {
+      const choice = variantProposalStore.getLensAgentChoice();
+      if (choice && choice !== lastChoiceSent) {
+        lastChoiceSent = choice;
+        send("agent-choice", { id: choice, remember: variantProposalStore.getLensAgentRemember() });
+      }
+    };
+    const onSubmitted = (): void => {
+      const outcome = variantProposalStore.getLastOutcome();
+      if (outcome) send("outcome", outcome);
+    };
+    const onCliSessionChanged = (active: boolean): void => {
+      if (!active) send("session-end", {});
+    };
+    variantProposalStore.events.on("changed", onChanged);
+    variantProposalStore.events.on("selectionSubmitted", onSubmitted);
+    variantProposalStore.events.on("cliSessionChanged", onCliSessionChanged);
+
+    // Heartbeat so an idle stream isn't dropped by a proxy or half-open socket;
+    // a comment line is ignored by the SSE parser.
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        /* ignore */
+      }
+    }, 15_000);
+    // Don't let the heartbeat keep the process alive on its own.
+    heartbeat.unref?.();
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      variantProposalStore.events.off("changed", onChanged);
+      variantProposalStore.events.off("selectionSubmitted", onSubmitted);
+      variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
+    });
   });
 
   // Human pressed "Complete selection" in the UI — unblocks await_user_selection.
