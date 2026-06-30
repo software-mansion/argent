@@ -42,27 +42,36 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   const h = window.innerHeight;
   if (!w || !h) return JSON.stringify({ tree: null, error: "viewport is zero" });
 
-  // Native prototype accessors, captured once. HTMLFormElement is [LegacyOverrideBuiltins]:
-  // a control named "children"/"childNodes"/"tagName" shadows the matching inherited
-  // property on the <form>, so el.children there returns the control element (not iterable)
-  // and the throw aborts the whole walk — the exact crash class this walker must avoid.
-  // The prototype getter is never shadowed by a form's named properties, so route every
-  // read of these three through it via .call(el).
+  // Native prototype accessors, captured once. HTMLFormElement (and HTMLObject/Embed)
+  // is [LegacyOverrideBuiltins]: a control named the same as an inherited member shadows
+  // it on the <form>, so el.children returns the control element (not iterable) and
+  // el.getAttribute returns an element (not a function) — both throw and abort the whole
+  // walk, the exact crash class this walker must avoid. A prototype accessor is never
+  // shadowed by a form's named properties, so EVERY inherited member read on a possibly-
+  // clobbered element (methods and getters alike) goes through these via .call(el).
   const getChildNodes = Object.getOwnPropertyDescriptor(Node.prototype, "childNodes").get;
   const getTagName = Object.getOwnPropertyDescriptor(Element.prototype, "tagName").get;
   const getChildrenEls = Object.getOwnPropertyDescriptor(Element.prototype, "children").get;
+  const getShadowRoot = Object.getOwnPropertyDescriptor(Element.prototype, "shadowRoot").get;
+  const getScrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight").get;
+  const getClientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight").get;
+  const getScrollWidth = Object.getOwnPropertyDescriptor(Element.prototype, "scrollWidth").get;
+  const getClientWidth = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth").get;
+  const getAttr = Element.prototype.getAttribute;
+  const hasAttr = Element.prototype.hasAttribute;
+  const getBCR = Element.prototype.getBoundingClientRect;
 
   function nodeRole(el) {
-    const r = el.getAttribute("role");
+    const r = getAttr.call(el, "role");
     if (r) return r;
     const t = getTagName.call(el).toLowerCase();
     return t;
   }
 
   function accessibleName(el) {
-    const aria = el.getAttribute("aria-label");
+    const aria = getAttr.call(el, "aria-label");
     if (aria) return aria.trim().slice(0, 200);
-    const labelledBy = el.getAttribute("aria-labelledby");
+    const labelledBy = getAttr.call(el, "aria-labelledby");
     if (labelledBy) {
       const ids = labelledBy.split(/\\s+/);
       const parts = [];
@@ -80,7 +89,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     // getAttribute, not el.title: a <form> with a control named "title" clobbers the
     // .title property to return that element (not a string), and .slice() then throws,
     // aborting the whole describe. getAttribute always yields string | null.
-    const t = el.getAttribute("title");
+    const t = getAttr.call(el, "title");
     if (t) return t.slice(0, 200);
     return null;
   }
@@ -99,17 +108,17 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     if (tag === "button") return true;
     if (tag === "input" || tag === "textarea" || tag === "select") return true;
     if (tag === "summary" || tag === "details") return true;
-    if (el.hasAttribute("onclick")) return true;
-    const role = el.getAttribute("role");
+    if (hasAttr.call(el, "onclick")) return true;
+    const role = getAttr.call(el, "role");
     if (role && /^(button|link|tab|menuitem|checkbox|radio|switch|option)$/i.test(role)) return true;
-    const tabIndex = el.getAttribute("tabindex");
+    const tabIndex = getAttr.call(el, "tabindex");
     if (tabIndex !== null && tabIndex !== "-1") return true;
     return false;
   }
 
   function isDisabled(el) {
-    if (el.hasAttribute("disabled")) return true;
-    if (el.getAttribute("aria-disabled") === "true") return true;
+    if (hasAttr.call(el, "disabled")) return true;
+    if (getAttr.call(el, "aria-disabled") === "true") return true;
     return false;
   }
 
@@ -117,7 +126,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
       return el.checked;
     }
-    const v = el.getAttribute("aria-checked");
+    const v = getAttr.call(el, "aria-checked");
     if (v === "true") return true;
     return false;
   }
@@ -131,7 +140,11 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     const oy = style.overflowY;
     const ox = style.overflowX;
     if (oy === "auto" || oy === "scroll" || ox === "auto" || ox === "scroll") {
-      if (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth) return true;
+      if (
+        getScrollHeight.call(el) > getClientHeight.call(el) ||
+        getScrollWidth.call(el) > getClientWidth.call(el)
+      )
+        return true;
     }
     return false;
   }
@@ -145,7 +158,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   }
 
   function frame(el) {
-    return normRect(el.getBoundingClientRect());
+    return normRect(getBCR.call(el));
   }
 
   // Painted extent of an element's own inline content. A box-less element
@@ -174,7 +187,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   // frame spanning their children rather than their own 0x0 rect.
   function boxless(el, style) {
     if (style.display === "contents") return true;
-    const r = el.getBoundingClientRect();
+    const r = getBCR.call(el);
     return r.width <= 0 || r.height <= 0;
   }
 
@@ -184,7 +197,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     }
     // display:contents has no box but lays its children out normally — never prune it.
     if (style.display === "contents") return false;
-    const r = el.getBoundingClientRect();
+    const r = getBCR.call(el);
     if (r.width > 0 && r.height > 0) return false;
     // Zero-area box: prune it only when it clips its overflow (a collapsed
     // overflow:hidden container genuinely hides its content). With the default
@@ -234,8 +247,13 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     // Web-components-heavy apps (VS Code, every Lit/Polymer SPA) put their
     // interactive content under .shadowRoot, so without this descent describe
     // returns an empty body.
-    if (el.shadowRoot) {
-      for (const child of el.shadowRoot.children) {
+    // getShadowRoot via the prototype: a <form> with a control named "shadowRoot"
+    // would otherwise return that control, and we'd re-walk its light-DOM children as
+    // shadow content and duplicate the subtree. A real ShadowRoot is a DocumentFragment
+    // (never a form), so its own .children read is safe.
+    const shadow = getShadowRoot.call(el);
+    if (shadow) {
+      for (const child of shadow.children) {
         const c = walk(child, depth + 1);
         if (c) childResults.push(c);
       }
@@ -308,9 +326,9 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     // getAttribute, not el.id: like .title, a named form control can clobber the .id
     // property to a DOM node, which would then break JSON.stringify of the tree.
     const id =
-      el.getAttribute("id") ||
-      el.getAttribute("data-testid") ||
-      el.getAttribute("data-test-id");
+      getAttr.call(el, "id") ||
+      getAttr.call(el, "data-testid") ||
+      getAttr.call(el, "data-test-id");
     if (id) node.identifier = id;
     if (clickable) node.clickable = true;
     if (isDisabled(el)) node.disabled = true;

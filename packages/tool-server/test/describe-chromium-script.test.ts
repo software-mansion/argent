@@ -45,6 +45,28 @@ function defineNative(proto: object, prop: string, field: string): void {
 defineNative(MockNode.prototype, "childNodes", "__childNodes");
 defineNative(MockElement.prototype, "tagName", "__tagName");
 defineNative(MockElement.prototype, "children", "__children");
+defineNative(MockElement.prototype, "shadowRoot", "__shadowRoot");
+// Scroll-dimension getters live on Element.prototype too; the script captures their
+// descriptor up front (so they must exist) and only reads them for overflow:auto/scroll.
+defineNative(MockElement.prototype, "scrollHeight", "__scrollHeight");
+defineNative(MockElement.prototype, "clientHeight", "__clientHeight");
+defineNative(MockElement.prototype, "scrollWidth", "__scrollWidth");
+defineNative(MockElement.prototype, "clientWidth", "__clientWidth");
+// getAttribute / hasAttribute / getBoundingClientRect are methods on Element.prototype.
+// The script invokes them via the captured `Element.prototype.X` so a [LegacyOverrideBuiltins]
+// form can't shadow them to a control element (which would crash with "not a function").
+// Back them with per-element fields, mirroring the real DOM.
+MockElement.prototype.getAttribute = function (this: Record<string, unknown>, n: string) {
+  const a = (this.__attrs as Record<string, string>) ?? {};
+  return n in a ? a[n] : null;
+};
+MockElement.prototype.hasAttribute = function (this: Record<string, unknown>, n: string) {
+  return n in ((this.__attrs as Record<string, string>) ?? {});
+};
+MockElement.prototype.getBoundingClientRect = function (this: Record<string, unknown>) {
+  const r = this.__rect as Rect;
+  return { left: r.x, top: r.y, right: r.x + r.w, bottom: r.y + r.h, width: r.w, height: r.h };
+};
 
 type Rect = { x: number; y: number; w: number; h: number };
 type Opts = {
@@ -57,23 +79,17 @@ type Opts = {
   children?: MockElement[];
   clobber?: boolean; // set .title/.id to non-string objects (DOM-clobbering)
   clobberStructural?: boolean; // shadow .children/.childNodes/.tagName with named controls (LegacyOverrideBuiltins)
+  clobberAccessors?: boolean; // shadow getAttribute/hasAttribute/getBoundingClientRect/shadowRoot with a control element
 };
 
 function el(opts: Opts = {}): MockElement {
   const node = new MockElement() as MockElement & Record<string, unknown>;
   const rect = opts.rect ?? { x: 0, y: 0, w: 100, h: 20 };
   node.tagName = (opts.tag ?? "div").toUpperCase();
-  const attrs = opts.attrs ?? {};
-  node.getAttribute = (n: string) => (n in attrs ? attrs[n] : null);
-  node.hasAttribute = (n: string) => n in attrs;
-  node.getBoundingClientRect = () => ({
-    left: rect.x,
-    top: rect.y,
-    right: rect.x + rect.w,
-    bottom: rect.y + rect.h,
-    width: rect.w,
-    height: rect.h,
-  });
+  // Backing fields read by the Element.prototype getAttribute/hasAttribute/
+  // getBoundingClientRect methods defined above (the script reads them via the prototype).
+  node.__attrs = opts.attrs ?? {};
+  node.__rect = rect;
   node.children = opts.children ?? [];
   node.childNodes = opts.text ? [{ nodeType: 3, nodeValue: opts.text }] : [];
   node.shadowRoot = null;
@@ -92,6 +108,17 @@ function el(opts: Opts = {}): MockElement {
     Object.defineProperty(node, "children", { value: kids[0], configurable: true });
     Object.defineProperty(node, "childNodes", { value: kids[1], configurable: true });
     Object.defineProperty(node, "tagName", { value: kids[2], configurable: true });
+  }
+  if (opts.clobberAccessors) {
+    // simulate a <form> whose controls are named getAttribute / hasAttribute /
+    // getBoundingClientRect / shadowRoot: each public member returns a control element,
+    // so a direct el.getAttribute(...) throws "not a function" and a direct el.shadowRoot
+    // read would re-walk the control's children (duplicating the subtree). The script must
+    // route every one of these through the captured Element.prototype accessor.
+    const ctrl = (opts.children ?? [])[0];
+    for (const m of ["getAttribute", "hasAttribute", "getBoundingClientRect", "shadowRoot"]) {
+      Object.defineProperty(node, m, { value: ctrl, configurable: true });
+    }
   }
   const baseStyle: Record<string, string> = {
     display: "block",
@@ -282,6 +309,43 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(serialized).toContain("field-children");
     expect(serialized).toContain("field-childnodes");
     expect(serialized).toContain("field-tagname");
+  });
+
+  it("does not crash (or duplicate) on a <form> clobbering getAttribute/getBoundingClientRect/hasAttribute/shadowRoot", () => {
+    // A <form> whose controls are named getAttribute / getBoundingClientRect /
+    // hasAttribute reproduced "TypeError: el.X is not a function" on real Chrome (each
+    // shadows the inherited method to a control element); a control named shadowRoot made
+    // the walker re-walk the control's children and duplicate the subtree. The fix routes
+    // all of these through the captured Element.prototype accessor.
+    const inner = el({
+      tag: "input",
+      attrs: { id: "deep-inner" },
+      rect: { x: 0, y: 130, w: 200, h: 20 },
+    });
+    const fieldset = el({
+      tag: "fieldset",
+      attrs: { id: "fs", name: "shadowRoot" },
+      rect: { x: 0, y: 110, w: 200, h: 40 },
+      children: [inner],
+    });
+    let result: { tree: unknown } | undefined;
+    expect(() => {
+      result = run([
+        el({
+          tag: "form",
+          attrs: { id: "clobber-form" },
+          rect: { x: 0, y: 100, w: 200, h: 60 },
+          children: [fieldset],
+          clobberAccessors: true,
+        }),
+      ]);
+    }).not.toThrow();
+    const serialized = JSON.stringify(result!.tree);
+    // The form's own id is read via the prototype getAttribute despite the clobber.
+    expect(serialized).toContain("clobber-form");
+    // The child still surfaces — exactly once (the shadowRoot clobber must not re-walk it).
+    expect(serialized).toContain("deep-inner");
+    expect((serialized.match(/deep-inner/g) || []).length).toBe(1);
   });
 
   it("leaves an ordinary visible element unchanged", () => {
