@@ -323,8 +323,35 @@ export async function ensureCoreDeviceTunnel(udid: string): Promise<Rsd> {
   }
 }
 
+/**
+ * Apple gates host-driven input (the CoreDevice "remote control" services that
+ * back tap/swipe/button) to iOS 27+. On iOS 18-26 those services exist but the
+ * device rejects the command with `CoreDeviceError 9021`, which `conciseError`
+ * would otherwise surface as a raw, unactionable line. `screen-capture` is NOT
+ * gated, so screenshots keep working and never hit this path.
+ *
+ * Detected against pymobiledevice3's own output (stderr/stdout) only — never the
+ * execFile `message`, which echoes the argv where a HID coordinate (0..65535)
+ * could itself be `9021` and false-positive a bare numeric match.
+ */
+function isRemoteControlGatedError(err: unknown): boolean {
+  const e = err as { stderr?: string; stdout?: string };
+  const output = [e?.stderr, e?.stdout]
+    .filter((v): v is string => typeof v === "string")
+    .join("\n");
+  return /core\s*device\s*error\W*9021/i.test(output) || /\b9021\b/.test(output);
+}
+
 /** Extract a concise, human-readable line from a (possibly huge/binary) pmd3 failure. */
 function conciseError(label: string, err: unknown): Error {
+  if (isRemoteControlGatedError(err)) {
+    return new Error(
+      `CoreDevice ${label} failed: this iPhone is on an iOS below 27; host-driven input ` +
+        `(tap/swipe/button) requires iOS 27+. Only screenshot is supported on earlier iOS ` +
+        `versions (Apple CoreDeviceError 9021).`,
+      { cause: err }
+    );
+  }
   const e = err as { stderr?: string; stdout?: string; message?: string };
   const blob = [e?.stderr, e?.stdout, e?.message]
     .filter((v): v is string => typeof v === "string")
