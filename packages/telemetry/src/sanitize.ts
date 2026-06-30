@@ -215,12 +215,12 @@ export const ALLOWED: ValidatorMap = {
 
 /** Strip keys and values that are not allowed for this event. */
 export function sanitize(event: string, raw: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.hasOwn(ALLOWED, event)) return {};
   const validators = (ALLOWED as Record<string, Record<string, Validator>>)[event];
-  if (!validators) return {};
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
+    if (!Object.hasOwn(validators, k)) continue;
     const validate = validators[k];
-    if (!validate) continue;
     const cleaned = validate(v);
     if (cleaned !== undefined) out[k] = cleaned;
   }

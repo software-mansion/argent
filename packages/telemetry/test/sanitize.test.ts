@@ -500,3 +500,25 @@ describe("sanitize", () => {
     });
   });
 });
+
+describe("sanitize ignores prototype-named keys (allowlist integrity)", () => {
+  it("drops 'constructor' and never leaks the value smuggled under it", () => {
+    const out = sanitize("tool:invoke", {
+      tool: "gesture-tap",
+      constructor: "/Users/alice/.ssh/id_rsa",
+    } as Record<string, unknown>);
+    expect(Object.keys(out)).toEqual(["tool"]);
+    expect(JSON.stringify(out)).not.toContain("/Users/alice");
+  });
+  it("drops other prototype-named keys (toString, valueOf, __proto__)", () => {
+    const out = sanitize("tool:invoke", {
+      tool: "gesture-tap",
+      toString: "x",
+      valueOf: "y",
+    } as Record<string, unknown>);
+    expect(Object.keys(out)).toEqual(["tool"]);
+  });
+  it("returns {} for an event name that is a prototype member", () => {
+    expect(sanitize("constructor", { tool: "gesture-tap" } as Record<string, unknown>)).toEqual({});
+  });
+});
