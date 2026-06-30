@@ -45,7 +45,9 @@ Before **every** tap, you MUST call a discovery tool and extract coordinates fro
 
 `native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point (iOS only).
 
-Whenever something changed YOU MUST first call `describe`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
+Alternatively, for the common "locate this element and tap/type into it" case, use `find` — it matches the same accessibility/DOM tree by text/label/value/role/id and performs the action in one call, so you never derive coordinates yourself. It still uses a discovery tool internally, so it satisfies this rule; fall back to `describe` when you need the whole screen or `find` reports an ambiguous `matchCount`.
+
+Whenever something changed YOU MUST first call `describe`, `find`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
 If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
 

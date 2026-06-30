@@ -21,6 +21,11 @@ const ALLOWED_TOOLS = new Set([
   // `keyboard` types into the focused field there.
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
+  // `find` is deliberately NOT allowed here (v1): unlike await-ui-element, a
+  // missed `find` returns { found: false } without throwing, and run-sequence's
+  // stop-on-failure only recognises an unmet await-ui-element wait
+  // (`isUnmetUiWaitResult`). A `find … tap` that located nothing would silently
+  // let the sequence continue past it. Use individual `find` calls instead.
 ]);
 
 const zodSchema = z.object({

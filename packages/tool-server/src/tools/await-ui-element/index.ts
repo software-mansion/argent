@@ -1,18 +1,17 @@
 import { z } from "zod";
 import type {
-  DeviceInfo,
   Registry,
   ServiceRef,
   ToolCapability,
   ToolContext,
   ToolDefinition,
 } from "@argent/registry";
-import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { sleepOrAbort } from "../../utils/timing";
+import { sleepOrAbort, settleWithin } from "../../utils/timing";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import {
   includesCI,
@@ -21,9 +20,9 @@ import {
   firstInReadingOrder,
   walkMatches,
 } from "../describe/match";
-import { describeIos, iosRequires } from "../describe/platforms/ios";
-import { describeAndroid, androidRequires } from "../describe/platforms/android";
-import { describeChromium } from "../describe/platforms/chromium";
+import { fetchDescribeTree, appendDescribeDiagnostics } from "../describe/fetch-tree";
+import { iosRequires } from "../describe/platforms/ios";
+import { androidRequires } from "../describe/platforms/android";
 
 // Tool id. Exported so run-sequence can both allow this tool and recognise its
 // result shape (it returns { success: false } instead of throwing on an unmet
@@ -217,21 +216,6 @@ function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
   return Boolean(data.hint || data.should_restart || everMatched);
 }
 
-// Fold an unreliable-read hint / restart prompt onto a timeout note so the agent
-// learns the real cause (degraded AX, native injection pending) rather than a
-// bare "no element matched".
-function appendDiagnostics(base: string, lastData: DescribeTreeData | null): string {
-  if (!lastData) return base;
-  const extras: string[] = [];
-  if (lastData.should_restart) {
-    extras.push(
-      "the foreground app may need a restart for native inspection — call restart-app and retry"
-    );
-  }
-  if (lastData.hint) extras.push(lastData.hint);
-  return extras.length === 0 ? base : `${base} (${extras.join("; ")})`;
-}
-
 function timeoutNote(
   params: Params,
   lastTree: DescribeNode | null,
@@ -263,47 +247,7 @@ function timeoutNote(
     default:
       base = "no element matched the selector before timeout";
   }
-  return appendDiagnostics(base, lastData);
-}
-
-// ── Per-fetch deadline / abort ─────────────────────────────────────────────
-
-type Settled<T> =
-  | { type: "value"; value: T }
-  | { type: "error"; error: string }
-  | { type: "timeout" }
-  | { type: "aborted" };
-
-// Race a tree fetch against the remaining wait budget and the abort signal. The
-// underlying describe fetch isn't cancellable (no AbortSignal reaches adb /
-// AXRuntime), so a slow or hung fetch — e.g. the Android `uiautomator dump`
-// fallback, which allows up to 20s — would otherwise blow past `timeoutMs` and
-// ignore an abort that arrives mid-fetch. We can't kill the orphaned fetch, but
-// we stop waiting on it; its eventual settle is consumed here (handlers attached
-// up front) so it can't surface as an unhandled rejection.
-function settleWithin<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<Settled<T>> {
-  return new Promise((resolve) => {
-    let done = false;
-    const teardown: Array<() => void> = [];
-    const finish = (r: Settled<T>) => {
-      if (done) return;
-      done = true;
-      for (const fn of teardown) fn();
-      resolve(r);
-    };
-    // Attach the settle handlers up front so a late settle from an abandoned
-    // fetch is always consumed (no unhandled rejection) even after we've moved on.
-    p.then(
-      (value) => finish({ type: "value", value }),
-      (err) => finish({ type: "error", error: err instanceof Error ? err.message : String(err) })
-    );
-    if (signal?.aborted) return finish({ type: "aborted" });
-    const onAbort = () => finish({ type: "aborted" });
-    signal?.addEventListener("abort", onAbort, { once: true });
-    teardown.push(() => signal?.removeEventListener("abort", onAbort));
-    const timer = setTimeout(() => finish({ type: "timeout" }), Math.max(0, ms));
-    teardown.push(() => clearTimeout(timer));
-  });
+  return appendDescribeDiagnostics(base, lastData);
 }
 
 // ── Tool ─────────────────────────────────────────────────────────────────
@@ -313,21 +257,6 @@ function settleWithin<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promi
 // rather than through the tool's own services() declaration. Only the Chromium
 // CDP session flows in as a normal service.
 export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Params, WaitResult> {
-  async function fetchTree(
-    device: DeviceInfo,
-    params: Params,
-    services: Record<string, unknown>,
-    isTvOs: boolean
-  ): Promise<DescribeTreeData> {
-    if (device.platform === "ios") {
-      return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
-    }
-    if (device.platform === "android") {
-      return describeAndroid(registry, device.id);
-    }
-    return describeChromium(services.chromium as ChromiumCdpApi);
-  }
-
   return {
     id: AWAIT_UI_ELEMENT_TOOL_ID,
     description: `Block until a UI element reaches an expected state or a timeout elapses, so you don't have to poll screenshot/describe yourself.
@@ -403,7 +332,9 @@ or before tapping an element that appears asynchronously.`,
         // promptly instead of after the fetch resolves.
         const remaining = Math.max(0, deadline - Date.now());
         const settled = await settleWithin(
-          fetchTree(device, params, services, isTvOs),
+          // Pass the pre-resolved tvOS verdict so a poll loop doesn't re-shell
+          // `xcrun` each iteration (isTvOs is resolved once above the loop).
+          fetchDescribeTree(registry, device, params, services, { isTvOs }),
           remaining,
           signal
         );
