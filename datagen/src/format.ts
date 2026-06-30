@@ -72,12 +72,14 @@ export function visibleElements(screen: ScreenDef, scrolled: boolean): ElementDe
   return screen.elements.filter((e) => (e.revealedByScroll ? scrolled : true));
 }
 
-const DESCRIBE_HEADER_NOTE =
-  "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), " +
-  "not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, " +
-  "which expect this same space. " +
-  "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, " +
-  "tap_y = frame.y + frame.height / 2.";
+// The EXACT 3 lines the real argent stack emits (tool-server format-tree.ts:194-211). Must match
+// byte-for-byte so train == serve: the model reads this preamble inside every describe result.
+// Exported so the renderer can re-normalize real-capture describes baked with an older note.
+export const DESCRIBE_HEADER_NOTE = [
+  "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels.",
+  "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.",
+  "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.",
+];
 
 export function formatDescribe(platform: Platform, screen: ScreenDef, scrolled: boolean): string {
   const source = describeSource(platform);
@@ -92,7 +94,7 @@ export function formatDescribe(platform: Platform, screen: ScreenDef, scrolled: 
   const header = [
     `Source: ${source}`,
     `Mode: ${mode}`,
-    DESCRIBE_HEADER_NOTE,
+    ...DESCRIBE_HEADER_NOTE,
     "",
     `ROOT  ${rootRole} (0.000, 0.000, 1.000, 1.000)`,
     "",

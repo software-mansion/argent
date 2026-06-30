@@ -114,10 +114,12 @@ export function trajectoryToRaw(traj: Trajectory): RawTrajectory {
             | undefined;
           const rawText = res?.content ?? "";
           const hasShot = INTERACTION_TOOLS.has(c.name);
-          // Real Argent interaction tools return an unreadable screenshot (no readable text);
-          // the gym fakes a `{"tapped":true}` ack. Blank it so the model trains on the real
-          // "act → screenshot junk → must describe" loop (matches the real-capture convention).
-          const text = hasShot ? "" : rawText.replace(SCENE_CAPTION, "").trimEnd();
+          // Keep the real tool-result ack ({tapped/launched/scrolled/typed/…}); strip only the gym's
+          // idealized `[screenshot]` caption. The renderer re-appends the real
+          // `--- Screen after action --- / Saved: <path>` for screenshot tools so train == serve.
+          // (Previously blanked to "" → the model trained on a result it NEVER receives at inference,
+          //  going OOD on every action outcome — the dominant cause of silver losing to the base.)
+          const text = rawText.replace(SCENE_CAPTION, "").trimEnd();
           steps.push({
             thought: m.content || undefined,
             call: { name: c.name, arguments: c.arguments },

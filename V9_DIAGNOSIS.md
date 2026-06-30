@@ -75,3 +75,19 @@ This EMPIRICALLY supports skipping further SFT-recipe iteration and going to the
 train↔inference FORMAT mismatch (the dominant, still-untested lever), then (2) scaffold the base + RL on its
 own real rollouts. To re-run any nav eval, the iOS sim surface (device + Bluesky dev-client + login + Metro)
 must be rebuilt first.
+
+## UPDATE 3 — "reasoning is ablated" is REFUTED; it was a measurement artifact (06-30, $0 local)
+The UPDATE-2 claim "silver emits no reasoning (content:'')" was WRONG — it only inspected the `content`
+field. ollama's gemma4 PARSER routes the model's pre-tool-call prose into the **`thinking`** channel, not
+`content`. A corrected probe (ollama `/api/chat`, both fields, real training contexts, num_predict 900 to
+kill a truncation confound) over 8 rows:
+- **silver-v8**: emits a proper tool_call **8/8**, carries reasoning **8/8** (`thinking` 250-740 ch).
+- **silver-v9rsn2** (reorder fix — thought rendered BEFORE the tool_call in the loss): reasoning **8/8**,
+  proper tool_call **7/8** (marginally WORSE, not better).
+So **reasoning was never removed** by training — the base's screen-reasoning surfaces at inference in both
+the tuned and untuned-rendered models. The "we're training it to remove reasoning" hypothesis is refuted,
+and BOTH cheap reasoning levers (reasoning-in-loss #2 and the thought-reorder) are **dead ends** — they move
+nothing. This RE-CONFIRMS the real cause is elsewhere: the train↔inference FORMAT mismatch (#1), the
+idealized/leaky data (#2's data half), and the 3-5 OOM data-scale floor (#4). v9 = fix the format mismatch
+first, then scaffold the base + RL on real rollouts. Stop touching reasoning rendering.
+(Artifacts: silver-v9rsn2 packaged to ollama as `silver-v9rsn2:e4b`; probe at scratchpad/probe_reasoning.py.)
