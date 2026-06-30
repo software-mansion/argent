@@ -252,6 +252,19 @@ function main() {
 
   const out = join(HERE, outName);
   mkdirSync(out, { recursive: true });
+  // --dump-raw: write the neutral RawTrajectory INPUTS (gym + real, pre-render) so the exact raw data a
+  // dataset version was built from can be published/reproduced. Renderers are deterministic over these.
+  if (argv.includes("--dump-raw")) {
+    // The meaningful raw is the trajectory itself (meta/task/steps/finalAnswer incl. the real AX trees);
+    // `policy` and `tools` are placeholders that buildRow re-samples per row, so we omit them.
+    writeFileSync(
+      join(out, "raw.jsonl"),
+      [...gym, ...real]
+        .map((r) => JSON.stringify({ meta: r.meta, task: r.task, steps: r.steps, finalAnswer: r.finalAnswer }))
+        .join("\n") + "\n"
+    );
+    console.error(`dumped ${gym.length + real.length} raw trajectories (${gym.length} gym + ${real.length} real) -> ${outName}/raw.jsonl`);
+  }
   const write = (file: string, recs: NativeRecord[]) =>
     writeFileSync(
       join(out, file),
