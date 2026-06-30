@@ -10,7 +10,13 @@
  */
 import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline";
 
-const ANIMATED_PATTERN = /(Animated|Animation|Transition|Motion)/i;
+// Match the animation tokens only as genuine PascalCase segments, not as
+// lowercase substrings. Real RN animation component names are PascalCase and
+// contain a capitalized token (`Animated`, `AnimatedView`, `MotionView`,
+// `FadeTransition`), whereas ordinary names like `PromotionCard`,
+// `EmotionThemeCard`, or `CommotionList` only contain a lowercase "motion".
+// Dropping the `/i` flag keeps the former and stops matching the latter.
+const ANIMATED_PATTERN = /(Animated|Animation|Transition|Motion)/;
 const RECYCLER_CHILD_PATTERN = /(ListItem|CellItem|Cell|Row|Item)$/i;
 const RECYCLER_PARENT_PATTERN =
   /^(FlatList|SectionList|VirtualizedList|FlashList|RecyclerListView)/i;
