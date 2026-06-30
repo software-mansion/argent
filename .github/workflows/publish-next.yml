@@ -138,11 +138,9 @@ jobs:
         if: github.event_name == 'push'
         id: canary
         run: |
-          VERSION="$(node scripts/next-canary-version.mjs)"
-          export VERSION
+          VERSION="$(node scripts/next-canary-version.mjs --write)"
           echo "Canary version: ${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          node -e 'const fs=require("fs");const p="packages/argent/package.json";const j=JSON.parse(fs.readFileSync(p,"utf8"));j.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(j,null,2)+"\n");'
 
       # The shipped CLI reads its version from package.json at runtime, so this
       # is exactly what `argent --version` prints after install. Fail loudly if
@@ -157,9 +155,40 @@ jobs:
 
       - run: npm pack --dry-run -w @swmansion/argent
 
-      - run: npm publish -w @swmansion/argent --tag next
+      # Dispatch publishes the ref's verbatim version.
+      - name: Publish prerelease
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish -w @swmansion/argent --tag next
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Canary publish. Serialization makes concurrent index collisions
+      # impossible, but npm's read-after-write lag could still hand a back-to-back
+      # run a stale version list, so retry a version-exists collision by
+      # recomputing + restamping. Any other publish failure is real and fails fast.
+      - name: Publish canary
+        if: github.event_name == 'push'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for attempt in 1 2 3; do
+            VERSION="$(node -p "require('./packages/argent/package.json').version")"
+            echo "Publishing ${VERSION} (attempt ${attempt})"
+            if npm publish -w @swmansion/argent --tag next; then
+              echo "Published ${VERSION}"
+              exit 0
+            fi
+            if npm view "@swmansion/argent@${VERSION}" version >/dev/null 2>&1; then
+              echo "::warning::${VERSION} already on npm (lost a race / stale read) — recomputing"
+              node scripts/next-canary-version.mjs --write
+              sleep 10
+            else
+              echo "::error::npm publish failed for ${VERSION} (not a version collision)"
+              exit 1
+            fi
+          done
+          echo "::error::canary publish still colliding after 3 attempts"
+          exit 1
 
       # `npm publish --tag next` already tags this prerelease. Re-pointing `next`
       # at the highest published version (and self-healing it if it was left

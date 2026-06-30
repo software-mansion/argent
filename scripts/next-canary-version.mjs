@@ -16,22 +16,32 @@
  * each new patch line starts at `.0` and increments per publish:
  *   0.13.1-next.0, 0.13.1-next.1, ...  then 0.13.1 ships stable  ...
  *   0.13.2-next.0, 0.13.2-next.1, ...
- * Deriving the counter from the registry (rather than a global CI counter)
- * means publishes MUST be serialized — see the `concurrency` group in
- * publish-next.yml — or two racing reads could pick the same index and collide.
+ *
+ * Because the counter is read from the registry, the `concurrency` group in
+ * publish-next.yml serializes canary publishes so two runs can't read the same
+ * index at once. That removes the concurrent race but not npm's read-after-write
+ * lag (a freshly published version may not be visible to the next run's read for
+ * a few seconds), so the publish step ALSO retries on a version-exists collision
+ * by recomputing — see "Publish canary" in publish-next.yml. Either way a
+ * collision fails safe (npm 409, no bad artifact, no tag move).
  *
  * Zero npm dependencies (runs in a lightweight CI job without `npm ci`); the
  * SemVer helpers are shared with sync-next-dist-tag.mjs.
  *
- * Usage: node scripts/next-canary-version.mjs
+ * Usage:
+ *   node scripts/next-canary-version.mjs           print the canary version
+ *   node scripts/next-canary-version.mjs --write    also stamp it into
+ *                                                    packages/argent/package.json
  */
 
 import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { argv as processArgv } from "node:process";
 import { pathToFileURL } from "node:url";
 import { compareSemver, parseSemver } from "./sync-next-dist-tag.mjs";
 
 const PACKAGE = "@swmansion/argent";
+const PKG_JSON = "packages/argent/package.json";
 
 /**
  * Pure version math, separated from npm I/O so it can be unit-tested.
@@ -67,12 +77,21 @@ export function computeCanaryVersion(versions) {
 }
 
 function main() {
+  const write = processArgv.includes("--write");
   const raw = JSON.parse(
     execFileSync("npm", ["view", PACKAGE, "versions", "--json"], { encoding: "utf8" })
   );
   // npm returns a bare string when a package has exactly one published version.
   const versions = Array.isArray(raw) ? raw : [raw];
-  process.stdout.write(computeCanaryVersion(versions) + "\n");
+  const version = computeCanaryVersion(versions);
+
+  if (write) {
+    const pkg = JSON.parse(readFileSync(PKG_JSON, "utf8"));
+    pkg.version = version;
+    writeFileSync(PKG_JSON, JSON.stringify(pkg, null, 2) + "\n");
+  }
+
+  process.stdout.write(version + "\n");
 }
 
 // Run only when invoked directly, not when imported by the test.
