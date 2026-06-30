@@ -248,7 +248,14 @@ export async function materializeArtifacts(
         // whole. Mirrors the gate's size check on the local path; skipped when
         // size is unknown (0, e.g. a lazily-registered file).
         if (value.size > 0 && data.length !== value.size) return null;
-        const downloadedPath = join(dir, sanitizeSegment(value.filename));
+        // Key the cache path by the unique `id`, not `filename`: `filename`
+        // defaults to `basename(hostPath)` server-side and carries no uniqueness
+        // guarantee, so two distinct handles in one result can share it. Keying
+        // by filename alone would collide them onto one path — the second
+        // download overwriting the first, and both handles rewritten to those
+        // bytes. The id prefix keeps the human-readable filename while making
+        // the path collision-free.
+        const downloadedPath = join(dir, sanitizeSegment(`${value.id}-${value.filename}`));
         await writeFile(downloadedPath, data);
         if (value.mimeType.startsWith("image/")) {
           images.push({ localPath: downloadedPath, data, mimeType: value.mimeType });
