@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { settleTree } from "./flow-actions";
 import { bindDeviceArgs } from "./flow-device";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 
@@ -47,8 +48,17 @@ export async function runSnapshot(
     name: string;
     maxMismatch: number;
     updateBaselines: boolean;
-  }
+  },
+  signal?: AbortSignal
 ): Promise<VisualOutcome> {
+  // Wait for the UI to settle (a transition/reflow finished) so the capture is
+  // stable run-to-run, rather than guessing a fixed delay. `settleTree` returns
+  // undefined only on abort; a best-effort timeout still proceeds to capture.
+  await settleTree(registry, device, signal);
+  if (signal?.aborted) {
+    return { status: "skip", reason: "run aborted during snapshot settle" };
+  }
+
   // Full-resolution capture, not attached to any agent context — a baseline.
   const shot = (await invokeSubTool(
     registry,

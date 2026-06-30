@@ -27,7 +27,7 @@ const POLL_INTERVAL_MS = 300;
 
 // Settle detection: re-read the tree until two consecutive reads match, so a tap
 // never lands mid-fling and a resolved frame can't go stale before we act.
-const SETTLE_POLL_MS = 150;
+const SETTLE_POLL_MS = 250;
 const SETTLE_TIMEOUT_MS = 3000;
 
 // `scroll-to`: a bounded number of momentum-free increments. Each travels half a
@@ -92,7 +92,7 @@ function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFra
  * from landing mid-deceleration (where a scroll view swallows it) or acting on a
  * frame that has already moved.
  */
-async function settleTree(
+export async function settleTree(
   registry: Registry,
   device: DeviceInfo,
   signal?: AbortSignal
