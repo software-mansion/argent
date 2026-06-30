@@ -43,6 +43,7 @@ function defineNative(proto: object, prop: string, field: string): void {
   });
 }
 defineNative(MockNode.prototype, "childNodes", "__childNodes");
+defineNative(MockNode.prototype, "textContent", "__textContent");
 defineNative(MockElement.prototype, "tagName", "__tagName");
 defineNative(MockElement.prototype, "children", "__children");
 defineNative(MockElement.prototype, "shadowRoot", "__shadowRoot");
@@ -118,7 +119,13 @@ function el(opts: Opts = {}): MockElement {
     // read would re-walk the control's children (duplicating the subtree). The script must
     // route every one of these through the captured Element.prototype accessor.
     const ctrl = (opts.children ?? [])[0];
-    for (const m of ["getAttribute", "hasAttribute", "getBoundingClientRect", "shadowRoot"]) {
+    for (const m of [
+      "getAttribute",
+      "hasAttribute",
+      "getBoundingClientRect",
+      "shadowRoot",
+      "textContent",
+    ]) {
       Object.defineProperty(node, m, { value: ctrl, configurable: true });
     }
   }
@@ -159,7 +166,20 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
   };
   g.document = {
     documentElement: root,
-    getElementById: () => null,
+    // Resolve aria-labelledby targets by walking the mock tree's backing __children
+    // (the real children, unaffected by any structural clobber) for a matching id.
+    getElementById: (id: string) => {
+      const find = (n: Record<string, unknown>): Record<string, unknown> | null => {
+        const attrs = (n.__attrs as Record<string, string>) ?? {};
+        if (attrs.id === id) return n;
+        for (const k of (n.__children as Record<string, unknown>[]) ?? []) {
+          const f = find(k);
+          if (f) return f;
+        }
+        return null;
+      };
+      return find(root);
+    },
     createRange: () => {
       let target: Record<string, unknown> | null = null;
       return {
@@ -348,6 +368,39 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     // The child still surfaces — exactly once (the shadowRoot clobber must not re-walk it).
     expect(serialized).toContain("deep-inner");
     expect((serialized.match(/deep-inner/g) || []).length).toBe(1);
+  });
+
+  it("does not crash on an aria-labelledby target whose form clobbers textContent", () => {
+    // accessibleName resolves aria-labelledby via getElementById, then reads textContent.
+    // A <form id="lbl"> with a control named "textContent" shadows the inherited getter,
+    // so a direct read returns the control and crashes (.trim on a non-string). The fix
+    // routes through Node.prototype.textContent.
+    const labelForm = el({
+      tag: "form",
+      attrs: { id: "lbl" },
+      rect: { x: 0, y: 200, w: 200, h: 20 },
+      children: [
+        el({
+          tag: "input",
+          attrs: { id: "tc", name: "textContent" },
+          rect: { x: 0, y: 200, w: 100, h: 20 },
+        }),
+      ],
+      clobberAccessors: true,
+    }) as MockElement & Record<string, unknown>;
+    labelForm.__textContent = "Real Label";
+    const labelled = el({
+      tag: "div",
+      attrs: { "aria-labelledby": "lbl" },
+      rect: BOX,
+      children: [el({ text: "BODY", rect: BOX })],
+    });
+    let result: { tree: unknown } | undefined;
+    expect(() => {
+      result = run([labelled, labelForm]);
+    }).not.toThrow();
+    // The label resolves via the prototype textContent despite the clobber.
+    expect(JSON.stringify(result!.tree)).toContain("Real Label");
   });
 
   it("leaves an ordinary visible element unchanged", () => {

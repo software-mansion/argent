@@ -50,6 +50,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   // shadowed by a form's named properties, so EVERY inherited member read on a possibly-
   // clobbered element (methods and getters alike) goes through these via .call(el).
   const getChildNodes = Object.getOwnPropertyDescriptor(Node.prototype, "childNodes").get;
+  const getTextContent = Object.getOwnPropertyDescriptor(Node.prototype, "textContent").get;
   const getTagName = Object.getOwnPropertyDescriptor(Element.prototype, "tagName").get;
   const getChildrenEls = Object.getOwnPropertyDescriptor(Element.prototype, "children").get;
   const getShadowRoot = Object.getOwnPropertyDescriptor(Element.prototype, "shadowRoot").get;
@@ -77,7 +78,10 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
       const parts = [];
       for (const id of ids) {
         const ref = document.getElementById(id);
-        if (ref) parts.push((ref.textContent || "").trim());
+        // getTextContent via the prototype: an aria-labelledby target can be a <form>
+        // with a control named "textContent", which would shadow the inherited getter
+        // to a control element and crash (.trim() on a non-string).
+        if (ref) parts.push((getTextContent.call(ref) || "").trim());
       }
       if (parts.length) return parts.join(" ").slice(0, 200);
     }
