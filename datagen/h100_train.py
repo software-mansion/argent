@@ -100,6 +100,24 @@ PAD = tok.pad_token_id if tok.pad_token_id is not None else 0
 MODEL_BLOCK = re.compile(r"<\|turn>model\n(.*?)(?:<turn\|>|\Z)", re.DOTALL)
 TOOL_RESP   = re.compile(r"<\|tool_response>.*?<tool_response\|>", re.DOTALL)
 
+# REORDER_THOUGHT=1: the gemma4 template renders a model turn as tool_call -> tool_response -> content,
+# so reasoning placed in assistant.content trains the model to think AFTER acting (useless). This moves the
+# trailing thought to the FRONT of each model turn (thought -> tool_call -> tool_response), so training is
+# think-THEN-act, matching the natural inference generation order the gemma4 parser expects.
+_TURN = re.compile(r"(<\|turn>model\n)(.*?)(<turn\|>|\Z)", re.DOTALL)
+def _reorder_thought_first(txt):
+    def fix(m):
+        head, body, tail = m.group(1), m.group(2), m.group(3)
+        p1, p2 = body.rfind("<tool_response|>"), body.rfind("<tool_call|>")
+        if p1 < 0 and p2 < 0:
+            return m.group(0)  # pure-text turn (final answer) -> leave
+        cut = (p1 + len("<tool_response|>")) if p1 >= 0 else (p2 + len("<tool_call|>"))
+        thought = body[cut:].strip()
+        if not thought:
+            return m.group(0)  # no trailing reasoning -> leave
+        return head + thought + "\n" + body[:cut] + tail
+    return _TURN.sub(fix, txt)
+
 def _assistant_spans(txt):
     spans = []
     for mt in MODEL_BLOCK.finditer(txt):
@@ -117,6 +135,8 @@ def _assistant_spans(txt):
 
 def build_example(messages, tools):
     txt = tok.apply_chat_template(messages, tools=tools, tokenize=False)
+    if os.environ.get("REORDER_THOUGHT") == "1":
+        txt = _reorder_thought_first(txt)
     enc = tok(txt, add_special_tokens=False, return_offsets_mapping=True)
     ids, offs = enc["input_ids"], enc["offset_mapping"]
     spans = _assistant_spans(txt)
@@ -135,8 +155,8 @@ def load(split):
     for line in open(_find(split)):
         d = json.loads(line)
         ids, labels = build_example(d["messages"], d.get("tools"))
-        if len(ids) > MAXLEN:  # proven 0 across the dataset; guard anyway (right-trunc would drop the answer)
-            over += 1; ids, labels = ids[:MAXLEN], labels[:MAXLEN]
+        if len(ids) > MAXLEN:  # DROP over-length rows (right-trunc would cut the labeled answer off the end)
+            over += 1; continue
         if not any(l != -100 for l in labels):
             skipped += 1; continue  # never observed, but a dead row would only add cost
         rows.append({"input_ids": ids, "labels": labels})
@@ -190,7 +210,8 @@ trainer = LigerCETrainer(
     model=model, processing_class=TKZ, train_dataset=train_ds, data_collator=collate,
     args=TrainingArguments(
         per_device_train_batch_size=1, gradient_accumulation_steps=4, num_train_epochs=EPOCHS, max_steps=MAX_STEPS,
-        warmup_ratio=0.03, learning_rate=2e-4, logging_steps=5, save_steps=50, save_total_limit=2,
+        warmup_ratio=0.03, learning_rate=2e-4, logging_steps=5, save_steps=50,
+        save_total_limit=int(os.environ.get("SAVE_TOTAL_LIMIT", "2")),
         optim="adamw_8bit", gradient_checkpointing=False, fp16=False, bf16=True,
         lr_scheduler_type="cosine", report_to="none", remove_unused_columns=False, output_dir="./out"))
 trainer.train()

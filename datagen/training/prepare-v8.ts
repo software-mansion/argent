@@ -31,10 +31,11 @@ import { render, HARNESSES } from "../harness/renderers.ts";
 import type { HarnessName, NativeRecord } from "../harness/renderers.ts";
 import type { ToolSpec } from "../src/types.ts";
 
-process.env.ARGENT_RICH_DESC = "1"; // full verbose tool descriptions (what OpenCode/Codex/Hermes send)
 // v9 experiment: --narration keeps each step's reasoning (step.thought) in the assistant turn, so the
 // completion-only mask trains "think-then-act" instead of bare tool calls. Default off = v8 behavior.
 const NARRATION = process.argv.includes("--narration");
+const LITE = process.argv.includes("--lite");  // small-spam + compact-desc short rows for cheap test runs
+if (!LITE) process.env.ARGENT_RICH_DESC = "1"; // verbose tools (real harness); lite uses compact for speed
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const catalog: ToolSpec[] = JSON.parse(readFileSync(join(HERE, "..", "spec", "tools.json"), "utf8"));
@@ -78,11 +79,14 @@ const CTX_BLOCKS = [
 // random blocks until the sampled target is reached (the heavy-skill-spam power user). gemma ~3.9 ch/tok
 // -> [62k, 150k] chars ~= [16k, 38k] tok.
 function assembleContext(rng: RNG): string {
-  const parts = [rng.pick(PROMPT_POOL), ...rng.shuffle(CTX_BLOCKS)];
+  // lite: just a provider prompt + one context block (cheap short rows); full: the whole spam set.
+  const parts = LITE ? [rng.pick(PROMPT_POOL), rng.pick(CTX_BLOCKS)] : [rng.pick(PROMPT_POOL), ...rng.shuffle(CTX_BLOCKS)];
   let len = parts.reduce((a, p) => a + p.length + 8, 0);
-  // 70% moderate spam, 30% heavy (power user with many skills + long memory) -> a real upper tail
-  // so the distribution genuinely reaches ~80k, not a cluster.
-  const target = rng.bool(0.7) ? rng.range(70000, 140000) : rng.range(140000, 205000);
+  // --lite: small spam target (~8-15k-token rows) for cheap, fast test runs that isolate a recipe change.
+  // otherwise: 70% moderate spam, 30% heavy -> the real 30-80k distribution.
+  const target = LITE
+    ? rng.range(20000, 45000)
+    : rng.bool(0.7) ? rng.range(70000, 140000) : rng.range(140000, 205000);
   while (len < target) {
     const b = rng.bool(0.3) ? rng.pick(PROMPT_POOL) : rng.pick(CTX_BLOCKS);
     parts.push(b);
