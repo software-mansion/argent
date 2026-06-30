@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { NativeProfilerSessionApi } from "../../src/blueprints/native-profiler-session";
 
 // Exercises the malloc_stack_logging launch path in startNativeProfilerIos
@@ -80,6 +81,7 @@ describe("native-profiler-start malloc_stack_logging", () => {
       spawn: spawnFn,
       execSync: execSyncFn,
       execFile: vi.fn(),
+      execFileSync: vi.fn(),
     }));
     vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
       getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
@@ -151,5 +153,84 @@ describe("native-profiler-start malloc_stack_logging", () => {
     // default attach mode never terminates the running app
     const execCmds = execSyncFn.mock.calls.map((c) => String(c[0]));
     expect(execCmds.some((c) => c.includes("simctl terminate"))).toBe(false);
+  });
+
+  // A degraded Xcode (26.4–27.0) is reported by `xcodebuild -version`, which the
+  // capture-strategy selector reads. The malloc cold launch needs `--device`,
+  // which is broken on those versions, so the start must be refused UP FRONT —
+  // before the running app is terminated and before any xctrace spawn.
+  function mockChildProcessDegraded() {
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execSyncFn = vi.fn((cmd: string) => {
+      if (cmd.includes("xcodebuild")) return "Xcode 26.5\nBuild version 17F42";
+      if (cmd.includes("listapps")) return LISTAPPS_JSON;
+      if (cmd.includes("launchctl list"))
+        return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n";
+      if (cmd.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
+      if (cmd.includes("terminate")) return "";
+      return "";
+    });
+    return { spawnFn, execSyncFn };
+  }
+
+  it("refuses malloc_stack_logging on a degraded Xcode before terminating the app", async () => {
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      const { spawnFn, execSyncFn } = mockChildProcessDegraded();
+      applyCommonMocks(spawnFn, execSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      // It must fail, with the degraded-Xcode failure code (telemetry-classified).
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_MALLOC_DEGRADED_XCODE
+      );
+      // And critically: it never touched the app or xctrace — no terminate, no
+      // bundle-path resolution, no spawn. The app the user had running is intact.
+      const execCmds = execSyncFn.mock.calls.map((c) => String(c[0]));
+      expect(execCmds.some((c) => c.includes("simctl terminate"))).toBe(false);
+      expect(execCmds.some((c) => c.includes("get_app_container"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("ARGENT_IOS_CAPTURE=device forces the malloc cold launch through on a degraded Xcode", async () => {
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    process.env.ARGENT_IOS_CAPTURE = "device";
+    try {
+      const { spawnFn, execSyncFn } = mockChildProcessDegraded();
+      applyCommonMocks(spawnFn, execSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const result = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      });
+
+      // The override bypasses the guard, so the cold launch proceeds as usual.
+      expect(result.status).toBe("recording");
+      const [, args] = spawnFn.mock.calls[0] as unknown as [string, string[]];
+      expect(args).toContain("--launch");
+      expect(args).toContain("--env");
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
   });
 });

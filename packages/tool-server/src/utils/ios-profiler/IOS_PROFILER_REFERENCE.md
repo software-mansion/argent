@@ -75,8 +75,19 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    ```
    The `.app` path is resolved via `simctl get_app_container`, and any running
    instance is terminated first for a clean cold start. Trade-off: this restarts
-   the app and adds allocator overhead, so it stays opt-in — leave it off for
+   the app, adds allocator overhead, and makes the app slow to launch (every
+   startup allocation records a backtrace), so it stays opt-in — leave it off for
    pure CPU/hang work, where attach (no relaunch, no overhead) is preferable.
+   **Degraded-Xcode guard:** the cold launch needs `xctrace --device`, which is
+   broken on Xcode 26.4–27.0 (the `--device` recording-start handshake records an
+   empty trace). Because the malloc path terminates the running app before
+   launching, `native-profiler-start { malloc_stack_logging: true }` is **rejected
+   up front** on those versions (before the app is touched) rather than silently
+   capturing nothing — re-run without the flag (leaks are still detected, just
+   unattributed) or set `ARGENT_IOS_CAPTURE=device` to force it on a known-good
+   host. The non-malloc path already routes around this via the capture-strategy
+   selector (`--all-processes` fallback), but that fallback cannot `--launch`, so
+   it cannot substitute for the malloc cold start.
 4. **Start gating** — only resolves the tool call once `xctrace` prints `Starting recording` / `Ctrl-C to stop` on stdout. At that point Argent records `Date.now()` (`wallClockStartMs`) — the anchor used later for cross-tool time alignment.
 5. **Safety timeout** — auto-SIGINTs after 10 minutes if `stop` is never called.
 

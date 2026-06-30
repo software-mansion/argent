@@ -41,8 +41,11 @@ describe("leak attribution rendering", () => {
   });
 
   it("does not surface an unattributed leak as an attributed one", async () => {
+    // Use a real classifier sentinel ("" → isLeakAttributed === false) so the
+    // fixture's attributed:false matches what the pipeline would actually assign;
+    // a non-sentinel frame like "(null)" classifies as attributed (RED).
     const res = await renderNativeProfilerReport({
-      payload: payload([leak(false, "(null)", "(null)")]),
+      payload: payload([leak(false, "")]),
       traceFile: null,
     });
     expect(res.report).toContain("No attributed leaks");

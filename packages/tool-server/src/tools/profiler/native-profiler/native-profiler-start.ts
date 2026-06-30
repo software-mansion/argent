@@ -36,8 +36,12 @@ const zodSchema = z.object({
       "iOS-only. When true, cold-launches the app under the profiler with Malloc Stack Logging " +
         "enabled so memory leaks carry an allocation backtrace (responsible frame + library). " +
         "Without it, leaks are still detected but unattributable — Instruments reports " +
-        "'<Call stack limit reached>'. Trade-offs: this RESTARTS the app (current state is lost) " +
-        "and adds memory/CPU overhead, so leave it off for pure CPU/hang profiling. Ignored on Android."
+        "'<Call stack limit reached>'. Trade-offs: this RESTARTS the app (current state is lost), " +
+        "adds memory/CPU overhead, and makes the app noticeably slow to launch (every startup " +
+        "allocation records a backtrace), so leave it off for pure CPU/hang profiling. Requires a " +
+        "non-degraded Xcode: on Xcode 26.4–27.0 the cold-launch path is broken, so the call is " +
+        "rejected up front (re-run without the flag, or set ARGENT_IOS_CAPTURE=device to override). " +
+        "Ignored on Android."
     ),
 });
 
