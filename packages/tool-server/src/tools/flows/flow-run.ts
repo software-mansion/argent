@@ -152,19 +152,8 @@ interface ExecState {
   updateBaselines: boolean;
   reports: StepReport[];
   stopped: boolean;
-  /** Whether the status bar has been pinned (lazily, on the first snapshot). */
+  /** Whether the status bar was pinned for this run (and so must be restored). */
   pinned: boolean;
-}
-
-/**
- * Pin the status bar the first time a visual diff actually runs — including one
- * nested inside a `run:` fragment, which a static top-level scan would miss.
- * Plain interaction flows (and unit tests) never reach this, so they never
- * shell out.
- */
-async function ensureStatusBarPinned(state: ExecState): Promise<void> {
-  if (state.pinned) return;
-  state.pinned = await pinStatusBar(state.device);
 }
 
 export function createRunFlowTool(
@@ -209,6 +198,13 @@ returns a notice with the prerequisite instead of running.`,
         platform: params.platform as FlowPlatform | undefined,
       });
 
+      // Normalize the status bar (clock/battery/signal) for the whole run so it
+      // never drives a snapshot diff and every screenshot is consistent. The
+      // `simctl status_bar override` is a device-level op independent of the
+      // app, so we pin as early as possible (see below). No-op (returns false)
+      // on chromium/vega; restored on teardown.
+      let statusBarPinned: boolean;
+
       // An e2e flow starts its app from a clean state (its contract): terminate
       // and relaunch via `restart-app` so a copy left running by a prior run
       // can't leak state into this one. Chromium has no app lifecycle to
@@ -234,6 +230,8 @@ returns a notice with the prerequisite instead of running.`,
           launchTool,
           bindDeviceArgs(registry, launchTool, device.id, { bundleId })
         );
+        // Pin right after the relaunch.
+        statusBarPinned = await pinStatusBar(device);
         // Let the app finish coming up before step 1 reads/acts on the UI, so a
         // slow cold start doesn't eat into the first step's auto-wait budget.
         await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
@@ -243,6 +241,9 @@ returns a notice with the prerequisite instead of running.`,
         if (device.platform === "ios") {
           await waitForNativeDevtools(registry, device, bundleId, signal);
         }
+      } else {
+        // Fragment run directly (no relaunch): pin before the first step runs.
+        statusBarPinned = await pinStatusBar(device);
       }
 
       const state: ExecState = {
@@ -255,13 +256,12 @@ returns a notice with the prerequisite instead of running.`,
         updateBaselines: Boolean(params.updateBaselines),
         reports: [],
         stopped: false,
-        pinned: false,
+        pinned: statusBarPinned,
       };
 
       try {
         await execSteps(state, flow.steps, params.name, [params.name]);
       } finally {
-        // Status bar is pinned lazily on the first expect; restore if we did.
         if (state.pinned) await restoreStatusBar(device);
       }
 
@@ -462,7 +462,6 @@ async function execLeafStep(
 
     case "snapshot": {
       try {
-        await ensureStatusBarPinned(state);
         const r = await runSnapshot(registry, ctx, device, {
           flowsDir: state.flowsDir,
           flowName: state.topFlowName,
