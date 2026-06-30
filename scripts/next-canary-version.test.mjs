@@ -8,10 +8,7 @@ test("first canary of a new base starts at 0", () => {
 });
 
 test("increments the counter within the same base", () => {
-  assert.equal(
-    computeCanaryVersion(["0.13.0", "0.13.1-next.0", "0.13.1-next.1"]),
-    "0.13.1-next.2"
-  );
+  assert.equal(computeCanaryVersion(["0.13.0", "0.13.1-next.0", "0.13.1-next.1"]), "0.13.1-next.2");
 });
 
 test("resets to 0 when the base advances (a new stable shipped)", () => {
@@ -23,10 +20,7 @@ test("resets to 0 when the base advances (a new stable shipped)", () => {
 });
 
 test("continues after the highest existing next.k (tolerates gaps)", () => {
-  assert.equal(
-    computeCanaryVersion(["0.13.0", "0.13.1-next.0", "0.13.1-next.5"]),
-    "0.13.1-next.6"
-  );
+  assert.equal(computeCanaryVersion(["0.13.0", "0.13.1-next.0", "0.13.1-next.5"]), "0.13.1-next.6");
 });
 
 test("counts manual-dispatch canaries of the same base too", () => {
@@ -34,10 +28,7 @@ test("counts manual-dispatch canaries of the same base too", () => {
 });
 
 test("ignores non-next prereleases of the same base", () => {
-  assert.equal(
-    computeCanaryVersion(["0.13.0", "0.13.1-beta.9", "0.13.1-next.0"]),
-    "0.13.1-next.1"
-  );
+  assert.equal(computeCanaryVersion(["0.13.0", "0.13.1-beta.9", "0.13.1-next.0"]), "0.13.1-next.1");
 });
 
 test("no stable yet: continues the highest prerelease's lineage", () => {
