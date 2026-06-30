@@ -14,11 +14,15 @@ import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
-import { selectIosCaptureStrategy } from "../../../../utils/ios-profiler/capture-strategy";
+import {
+  selectIosCaptureStrategy,
+  deviceStrategy,
+} from "../../../../utils/ios-profiler/capture-strategy";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 import { formatTraceFreshness } from "../../../../utils/profiler-shared/freshness";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
+import { checkIsSimulator, detectRunningAppOnDevice } from "../../../../utils/ios-physical-device";
 
 // Two candidates because __dirname differs by runtime: bundled it's argent/dist/
 // (template in argent/assets/); in dev it's tool-server/dist/tools/profiler/
@@ -300,16 +304,31 @@ export async function startNativeProfilerIos(
   }
 
   const templatePath = params.template_path ?? resolveDefaultTemplatePath();
-  const detected = params.app_process
-    ? resolveExplicitApp(params.device_id, params.app_process)
-    : detectRunningApp(params.device_id);
+
+  // Resolve the target app, branching by device type only when auto-detecting.
+  // Simulators expose a host PID via `simctl … launchctl list` (used for the
+  // PID-based attach and the all-processes fallback); physical devices go
+  // through `devicectl`, which yields only the executable name — their apps are
+  // not host processes, so there is no host PID to attach by.
+  let detected: DetectedApp;
+  let isPhysicalDevice = false;
+  if (params.app_process) {
+    detected = resolveExplicitApp(params.device_id, params.app_process);
+  } else if (await checkIsSimulator(params.device_id)) {
+    detected = detectRunningApp(params.device_id);
+  } else {
+    isPhysicalDevice = true;
+    detected = { executable: await detectRunningAppOnDevice(params.device_id), pid: null };
+  }
   const appProcess = detected.executable;
 
-  // Pick the capture approach for this environment. On Xcode versions where
-  // `xctrace --device` works this is the original device/attach path; on the
-  // 26.4–27.0 regression (where --device deadlocks) it is the host-wide
-  // --all-processes fallback, filtered to the app PID. See capture-strategy.
-  const strategy = selectIosCaptureStrategy();
+  // Pick the capture approach for this environment. A physical device always
+  // uses the device/attach path: its app is not a host process, so the host-wide
+  // --all-processes fallback (a simulator-only workaround for the Xcode
+  // 26.4–27.0 `xctrace --device` deadlock) cannot isolate it. For simulators,
+  // pick per Xcode version — the original device/attach path where it works, or
+  // the all-processes fallback filtered to the app PID. See capture-strategy.
+  const strategy = isPhysicalDevice ? deviceStrategy : selectIosCaptureStrategy();
   // The all-processes fallback records host-wide and isolates the app by PID, so
   // it can only run when the target is actually running (PID known).
   if (strategy.name === "all-processes" && detected.pid == null) {

@@ -3,13 +3,17 @@ import type { ToolDefinition } from "@argent/registry";
 import { listAndroidDevices, listAvds, consolePortFromAdbSerial } from "../../utils/adb";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import { listPhysicalDevices, type PhysicalDevice } from "../../utils/ios-physical-device";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
 import {
   listVegaDevices,
   filterVvdShadowsFromAndroid,
   type VegaDevice,
 } from "../../utils/vega-devices";
-type IosDevice = IosSimulator & { platform: "ios" };
+
+type IosSimulatorDevice = IosSimulator & { platform: "ios"; kind: "simulator" };
+type IosPhysicalDevice = PhysicalDevice & { platform: "ios"; kind: "physical" };
+type IosDevice = IosSimulatorDevice | IosPhysicalDevice;
 
 type AndroidDevice = {
   platform: "android";
@@ -29,9 +33,13 @@ type AndroidDevice = {
 type ListDevicesResult = {
   devices: Array<IosDevice | AndroidDevice | ChromiumDevice | VegaDevice>;
   avds: Array<{ name: string }>;
+  // Only present when a physical-device scan was requested but devicectl failed
+  // (e.g. Xcode < 15, device locked/untrusted) — lets the caller surface the
+  // reason instead of silently reporting "no devices".
+  physicalDevicesError?: string;
 };
 
-function sortIos(a: IosDevice, b: IosDevice): number {
+function sortIos(a: IosSimulatorDevice, b: IosSimulatorDevice): number {
   const aBooted = a.state === "Booted" ? 0 : 1;
   const bBooted = b.state === "Booted" ? 0 : 1;
   if (aBooted !== bBooted) return aBooted - bBooted;
@@ -51,8 +59,12 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
 
 // Float booted/ready devices to the top of the merged list regardless of
 // platform — without this, all iOS entries are emitted before any Android.
+// Connected physical devices are always ready.
 function readinessRank(d: IosDevice | AndroidDevice | ChromiumDevice | VegaDevice): number {
-  if (d.platform === "ios") return d.state === "Booted" ? 0 : 1;
+  if (d.platform === "ios") {
+    if (d.kind === "physical") return 0;
+    return d.state === "Booted" ? 0 : 1;
+  }
   if (d.platform === "android") return d.state === "device" ? 0 : 1;
   if (d.platform === "vega") return d.state === "running" || d.state === "device" ? 0 : 1;
   return 0; // Chromium entries are only listed when their CDP is responsive
@@ -78,31 +90,58 @@ async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
   return shadows;
 }
 
-const zodSchema = z.object({});
+const zodSchema = z.object({
+  include_physical_devices: z
+    .boolean()
+    .optional()
+    .describe(
+      'Also scan for physical iOS devices connected via USB or Wi-Fi (tagged `kind: "physical"`). Defaults to false — the scan is slower (~5s) and requires Xcode 15+. Physical devices support profiling/debugging only, not automated interaction.'
+    ),
+});
 
-export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
+type Params = z.infer<typeof zodSchema>;
+
+export const listDevicesTool: ToolDefinition<Params, ListDevicesResult> = {
   id: "list-devices",
   description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, and Vega (Fire TV) devices in one place.
 Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
-Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
+Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'); iOS entries also carry a 'kind' ('simulator' or 'physical'). 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
 Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb) — physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
+Set include_physical_devices: true to also scan for connected physical iOS devices (slower, requires Xcode 15+); physical devices support profiling/debugging only, not automated interaction.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with electronAppPath to launch one.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select, Android platform-tools, or the Vega SDK is not installed.`,
   alwaysLoad: true,
   searchHint:
-    "list devices simulators emulators avd serial udid ios android chromium vega app fire tv session start",
+    "list devices simulators emulators physical avd serial udid ios android chromium vega app fire tv session start",
   zodSchema,
   services: () => ({}),
-  async execute(_services, _params) {
-    const [ios, android, avds, chromium, vega] = await Promise.all([
+  async execute(_services, params) {
+    const includePhysical = params.include_physical_devices ?? false;
+    const [ios, android, avds, chromium, vega, physical] = await Promise.all([
       listIosSimulators(),
       listAndroidDevices().catch(() => []),
       listAvds(),
       discoverChromiumDevices().catch(() => []),
       listVegaDevices().catch(() => []),
+      includePhysical ? listPhysicalDevices() : Promise.resolve(null),
     ]);
-    const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
-    iosTagged.sort(sortIos);
+
+    const iosSimTagged: IosSimulatorDevice[] = ios.map((s) => ({
+      platform: "ios",
+      kind: "simulator",
+      ...s,
+    }));
+    iosSimTagged.sort(sortIos);
+
+    let physicalDevicesError: string | undefined;
+    const iosPhysTagged: IosPhysicalDevice[] = [];
+    if (physical) {
+      physicalDevicesError = physical.error;
+      for (const pd of physical.devices) {
+        iosPhysTagged.push({ platform: "ios", kind: "physical", ...pd });
+      }
+    }
+
     const androidTagged: AndroidDevice[] = android.map((d) => ({
       platform: "android",
       serial: d.serial,
@@ -119,13 +158,14 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     androidDeduped.sort(sortAndroid);
 
     const devices: Array<IosDevice | AndroidDevice | ChromiumDevice | VegaDevice> = [
-      ...iosTagged,
+      ...iosSimTagged,
+      ...iosPhysTagged,
       ...androidDeduped,
       ...chromium,
       ...vega,
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
-    return { devices, avds };
+    return physicalDevicesError ? { devices, avds, physicalDevicesError } : { devices, avds };
   },
 };
