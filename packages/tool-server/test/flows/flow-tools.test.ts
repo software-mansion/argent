@@ -390,6 +390,99 @@ describe("flow-add-step", () => {
     ]);
   });
 
+  async function writeSiblingFlow(name: string, yaml: string): Promise<void> {
+    await fs.writeFile(path.join(tmpDir, ".argent", "flows", `${name}.yaml`), yaml, "utf8");
+  }
+
+  it("records a flow-execute of a sibling fragment as a run: directive", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "compose-test", project_root: tmpDir, launch: "com.acme.app" }
+    );
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    const result = await tool.execute(
+      {},
+      {
+        command: "flow-execute",
+        args: JSON.stringify({
+          name: "login",
+          project_root: tmpDir,
+          device: "ABC",
+          prerequisiteAcknowledged: true,
+        }),
+      }
+    );
+
+    // Ran the fragment live to set up state…
+    expect(result.toolResult).toEqual({ ok: true, steps: [] });
+    // …but recorded the portable composition directive, not the raw tool call.
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login" }]);
+  });
+
+  it("keeps the raw flow-execute step when the target is an e2e flow", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "compose-e2e", project_root: tmpDir, launch: "com.acme.app" }
+    );
+    await writeSiblingFlow("other-e2e", "launch: com.acme.app\nsteps:\n  - echo: hi\n");
+
+    const result = await tool.execute(
+      {},
+      {
+        command: "flow-execute",
+        args: JSON.stringify({ name: "other-e2e", project_root: tmpDir, device: "ABC" }),
+      }
+    );
+
+    expect(result.message).toMatch(/e2e flow/i);
+    // The raw fallback keeps `device` (flow-execute's device param isn't a
+    // udid/device_id key, so it survives stripping) — exactly the
+    // non-portability that the run: rewrite avoids.
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      {
+        kind: "tool",
+        name: "flow-execute",
+        args: { name: "other-e2e", project_root: tmpDir, device: "ABC" },
+      },
+    ]);
+  });
+
+  it("keeps the raw flow-execute step when the target is not a sibling", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "compose-missing", project_root: tmpDir, launch: "com.acme.app" }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        command: "flow-execute",
+        args: JSON.stringify({ name: "elsewhere", project_root: tmpDir }),
+      }
+    );
+
+    expect(result.message).toMatch(/could not resolve/i);
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      { kind: "tool", name: "flow-execute", args: { name: "elsewhere", project_root: tmpDir } },
+    ]);
+  });
+
   it("throws on invalid JSON in args", async () => {
     const registry = createMockRegistry({
       tap: { result: { ok: true } },

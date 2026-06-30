@@ -1,4 +1,6 @@
 import { z } from "zod";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import {
   getActiveFlow,
@@ -6,6 +8,9 @@ import {
   appendStepToActiveFlow,
   serializeFlow,
   clientFileDirective,
+  parseFlow,
+  isE2eFlow,
+  assertSafeFlowName,
   type FlowSavedTo,
   type FlowStep,
   type RecordingSession,
@@ -73,6 +78,56 @@ function isRedundantLeadingLaunch(command: string, session: RecordingSession | n
   );
 }
 
+// Replaying a fragment to set up state during recording is done by running it
+// through `flow-execute`. Recorded verbatim that becomes a brittle
+// `tool: flow-execute` step (baked-in project_root + device, no portability).
+// Instead, capture it as a `run: <name>` composition directive — mirroring the
+// gesture-tap → tap rewrite.
+const RUN_TARGET_COMMAND = "flow-execute";
+
+/**
+ * For a recorded `flow-execute` call, decide whether to record it as a
+ * `run: <name>` directive. Returns the fragment name to compose, or a warning
+ * explaining why the raw `flow-execute` step was kept.
+ *
+ * `run:` only composes **fragments** (no `launch`) resolved as **siblings** of
+ * the recording in its `.argent/flows` dir (host-resolved composition, design
+ * §12). So we keep the raw step when the target is an e2e flow, can't be
+ * resolved as a sibling, or the recording is remote (the host can't read the
+ * client's sibling files to validate).
+ */
+async function captureRunTarget(
+  session: RecordingSession | null,
+  args: Record<string, unknown>
+): Promise<{ flow?: string; warning?: string }> {
+  const name = args.name;
+  if (typeof name !== "string") {
+    return { warning: "flow-execute call had no flow name; kept the raw step" };
+  }
+  if (!session || session.persist !== "host") {
+    return {
+      warning: `kept the raw flow-execute step — run: composition is host-resolved, so a remote recording can't reference "${name}" portably`,
+    };
+  }
+  try {
+    assertSafeFlowName(name);
+    // Resolve against the recording's own flows dir (the running flow-execute
+    // may have mutated the active-project-root global), not getFlowsDir().
+    const fragPath = path.join(path.dirname(session.filePath), `${name}.yaml`);
+    const fragment = parseFlow(await fs.readFile(fragPath, "utf8"));
+    if (isE2eFlow(fragment)) {
+      return {
+        warning: `"${name}" is an e2e flow (declares launch); only fragments compose via run: — kept the raw flow-execute step`,
+      };
+    }
+    return { flow: name };
+  } catch (err) {
+    return {
+      warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,
+    };
+  }
+}
+
 export function createFlowAddStepTool(
   registry: Registry
 ): ToolDefinition<
@@ -130,6 +185,13 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         };
       }
 
+      // Running a fragment via flow-execute mid-recording is recorded as a
+      // `run:` composition directive rather than a raw, non-portable tool call.
+      const runTarget =
+        params.command === RUN_TARGET_COMMAND && params.delayMs === undefined
+          ? await captureRunTarget(session, args)
+          : undefined;
+
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
@@ -139,7 +201,10 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         // directive so every tap reads uniformly.
         step = { kind: "tap", x: args.x as number, y: args.y as number };
         warning = captured?.warning;
+      } else if (runTarget?.flow) {
+        step = { kind: "run", flow: runTarget.flow };
       } else {
+        warning = runTarget?.warning;
         // The step ran live with the full args (incl. the device id), but the
         // recorded form drops the device id so the flow stays portable — the
         // runner injects whatever device it resolves at replay.
