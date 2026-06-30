@@ -18,6 +18,7 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult, AWAIT_UI_ELEMENT_TOOL_ID } from "../await-ui-element";
 import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-device";
 import { runTap, runType, runAssert, runScrollTo } from "./flow-actions";
+import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { runSnapshot, DEFAULT_MAX_MISMATCH } from "./flow-visual";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -108,6 +109,38 @@ const MAX_RUN_DEPTH = 20;
  * give the app a head start here rather than inflating every step's timeout.
  */
 const POST_LAUNCH_SETTLE_MS = 1500;
+
+/**
+ * Flows resolve selectors against the native UIView tree, served over the
+ * native-devtools connection the injected dylib opens asynchronously after
+ * launch. The post-launch settle alone can race a slow cold start, so we
+ * additionally poll for the connection before step 1 — otherwise the first
+ * describes silently fall back to the (collapsing) AX tree. Best-effort: on
+ * timeout we proceed anyway and let describe degrade with its should_restart
+ * hint rather than blocking the whole run.
+ */
+const NATIVE_READY_TIMEOUT_MS = 8000;
+const NATIVE_READY_POLL_MS = 250;
+
+async function waitForNativeDevtools(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string,
+  signal?: AbortSignal
+): Promise<void> {
+  let api: NativeDevtoolsApi;
+  try {
+    const ref = nativeDevtoolsRef(device);
+    api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+  } catch {
+    return; // native-devtools unavailable — describe will degrade with a hint
+  }
+  const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (signal?.aborted || api.isConnected(bundleId)) return;
+    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return;
+  }
+}
 
 interface ExecState {
   registry: Registry;
@@ -204,6 +237,12 @@ returns a notice with the prerequisite instead of running.`,
         // Let the app finish coming up before step 1 reads/acts on the UI, so a
         // slow cold start doesn't eat into the first step's auto-wait budget.
         await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
+        // Flows resolve selectors against the native UIView hierarchy, which the
+        // injected dylib serves over a connection it opens asynchronously — wait
+        // for it so step 1 doesn't race the cold start and fall back to AX.
+        if (device.platform === "ios") {
+          await waitForNativeDevtools(registry, device, bundleId, signal);
+        }
       }
 
       const state: ExecState = {
