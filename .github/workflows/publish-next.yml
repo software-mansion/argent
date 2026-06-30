@@ -17,8 +17,10 @@ on:
         type: string
 
 concurrency:
-  # Serialize canary publishes so versions land in run-number order; manual
-  # dispatches get their own lane. Never cancel an in-flight publish.
+  # Serialize canary publishes: the per-base counter is derived from the
+  # registry (next index after the highest published `<base>-next.<k>`), so two
+  # overlapping runs could otherwise read the same index and collide on npm.
+  # Manual dispatches get their own lane. Never cancel an in-flight publish.
   group: publish-next-${{ github.event_name }}
   cancel-in-progress: false
 
@@ -125,16 +127,18 @@ jobs:
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
 
-      # Canary version: <patch-bump of highest published>-next.<run-number>,
-      # stamped into package.json so the published build reports it. Done after
-      # `npm ci` (the checked-out lockfile still matches the original version at
-      # install time) and after the build (the CLI reads its version from
-      # package.json at runtime — nothing bakes it in), but before pack/publish.
+      # Canary version: <patch-bump of highest published>-next.<counter>, where
+      # the counter resets to 0 per base and increments per publish (derived
+      # from the registry). Stamped into package.json so the published build
+      # reports it. Done after `npm ci` (the checked-out lockfile still matches
+      # the original version at install time) and after the build (the CLI reads
+      # its version from package.json at runtime — nothing bakes it in), but
+      # before pack/publish.
       - name: Compute and stamp canary version
         if: github.event_name == 'push'
         id: canary
         run: |
-          VERSION="$(node scripts/next-canary-version.mjs "${{ github.run_number }}")"
+          VERSION="$(node scripts/next-canary-version.mjs)"
           export VERSION
           echo "Canary version: ${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
