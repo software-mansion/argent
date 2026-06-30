@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { getActiveFlow, appendStepToActiveFlow, type FlowSavedTo } from "./flow-utils";
+import { isMissedFindResult, missedFindError } from "./flow-step-results";
 import { invokeSubTool } from "../../utils/sub-invoke";
 
 const zodSchema = z.object({
@@ -27,7 +28,7 @@ export function createFlowAddStepTool(
 > {
   return {
     id: "flow-add-step",
-    description: `Execute a tool call live and record it as a step in the active flow unless the tool throws. Use when recording a flow with flow-start-recording and you want to run and capture each action. Returns { message, toolResult, flowFile } after recording. Tool results that report failure as data, such as find returning { found: false }, are still recorded; inspect toolResult before continuing and edit the .yaml file to remove mistaken steps. If the tool throws, an error is returned and nothing is recorded. Error if the tool name is not found in the registry or arguments are invalid JSON.`,
+    description: `Execute a tool call live and record it as a step in the active flow unless the tool throws or a find step returns { found: false }. Use when recording a flow with flow-start-recording and you want to run and capture each action. Returns { message, toolResult, flowFile } after recording. If the tool throws, or find does not locate an element, an error is returned and nothing is recorded. Error if the tool name is not found in the registry or arguments are invalid JSON.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, ctx) {
@@ -35,6 +36,9 @@ export function createFlowAddStepTool(
       const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
 
       const toolResult = await invokeSubTool(registry, ctx, params.command, args);
+      if (isMissedFindResult(params.command, toolResult)) {
+        throw new Error(missedFindError(toolResult));
+      }
 
       const { flowFile, savedTo } = await appendStepToActiveFlow({
         kind: "tool",

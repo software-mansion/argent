@@ -658,9 +658,9 @@ describe("find tool", () => {
     expect(result.found).toBe(false);
     expect(result.note).toMatch(/cancel/i);
     // the text was never typed (no keyboard call carrying `text`)
-    expect(invocations.some((i) => i.toolId === "keyboard" && typeof i.args.text === "string")).toBe(
-      false
-    );
+    expect(
+      invocations.some((i) => i.toolId === "keyboard" && typeof i.args.text === "string")
+    ).toBe(false);
   });
 
   // ── Android branch ──
