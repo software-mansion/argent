@@ -6,8 +6,8 @@ viewer gets a version dropdown. Every row keeps the full `messages`/`tools` (JSO
 the viewer renders them cleanly and the variable tool-schemas don't break Arrow inference) plus derived
 browsable columns: harness, start_state, task, tool_sequence, n_steps, final_answer, token sizes.
 
-  python3 upload_hf.py training/data-v8 latekvo/silver-nav v8           # private (default)
-  python3 upload_hf.py training/data-v8 latekvo/silver-nav v8 --public
+  python3 upload_hf.py training/data-v9 software-mansion/silver-datasets v9           # private (default)
+  python3 upload_hf.py training/data-v9 software-mansion/silver-datasets v9 --public
 """
 import json, sys, os
 from datasets import Dataset, DatasetDict
