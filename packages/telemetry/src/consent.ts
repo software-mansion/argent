@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
+import { updateConfig } from "@argent/configuration-core";
 import { configFilePath } from "./paths.js";
-import { updateConfig } from "./config-file.js";
 
 // Consent is evaluated on every track() so a running tool server sees opt-outs.
 // The config file is re-parsed only when its mtime or inode changes.

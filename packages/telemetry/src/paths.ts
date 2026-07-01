@@ -1,29 +1,15 @@
-import * as os from "node:os";
 import * as path from "node:path";
+import { argentHomeDir, configFilePath } from "@argent/configuration-core";
 
-// Resolve at call time so tests can override HOME/USERPROFILE per case.
-function nonEmpty(value: string | undefined): string | null {
-  if (value == undefined) return null;
-  const trimmed = value.trim();
-  return trimmed === "" ? null : value;
-}
-
-export function argentHomeDir(): string {
-  const home =
-    process.platform === "win32"
-      ? (nonEmpty(process.env.USERPROFILE) ?? os.homedir())
-      : (nonEmpty(process.env.HOME) ?? os.homedir());
-  return path.join(home, ".argent");
-}
+// `argentHomeDir` and `configFilePath` (the shared `~/.argent` home and
+// config.json) now live in `@argent/configuration-core` — they are general,
+// not telemetry-specific. Re-export them here so the telemetry modules that
+// already import from `./paths.js` keep working unchanged.
+export { argentHomeDir, configFilePath };
 
 /** Anonymous identity file (UUID v4, mode 0600, atomic create). */
 export function identityFilePath(): string {
   return path.join(argentHomeDir(), "telemetry-id");
-}
-
-/** Persisted opt-in / opt-out flag (JSON, "{telemetry: {enabled: boolean}}"). */
-export function configFilePath(): string {
-  return path.join(argentHomeDir(), "config.json");
 }
 
 /** Local payload audit log emitted when `ARGENT_TELEMETRY_DEBUG=1`. */

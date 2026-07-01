@@ -1,11 +1,17 @@
 name: Sync 'next' dist-tag
 
 # Re-points the `next` npm dist-tag at the highest published version of
-# @swmansion/argent (prerelease or stable). The publish workflows run this
-# automatically; this manual trigger repairs `next` without republishing —
-# e.g. when it has drifted behind `latest`.
+# @swmansion/argent (prerelease or stable). Runs automatically after either
+# publish workflow succeeds; the manual trigger repairs `next` without
+# republishing — e.g. when it has drifted behind `latest`.
 
 on:
+  workflow_run:
+    workflows:
+      - "Publish to npm"
+      - "Publish prerelease to npm (next)"
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       dry_run:
@@ -19,6 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # A manual dispatch always runs; an automatic run only follows a
+    # *successful* publish (a failed publish has nothing new to sync).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - uses: actions/checkout@v7

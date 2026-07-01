@@ -26,6 +26,8 @@ const IOS_UDID = "00000000-0000-0000-0000-000000000000";
 const ANDROID_SERIAL = "emulator-5554";
 // `chromium-cdp-<port>` is classified as platform "chromium" by shape alone.
 const CHROMIUM_ID = "chromium-cdp-9222";
+// `amazon-<id>` is classified as platform "vega" by shape alone.
+const VEGA_ID = "amazon-vvd-0001";
 
 const TREE = {
   role: "AXGroup",
@@ -112,8 +114,24 @@ describe("GET /preview/describe/:udid (describe-based; post-#197 text-contract r
     // A chromium id must be rejected before dispatch — otherwise it falls into
     // the else-branch and shells `adb` against a non-existent serial, 500ing
     // with a misleading message. Mirrors the /simulator-server/:udid guard.
+    // (The guard rejects any non-ios/android platform; the message names the
+    // rejected platform, e.g. "chromium".)
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain("Chromium");
+    expect(res.body.error).toContain("chromium");
+    expect(res.body.error).toContain("not available");
+    expect(mockedIos).not.toHaveBeenCalled();
+    expect(mockedAndroid).not.toHaveBeenCalled();
+  });
+
+  it("Vega (amazon-) id -> 400; guard rejects any non-ios/android, not only chromium", async () => {
+    // Regression guard for the broadened check: a vega serial must NOT fall
+    // through to describeAndroid (which would shell `adb -s amazon-...` against
+    // a non-existent serial). Would still pass if the guard were chromium-only.
+    const res = await request(makeApp()).get(`/describe/${VEGA_ID}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("vega");
+    expect(res.body.error).toContain("not available");
     expect(mockedIos).not.toHaveBeenCalled();
     expect(mockedAndroid).not.toHaveBeenCalled();
   });

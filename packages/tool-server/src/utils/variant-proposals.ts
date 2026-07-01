@@ -133,6 +133,23 @@ export interface StoreSnapshot {
   device: string | null;
   /** Whether at least one `await_user_selection` call is currently parked. */
   agentWaiting: boolean;
+  /**
+   * Whether a CLI-driven Lens session (`argent lens`) currently owns the window.
+   * When true the window is opened up front (not on an await) and is NOT
+   * auto-closed when the user submits — the human keeps iterating and their
+   * feedback is piped into the spawned `claude` terminal instead. The UI reads
+   * this to relabel its submit action ("Request changes" rather than the
+   * await-and-close phrasing).
+   */
+  cliSession: boolean;
+  /**
+   * Agent choices the window's picker offers (empty unless a CLI Lens session
+   * began with more than one installed agent) and the id the human picked (null
+   * until they do). The `argent lens` bridge polls `lensAgentChoice` to learn
+   * which agent to spawn.
+   */
+  lensAgents: Array<{ id: string; name: string }>;
+  lensAgentChoice: string | null;
 }
 
 type StoreEvents = {
@@ -147,6 +164,12 @@ type StoreEvents = {
   awaitParked: () => void;
   /** Emitted after a successful `submitSelection` — the round is done. */
   selectionSubmitted: () => void;
+  /**
+   * Emitted when a CLI-driven Lens session is begun or ended (`argent lens`).
+   * The tool-server's window manager listens: begin ⇒ open the window now, end
+   * ⇒ close it. Carries the new active state so listeners need not re-snapshot.
+   */
+  cliSessionChanged: (active: boolean) => void;
 };
 
 /** A parked `await_user_selection` call, bound to the round it is waiting on. */
@@ -186,6 +209,36 @@ export class VariantProposalStore {
    * — so it is intentionally NOT cleared by `reset()`.
    */
   private device: string | null = null;
+  /**
+   * True while an `argent lens` CLI session owns the window. Set via
+   * `setCliSession`; deliberately NOT cleared by `reset()` — a CLI session spans
+   * many propose→submit rounds, like `device`.
+   */
+  private cliSession = false;
+  /**
+   * The agent choices a CLI Lens session offers (when more than one is
+   * installed) and the one the human picked in the window. The `argent lens`
+   * bridge passes the choices in on begin and polls `lensAgentChoice` to learn
+   * which agent to spawn. Empty / null outside an unresolved pick. Like
+   * `cliSession`, deliberately NOT cleared by `reset()`.
+   */
+  private lensAgents: Array<{ id: string; name: string }> = [];
+  private lensAgentChoice: string | null = null;
+  /**
+   * Whether the human asked to REMEMBER the agent pick (the picker's "Remember
+   * this choice" checkbox). The `argent lens` process reads this alongside the
+   * choice and persists it to `~/.argent/config.json` so later runs skip the
+   * picker. Tied to `lensAgentChoice`; reset with it.
+   */
+  private lensAgentRemember = false;
+  /**
+   * Devices (iOS udid / Android serial) that Lens BOOTED itself — i.e. the
+   * `POST /preview/boot` route started them because they were not already
+   * running. Tracked so the tool-server can shut them down when the CLI Lens
+   * session ends (`takeOwnedDevices`), without ever touching a device the user
+   * had already booted. Like `cliSession`, NOT cleared by `reset()`.
+   */
+  private ownedDevices = new Set<string>();
   private submitted: SubmittedSelection[] = [];
   private submittedAnnotations: ElementAnnotation[] = [];
   private variantSeq = 0;
@@ -367,7 +420,103 @@ export class VariantProposalStore {
       })),
       device: this.device,
       agentWaiting: this.waitersList.some((w) => !w.settled),
+      cliSession: this.cliSession,
+      lensAgents: this.lensAgents.map((a) => ({ ...a })),
+      lensAgentChoice: this.lensAgentChoice,
     };
+  }
+
+  /**
+   * Begin or end a CLI-driven Lens session (`argent lens`), optionally offering
+   * a set of agent choices for the window's picker. `cliSessionChanged` fires
+   * only on an actual begin/end transition (so the window opens/closes once),
+   * but the agent choices are always refreshed on a begin call — a re-begin from
+   * a fresh `argent lens` must replace any stale choices.
+   */
+  setCliSession(active: boolean, agents: Array<{ id: string; name: string }> = []): void {
+    const transitioned = this.cliSession !== active;
+    // A CLI session must start from a clean round when there is leftover round
+    // state to clear. `autoRollIfCompleted` (run by propose_variant) only rolls
+    // a *completed* round, so an unsubmitted round with staged proposals would
+    // otherwise be APPENDED to by the session's first propose_variant instead of
+    // opening a fresh one. A completed round left over from a prior (possibly
+    // non-CLI) flow — e.g. an await_user_selection that timed out (waiter
+    // removed, `consumed` still false) and was then submitted, leaving
+    // completed=true/consumed=false — is rolled here too so the session starts
+    // clean. Reset only when such state exists so a clean start isn't needlessly
+    // bumped past round 1. (reset() does not clear cliSession / device /
+    // owned-devices, so it's safe to call here.)
+    if (transitioned && active && (this.completed || this.proposals.length > 0)) this.reset();
+    this.cliSession = active;
+    this.lensAgents = active ? agents.map((a) => ({ ...a })) : [];
+    this.lensAgentChoice = null;
+    this.lensAgentRemember = false;
+    if (transitioned) this.events.emit("cliSessionChanged", active);
+    this.events.emit("changed");
+  }
+
+  /** Record the agent the human picked in the window's picker, and whether they
+   * asked to remember it. */
+  setLensAgentChoice(id: string, remember = false): void {
+    this.lensAgentChoice = id;
+    this.lensAgentRemember = remember;
+    this.events.emit("changed");
+  }
+
+  /** The agent id picked in the window, or null until the human chooses. */
+  getLensAgentChoice(): string | null {
+    return this.lensAgentChoice;
+  }
+
+  /** Whether the human asked to remember the current agent pick. */
+  getLensAgentRemember(): boolean {
+    return this.lensAgentRemember;
+  }
+
+  /** Whether a CLI-driven Lens session currently owns the window. */
+  isCliSession(): boolean {
+    return this.cliSession;
+  }
+
+  /** Record a device Lens booted itself, so it can be shut down on session end. */
+  markDeviceOwned(id: string): void {
+    if (id.trim()) this.ownedDevices.add(id.trim());
+  }
+
+  /**
+   * Whether Lens booted this device itself (and is therefore responsible for
+   * it). Test-only accessor: production code manages ownership through
+   * `markDeviceOwned` / `releaseDevice` / `takeOwnedDevices` and never needs to
+   * read a single device's ownership. Kept as a non-mutating way for tests to
+   * assert ownership without draining it via `takeOwnedDevices`.
+   */
+  isDeviceOwned(id: string): boolean {
+    return this.ownedDevices.has(id.trim());
+  }
+
+  /**
+   * Drop a single owned device — e.g. the user shut it down manually via the
+   * preview window, so session-end teardown must not try to kill it again.
+   */
+  releaseDevice(id: string): void {
+    this.ownedDevices.delete(id.trim());
+  }
+
+  /** Drain and return the devices Lens booted — the caller shuts them down. */
+  takeOwnedDevices(): string[] {
+    const ids = [...this.ownedDevices];
+    this.ownedDevices.clear();
+    return ids;
+  }
+
+  /**
+   * The frozen outcome of the last submitted round, or null if nothing has been
+   * submitted since the last reset. Read by `GET /preview/outcome` so the
+   * `argent lens` watcher can format the user's feedback and type it into the
+   * spawned `claude` terminal. Cleared (to null) when a new round begins.
+   */
+  getLastOutcome(): Extract<AwaitOutcome, { status: "completed" }> | null {
+    return this.lastOutcome;
   }
 
   /** Called by the preview UI when the human presses "Complete selection". */
@@ -419,6 +568,16 @@ export class VariantProposalStore {
         w.settled = true;
         w.settle(this.lastOutcome);
       }
+    } else if (this.cliSession) {
+      // In a CLI Lens session no await_user_selection consumes the round — the
+      // `argent lens` watcher reads the frozen outcome over HTTP and types it
+      // into the agent terminal. Mark the round consumed here too, so the
+      // agent's next propose_variant opens a FRESH round (the preview UI keys
+      // "new round" off the round number, and getLastOutcome stops returning a
+      // stale outcome) rather than appending to this already-submitted one.
+      // No outcome is queued: the CLI watcher already read it over HTTP, and
+      // nothing drains `pendingOutcomes` in a CLI session (no await is parked).
+      this.consumed = true;
     } else {
       // No waiter was parked to receive this outcome directly. Queue it so a
       // later await_user_selection still gets it, even across an intervening

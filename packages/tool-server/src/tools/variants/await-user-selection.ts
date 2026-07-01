@@ -22,6 +22,12 @@ type Params = z.infer<typeof zodSchema>;
 export const awaitUserSelectionTool: ToolDefinition<Params> = {
   id: "await_user_selection",
   featureFlag: "argent-lens",
+  // Hidden entirely while an `argent lens` CLI session owns the preview window:
+  // there, the user's picks are relayed into the agent's terminal as a normal
+  // message (see `argent-cli/src/lens.ts`), so the agent never blocks on a pick.
+  // Hiding the tool (rather than telling the agent "don't call it") keeps the
+  // CLI-relay surface honest — propose_variant then end the turn.
+  hideWhen: () => variantProposalStore.isCliSession(),
   description: `Block until the human finishes picking among the variants you proposed (the ONE blocking call).
 
 Call this exactly once, AFTER you have staged every variant for every element via \`propose_variant\`.
