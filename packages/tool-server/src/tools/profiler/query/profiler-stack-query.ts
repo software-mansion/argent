@@ -371,8 +371,14 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
 
 async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typeof zodSchema>) {
   if (!api.exportedFiles?.pftrace || !api.traceFile) {
-    throw new Error(
-      "No Android trace loaded. Run native-profiler-stop → native-profiler-analyze first."
+    throw new FailureError(
+      "No Android trace loaded. Run native-profiler-stop → native-profiler-analyze first.",
+      {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_stack_query_android_unloaded",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
   if (params.mode === "leak_stacks") {

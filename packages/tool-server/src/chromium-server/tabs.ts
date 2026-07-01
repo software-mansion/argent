@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { CDPClient } from "../utils/debugger/cdp-client";
 import { browserWebSocketUrl, listPageTargets, type CdpTarget } from "./cdp-session";
 
@@ -110,8 +111,14 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
     }
     // Or a raw CDP target id.
     if (targets.some((t) => t.id === ref)) return ref;
-    throw new Error(
-      `No tab matches "${ref}". Use \`chromium-tabs action=list\` to see current tabIds and labels.`
+    throw new FailureError(
+      `No tab matches "${ref}". Use \`chromium-tabs action=list\` to see current tabIds and labels.`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_TAB_NOT_FOUND,
+        failure_stage: "chromium_tab_resolve",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
 
@@ -119,8 +126,14 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
     if (targetId === activeTargetId) return;
     const target = targets.find((t) => t.id === targetId);
     if (!target?.webSocketDebuggerUrl) {
-      throw new Error(
-        `Tab target ${targetId} has no webSocketDebuggerUrl (it may have just closed).`
+      throw new FailureError(
+        `Tab target ${targetId} has no webSocketDebuggerUrl (it may have just closed).`,
+        {
+          error_code: FAILURE_CODES.CHROMIUM_TAB_NOT_FOUND,
+          failure_stage: "chromium_tab_activate",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        }
       );
     }
     await cdp.reconnect(target.webSocketDebuggerUrl);
@@ -154,7 +167,18 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
     const url = opts?.url ?? "about:blank";
     const created = await withBrowserClient(async (browser) => {
       const out = (await browser.send("Target.createTarget", { url })) as { targetId?: string };
-      if (!out.targetId) throw new Error("Target.createTarget returned no targetId.");
+      if (!out.targetId)
+        throw new FailureError("Target.createTarget returned no targetId.", {
+          error_code: FAILURE_CODES.CHROMIUM_TAB_OPEN_FAILED,
+          failure_stage: "chromium_tab_open",
+          failure_area: "tool_server",
+          // The CDP call round-tripped but its response was missing the expected
+          // targetId — a "reached but malformed" response, classified the same
+          // way as CHROMIUM_CDP_INVALID_RESPONSE rather than as a generic unknown.
+          error_kind: "network",
+          failure_command: "cdp",
+          network_failure: "invalid_response",
+        });
       return out.targetId;
     });
     const tabId = mintTabId(created);

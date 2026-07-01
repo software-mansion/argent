@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { ButtonType, KeyDirection, Point, Rotation, TouchType, ViewportSize } from "./types";
 
@@ -5,7 +6,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function clampPx(value: number, max: number): number {
   if (!Number.isFinite(value)) {
-    throw new Error(`Chromium input: non-finite coordinate ${value}`);
+    throw new FailureError(`Chromium input: non-finite coordinate ${value}`, {
+      error_code: FAILURE_CODES.CHROMIUM_INPUT_INVALID,
+      failure_stage: "chromium_input_coordinate",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   return Math.max(0, Math.min(max, value));
 }
@@ -139,9 +145,15 @@ export async function sendButton(
     }
     return;
   }
-  throw new Error(
+  throw new FailureError(
     `Chromium does not support the "${button}" hardware button. ` +
-      `Use a keyboard shortcut via the keyboard tool, or invoke an app-level handler via the debugger.`
+      `Use a keyboard shortcut via the keyboard tool, or invoke an app-level handler via the debugger.`,
+    {
+      error_code: FAILURE_CODES.CHROMIUM_BUTTON_UNSUPPORTED,
+      failure_stage: "chromium_input_button",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    }
   );
 }
 
@@ -158,7 +170,12 @@ export async function sendWheel(
   dy: number
 ): Promise<void> {
   if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-    throw new Error(`Chromium wheel: non-finite delta dx=${dx}, dy=${dy}`);
+    throw new FailureError(`Chromium wheel: non-finite delta dx=${dx}, dy=${dy}`, {
+      error_code: FAILURE_CODES.CHROMIUM_INPUT_INVALID,
+      failure_stage: "chromium_input_wheel_delta",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   if (dx === 0 && dy === 0) return;
   const pixel = toCssPixels(point, viewport);

@@ -1,4 +1,6 @@
 import {
+  FAILURE_CODES,
+  FailureError,
   TypedEventEmitter,
   type DeviceInfo,
   type ServiceBlueprint,
@@ -154,21 +156,36 @@ export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> 
     const deviceFromOpts = opts?.device;
     const payloadStr = typeof payload === "string" ? payload : (payload as DeviceInfo)?.id;
     if (deviceFromOpts && payloadStr && deviceFromOpts.id !== payloadStr) {
+      // Internal wiring invariant, not a telemetry-bearing failure: on every
+      // registry path chromiumCdpRef(device) sets options.device and the URN
+      // payload from the same device.id (so the ids agree), and the transitive-dep
+      // path passes no options at all (so deviceFromOpts is undefined). A mismatch
+      // can therefore only come from a hand-crafted direct factory() call — a
+      // programmer error — so it stays a plain Error without a code.
       throw new Error(
         `${CHROMIUM_CDP_NAMESPACE}.factory: options.device.id "${deviceFromOpts.id}" disagrees with URN payload "${payloadStr}".`
       );
     }
     const device = deviceFromOpts ?? (payloadStr ? resolveDevice(payloadStr) : null);
     if (!device) {
+      // Also dead on any registry path (resolveDevice never returns null and the
+      // URN payload is always present); reachable only by a direct factory() call
+      // with neither options.device nor a payload. Plain Error, no code.
       throw new Error(
         `${CHROMIUM_CDP_NAMESPACE}.factory could not determine the device — pass it via chromiumCdpRef(device).options or via the URN payload.`
       );
     }
     const port = parseChromiumCdpPort(device.id);
     if (port == null) {
-      throw new Error(
+      throw new FailureError(
         `${CHROMIUM_CDP_NAMESPACE}.factory got a malformed device id "${device.id}". ` +
-          `Expected "chromium-cdp-<port>".`
+          `Expected "chromium-cdp-<port>".`,
+        {
+          error_code: FAILURE_CODES.CHROMIUM_DEVICE_ID_INVALID,
+          failure_stage: "chromium_factory_device_id",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 
@@ -194,8 +211,14 @@ export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> 
       refreshViewport: () => server.refreshViewport(),
       dispatchMouseEvent: async (event: MouseEventArgs) => {
         if (!Number.isFinite(event.x) || !Number.isFinite(event.y)) {
-          throw new Error(
-            `Chromium CDP: dispatchMouseEvent received non-finite coords x=${event.x}, y=${event.y}.`
+          throw new FailureError(
+            `Chromium CDP: dispatchMouseEvent received non-finite coords x=${event.x}, y=${event.y}.`,
+            {
+              error_code: FAILURE_CODES.CHROMIUM_INPUT_INVALID,
+              failure_stage: "chromium_dispatch_mouse_coords",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
           );
         }
         const button = event.button ?? (event.type === "mouseMoved" ? "none" : "left");

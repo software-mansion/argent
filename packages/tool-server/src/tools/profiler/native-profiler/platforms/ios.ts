@@ -41,9 +41,17 @@ function resolveDefaultTemplatePath(): string {
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
-  throw new Error(
+  throw new FailureError(
     `Argent.tracetemplate not found. Looked in:\n${candidates.map((c) => `  - ${c}`).join("\n")}\n` +
-      `Pass template_path explicitly, or rebuild so the template is copied into place.`
+      `Pass template_path explicitly, or rebuild so the template is copied into place.`,
+    {
+      // A required bundled asset is absent — a packaging/build problem, not a
+      // device or subprocess failure — so dependency_missing with no command.
+      error_code: FAILURE_CODES.NATIVE_PROFILER_TRACE_TEMPLATE_MISSING,
+      failure_stage: "ios_native_profiler_template_resolve",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+    }
   );
 }
 const STARTUP_TIMEOUT_MS = 10_000;
@@ -485,7 +493,10 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
         error_code: FAILURE_CODES.NATIVE_PROFILER_NO_ACTIVE_SESSION,
         failure_stage: "native_profiler_stop_session_state",
         failure_area: "tool_server",
-        error_kind: "validation",
+        // Internal session-state, not caller input — matches the react twin
+        // REACT_PROFILER_NO_ACTIVE_SESSION (not_found) and the Android site so the
+        // "no active session" family carries one consistent kind.
+        error_kind: "not_found",
       }
     );
   }
@@ -544,8 +555,12 @@ export async function analyzeNativeProfilerIos(
   api: NativeProfilerSessionApi
 ): Promise<NativeProfilerAnalyzeResult> {
   if (!api.exportedFiles) {
+    // Same logical failure as the Android analyze guard — keep them on one code
+    // so telemetry doesn't split "analyze called before stop" by platform.
+    // PROFILER_NATIVE_TRACE_MISSING stays reserved for a trace file missing on
+    // disk (see profiler-load).
     throw new FailureError("No exported trace data found. Call native-profiler-stop first.", {
-      error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
+      error_code: FAILURE_CODES.NATIVE_PROFILER_NO_EXPORTED_TRACE,
       failure_stage: "native_profiler_analyze_load_exports",
       failure_area: "tool_server",
       error_kind: "validation",
