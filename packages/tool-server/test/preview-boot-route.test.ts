@@ -67,6 +67,22 @@ describe("POST /preview/boot", () => {
     expect(variantProposalStore.isDeviceOwned(IOS_UDID)).toBe(false);
   });
 
+  it.each(["Booting", "Shutting Down", "Creating"])(
+    "does NOT boot or own a sim in the transient %s state (only Shutdown is ownable)",
+    async (state) => {
+      // A device the user is mid-booting externally must not be re-booted and
+      // marked Lens-owned, or session-end would shut down the user's own sim.
+      const { app, bootCalls } = harness([{ platform: "ios", udid: IOS_UDID, state }]);
+
+      const res = await request(app).post("/boot").send({ udid: IOS_UDID });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ alreadyRunning: true, owned: false });
+      expect(bootCalls).toEqual([]);
+      expect(variantProposalStore.isDeviceOwned(IOS_UDID)).toBe(false);
+    }
+  );
+
   it("rejects an unknown udid without booting (auth-exempt spawn guard)", async () => {
     const { app, bootCalls } = harness([{ platform: "ios", udid: IOS_UDID, state: "Shutdown" }]);
 

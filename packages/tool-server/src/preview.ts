@@ -351,9 +351,12 @@ export function createPreviewRouter(registry: Registry): Router {
           .json({ error: `Unknown device "${udid}". Use a udid/serial from /preview/simulators.` });
         return;
       }
-      // Skip (and don't take ownership) if it's already running — Lens must
-      // never shut down a simulator the user booted themselves.
-      if (entry.state === "Booted") {
+      // Only a fully "Shutdown" simulator is a safe boot target we may own. Any
+      // other state — "Booted", or a transient "Booting"/"Shutting Down" the
+      // USER just triggered externally — must NOT be re-booted or marked
+      // Lens-owned: owning it would let session-end teardown shut down a device
+      // the user started themselves (the invariant this route must never break).
+      if (entry.state !== "Shutdown") {
         res.json({ ok: true, booted: true, alreadyRunning: true, owned: false });
         return;
       }

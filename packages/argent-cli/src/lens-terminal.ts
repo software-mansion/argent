@@ -37,11 +37,6 @@ export interface TerminalSession {
   tty: string;
 }
 
-/** The name AppleScript addresses each terminal by. */
-export function terminalAppName(app: TerminalApp): string {
-  return app === "iterm" ? "iTerm" : "Terminal";
-}
-
 /** Common install locations for iTerm; Terminal.app is part of macOS so it is
  * always present and needs no detection. */
 const ITERM_PATHS = ["/Applications/iTerm.app", `${process.env.HOME ?? ""}/Applications/iTerm.app`];
