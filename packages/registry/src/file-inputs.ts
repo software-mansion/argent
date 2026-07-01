@@ -53,6 +53,14 @@ export interface FileInputWire {
    * another field.
    */
   contentOmitted?: "size-limit";
+  /**
+   * Upload ID returned by `POST /upload` on the tool-server. Set by the client
+   * for `kind: "tar-upload"` inputs when the tool-server is remote — the client
+   * tars the file or directory and streams it to `/upload` before the tool
+   * call, avoiding the base64-in-JSON body limit. Absent for co-located
+   * sessions (the server reads the path in place).
+   */
+  uploadId?: string;
 }
 
 /**
@@ -69,8 +77,15 @@ export interface FileInputWire {
  *                 server host and adapts (e.g. flow recording switches to
  *                 client-side persistence, screenshot-diff falls back to a
  *                 temp output dir).
+ * - `"tar-upload"` — the tool reads a file or directory that the client owns
+ *                 (e.g. an iOS `.app` bundle, an Android `.apk`, a Vega
+ *                 `.vpkg`). Co-located: used in place. Remote: the client tars
+ *                 the path, streams it to `POST /upload`, and sets `uploadId` on
+ *                 the wire. The server extracts the archive to a temp dir and
+ *                 passes the extracted path to the tool. Handles bundles too big
+ *                 to travel as base64-in-JSON, of any size the disk allows.
  */
-export type FileInputKind = "file" | "directory" | "probe";
+export type FileInputKind = "file" | "directory" | "probe" | "tar-upload";
 
 /**
  * Declaration of one file-boundary arg on a {@link ToolDefinition}. Shipped
