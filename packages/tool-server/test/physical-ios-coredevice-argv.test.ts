@@ -163,7 +163,9 @@ describe("iOS-27 host-input gate (CoreDeviceError 9021) is translated, screensho
     const { api } = await makeApi(() => ({ error: gated }));
     const e = (await api.tap(0.5, 0.5).catch((x: unknown) => x)) as Error;
     expect(e.message).toMatch(/requires iOS 27\+/);
-    expect(e.message).toMatch(/Only screenshot is supported/i);
+    // Hardware-verified: screenshot AND buttons work below iOS 27 — only touch
+    // (tap/swipe) is actually gated. The message must not overclaim button too.
+    expect(e.message).toMatch(/Screenshot and hardware buttons work/i);
     expect(e.message).toContain("CoreDeviceError 9021");
     // Names the attempted interaction so the user knows what was gated.
     expect(e.message).toContain("tap");
@@ -199,6 +201,32 @@ describe("iOS-27 host-input gate (CoreDeviceError 9021) is translated, screensho
     expect(e.message).toContain("CoreDevice tap failed:");
     expect(e.message).toContain("Connection refused");
     expect(e.message).not.toMatch(/iOS 27/);
+  });
+
+  it("picks the real exception, not a rich-boxed source line, from a stale-tunnel traceback", async () => {
+    // Real captured shape (a genuinely unreachable/stale RSD endpoint): pymobiledevice3
+    // renders its traceback via Python's `rich`, framing SOURCE CODE context lines in a
+    // box — several of which coincidentally match the "fail"/"not " keyword heuristic
+    // (e.g. "if rsd is not None:") well before the actual OSError line at the bottom.
+    const staleTunnel = Object.assign(new Error("Command failed"), {
+      stderr: [
+        "Traceback (most recent call last):",
+        "╭──────────────── Traceback (most recent call last) ────────────────╮",
+        "│ /pmd3/remote/core_device_tunnel_service.py:218 in connect          │",
+        "│                                                                    │",
+        "│   218 │   │   if rsd is not None:                                  │",
+        "│   219 │   │   │   raise ConnectionError('rsd is not available')    │",
+        "╰────────────────────────────────────────────────────────────────────╯",
+        "OSError: [Errno 65] No route to host",
+      ].join("\n"),
+      stdout: "",
+      code: 1,
+    });
+    const { api } = await makeApi(() => ({ error: staleTunnel }));
+    const e = (await api.tap(0.5, 0.5).catch((x: unknown) => x)) as Error;
+    expect(e.message).toContain("CoreDevice tap failed:");
+    expect(e.message).toContain("OSError: [Errno 65] No route to host");
+    expect(e.message).not.toContain("if rsd is not None");
   });
 
   it("does NOT mistranslate a standalone 9021 HID coordinate echoed in the argv message", async () => {

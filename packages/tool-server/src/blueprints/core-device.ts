@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   TypedEventEmitter,
+  FAILURE_CODES,
+  FailureError,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceInstance,
@@ -33,8 +35,14 @@ const PHYSICAL_IOS_FLAG = "physical-ios-devices";
  */
 export function assertPhysicalIosEnabled(): void {
   if (!isFlagEnabled(PHYSICAL_IOS_FLAG)) {
-    throw new Error(
-      `Physical iOS support is disabled. Enable it with: argent enable ${PHYSICAL_IOS_FLAG}`
+    throw new FailureError(
+      `Physical iOS support is disabled. Enable it with: argent enable ${PHYSICAL_IOS_FLAG}`,
+      {
+        error_code: FAILURE_CODES.CORE_DEVICE_FLAG_DISABLED,
+        failure_stage: "core_device_flag_gate",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
     );
   }
 }
@@ -110,10 +118,17 @@ async function verifyPmd3Available(pmd3: string): Promise<void> {
     await execFileAsync(pmd3, ["version"], { timeout: 10_000 });
   } catch (err) {
     if ((err as { code?: string })?.code === "ENOENT") {
-      throw new Error(
+      throw new FailureError(
         `pymobiledevice3 was not found (tried "${pmd3}"). Physical iOS control needs it — ` +
           `install it (e.g. \`pipx install pymobiledevice3\`) or set ARGENT_PYMOBILEDEVICE3 to its path.`,
-        { cause: err }
+        {
+          error_code: FAILURE_CODES.CORE_DEVICE_PMD3_NOT_FOUND,
+          failure_stage: "core_device_verify_pmd3",
+          failure_area: "tool_server",
+          error_kind: "dependency_missing",
+          failure_command: "pymobiledevice3",
+        },
+        { cause: err instanceof Error ? err : new Error(String(err)) }
       );
     }
     // Non-ENOENT (odd `version` failure): don't block; a real command will report.
@@ -132,9 +147,16 @@ async function resolvePmd3Absolute(): Promise<string> {
   } catch {
     // fall through to the install hint
   }
-  throw new Error(
+  throw new FailureError(
     `pymobiledevice3 was not found on PATH. Install it (e.g. \`pipx install pymobiledevice3\`) ` +
-      `or set ARGENT_PYMOBILEDEVICE3 to its absolute path.`
+      `or set ARGENT_PYMOBILEDEVICE3 to its absolute path.`,
+    {
+      error_code: FAILURE_CODES.CORE_DEVICE_PMD3_NOT_FOUND,
+      failure_stage: "core_device_resolve_pmd3_absolute",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+      failure_command: "pymobiledevice3",
+    }
   );
 }
 
@@ -240,12 +262,31 @@ async function resolveTunnel(udid: string): Promise<Rsd> {
     if (!res.ok) throw new Error(`tunneld responded HTTP ${res.status}`);
     payload = (await res.json()) as typeof payload;
   } catch (err) {
-    throw new Error(tunnelHelp(udid, "tunneld is not running"), { cause: err });
+    throw new FailureError(
+      tunnelHelp(udid, "tunneld is not running"),
+      {
+        error_code: FAILURE_CODES.CORE_DEVICE_TUNNEL_UNREACHABLE,
+        failure_stage: "core_device_resolve_tunnel",
+        failure_area: "tool_server",
+        error_kind: "network",
+        failure_command: "pymobiledevice3",
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
   }
   const entry = payload?.[udid];
   const t = Array.isArray(entry) ? entry[0] : undefined;
-  if (!t?.["tunnel-address"] || t["tunnel-port"] == null) {
-    throw new Error(tunnelHelp(udid, "no active tunnel is registered for it"));
+  // `!t["tunnel-port"]` (not `== null`) deliberately also rejects 0 — tunneld
+  // never assigns port 0 to a real tunnel, so treat it the same as missing,
+  // consistent with the tunnel-address check on the left.
+  if (!t?.["tunnel-address"] || !t["tunnel-port"]) {
+    throw new FailureError(tunnelHelp(udid, "no active tunnel is registered for it"), {
+      error_code: FAILURE_CODES.CORE_DEVICE_TUNNEL_NOT_REGISTERED,
+      failure_stage: "core_device_resolve_tunnel",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+      failure_command: "pymobiledevice3",
+    });
   }
   return { address: String(t["tunnel-address"]), port: Number(t["tunnel-port"]) };
 }
@@ -295,9 +336,20 @@ export async function ensureCoreDeviceTunnel(udid: string): Promise<Rsd> {
         await tunnelStartInFlight;
       } catch (escalationErr) {
         tunnelStartInFlight = null; // allow a later retry
-        throw new Error(tunnelHelp(udid, "the authorization prompt was cancelled or unavailable"), {
-          cause: escalationErr,
-        });
+        throw new FailureError(
+          tunnelHelp(udid, "the authorization prompt was cancelled or unavailable"),
+          {
+            error_code: FAILURE_CODES.CORE_DEVICE_TUNNEL_AUTH_DECLINED,
+            failure_stage: "core_device_ensure_tunnel_escalation",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            failure_command: "pymobiledevice3",
+          },
+          {
+            cause:
+              escalationErr instanceof Error ? escalationErr : new Error(String(escalationErr)),
+          }
+        );
       }
       tunnelStartInFlight = null;
     }
@@ -311,14 +363,21 @@ export async function ensureCoreDeviceTunnel(udid: string): Promise<Rsd> {
         // keep polling
       }
     }
-    throw new Error(
+    throw new FailureError(
       tunnelHelp(
         udid,
         reachable
           ? "tunneld is running but the device tunnel did not form — is the iPhone unlocked and trusted?"
           : "the tunnel did not come up after starting tunneld"
       ),
-      { cause: notRunning }
+      {
+        error_code: FAILURE_CODES.CORE_DEVICE_TUNNEL_TIMEOUT,
+        failure_stage: "core_device_ensure_tunnel_poll",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+        failure_command: "pymobiledevice3",
+      },
+      { cause: notRunning instanceof Error ? notRunning : new Error(String(notRunning)) }
     );
   }
 }
@@ -343,27 +402,64 @@ function isRemoteControlGatedError(err: unknown): boolean {
 }
 
 /** Extract a concise, human-readable line from a (possibly huge/binary) pmd3 failure. */
-function conciseError(label: string, err: unknown): Error {
+function conciseError(label: string, err: unknown): FailureError {
+  const cause = err instanceof Error ? err : new Error(String(err));
   if (isRemoteControlGatedError(err)) {
-    return new Error(
-      `CoreDevice ${label} failed: this iPhone is on an iOS below 27; host-driven input ` +
-        `(tap/swipe/button) requires iOS 27+. Only screenshot is supported on earlier iOS ` +
+    // Hardware-verified (iPhone 15, iOS 18.7.8 vs 27.0): screenshot and hardware
+    // buttons (`hid button`) work below iOS 27 — only touch (tap/swipe/drag) is
+    // actually gated. Don't overclaim "button" is affected too.
+    return new FailureError(
+      `CoreDevice ${label} failed: this iPhone is on an iOS below 27; host-driven touch input ` +
+        `(tap/swipe) requires iOS 27+. Screenshot and hardware buttons work on earlier iOS ` +
         `versions (Apple CoreDeviceError 9021).`,
-      { cause: err }
+      {
+        error_code: FAILURE_CODES.CORE_DEVICE_IOS_VERSION_TOO_OLD,
+        failure_stage: "core_device_command",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+        failure_command: "pymobiledevice3",
+      },
+      { cause }
     );
   }
   const e = err as { stderr?: string; stdout?: string; message?: string };
-  const blob = [e?.stderr, e?.stdout, e?.message]
+  // stderr/stdout are pymobiledevice3's own output — the trustworthy source for
+  // the real cause. `message` (execFile's synthesized "Command failed: <argv>")
+  // is deliberately searched LAST, as a fallback only: it's just the invoked
+  // command line, not a real diagnostic, and searching it with equal priority
+  // would let its ever-present "Command failed" text outrank a genuine
+  // stderr/stdout line lower in that output.
+  const outputLines = [e?.stderr, e?.stdout]
     .filter((v): v is string => typeof v === "string")
-    .join("\n");
+    .join("\n")
+    .split("\n")
+    .map((s) => s.trim())
+    // pymobiledevice3 renders failures via Python's `rich`, which frames source
+    // context in a box (each line starting with a `│`/`┃` rule) — never the
+    // actual exception. A keyword like "not "/"fail" can spuriously match a
+    // highlighted source line (e.g. "if rsd is not None:") before the real
+    // cause appears, so those are never eligible picks.
+    .filter((l) => l.length > 0 && !/^[│┃╭╮╰╯─━]/.test(l));
   const line =
-    blob
-      .split("\n")
-      .map((s) => s.trim())
-      .find((l) => /requires iOS|error|fail|not |unable|refused|timed out/i.test(l)) ??
+    // Prefer a genuine `SomeError: message` / `SomeException: message` line —
+    // the actual raised exception, not just an incidentally keyword-matching
+    // one — and prefer the LAST such line, since that's where Python puts the
+    // real exception in a traceback (rich or plain).
+    outputLines.findLast((l) => /^[\w.]*(?:Error|Exception)\b.*:/.test(l)) ??
+    outputLines.findLast((l) => /requires iOS|error|fail|not |unable|refused|timed out/i.test(l)) ??
     e?.message ??
     "unknown error";
-  return new Error(`CoreDevice ${label} failed: ${line.slice(0, 240)}`, { cause: err });
+  return new FailureError(
+    `CoreDevice ${label} failed: ${line.slice(0, 240)}`,
+    {
+      error_code: FAILURE_CODES.CORE_DEVICE_COMMAND_FAILED,
+      failure_stage: "core_device_command",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      failure_command: "pymobiledevice3",
+    },
+    { cause }
+  );
 }
 
 const COREDEVICE = ["developer", "core-device"];
@@ -421,14 +517,26 @@ export const coreDeviceBlueprint: ServiceBlueprint<CoreDeviceApi, DeviceInfo> = 
     const opts = options as unknown as CoreDeviceFactoryOptions | undefined;
     const device = opts?.device;
     if (!device?.id) {
-      throw new Error(
+      throw new FailureError(
         `${CORE_DEVICE_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use coreDeviceRef(device) when registering the service ref.`
+          `Use coreDeviceRef(device) when registering the service ref.`,
+        {
+          error_code: FAILURE_CODES.CORE_DEVICE_FACTORY_OPTIONS_MISSING,
+          failure_stage: "core_device_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     if (device.platform !== "ios" || device.kind !== "device") {
-      throw new Error(
-        `${CORE_DEVICE_NAMESPACE} only drives physical iOS devices; got ${device.platform}/${device.kind}.`
+      throw new FailureError(
+        `${CORE_DEVICE_NAMESPACE} only drives physical iOS devices; got ${device.platform}/${device.kind}.`,
+        {
+          error_code: FAILURE_CODES.CORE_DEVICE_WRONG_DEVICE,
+          failure_stage: "core_device_factory_platform",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     // Gate first — before any setup probe — so a flag-disabled user gets the

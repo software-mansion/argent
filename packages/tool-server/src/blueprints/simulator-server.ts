@@ -250,9 +250,15 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       // route physical iOS to that backend; any other tool lands here, so fail
       // with a clear message instead of spawning a simulator-server that can't
       // attach to a hardware UDID.
-      throw new Error(
+      throw new FailureError(
         `simulator-server cannot drive the physical iOS device ${device.id}. ` +
-          `Physical iPhones support screenshot, gesture-tap, gesture-swipe, button, and launch-app only.`
+          `Physical iPhones support screenshot, gesture-tap, gesture-swipe, button, and launch-app only.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_SERVER_PHYSICAL_DEVICE_UNSUPPORTED,
+          failure_stage: "simulator_server_factory_platform",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
       );
     }
 

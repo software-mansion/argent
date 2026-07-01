@@ -32,6 +32,7 @@ export const FAILURE_COMMANDS = [
   "android_devtools",
   "ax_service",
   "simulator_server",
+  "pymobiledevice3",
   "cdp",
   "npm",
   "npx",
