@@ -10,7 +10,20 @@
  */
 import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline";
 
-const ANIMATED_PATTERN = /(Animated|Animation|Transition|Motion)/i;
+// Match the animation tokens only as genuine PascalCase segments.
+//  - Case-sensitive: a lowercase-embedded "motion" (`PromotionCard`,
+//    `Emotion`, `Locomotion`) never contains the capitalized token, so it is
+//    rejected with no boundary needed.
+//  - Leading `(?<![A-Z0-9])` rejects acronym/number-glued prefixes
+//    (`SVGAnimatedPath`, `RNAnimatedView`, `G2MotionSensor`) where the token
+//    is not a real PascalCase word-start.
+//  - Trailing `(?=[A-Z0-9_(.]|$)` requires the token to end a segment: another
+//    capitalized word, a digit/underscore, `(` or `.` (paren/dot/HOC-wrapped
+//    display names like `Animated(View)`, `Animated.View`,
+//    `Memo(AnimatedComponent(View))`), or end-of-string — so it still matches
+//    real names while rejecting tokens that bleed into more lowercase
+//    (`MotionlessIndicator`).
+const ANIMATED_PATTERN = /(?<![A-Z0-9])(Animated|Animation|Transition|Motion)(?=[A-Z0-9_(.]|$)/;
 const RECYCLER_CHILD_PATTERN = /(ListItem|CellItem|Cell|Row|Item)$/i;
 const RECYCLER_PARENT_PATTERN =
   /^(FlatList|SectionList|VirtualizedList|FlashList|RecyclerListView)/i;
