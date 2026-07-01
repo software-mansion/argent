@@ -62,4 +62,13 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
       expect(tagged.components.get(n)!.isAnimated).toBe(true);
     }
   });
+  it("does NOT tag a capitalized token that merely trails into lowercase letters", () => {
+    // Case-sensitivity alone isn't a boundary: without one, "MotionlessIndicator"
+    // still matches "Motion" as a bare substring, same bug class as the
+    // original lowercase false positives.
+    const tagged = tag(enrich(["MotionlessIndicator", "AnimationsDisabledBanner"]));
+    for (const n of ["MotionlessIndicator", "AnimationsDisabledBanner"]) {
+      expect(tagged.components.get(n)!.isAnimated).toBe(false);
+    }
+  });
 });

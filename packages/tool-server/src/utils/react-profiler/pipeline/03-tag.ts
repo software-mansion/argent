@@ -15,8 +15,17 @@ import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline
 // contain a capitalized token (`Animated`, `AnimatedView`, `MotionView`,
 // `FadeTransition`), whereas ordinary names like `PromotionCard`,
 // `EmotionThemeCard`, or `CommotionList` only contain a lowercase "motion".
-// Dropping the `/i` flag keeps the former and stops matching the latter.
-const ANIMATED_PATTERN = /(Animated|Animation|Transition|Motion)/;
+// Case-sensitivity alone isn't enough: without a boundary, a capitalized token
+// that merely trails off into lowercase letters (`MotionlessIndicator`,
+// `AnimationsDisabledBanner`) still matches. Anchor the token to a PascalCase
+// segment boundary — start-of-string or preceded by a lowercase/digit (i.e. a
+// new capitalized word starting), and followed by another capitalized word or
+// end-of-string. This still can't disambiguate a token that legitimately
+// starts its own segment in a non-animation compound name (e.g. a sensor
+// component like `DeviceMotionListener`) — that would need a semantic
+// allow/deny list, not a regex — but it closes the trailing-continuation gap
+// the case-only fix left open.
+const ANIMATED_PATTERN = /(?:^|(?<=[a-z0-9]))(Animated|Animation|Transition|Motion)(?=[A-Z]|$)/;
 const RECYCLER_CHILD_PATTERN = /(ListItem|CellItem|Cell|Row|Item)$/i;
 const RECYCLER_PARENT_PATTERN =
   /^(FlatList|SectionList|VirtualizedList|FlashList|RecyclerListView)/i;
