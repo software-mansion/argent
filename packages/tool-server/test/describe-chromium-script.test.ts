@@ -11,8 +11,11 @@ import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
  *
  * The mock implements only the DOM surface the script reads: getBoundingClientRect,
  * getComputedStyle (display / visibility / opacity / overflow{,X,Y}), children,
- * childNodes (text), getAttribute/hasAttribute, shadowRoot, and a Range whose rect is
- * the element's "painted" content extent (zero when an ancestor transform collapses it).
+ * childNodes (text), getAttribute/hasAttribute, open shadowRoot, iframe contentDocument,
+ * and a Range whose rect unions the element's own painted content with the still-laid-out
+ * boxes of its descendants (everything but display:none) — so it reproduces the real
+ * behaviour where a box-less wrapper's Range is non-zero purely from a visibility:hidden /
+ * opacity:0 child, and returns zero only when an ancestor transform collapses the paint.
  */
 
 const W = 1000;
@@ -80,6 +83,8 @@ type Opts = {
   style?: Record<string, string>;
   attrs?: Record<string, string>;
   children?: MockElement[];
+  shadow?: MockElement[]; // open shadow root children (walker pierces these)
+  iframeDoc?: MockElement; // <iframe> contentDocument.documentElement (same-origin pierce)
   clobber?: boolean; // set .title/.id to non-string objects (DOM-clobbering)
   clobberStructural?: boolean; // shadow .children/.childNodes/.tagName with named controls (LegacyOverrideBuiltins)
   clobberAccessors?: boolean; // shadow getAttribute/hasAttribute/getBoundingClientRect/shadowRoot with a control element
@@ -95,7 +100,14 @@ function el(opts: Opts = {}): MockElement {
   node.__rect = rect;
   node.children = opts.children ?? [];
   node.childNodes = opts.text ? [{ nodeType: 3, nodeValue: opts.text }] : [];
-  node.shadowRoot = null;
+  // An open shadow root is a DocumentFragment exposing `.children`; the walker reads
+  // `getShadowRoot.call(el)` then iterates `shadow.children`. null unless a fixture sets it.
+  node.shadowRoot = opts.shadow ? ({ children: opts.shadow } as unknown) : null;
+  // A same-origin <iframe> exposes contentDocument.documentElement (read directly, not via
+  // a prototype getter). Only meaningful when tag === "iframe".
+  if (opts.iframeDoc) {
+    (node as Record<string, unknown>).contentDocument = { documentElement: opts.iframeDoc };
+  }
   (node as Record<string, unknown>).__content = opts.content ?? null;
   if (opts.clobber) {
     // simulate a <form> whose named control shadows the .title / .id properties
@@ -186,16 +198,44 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
         selectNodeContents: (e: Record<string, unknown>) => {
           target = e;
         },
+        // Model a real Range over selectNodeContents(el): the union of the element's own
+        // painted inline content (__content) AND the layout boxes of its descendants that
+        // still occupy layout — i.e. everything except display:none (visibility:hidden and
+        // opacity:0 keep their box). This lets a fixture reproduce the real-browser case a
+        // plain "return __content" mock could not: a box-less wrapper whose Range is
+        // non-zero purely because an invisible child still lays out.
         getBoundingClientRect: () => {
-          const c = target?.__content as Rect | null | undefined;
-          if (!c) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+          let box: { x: number; y: number; r: number; b: number } | null = null;
+          const add = (r: Rect | null | undefined) => {
+            if (!r || r.w <= 0 || r.h <= 0) return;
+            box = box
+              ? {
+                  x: Math.min(box.x, r.x),
+                  y: Math.min(box.y, r.y),
+                  r: Math.max(box.r, r.x + r.w),
+                  b: Math.max(box.b, r.y + r.h),
+                }
+              : { x: r.x, y: r.y, r: r.x + r.w, b: r.y + r.h };
+          };
+          add(target?.__content as Rect | null | undefined);
+          const walkRects = (n: Record<string, unknown> | null | undefined) => {
+            for (const c of (n?.__children as Record<string, unknown>[]) ?? []) {
+              const st = (c.__style as Record<string, string>) ?? {};
+              if (st.display === "none") continue; // display:none collapses layout
+              add(c.__rect as Rect);
+              walkRects(c);
+            }
+          };
+          walkRects(target);
+          if (!box) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+          const b = box as { x: number; y: number; r: number; b: number };
           return {
-            left: c.x,
-            top: c.y,
-            right: c.x + c.w,
-            bottom: c.y + c.h,
-            width: c.w,
-            height: c.h,
+            left: b.x,
+            top: b.y,
+            right: b.r,
+            bottom: b.b,
+            width: b.r - b.x,
+            height: b.b - b.y,
           };
         },
       };
@@ -225,6 +265,39 @@ function valuesOf(tree: unknown): string[] {
     for (const c of (n.children as Record<string, unknown>[]) ?? []) rec(c);
   })(tree as Record<string, unknown>);
   return out;
+}
+
+function identifiersOf(tree: unknown): string[] {
+  const out: string[] = [];
+  (function rec(n: Record<string, unknown> | null) {
+    if (!n) return;
+    if (typeof n.identifier === "string") out.push(n.identifier);
+    for (const c of (n.children as Record<string, unknown>[]) ?? []) rec(c);
+  })(tree as Record<string, unknown>);
+  return out;
+}
+
+function findById(tree: unknown, id: string): Record<string, unknown> | null {
+  let found: Record<string, unknown> | null = null;
+  (function rec(n: Record<string, unknown> | null) {
+    if (!n || found) return;
+    if (n.identifier === id) {
+      found = n;
+      return;
+    }
+    for (const c of (n.children as Record<string, unknown>[]) ?? []) rec(c);
+  })(tree as Record<string, unknown>);
+  return found;
+}
+
+function countNodes(tree: unknown): number {
+  let n = 0;
+  (function rec(node: Record<string, unknown> | null) {
+    if (!node) return;
+    n++;
+    for (const c of (node.children as Record<string, unknown>[]) ?? []) rec(c);
+  })(tree as Record<string, unknown>);
+  return n;
 }
 
 const ZERO = { x: 0, y: 0, w: 0, h: 0 };
@@ -428,5 +501,215 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   it("leaves an ordinary visible element unchanged", () => {
     const { tree } = run([el({ text: "NORMAL", rect: BOX })]);
     expect(valuesOf(tree)).toContain("NORMAL");
+  });
+
+  // ---- box-less wrapper over invisible-only content must not become a phantom node ----
+  it("drops a box-less wrapper whose non-zero content frame comes only from an invisible child", () => {
+    // The wrapper has no own text; its single element child is visibility:hidden (pruned).
+    // A real Range over the wrapper is non-zero because the child still lays out (the mock
+    // Range now models that), but that must NOT resurrect the wrapper as an empty node with
+    // a real frame — it paints nothing.
+    const { tree } = run([
+      el({
+        attrs: { id: "phantom-wrap" },
+        style: { display: "contents" },
+        rect: ZERO,
+        children: [el({ text: "HIDDENKID", style: { visibility: "hidden" }, rect: BOX })],
+      }),
+    ]);
+    expect(identifiersOf(tree)).not.toContain("phantom-wrap");
+    expect(valuesOf(tree)).not.toContain("HIDDENKID");
+  });
+
+  it("keeps a box-less wrapper with own painting text even when it also has an invisible child", () => {
+    // Own text paints, so the wrapper is real; the invisible child is just pruned.
+    const { tree } = run([
+      el({
+        text: "REALTEXT",
+        content: { x: 0, y: 40, w: 60, h: 12 },
+        style: { display: "contents" },
+        rect: ZERO,
+        children: [el({ text: "HIDDENKID2", style: { visibility: "hidden" }, rect: BOX })],
+      }),
+    ]);
+    expect(valuesOf(tree)).toContain("REALTEXT");
+    expect(valuesOf(tree)).not.toContain("HIDDENKID2");
+  });
+
+  // ---- visibility:hidden inherits but a descendant can override it back to visible ----
+  it("surfaces a visibility:visible descendant nested under a visibility:hidden ancestor", () => {
+    const { tree } = run([
+      el({
+        style: { visibility: "hidden" },
+        rect: { x: 0, y: 100, w: 200, h: 200 },
+        children: [el({ text: "OVERRIDE", style: { visibility: "visible" }, rect: BOX })],
+      }),
+    ]);
+    expect(valuesOf(tree)).toContain("OVERRIDE");
+  });
+
+  it("suppresses a visibility:hidden element's own text but keeps its visible child", () => {
+    const { tree } = run([
+      el({
+        text: "HIDDENOWN",
+        style: { visibility: "hidden" },
+        rect: { x: 0, y: 100, w: 200, h: 200 },
+        children: [el({ text: "VISIBLECHILD", style: { visibility: "visible" }, rect: BOX })],
+      }),
+    ]);
+    expect(valuesOf(tree)).toContain("VISIBLECHILD");
+    expect(valuesOf(tree)).not.toContain("HIDDENOWN");
+  });
+
+  it("prunes a fully visibility:hidden subtree with no visible descendant (no phantom)", () => {
+    const { tree } = run([
+      el({
+        style: { visibility: "hidden" },
+        rect: { x: 0, y: 100, w: 200, h: 200 },
+        children: [el({ text: "ALLHIDDEN", style: { visibility: "hidden" }, rect: BOX })],
+      }),
+    ]);
+    expect(valuesOf(tree)).not.toContain("ALLHIDDEN");
+    // Only the html/body scaffold survives — no phantom node for the hidden subtree.
+    expect(identifiersOf(tree)).toEqual([]);
+  });
+
+  // ---- promotion must not discard an identifier ----
+  it("keeps a box-less wrapper's identifier instead of promoting it away", () => {
+    const { tree } = run([
+      el({
+        attrs: { id: "keepme" },
+        style: { display: "contents" },
+        rect: ZERO,
+        children: [el({ text: "INNER5", rect: BOX })],
+      }),
+    ]);
+    expect(identifiersOf(tree)).toContain("keepme");
+    expect(valuesOf(tree)).toContain("INNER5");
+  });
+
+  it("keeps a boxed structural div's identifier instead of collapsing it away", () => {
+    const { tree } = run([
+      el({
+        attrs: { "data-testid": "structural" },
+        rect: { x: 0, y: 100, w: 200, h: 200 },
+        children: [el({ text: "INNER5C", rect: BOX })],
+      }),
+    ]);
+    expect(identifiersOf(tree)).toContain("structural");
+    expect(valuesOf(tree)).toContain("INNER5C");
+  });
+
+  it("still promotes an anonymous box-less wrapper (no identifier) to its single child", () => {
+    const withWrap = run([
+      el({
+        style: { display: "contents" },
+        rect: ZERO,
+        children: [el({ text: "SOLO", rect: BOX })],
+      }),
+    ]);
+    const withoutWrap = run([el({ text: "SOLO", rect: BOX })]);
+    expect(valuesOf(withWrap.tree)).toContain("SOLO");
+    // The wrapper adds no node — identical node count to the bare child.
+    expect(countNodes(withWrap.tree)).toBe(countNodes(withoutWrap.tree));
+    expect(identifiersOf(withWrap.tree)).toEqual([]);
+  });
+
+  // ---- box-less node framing: unionFrame across multiple children (emitted, not promoted) ----
+  it("frames an emitted box-less multi-child wrapper by the union of its children (unionFrame)", () => {
+    const { tree } = run([
+      el({
+        attrs: { role: "button", id: "unioned" }, // clickable + named -> emitted, not promoted
+        style: { display: "contents" },
+        rect: ZERO,
+        children: [
+          el({ text: "A", rect: { x: 100, y: 100, w: 100, h: 20 } }),
+          el({ text: "B", rect: { x: 300, y: 400, w: 100, h: 20 } }),
+        ],
+      }),
+    ]);
+    const node = findById(tree, "unioned");
+    expect(node).toBeTruthy();
+    expect((node!.children as unknown[]).length).toBe(2);
+    const f = node!.frame as { x: number; y: number; width: number; height: number };
+    // union of (100,100,100,20) and (300,400,100,20): x=100 y=100 right=400 bottom=420
+    expect(f.x).toBeCloseTo(0.1, 6);
+    expect(f.y).toBeCloseTo(0.1, 6);
+    expect(f.width).toBeCloseTo(0.3, 6); // (400-100)/1000
+    expect(f.height).toBeCloseTo(0.32, 6); // (420-100)/1000
+  });
+
+  it("frames a promoted box-less single-child node by the child's own rect", () => {
+    const { tree } = run([
+      el({
+        style: { display: "contents" },
+        rect: ZERO,
+        children: [el({ text: "SOLO2", rect: BOX })],
+      }),
+    ]);
+    const node = findById(tree, "");
+    // The promoted node is the child itself; find it by value and check its frame == BOX.
+    const child = (function find(
+      n: Record<string, unknown> | null
+    ): Record<string, unknown> | null {
+      if (!n) return null;
+      if (n.value === "SOLO2") return n;
+      for (const c of (n.children as Record<string, unknown>[]) ?? []) {
+        const r = find(c);
+        if (r) return r;
+      }
+      return null;
+    })(tree as Record<string, unknown>);
+    expect(child).toBeTruthy();
+    const f = child!.frame as { x: number; y: number; width: number; height: number };
+    expect(f.x).toBeCloseTo(BOX.x / W, 6);
+    expect(f.y).toBeCloseTo(BOX.y / H, 6);
+    expect(f.width).toBeCloseTo(BOX.w / W, 6);
+    expect(f.height).toBeCloseTo(BOX.h / H, 6);
+    expect(node).toBeNull(); // sanity: no node literally identified by "" exists
+  });
+
+  // ---- shadow DOM + iframe piercing (previously uncovered) ----
+  it("pierces an open shadow root and surfaces its content", () => {
+    const { tree } = run([
+      el({ tag: "my-widget", rect: BOX, shadow: [el({ text: "SHADOWTEXT", rect: BOX })] }),
+    ]);
+    expect(valuesOf(tree)).toContain("SHADOWTEXT");
+  });
+
+  it("pierces a same-origin iframe's contentDocument", () => {
+    const innerDoc = el({
+      tag: "html",
+      rect: { x: 0, y: 0, w: W, h: H },
+      children: [
+        el({
+          tag: "body",
+          rect: { x: 0, y: 0, w: W, h: H },
+          children: [el({ text: "IFRAMETEXT", rect: BOX })],
+        }),
+      ],
+    });
+    const { tree } = run([
+      el({ tag: "iframe", rect: { x: 0, y: 0, w: 500, h: 500 }, iframeDoc: innerDoc }),
+    ]);
+    expect(valuesOf(tree)).toContain("IFRAMETEXT");
+  });
+
+  // ---- a missing captured accessor must degrade, not abort the whole describe ----
+  it("degrades instead of aborting when a captured prototype accessor is absent", () => {
+    // scrollHeight is read only for overflow:auto/scroll nodes. Removing its prototype
+    // accessor made the old `getOwnPropertyDescriptor(...).get` throw at script top and
+    // abort the entire describe; protoGetter now falls back to a direct read.
+    const saved = Object.getOwnPropertyDescriptor(MockElement.prototype, "scrollHeight");
+    delete (MockElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+    try {
+      let out: { tree: unknown } | undefined;
+      expect(() => {
+        out = run([el({ text: "STILLHERE", rect: BOX, style: { overflow: "auto" } })]);
+      }).not.toThrow();
+      expect(valuesOf(out!.tree)).toContain("STILLHERE");
+    } finally {
+      Object.defineProperty(MockElement.prototype, "scrollHeight", saved!);
+    }
   });
 });
