@@ -385,13 +385,19 @@ export async function runTap(
   return { ok: true };
 }
 
-/** Resolve `into` → tap to focus → type text via the keyboard tool. */
+/**
+ * Resolve `into` → tap to focus → type text via the keyboard tool. Unless
+ * `submit` is explicitly `false`, a trailing Enter is pressed to commit the
+ * value and dismiss the keyboard, so it can't obscure later steps (chained
+ * form fields that end in an explicit submit `tap` should pass `submit: false`).
+ */
 export async function runType(
   registry: Registry,
   ctx: ToolContext | undefined,
   device: DeviceInfo,
   into: FlowSelector,
   text: string,
+  submit: boolean | undefined,
   signal?: AbortSignal
 ): Promise<DirectiveOutcome> {
   const frame = await resolveOrScroll(registry, ctx, device, into, signal);
@@ -411,6 +417,16 @@ export async function runType(
     "keyboard",
     bindDeviceArgs(registry, "keyboard", device.id, { text })
   );
+  if (submit !== false) {
+    // Press Enter as a separate keyboard call — the tool dispatches `key`
+    // before `text`, so a combined `{ text, key }` would submit before typing.
+    await invokeSubTool(
+      registry,
+      ctx,
+      "keyboard",
+      bindDeviceArgs(registry, "keyboard", device.id, { key: "enter" })
+    );
+  }
   return { ok: true };
 }
 
