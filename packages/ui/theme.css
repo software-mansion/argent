@@ -207,6 +207,7 @@
   --z-pop: 9; /* off-screen pill, comment popover */
   --z-overlay: 10; /* annotation popover, footbar */
   --z-modal: 12; /* confirm modal (above the footbar) */
+  --z-ctx: 14; /* right-click context menu (above every popover/menu) */
 
   /* ── Motion & feel (CSS transitions AND read by JS at boot) ──────────── */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);

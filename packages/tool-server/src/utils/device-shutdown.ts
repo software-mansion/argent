@@ -32,3 +32,47 @@ export async function shutdownOwnedDevice(id: string): Promise<void> {
 export async function shutdownOwnedDevices(ids: readonly string[]): Promise<void> {
   await Promise.all(ids.map((id) => shutdownOwnedDevice(id)));
 }
+
+export interface ShutdownResult {
+  ok: boolean;
+  /** Present when ok=false — a human-readable reason to surface in the UI. */
+  error?: string;
+}
+
+/**
+ * Shut down a running device by id, surfacing the outcome — unlike the
+ * best-effort {@link shutdownOwnedDevice}, which swallows every error for
+ * session teardown. Backs the preview window's right-click "Shut down" action,
+ * so the UI can report why a shutdown failed.
+ *
+ * iOS simulator → `simctl shutdown`; Android emulator → `adb -s <serial> emu
+ * kill`. A physical Android device can't be shut down remotely, and
+ * Chromium / Vega have no equivalent — those are rejected with a reason.
+ */
+export async function shutdownDevice(id: string): Promise<ShutdownResult> {
+  let device: { platform: string; kind: string };
+  try {
+    device = resolveDevice(id);
+  } catch {
+    return { ok: false, error: `Unknown device "${id}".` };
+  }
+  try {
+    if (device.platform === "ios") {
+      await execFileAsync("xcrun", ["simctl", "shutdown", id]);
+      return { ok: true };
+    }
+    if (device.platform === "android" && device.kind === "emulator") {
+      await execFileAsync("adb", ["-s", id, "emu", "kill"]);
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error:
+        device.platform === "android"
+          ? "A physical Android device can't be shut down remotely."
+          : `Shutting down ${device.platform} devices isn't supported.`,
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

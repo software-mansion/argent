@@ -207,6 +207,50 @@
       .dev-item.current {
         border-color: var(--color-accent);
       }
+      /* Right-click context menu (device rows → "Shut down"). Fixed to the
+         cursor, above every popover so it's never clipped by the dropdown. */
+      .ctx-menu {
+        position: fixed;
+        min-width: 160px;
+        max-width: 260px;
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
+        padding: var(--pad-footbar);
+        z-index: var(--z-ctx);
+        -webkit-app-region: no-drag;
+      }
+      .ctx-menu[hidden] {
+        display: none;
+      }
+      .ctx-menu button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        color: var(--color-fg);
+        border: var(--border-hairline) solid transparent;
+        border-radius: var(--radius-control);
+        padding: var(--pad-refresh);
+        font: inherit;
+        cursor: pointer;
+      }
+      .ctx-menu button:hover {
+        border-color: var(--color-border);
+        background: var(--color-bg);
+      }
+      .ctx-menu button.danger {
+        color: var(--color-error);
+      }
+      .ctx-menu button.danger:hover {
+        background: var(--color-danger-bg);
+        color: var(--color-danger-fg);
+        border-color: var(--color-danger-bg);
+      }
       .viewport {
         flex: 1;
         display: flex;
@@ -1775,6 +1819,7 @@
         deviceMenuOpen = false;
         if (deviceNameEl) deviceNameEl.setAttribute("aria-expanded", "false");
         if (deviceMenuEl) deviceMenuEl.hidden = true;
+        hideContextMenu();
       }
       function openDeviceMenu() {
         if (!deviceMenuEl) return;
@@ -1844,13 +1889,80 @@
           toggleDeviceMenu();
         });
       }
-      // Dismiss on outside-click or Escape.
+      // ── Right-click context menu (device rows → "Shut down") ───────────
+      // One reusable floating menu, positioned at the cursor and clamped into
+      // the viewport. Built on demand so it can carry per-device actions.
+      let ctxMenuEl = null;
+      function hideContextMenu() {
+        if (ctxMenuEl) ctxMenuEl.hidden = true;
+      }
+      function showContextMenu(x, y, items) {
+        if (!ctxMenuEl) {
+          ctxMenuEl = document.createElement("div");
+          ctxMenuEl.className = "ctx-menu";
+          ctxMenuEl.setAttribute("role", "menu");
+          document.body.appendChild(ctxMenuEl);
+        }
+        ctxMenuEl.innerHTML = "";
+        for (const it of items) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = it.label;
+          if (it.danger) b.className = "danger";
+          b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            hideContextMenu();
+            it.onClick();
+          });
+          ctxMenuEl.appendChild(b);
+        }
+        // Reveal at the origin to measure, then clamp so it never spills off-screen.
+        ctxMenuEl.hidden = false;
+        ctxMenuEl.style.left = "0px";
+        ctxMenuEl.style.top = "0px";
+        const r = ctxMenuEl.getBoundingClientRect();
+        const px = Math.min(x, window.innerWidth - r.width - 8);
+        const py = Math.min(y, window.innerHeight - r.height - 8);
+        ctxMenuEl.style.left = Math.max(8, px) + "px";
+        ctxMenuEl.style.top = Math.max(8, py) + "px";
+      }
+
+      // Shut down a device via the backend, then recover the UI: if it was the
+      // streamed device, tear the stream down and fall back to the picker;
+      // otherwise refresh whichever list is on screen.
+      async function shutdownDeviceAction(s) {
+        const wasCurrent = s.udid === currentUdid;
+        setStatus(`shutting down ${s.name}…`);
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/shutdown/${encodeURIComponent(s.udid)}`, {
+            method: "POST",
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          deviceNameByUdid.delete(s.udid);
+          if (wasCurrent) {
+            teardownStream();
+            refreshSimulators();
+          } else if (deviceMenuOpen) {
+            openDeviceMenu();
+          } else {
+            refreshSimulators();
+          }
+        } catch (err) {
+          setStatus(`couldn't shut down ${s.name}: ${err.message || err}`, "error");
+        }
+      }
+
+      // Dismiss the dropdown / context menu on outside-click or Escape.
       document.addEventListener("click", (e) => {
+        if (ctxMenuEl && !ctxMenuEl.hidden && !ctxMenuEl.contains(e.target)) hideContextMenu();
         if (deviceMenuOpen && deviceSwitchEl && !deviceSwitchEl.contains(e.target))
           closeDeviceMenu();
       });
       document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && deviceMenuOpen) closeDeviceMenu();
+        if (e.key !== "Escape") return;
+        if (ctxMenuEl && !ctxMenuEl.hidden) hideContextMenu();
+        else if (deviceMenuOpen) closeDeviceMenu();
       });
       // Device the window was opened for (?udid=…), set by the tool-server from
       // the agent's propose_variant. When present we connect straight to it and
@@ -2020,6 +2132,15 @@
         };
       }
 
+      // Turn a raw runtime id into a short label so the row shows the device
+      // name, not "com.apple.CoreSimulator.SimRuntime.iOS-26-4". Android runtimes
+      // (e.g. "Android API 34") are already friendly, so leave them untouched.
+      function humanizeRuntime(rt) {
+        if (!rt) return "";
+        const m = /SimRuntime\.([A-Za-z]+)-([\d-]+)$/.exec(rt);
+        return m ? `${m[1]} ${m[2].replace(/-/g, ".")}` : rt;
+      }
+
       // Build one .dev-item row. kind: "connect" (booted → switch/connect),
       // "boot" (stopped iOS → boot then connect), "disabled" (not actionable).
       // onAct, if given, runs on a successful click (e.g. to close the dropdown).
@@ -2044,7 +2165,7 @@
         rt.textContent = isCurrent
           ? "Current"
           : kind === "connect"
-            ? s.runtime || ""
+            ? humanizeRuntime(s.runtime)
             : kind === "boot"
               ? "Boot"
               : s.state || "";
@@ -2055,6 +2176,19 @@
             if (onAct) onAct();
             if (s.udid === currentUdid) return; // already streaming this one
             connect(s.udid).catch((err) => setStatus(String(err.message || err), "error"));
+          });
+          // Right-click a booted device to shut it down (it's already running,
+          // so there's a real device to kill).
+          b.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showContextMenu(e.clientX, e.clientY, [
+              {
+                label: `Shut down ${s.name}`,
+                danger: true,
+                onClick: () => shutdownDeviceAction(s),
+              },
+            ]);
           });
         } else if (kind === "boot") {
           b.addEventListener("click", () => {

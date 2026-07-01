@@ -455,6 +455,14 @@ export class VariantProposalStore {
     return this.ownedDevices.has(id.trim());
   }
 
+  /**
+   * Drop a single owned device — e.g. the user shut it down manually via the
+   * preview window, so session-end teardown must not try to kill it again.
+   */
+  releaseDevice(id: string): void {
+    this.ownedDevices.delete(id.trim());
+  }
+
   /** Drain and return the devices Lens booted — the caller shuts them down. */
   takeOwnedDevices(): string[] {
     const ids = [...this.ownedDevices];

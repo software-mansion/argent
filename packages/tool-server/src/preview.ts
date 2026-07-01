@@ -6,6 +6,7 @@ import express from "express";
 import type { Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
 import { resolveDevice } from "./utils/device-info";
+import { shutdownDevice } from "./utils/device-shutdown";
 import { listDevicesTool } from "./tools/devices/list-devices";
 import {
   variantProposalStore,
@@ -327,6 +328,39 @@ export function createPreviewRouter(registry: Registry): Router {
       await registry.invokeTool("boot-device", { udid, headless: true });
       variantProposalStore.markDeviceOwned(udid);
       res.json({ ok: true, booted: true, alreadyRunning: false, owned: true });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Shut down a running device from the preview window's right-click menu.
+  // Tokenless like the rest of /preview, but state-changing: it drives
+  // `simctl`/`adb`, so the :udid is validated against the live device list
+  // (same known-device cache as connect/boot) before dispatching — a forged id
+  // can't be turned into an arbitrary shell invocation. Unlike `/boot`, this
+  // acts on a device regardless of whether Lens owns it: the user explicitly
+  // asked to shut down a simulator they can see in the picker.
+  router.post("/shutdown/:udid", async (req: Request, res: Response) => {
+    const udid = req.params.udid as string;
+    try {
+      const known = (await knownDeviceIds()).has(udid);
+      if (!known) {
+        res
+          .status(400)
+          .json({ error: `Unknown device "${udid}". Use a udid/serial from /preview/simulators.` });
+        return;
+      }
+      const result = await shutdownDevice(udid);
+      if (!result.ok) {
+        res.status(400).json({ error: result.error ?? "Shutdown failed." });
+        return;
+      }
+      // It's no longer running — drop any Lens ownership so session-end
+      // teardown doesn't try to shut down an already-dead device, and forget
+      // the stale device-list cache so a re-list reflects the new state.
+      variantProposalStore.releaseDevice(udid);
+      knownDevices = null;
+      res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
