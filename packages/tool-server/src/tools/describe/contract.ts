@@ -16,6 +16,14 @@ export interface DescribeNode {
   label?: string;
   identifier?: string;
   value?: string;
+  // Text hoisted up from descendant nodes during the flow adapters' flatten
+  // pass (see flow-native-tree / flow-android-tree). The flat-leaves shape
+  // discards nesting, so a testID container's own `label`/`value` is empty even
+  // when it visibly wraps text (e.g. a counter whose number is a child `Text`).
+  // `subtreeText` carries that descendant text so an `assert`/`text` check can
+  // read "what this container shows" without the structure. Only the flow trees
+  // populate it; the agent-facing describe path leaves it unset.
+  subtreeText?: string;
   // Interactivity flags surfaced by the Android uiautomator dump. iOS
   // consumers leave these unset; adding them as optional avoids breaking
   // existing payloads. `scrollHidden` counts children that fell outside an
@@ -46,6 +54,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       label: z.string().optional(),
       identifier: z.string().optional(),
       value: z.string().optional(),
+      subtreeText: z.string().optional(),
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),

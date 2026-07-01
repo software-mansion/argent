@@ -9,6 +9,7 @@ import {
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
 } from "../describe/platforms/android/uiautomator-parser";
+import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
   type DescribeNode,
@@ -91,39 +92,52 @@ interface ParsedXmlNode {
   children: ParsedXmlNode[];
 }
 
-function collectLeaves(
+// Only child `<node>` elements carry views; other tags are uiautomator noise.
+function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
+  return node.children.filter((c) => c.tag === "node");
+}
+
+/**
+ * Project a uiautomator XML node for the shared flatten (see
+ * `flow-tree-flatten`). A view is emitted as a leaf when it carries a
+ * `resource-id` (React Native `testID`) or a label and has an on-screen frame;
+ * system chrome is skipped; an identified node — or a password field — shields
+ * its text so hoisting scopes to the nearest identified ancestor. A password
+ * field never contributes its secret: its own text is the `[password]`
+ * placeholder and its raw `text` is never read into the leaf value.
+ */
+function projectAndroidNode(
   node: ParsedXmlNode,
   screenW: number,
-  screenH: number,
-  out: DescribeNode[]
-): void {
+  screenH: number
+): FlatNode<ParsedXmlNode> {
   const attrs = node.attrs;
   // System chrome (status bar / nav bar / SystemUI) is noise for a flow and can
   // introduce false matches (a system "Back"); drop the node and its subtree.
-  if (isSystemChrome(attrs)) return;
+  const skip = isSystemChrome(attrs);
 
   const identifier = (attrs["resource-id"] ?? "").trim();
   const isPassword = attrs.password === "true";
   const label = isPassword ? "[password]" : labelOf(attrs);
+  const rawText = (attrs.text ?? "").trim();
+  const hasValue = !isPassword && Boolean(rawText) && rawText !== label;
 
+  // The node's own visible text mirrors what `nodeText` reads off the leaf
+  // (label plus a distinct text value) — never the secret behind a password.
+  const ownText = [label, hasValue ? rawText : ""].filter(Boolean).join(" ");
+
+  let leaf: DescribeNode | null = null;
   // Keep any view a selector could address: a resource-id (RN testID) or a
   // label. Pure layout scaffolding with neither is dropped — but its children
   // are still walked, so a testID nested under an unlabelled container survives.
-  if (identifier || label) {
+  if (!skip && (identifier || label)) {
     const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
     const frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
-      const leaf: DescribeNode = {
-        role: deriveUiAutomatorRole(attrs.class ?? ""),
-        frame,
-        children: [],
-      };
+      leaf = { role: deriveUiAutomatorRole(attrs.class ?? ""), frame, children: [] };
       if (label) leaf.label = label;
       if (identifier) leaf.identifier = identifier;
-      if (!isPassword) {
-        const text = (attrs.text ?? "").trim();
-        if (text && text !== label) leaf.value = text;
-      }
+      if (hasValue) leaf.value = rawText;
       if (attrs.clickable === "true") leaf.clickable = true;
       if (attrs["long-clickable"] === "true") leaf.longClickable = true;
       if (attrs.scrollable === "true") leaf.scrollable = true;
@@ -131,13 +145,18 @@ function collectLeaves(
       if (attrs.checked === "true") leaf.checked = true;
       if (attrs.enabled === "false") leaf.disabled = true;
       if (isPassword) leaf.password = true;
-      out.push(leaf);
     }
   }
 
-  for (const child of node.children) {
-    if (child.tag === "node") collectLeaves(child, screenW, screenH, out);
-  }
+  return {
+    skip,
+    children: childNodes(node),
+    ownText,
+    leaf,
+    // A password node shields its placeholder text like any identified node —
+    // even if it somehow lacks an id — so the secret can never bubble upward.
+    shield: Boolean(identifier) || isPassword,
+  };
 }
 
 /**
@@ -156,8 +175,8 @@ export function adaptFullAndroidHierarchyToDescribeResult(
   if (screenW > 0 && screenH > 0) {
     const root = parseUiAutomatorXml(xml);
     if (root) {
-      for (const c of root.children) {
-        if (c.tag === "node") collectLeaves(c, screenW, screenH, children);
+      for (const c of childNodes(root)) {
+        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH), children);
       }
     }
   }

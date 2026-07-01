@@ -3,6 +3,7 @@ import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/nati
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
 import { fetchTree } from "../../utils/ui-tree-match";
 import { queryAndroidFullHierarchy } from "./flow-android-tree";
+import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
   type DescribeNode,
@@ -124,32 +125,43 @@ function normalizeFrame(rect: RawRect, screenW: number, screenH: number): Descri
   };
 }
 
-function collectLeaves(
+/**
+ * Project a UIView node for the shared flatten (see `flow-tree-flatten`). A view
+ * is emitted as a leaf when it carries an `identifier` (React Native `testID`)
+ * or a `label` and has an on-screen frame; hidden/transparent subtrees are
+ * skipped; an identified node shields its text so hoisting scopes to the nearest
+ * identified ancestor. Its own text is just its label.
+ */
+function projectIosNode(
   node: RawViewNode,
   screenW: number,
-  screenH: number,
-  out: DescribeNode[]
-): void {
+  screenH: number
+): FlatNode<RawViewNode> {
   // Skip an invisible subtree entirely — its descendants are off-screen too.
-  if (node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01)) return;
+  const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
 
-  if (node.identifier || node.label) {
+  let leaf: DescribeNode | null = null;
+  if (!skip && (node.identifier || node.label)) {
     const rect = node.windowFrame ?? node.frame;
     const frame = rect ? normalizeFrame(rect, screenW, screenH) : null;
     if (frame) {
-      out.push({
+      leaf = {
         role: roleFromClassName(node.className),
         frame,
         children: [],
         label: node.label,
         identifier: node.identifier,
-      });
+      };
     }
   }
 
-  for (const child of node.children ?? []) {
-    collectLeaves(child, screenW, screenH, out);
-  }
+  return {
+    skip,
+    children: node.children ?? [],
+    ownText: node.label ?? "",
+    leaf,
+    shield: Boolean(node.identifier),
+  };
 }
 
 /**
@@ -182,7 +194,7 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
   const children: DescribeNode[] = [];
   if (screenW > 0 && screenH > 0) {
     for (const win of windows) {
-      collectLeaves(win, screenW, screenH, children);
+      flattenHoisting(win, (n) => projectIosNode(n, screenW, screenH), children);
     }
   }
 

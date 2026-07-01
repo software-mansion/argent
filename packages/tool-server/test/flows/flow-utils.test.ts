@@ -188,13 +188,40 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("parses the text sugar { in, equals }", () => {
+  it("parses the text sugar { in, contains } as a substring match", () => {
+    const flow = parseFlow(
+      'steps:\n  - assert: { text: { in: { identifier: counter }, contains: "Taps: 0" } }\n'
+    );
+    expect(flow.steps).toEqual([
+      {
+        kind: "assert",
+        condition: "text",
+        selector: { identifier: "counter" },
+        expectedText: "Taps: 0",
+        textMatch: "contains",
+      },
+    ]);
+  });
+
+  it("parses the text sugar { in, equals } as an exact match", () => {
     const flow = parseFlow(
       'steps:\n  - assert: { text: { in: { identifier: counter }, equals: "Taps: 0" } }\n'
     );
     expect(flow.steps).toEqual([
-      { kind: "assert", condition: "text", selector: { identifier: "counter" }, expectedText: "Taps: 0" },
+      {
+        kind: "assert",
+        condition: "text",
+        selector: { identifier: "counter" },
+        expectedText: "Taps: 0",
+        textMatch: "equals",
+      },
     ]);
+  });
+
+  it("rejects text sugar with both contains and equals", () => {
+    expect(() =>
+      parseFlow('steps:\n  - assert: { text: { in: counter, contains: a, equals: b } }\n')
+    ).toThrow(/exactly one of `contains` or `equals`/);
   });
 
   it("rejects the explicit { condition, selector, expectedText } form (sugar only)", () => {
@@ -217,9 +244,15 @@ describe("parseFlow", () => {
     );
   });
 
-  it("rejects text sugar without a non-empty equals", () => {
+  it("rejects text sugar with neither contains nor equals", () => {
     expect(() => parseFlow("steps:\n  - assert: { text: { in: counter } }\n")).toThrow(
-      /non-empty `equals`/
+      /exactly one of `contains` or `equals`/
+    );
+  });
+
+  it("rejects text sugar with an empty contains", () => {
+    expect(() => parseFlow('steps:\n  - assert: { text: { in: counter, contains: "" } }\n')).toThrow(
+      /non-empty `contains`/
     );
   });
 
@@ -228,12 +261,26 @@ describe("parseFlow", () => {
       executionPrerequisite: "",
       steps: [
         { kind: "assert", condition: "visible", selector: { text: "Welcome" } },
-        { kind: "assert", condition: "text", selector: { identifier: "counter" }, expectedText: "Taps: 0" },
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "counter" },
+          expectedText: "Taps: 0",
+          textMatch: "contains",
+        },
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "total" },
+          expectedText: "1",
+          textMatch: "equals",
+        },
       ],
     });
     expect(yaml).toContain("visible: Welcome");
     expect(yaml).not.toContain("condition:");
-    expect(yaml).toContain('equals: "Taps: 0"');
+    expect(yaml).toContain('contains: "Taps: 0"');
+    expect(yaml).toContain('equals: "1"');
     expect(yaml).toContain("identifier: counter");
   });
 
@@ -249,7 +296,20 @@ describe("parseFlow", () => {
         { kind: "type", into: { text: "email", loose: true }, text: "a@b.com" },
         { kind: "await", condition: "hidden", selector: { identifier: "spinner" } },
         { kind: "wait", ms: 500 },
-        { kind: "assert", condition: "text", selector: { text: "Taps:", loose: true }, expectedText: "Taps: 0" },
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { text: "Taps:", loose: true },
+          expectedText: "Taps: 0",
+          textMatch: "contains",
+        },
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "total" },
+          expectedText: "1",
+          textMatch: "equals",
+        },
         { kind: "scroll-to", target: { text: "Order #1234", loose: true }, direction: "down" },
         {
           kind: "scroll-to",

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { adaptFullHierarchyToDescribeResult } from "../src/tools/flows/flow-native-tree";
-import { findAll, selectorToFrame } from "../src/utils/ui-tree-match";
+import { evaluateCondition, findAll, selectorToFrame } from "../src/utils/ui-tree-match";
 
 // A getFullHierarchy payload shaped like SerializeView output: a window spanning
 // the screen, an `accessible` carousel container carrying a testID, and its
@@ -111,5 +111,125 @@ describe("describe full-hierarchy adapter", () => {
   it("returns an empty tree when no window frame is available", () => {
     const tree = adaptFullHierarchyToDescribeResult({ windows: [{ className: "UIWindow" }] });
     expect(tree.children).toHaveLength(0);
+  });
+
+  // A testID container whose visible text lives in a child node (a counter whose
+  // number is a `<Text>`): the flat shape emits the two as siblings, so the
+  // container's own text is empty. `subtreeText` hoists the child text up so a
+  // `text` assert against the container reads what it shows.
+  it("hoists a testID container's child text into subtreeText", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTView",
+              identifier: "square-#d97973",
+              windowFrame: { x: 24, y: 304, width: 100, height: 100 },
+              children: [
+                {
+                  className: "RCTTextView",
+                  label: "1",
+                  windowFrame: { x: 60, y: 340, width: 20, height: 24 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    const square = findAll(tree, { identifier: "square-#d97973" });
+    expect(square[0]!.label).toBeUndefined(); // its own text is still empty
+    expect(square[0]!.subtreeText).toBe("1"); // ...but the child's text is hoisted
+
+    // End to end: the `text` condition against the container now passes —
+    // `contains` (default) and exact `equals` both hold for the single "1".
+    expect(evaluateCondition("text", "1", square)).toBe(true);
+    expect(evaluateCondition("text", "1", square, "equals")).toBe(true);
+    // Exact `equals` rejects a partial expectation the substring would accept.
+    expect(evaluateCondition("text", "1", square, "contains")).toBe(true);
+    expect(evaluateCondition("text", "Taps: 1", square, "equals")).toBe(false);
+  });
+
+  // The classic contains-vs-equals split: a counter reading "10" satisfies a
+  // `contains: "1"` substring but not an `equals: "1"` exact match.
+  it("distinguishes contains from equals on the hoisted text", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTView",
+              identifier: "counter",
+              windowFrame: { x: 24, y: 304, width: 100, height: 100 },
+              children: [
+                {
+                  className: "RCTTextView",
+                  label: "10",
+                  windowFrame: { x: 60, y: 340, width: 30, height: 24 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+    const counter = findAll(tree, { identifier: "counter" });
+
+    expect(evaluateCondition("text", "1", counter, "contains")).toBe(true); // "10" contains "1"
+    expect(evaluateCondition("text", "1", counter, "equals")).toBe(false); // "10" ≠ "1"
+    expect(evaluateCondition("text", "10", counter, "equals")).toBe(true);
+  });
+
+  // Scoping: text belongs to its NEAREST identified ancestor. A self-identified
+  // descendant claims its own text, so an outer container does not swallow it —
+  // otherwise a screen-root testID would match any text anywhere beneath it.
+  it("does not let an outer container swallow a self-identified descendant's text", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTView",
+              identifier: "outer",
+              windowFrame: { x: 0, y: 0, width: 200, height: 200 },
+              children: [
+                {
+                  className: "RCTView",
+                  identifier: "inner",
+                  windowFrame: { x: 0, y: 0, width: 100, height: 100 },
+                  children: [
+                    {
+                      className: "RCTTextView",
+                      label: "42",
+                      windowFrame: { x: 10, y: 10, width: 20, height: 24 },
+                      children: [],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    expect(findAll(tree, { identifier: "inner" })[0]!.subtreeText).toBe("42");
+    expect(findAll(tree, { identifier: "outer" })[0]!.subtreeText).toBeUndefined();
   });
 });

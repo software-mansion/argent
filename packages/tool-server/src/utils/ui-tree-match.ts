@@ -43,14 +43,45 @@ export type Selector = z.infer<typeof selectorSchema>;
 
 export type WaitCondition = "exists" | "visible" | "hidden" | "text";
 
+// How a `text` condition compares the located element's text to the expected
+// string: `contains` (default) is a case-insensitive substring; `equals` is a
+// case-insensitive full-string match (so "1" no longer satisfies "10"). Both
+// are offered so a caller can assert "shows this somewhere" or "shows exactly
+// this" interchangeably.
+export type TextMatchMode = "contains" | "equals";
+
 // ── Tree matching ──────────────────────────────────────────────────────────
 
 export function nodeText(node: DescribeNode): string {
   return [node.label, node.value].filter(Boolean).join(" ");
 }
 
+// Text used to evaluate a `text` condition. Prefers `subtreeText` — the text
+// hoisted from descendants by the flow adapters — so a `text` check against a
+// testID container reads the text it visibly wraps (e.g. a counter whose number
+// is a child node), not the container's own (empty) label. Falls back to the
+// node's own text when no descendant text was hoisted (every non-flow tree, and
+// any leaf that already carries its own text). Selector matching stays on
+// `nodeText` so `tap`/`{ text }` targeting is unaffected.
+export function assertText(node: DescribeNode): string {
+  return node.subtreeText ?? nodeText(node);
+}
+
 export function includesCI(haystack: string | undefined, needle: string): boolean {
   return Boolean(haystack) && haystack!.toLowerCase().includes(needle.toLowerCase());
+}
+
+export function equalsCI(actual: string | undefined, expected: string): boolean {
+  return (actual ?? "").toLowerCase() === expected.toLowerCase();
+}
+
+/** Compare an element's text to the expected string under the chosen mode. */
+export function textMatches(
+  actual: string | undefined,
+  expected: string,
+  mode: TextMatchMode
+): boolean {
+  return mode === "equals" ? equalsCI(actual, expected) : includesCI(actual, expected);
 }
 
 export function matchNode(node: DescribeNode, selector: Selector): boolean {
@@ -111,7 +142,8 @@ export function firstInReadingOrder(matches: DescribeNode[]): DescribeNode | und
 export function evaluateCondition(
   condition: WaitCondition,
   expectedText: string | undefined,
-  matches: DescribeNode[]
+  matches: DescribeNode[],
+  textMatch: TextMatchMode = "contains"
 ): boolean {
   switch (condition) {
     case "exists":
@@ -122,7 +154,11 @@ export function evaluateCondition(
       return !matches.some(isVisible);
     case "text": {
       const first = firstInReadingOrder(matches);
-      return first !== undefined && expectedText !== undefined && includesCI(nodeText(first), expectedText);
+      return (
+        first !== undefined &&
+        expectedText !== undefined &&
+        textMatches(assertText(first), expectedText, textMatch)
+      );
     }
     default:
       return false;
