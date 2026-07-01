@@ -115,7 +115,7 @@ jobs:
 
       - name: Boot VVD; drive remote + screenshot
         id: vvd
-        uses: finloop/vega-virtual-device-action/vega-virtual-device-action@fe151d9a807b64e2838080e16a9ff2ea55ee48f6 # main
+        uses: finloop/vega-virtual-device-action/vega-virtual-device-action@a0f17767abafb27ec9b58974d94643fc46a4a35d # main
         with:
           image: ${{ env.HOST_IMAGE }}
           pull: true
