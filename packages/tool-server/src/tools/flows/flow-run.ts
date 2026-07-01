@@ -114,31 +114,39 @@ const POST_LAUNCH_SETTLE_MS = 1500;
  * Flows resolve selectors against the native UIView tree, served over the
  * native-devtools connection the injected dylib opens asynchronously after
  * launch. The post-launch settle alone can race a slow cold start, so we
- * additionally poll for the connection before step 1 — otherwise the first
- * describes silently fall back to the (collapsing) AX tree. Best-effort: on
- * timeout we proceed anyway and let describe degrade with its should_restart
- * hint rather than blocking the whole run.
+ * additionally poll for the connection before step 1. If it never connects,
+ * selectors would silently fall back to the (collapsing) AX tree — where a
+ * testID container the flow addresses (e.g. a `within` scroll container) is
+ * absent, producing confusing "not visible" failures. So the caller treats a
+ * failure to connect as a hard error rather than degrading the whole run.
  */
 const NATIVE_READY_TIMEOUT_MS = 8000;
 const NATIVE_READY_POLL_MS = 250;
 
+/**
+ * Poll until native-devtools is connected for `bundleId`. Returns true once
+ * connected, false on timeout / abort / the service being unavailable. The
+ * caller decides how to treat false (iOS flows fail; see execute).
+ */
 async function waitForNativeDevtools(
   registry: Registry,
   device: DeviceInfo,
   bundleId: string,
   signal?: AbortSignal
-): Promise<void> {
+): Promise<boolean> {
   let api: NativeDevtoolsApi;
   try {
     const ref = nativeDevtoolsRef(device);
     api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
   } catch {
-    return; // native-devtools unavailable — describe will degrade with a hint
+    return false; // native-devtools service unavailable
   }
   const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (signal?.aborted || api.isConnected(bundleId)) return;
-    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return;
+  for (;;) {
+    if (signal?.aborted) return false;
+    if (api.isConnected(bundleId)) return true;
+    if (Date.now() >= deadline) return false;
+    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return false;
   }
 }
 
@@ -237,9 +245,24 @@ returns a notice with the prerequisite instead of running.`,
         await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
         // Flows resolve selectors against the native UIView hierarchy, which the
         // injected dylib serves over a connection it opens asynchronously — wait
-        // for it so step 1 doesn't race the cold start and fall back to AX.
-        if (device.platform === "ios") {
-          await waitForNativeDevtools(registry, device, bundleId, signal);
+        // for it so step 1 doesn't race the cold start. If it never connects,
+        // selectors would silently fall back to the AX tree (which drops testID
+        // containers), so fail outright rather than run against the wrong tree.
+        if (device.platform === "ios" && !signal?.aborted) {
+          const connected = await waitForNativeDevtools(registry, device, bundleId, signal);
+          if (!connected && !signal?.aborted) {
+            if (statusBarPinned) await restoreStatusBar(device);
+            throw new FailureError(
+              `Flow "${params.name}" could not connect to native devtools for ${bundleId}. Re-run to relaunch the app and retry. ` +
+                `If it keeps failing, a stale or duplicate argent server may be holding the devtools connection — restart the argent server and try again.`,
+              {
+                error_code: FAILURE_CODES.FLOW_NATIVE_DEVTOOLS_UNAVAILABLE,
+                failure_stage: "flow_native_devtools_connect",
+                failure_area: "tool_server",
+                error_kind: "timeout",
+              }
+            );
+          }
         }
       } else {
         // Fragment run directly (no relaunch): pin before the first step runs.

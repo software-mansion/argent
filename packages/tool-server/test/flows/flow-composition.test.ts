@@ -17,6 +17,13 @@ function mockRegistry(): Registry {
       return { ok: true };
     }),
     getTool: vi.fn(() => undefined),
+    // iOS flows gate on a native-devtools connection: report connected so the
+    // run proceeds, but expose no target app so the tree fetch falls back to
+    // the AX tree (these tests don't drive the native hierarchy).
+    resolveService: vi.fn(async () => ({
+      isConnected: () => true,
+      listConnectedBundleIds: () => [],
+    })),
   } as unknown as Registry;
 }
 
@@ -92,6 +99,29 @@ describe("flow composition (run:)", () => {
     const result = asRun(await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE }));
     const errored = result.steps.find((s) => s.status === "error");
     expect(errored?.reason).toMatch(/cyclic/i);
+  });
+
+  it("fails outright when native devtools never connects on iOS", async () => {
+    await writeFlow("main", {
+      launch: "com.acme.app",
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "should never run" }],
+    });
+    // Registry whose native-devtools service is unavailable: the flow must
+    // abort rather than silently fall back to the AX tree. (An unresolvable
+    // service fails fast; a resolvable-but-never-connected one hits the same
+    // guard after the connect timeout.)
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => (id === "list-devices" ? { devices: [] } : { ok: true })),
+      getTool: vi.fn(() => undefined),
+      resolveService: vi.fn(async () => {
+        throw new Error("native-devtools unavailable");
+      }),
+    } as unknown as Registry;
+
+    await expect(
+      createRunFlowTool(registry).execute({}, { name: "main", project_root: tmpDir, device: DEVICE })
+    ).rejects.toThrow(/could not connect to native devtools/i);
   });
 });
 

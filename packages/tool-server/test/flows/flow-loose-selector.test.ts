@@ -47,6 +47,13 @@ function mockRegistry(taps: TapCall[]): Registry {
     getTool: vi.fn((id: string) =>
       id === "gesture-tap" ? { inputSchema: { properties: { udid: {} } } } : undefined
     ),
+    // iOS flows gate on a native-devtools connection: report connected so the
+    // run proceeds, but expose no target app so the tree fetch falls back to
+    // the mocked AX tree above.
+    resolveService: vi.fn(async () => ({
+      isConnected: () => true,
+      listConnectedBundleIds: () => [],
+    })),
   } as unknown as Registry;
 }
 
