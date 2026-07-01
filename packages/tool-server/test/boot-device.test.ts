@@ -103,15 +103,22 @@ describe("boot-device — iOS path", () => {
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
       "11111111-1111-1111-1111-111111111111"
     );
+    const bootCallIdx = mockExecFile.mock.calls.findIndex(
+      ([file, args]) => file === "xcrun" && args?.[1] === "boot"
+    );
     expect(setAccessibilityPrefsPreBootMock.mock.invocationCallOrder[0]).toBeLessThan(
-      mockExecFile.mock.invocationCallOrder[0]
+      mockExecFile.mock.invocationCallOrder[bootCallIdx]
     );
     expect(ensureAutomationEnabledMock).toHaveBeenCalledTimes(1);
     expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
       "11111111-1111-1111-1111-111111111111"
     );
 
-    expect(mockExecFile.mock.calls.map(([file, args]) => [file, args])).toEqual([
+    expect(
+      mockExecFile.mock.calls
+        .map(([file, args]) => [file, args])
+        .filter(([file]) => file !== "xcode-select")
+    ).toEqual([
       ["xcrun", ["simctl", "boot", "11111111-1111-1111-1111-111111111111"]],
       ["xcrun", ["simctl", "bootstatus", "11111111-1111-1111-1111-111111111111", "-b"]],
       [
@@ -133,18 +140,44 @@ describe("boot-device — iOS path", () => {
       }
     );
     // NativeDevtools must be primed AFTER bootstatus returns (launchd env is
-    // only reachable once the simulator is fully up) and BEFORE `open`, so
+    // only reachable once the simulator is fully up) and BEFORE `defaults`, so
     // the UI reflects the injected state on first paint.
+    const bootstatusIdx = mockExecFile.mock.calls.findIndex(
+      ([file, args]) => file === "xcrun" && args?.[1] === "bootstatus"
+    );
+    const defaultsIdx = mockExecFile.mock.calls.findIndex(([file]) => file === "defaults");
     expect(resolveService.mock.invocationCallOrder[0]).toBeGreaterThan(
-      mockExecFile.mock.invocationCallOrder[1]
+      mockExecFile.mock.invocationCallOrder[bootstatusIdx]
     );
     expect(resolveService.mock.invocationCallOrder[0]).toBeLessThan(
-      mockExecFile.mock.invocationCallOrder[2]
+      mockExecFile.mock.invocationCallOrder[defaultsIdx]
     );
     // The (re)boot wipes launchd's DYLD_INSERT_LIBRARIES; boot-device must
     // force a re-apply so a cached/latched native-devtools service can't leave
     // the env unset (which would make the next launch uninjected).
     expect(reverifyEnv).toHaveBeenCalledOnce();
+  });
+
+  it("runs the SimulatorKit xcode-select preflight before simctl boot", async () => {
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const registry = { resolveService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: "11111111-1111-1111-1111-111111111111" });
+
+    const xcodeSelectIdx = mockExecFile.mock.calls.findIndex(
+      ([file, args]) => file === "xcode-select" && args?.[0] === "--print-path"
+    );
+    expect(xcodeSelectIdx).toBeGreaterThanOrEqual(0);
+    const bootIdx = mockExecFile.mock.calls.findIndex(
+      ([file, args]) => file === "xcrun" && args?.[1] === "boot"
+    );
+    expect(mockExecFile.mock.invocationCallOrder[xcodeSelectIdx]).toBeLessThan(
+      mockExecFile.mock.invocationCallOrder[bootIdx]
+    );
   });
 
   it("skips pre-boot plist write when the sim is already Booted and falls back to ensureAutomationEnabled", async () => {
@@ -260,7 +293,10 @@ describe("boot-device — iOS path", () => {
       booted: true,
     });
 
-    expect(mockExecFile.mock.calls[1]?.slice(0, 2)).toEqual([
+    const bootstatusCall = mockExecFile.mock.calls.find(
+      ([file, args]) => file === "xcrun" && args?.[1] === "bootstatus"
+    );
+    expect(bootstatusCall?.slice(0, 2)).toEqual([
       "xcrun",
       ["simctl", "bootstatus", "22222222-2222-2222-2222-222222222222", "-b"],
     ]);
@@ -293,14 +329,15 @@ describe("boot-device — iOS path", () => {
       "22222222-2222-2222-2222-222222222222"
     );
     const execCalls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
-    expect(execCalls[0]).toEqual([
+    const shutdownCall = execCalls.find(
+      ([file, args]) => file === "xcrun" && args?.[1] === "shutdown"
+    );
+    expect(shutdownCall).toEqual([
       "xcrun",
       ["simctl", "shutdown", "22222222-2222-2222-2222-222222222222"],
     ]);
-    expect(execCalls[1]).toEqual([
-      "xcrun",
-      ["simctl", "boot", "22222222-2222-2222-2222-222222222222"],
-    ]);
+    const bootCall = execCalls.find(([file, args]) => file === "xcrun" && args?.[1] === "boot");
+    expect(bootCall).toEqual(["xcrun", ["simctl", "boot", "22222222-2222-2222-2222-222222222222"]]);
   });
 
   it("force not set on a Booted sim does not shut down", async () => {

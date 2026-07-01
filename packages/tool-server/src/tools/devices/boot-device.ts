@@ -1,4 +1,6 @@
 import { execFile, spawn } from "node:child_process";
+import { existsSync, mkdirSync, symlinkSync } from "node:fs";
+import path from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 import {
@@ -428,6 +430,28 @@ async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
   return now.filter((s) => !before.has(s));
 }
 
+async function ensureSimulatorKitPath(): Promise<void> {
+  let devPath: string;
+  try {
+    const { stdout } = await execFileAsync("xcode-select", ["--print-path"], { timeout: 5_000 });
+    devPath = stdout.trim();
+  } catch {
+    return;
+  }
+  if (!devPath.endsWith("/Developer")) return;
+  const oldPath = path.join(devPath, "Library", "PrivateFrameworks", "SimulatorKit.framework");
+  if (existsSync(oldPath)) return;
+  const newPath = path.join(
+    path.resolve(devPath, "..", ".."),
+    "Contents",
+    "SharedFrameworks",
+    "SimulatorKit.framework"
+  );
+  if (!existsSync(newPath)) return;
+  mkdirSync(path.dirname(oldPath), { recursive: true });
+  symlinkSync(newPath, oldPath);
+}
+
 async function bootIos(
   udid: string,
   registry: Registry,
@@ -448,6 +472,7 @@ async function bootIos(
     );
   }
   await ensureDep("xcrun");
+  await ensureSimulatorKitPath();
 
   const simState = await listIosSimulators()
     .then((sims) => sims.find((s) => s.udid === udid)?.state)
@@ -501,8 +526,10 @@ async function bootIos(
     "com.apple.iphonesimulator",
     "CurrentDeviceUDID",
     udid,
-  ]);
-  await execFileAsync("open", ["-a", "Simulator.app"]);
+  ]).catch(() => {});
+  await execFileAsync("open", ["-a", "Simulator.app"])
+    .catch(() => execFileAsync("open", ["-b", "com.apple.dt.Devices"]))
+    .catch(() => {});
   return { platform: "ios", udid, booted: true };
 }
 
