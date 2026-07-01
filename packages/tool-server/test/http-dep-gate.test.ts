@@ -3,11 +3,12 @@ import request from "supertest";
 import { Registry } from "@argent/registry";
 import { z } from "zod";
 
-const execFileMock = vi.fn();
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return { ...actual, execFile: (...args: unknown[]) => execFileMock(...args) };
-});
+// PATH deps (xcrun) resolve through `commandOnPath`; mock it so the gate test
+// is platform-agnostic rather than asserting a `/bin/sh` call shape.
+const commandOnPathMock = vi.fn();
+vi.mock("../src/utils/command-on-path", () => ({
+  commandOnPath: (name: string) => commandOnPathMock(name),
+}));
 
 // `probe()` special-cases adb/emulator to use `resolveAndroidBinary`
 // (which adds an `$ANDROID_HOME` fallback to PATH). Mock the resolver so
@@ -27,18 +28,8 @@ import {
 } from "../src/utils/check-deps";
 
 function stubProbe(missing: readonly string[]): void {
-  execFileMock.mockImplementation(
-    (
-      _cmd: string,
-      args: string[],
-      _opts: unknown,
-      cb: (err: Error | null, stdout?: string, stderr?: string) => void
-    ) => {
-      const script = args[1] ?? "";
-      const dep = script.replace("command -v ", "").trim();
-      if (missing.includes(dep)) cb(new Error(`not found: ${dep}`));
-      else cb(null, `/usr/bin/${dep}\n`, "");
-    }
+  commandOnPathMock.mockImplementation(async (name: string) =>
+    missing.includes(name) ? null : `/usr/bin/${name}`
   );
   resolveAndroidBinaryMock.mockImplementation(async (name: string) => {
     return missing.includes(name) ? null : `/usr/bin/${name}`;
@@ -48,7 +39,7 @@ function stubProbe(missing: readonly string[]): void {
 describe("http dependency gate", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
-    execFileMock.mockReset();
+    commandOnPathMock.mockReset();
     resolveAndroidBinaryMock.mockReset();
   });
 
@@ -185,7 +176,7 @@ describe("http dependency gate", () => {
     const { app } = createHttpApp(registry);
     const res = await request(app).post("/tools/no-deps").send({});
     expect(res.status).toBe(200);
-    expect(execFileMock).not.toHaveBeenCalled();
+    expect(commandOnPathMock).not.toHaveBeenCalled();
   });
 
   it("still returns 424 when the DependencyMissingError is buried two levels deep in the cause chain", async () => {

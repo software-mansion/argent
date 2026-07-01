@@ -1,4 +1,7 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type StdioOptions } from "node:child_process";
+import { openSync, closeSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 import {
@@ -538,11 +541,35 @@ async function attemptBoot(params: {
   // returned as booted rather than destroyed.
   tearDownIfUnready: boolean;
 }): Promise<{ serial: string }> {
+  // On Windows the emulator hangs mid-boot when spawned with stdio:"ignore":
+  // a detached process whose stdout/stderr are NUL never reaches
+  // sys.boot_completed (verified on windows-latest — the identical flag set
+  // boots fine when given real handles). Redirect its output to a throwaway log
+  // file so it has valid write handles, mirroring a `emulator ... > log` launch.
+  // POSIX is unchanged: "ignore" works there, and detaching keeps the emulator
+  // alive across a tool-server restart.
+  let emulatorLogFd: number | undefined;
+  let stdio: StdioOptions = "ignore";
+  if (process.platform === "win32") {
+    const safeName = params.avdName.replace(/[^\w.-]/g, "_");
+    const logPath = join(tmpdir(), `argent-emulator-${safeName}-${Date.now()}.log`);
+    emulatorLogFd = openSync(logPath, "a");
+    stdio = ["ignore", emulatorLogFd, emulatorLogFd];
+  }
   const child = spawn(params.emulatorBinary, params.emulatorArgs, {
     detached: true,
-    stdio: "ignore",
+    stdio,
   });
   child.unref();
+  // The spawned child inherited its own handle for the log fd; close the
+  // parent's copy so a descriptor doesn't leak per boot. No-op on POSIX.
+  if (emulatorLogFd !== undefined) {
+    try {
+      closeSync(emulatorLogFd);
+    } catch {
+      // best-effort — the child keeps its own handle regardless
+    }
+  }
 
   let earlyExitError: Error | null = null;
   child.on("exit", (code, signal) => {

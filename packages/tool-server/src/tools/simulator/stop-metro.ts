@@ -2,6 +2,67 @@ import { z } from "zod";
 import { execFileSync } from "node:child_process";
 import type { ToolDefinition } from "@argent/registry";
 
+/**
+ * Parse the raw output of `netstat -ano` (Windows) into the deduped set of PIDs
+ * *listening* on `port`. Pure string parsing, split out of `listeningPids` so
+ * the win32 row-matching can be unit-tested without a Windows host.
+ *
+ * Each row is `proto localAddr foreignAddr state pid`. A row matches when it is
+ * a TCP row in the LISTENING state whose local address ends in `:<port>`. The
+ * leading colon guards against `:18081` matching port 8081. UDP rows (4 columns,
+ * no state) and ESTABLISHED/other states are skipped, and PIDs are deduplicated
+ * — a listener bound on both IPv4 `0.0.0.0:<port>` and IPv6 `[::]:<port>`
+ * reports the same PID on two rows.
+ */
+export function parseNetstatListeningPids(netstatOutput: string, port: number): number[] {
+  const pids = new Set<number>();
+  for (const line of netstatOutput.split(/\r?\n/)) {
+    const cols = line.trim().split(/\s+/);
+    // cols: [proto, localAddr, foreignAddr, state, pid]
+    if (cols.length < 5 || cols[0].toUpperCase() !== "TCP") continue;
+    if (cols[3].toUpperCase() !== "LISTENING") continue;
+    // The colon guards against `:18081` matching port 8081.
+    if (!cols[1].endsWith(`:${port}`)) continue;
+    const pid = parseInt(cols[4], 10);
+    if (!Number.isNaN(pid) && pid > 0) pids.add(pid);
+  }
+  return [...pids];
+}
+
+/**
+ * Resolve the PIDs of processes *listening* on a TCP port, cross-platform.
+ * Only the listener (Metro itself) is returned, never processes holding an
+ * ESTABLISHED connection to the port — otherwise the Argent tool-server's own
+ * CDP client socket to Metro would be matched and killed alongside it.
+ *
+ * - POSIX: `lsof -ti tcp:<port> -sTCP:LISTEN` — one PID per line, exits
+ *   non-zero when the port is free.
+ * - Windows: `netstat -ano`, then filter TCP rows in the LISTENING state whose
+ *   local address ends in `:<port>` and read the trailing PID column. `lsof`
+ *   doesn't exist on Windows, so the prior implementation threw ENOENT there.
+ *
+ * Both run without a shell, so `port` (already an int by the time it reaches
+ * here) can never be interpreted as a shell token.
+ */
+function listeningPids(port: number): number[] {
+  if (process.platform === "win32") {
+    const output = execFileSync("netstat", ["-ano"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+    });
+    return parseNetstatListeningPids(output, port);
+  }
+  const output = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+    encoding: "utf-8",
+    timeout: 5_000,
+  }).trim();
+  if (!output) return [];
+  return output
+    .split("\n")
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => !Number.isNaN(n));
+}
+
 const zodSchema = z.object({
   port: z
     .number()
@@ -23,28 +84,7 @@ export const stopMetroTool: ToolDefinition<
   async execute(_services, params) {
     const port = (params as { port: number }).port;
     try {
-      // execFileSync (no shell) so `port` can never be shell-interpreted,
-      // even if a caller bypasses the zod schema. `port` is also validated to
-      // an int by registry.invokeTool before reaching here.
-      //
-      // `-sTCP:LISTEN` restricts the match to the process *listening* on the
-      // port (Metro itself). Without it, `lsof -ti tcp:<port>` also returns
-      // every process holding an ESTABLISHED connection to that port — which
-      // includes the Argent tool-server's own CDP client socket to Metro. We
-      // would then SIGTERM the tool-server along with Metro.
-      const output = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
-        encoding: "utf-8",
-        timeout: 5_000,
-      }).trim();
-
-      if (!output) {
-        return { stopped: false, port, pids: [] };
-      }
-
-      const pids = output
-        .split("\n")
-        .map((s) => parseInt(s.trim(), 10))
-        .filter((n) => !isNaN(n));
+      const pids = listeningPids(port);
 
       if (pids.length === 0) {
         return { stopped: false, port, pids: [] };
@@ -52,6 +92,9 @@ export const stopMetroTool: ToolDefinition<
 
       for (const pid of pids) {
         try {
+          // On Windows the signal is ignored and the process is terminated
+          // outright (Node maps any kill to TerminateProcess); on POSIX
+          // SIGTERM lets Metro shut down its watchers cleanly.
           process.kill(pid, "SIGTERM");
         } catch {
           // Process may have already exited
@@ -60,7 +103,8 @@ export const stopMetroTool: ToolDefinition<
 
       return { stopped: true, port, pids };
     } catch {
-      // lsof exits non-zero when no process is found on the port
+      // lsof / netstat exits non-zero (or finds nothing) when no process is
+      // listening on the port.
       return { stopped: false, port, pids: [] };
     }
   },

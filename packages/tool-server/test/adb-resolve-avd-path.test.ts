@@ -45,4 +45,14 @@ describe("resolveAvdPath", () => {
     await avdHomeWith("Other.ini", "path=/data/avd/Other.avd\n");
     expect(await resolveAvdPath("Missing")).toBeNull();
   });
+
+  // Windows-only: a drive-absolute path must be accepted. The previous
+  // startsWith("/") guard rejected `C:/…`, so on Windows resolveAvdPath always
+  // returned null and the snapshot pre-check silently fell back to cold boot.
+  // isAbsolute() (win32) accepts it. Skipped off Windows because `C:/…` is not
+  // absolute under POSIX path semantics, which is the correct host behaviour.
+  it.skipIf(process.platform !== "win32")("accepts a Windows drive-absolute path", async () => {
+    await avdHomeWith("Win.ini", "path=C:/Users/ci/.android/avd/Win.avd\n");
+    expect(await resolveAvdPath("Win")).toBe("C:/Users/ci/.android/avd/Win.avd");
+  });
 });

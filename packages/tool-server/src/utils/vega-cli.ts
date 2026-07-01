@@ -13,6 +13,7 @@ import {
 } from "@argent/registry";
 import { formatSubprocessFailure } from "./subprocess-error";
 import { listRunningVvdConsolePorts } from "./vega-process";
+import { commandOnPath } from "./command-on-path";
 
 const execFileAsync = promisify(execFile);
 
@@ -43,18 +44,6 @@ async function isExecutable(p: string): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function commandOnPath(name: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], {
-      timeout: 2_000,
-    });
-    const path = stdout.trim();
-    return path || null;
-  } catch {
-    return null;
   }
 }
 

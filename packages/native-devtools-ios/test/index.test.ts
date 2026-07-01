@@ -29,6 +29,14 @@ function setArch(value: NodeJS.Architecture) {
   Object.defineProperty(process, "arch", { value, configurable: true });
 }
 
+// The on-disk binary name is `.exe` on Windows, extensionless elsewhere — must
+// match simulatorServerBinaryName(). Tests that don't override the platform run
+// against the host's real one, so their fixtures have to use the host-correct
+// name to pass on a Windows runner as well as on macOS/Linux.
+function ssBinName(): string {
+  return process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
+}
+
 beforeAll(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-resolver-"));
 });
@@ -108,7 +116,7 @@ describe("simulator-server path resolution", () => {
     const dir = fs.mkdtempSync(path.join(tmpRoot, "platform-join-"));
     const platDir = path.join(dir, process.platform);
     fs.mkdirSync(platDir, { recursive: true });
-    const binPath = path.join(platDir, "simulator-server");
+    const binPath = path.join(platDir, ssBinName());
     fs.writeFileSync(binPath, "", { mode: 0o755 });
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
@@ -135,8 +143,8 @@ describe("simulator-server path resolution", () => {
     // the message tells them exactly what changed and how to fix it.
     const dir = fs.mkdtempSync(path.join(tmpRoot, "flat-layout-"));
     fs.mkdirSync(path.join(dir, process.platform), { recursive: true });
-    // Place the binary at the flat (old) path.
-    const flatBin = path.join(dir, "simulator-server");
+    // Place the binary at the flat (old) path, host-correct name.
+    const flatBin = path.join(dir, ssBinName());
     fs.writeFileSync(flatBin, "", { mode: 0o755 });
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
@@ -204,6 +212,45 @@ describe("host platform key (arch-aware Linux bin dirs)", () => {
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
     expect(() => r.simulatorServerBinaryPath()).toThrow(/linux-arm64/);
+  });
+});
+
+describe("Windows (win32) binary resolution", () => {
+  // The Windows release ships a PE `.exe` (simulator-server.exe), not the
+  // extensionless binary other hosts use. The resolver must pick the `.exe`
+  // name AND key the directory by "win32" (process.platform), so a Windows
+  // host finds bin/win32/simulator-server.exe. iOS is macOS-only, so this
+  // binary serves Android + Chromium hosts.
+  it("resolves bin/win32/simulator-server.exe on Windows", async () => {
+    setPlatform("win32");
+    setArch("x64");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "win32-"));
+    const platDir = path.join(dir, "win32");
+    fs.mkdirSync(platDir, { recursive: true });
+    const binPath = path.join(platDir, "simulator-server.exe");
+    fs.writeFileSync(binPath, "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(r.hostPlatformKey()).toBe("win32");
+    expect(r.simulatorServerBinaryName()).toBe("simulator-server.exe");
+    expect(r.simulatorServerBinaryPath()).toBe(binPath);
+    expect(r.simulatorServerBinaryDir()).toBe(platDir);
+  });
+
+  it("does not resolve an extensionless binary on Windows", async () => {
+    // Guards against a half-migrated layout: an extensionless
+    // bin/win32/simulator-server must NOT satisfy the resolver, since Windows
+    // can't exec it — the error should point at the `.exe` it actually needs.
+    setPlatform("win32");
+    setArch("x64");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "win32-noext-"));
+    const platDir = path.join(dir, "win32");
+    fs.mkdirSync(platDir, { recursive: true });
+    fs.writeFileSync(path.join(platDir, "simulator-server"), "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(() => r.simulatorServerBinaryPath()).toThrow(/simulator-server\.exe/);
+    expect(() => r.simulatorServerBinaryPath()).toThrow(/win32/);
   });
 });
 
