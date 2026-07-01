@@ -23,10 +23,15 @@ export interface InstallationCliInitCompleteProps extends FailureTelemetryProps 
   duration_ms: number;
   is_success: boolean;
   editors_configured_count: number;
+  install_mode?: "global" | "local";
 }
 
 export interface InstallationCliInitCancelProps {
-  step: "global_install" | "editors" | "scope" | "skills" | "allowlist";
+  step: "global_install" | "editors" | "scope" | "skills" | "allowlist" | "install_mode";
+}
+
+export interface InstallationInstallModeDecisionProps {
+  install_mode: "global" | "local";
 }
 
 export interface InstallationGlobalInstallDecisionProps {
@@ -45,6 +50,7 @@ export interface InstallationEditorsSelectProps {
   editors: string[];
   detected_editor_count: number;
   scope: "local" | "global" | "custom";
+  install_mode?: "global" | "local";
 }
 
 export interface InstallationAllowlistDecisionProps {
@@ -90,10 +96,12 @@ export type InstallationCliUpdateStartProps = Record<string, never>;
 
 export interface InstallationCliUpdateCompleteProps {
   duration_ms: number;
+  install_mode?: "global" | "local";
 }
 
 export interface InstallationCliUpdateFailProps extends FailureTelemetryProps {
   duration_ms: number;
+  install_mode?: "global" | "local";
 }
 
 export type InstallationCliUninstallStartProps = Record<string, never>;
@@ -101,6 +109,7 @@ export type InstallationCliUninstallStartProps = Record<string, never>;
 export interface InstallationCliUninstallCompleteProps extends FailureTelemetryProps {
   has_pruned_content: boolean;
   has_uninstalled_package: boolean;
+  install_mode?: "global" | "local";
 }
 
 // Tool usage events
@@ -148,6 +157,7 @@ export interface EventPropertyMap {
   "installation:cli_init_start": InstallationCliInitStartProps;
   "installation:cli_init_complete": InstallationCliInitCompleteProps;
   "installation:cli_init_cancel": InstallationCliInitCancelProps;
+  "installation:install_mode_decision": InstallationInstallModeDecisionProps;
   "installation:global_install_decision": InstallationGlobalInstallDecisionProps;
   "installation:update_decision": InstallationUpdateDecisionProps;
   "installation:editors_select": InstallationEditorsSelectProps;
@@ -175,6 +185,7 @@ export const EVENT_NAMES: readonly EventName[] = [
   "installation:cli_init_start",
   "installation:cli_init_complete",
   "installation:cli_init_cancel",
+  "installation:install_mode_decision",
   "installation:global_install_decision",
   "installation:update_decision",
   "installation:editors_select",

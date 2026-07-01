@@ -18,6 +18,8 @@ import {
   readYaml,
   writeYaml,
   editJsoncFile,
+  isYarnPnp,
+  getLocalArgentBinRelPath,
 } from "./utils.js";
 import { isMap } from "yaml";
 import escapeStringRegexp from "escape-string-regexp";
@@ -70,18 +72,52 @@ type CodexConfig = {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-function buildMcpEntry(): McpServerEntry {
+// How the committed MCP entry should locate the argent executable.
+//   global     → bare PATH `argent` (the default; a global install).
+//   local-node → `node <project-relative bin path>` (committable repo-local
+//                install on a normal node_modules layout: npm/yarn-classic/pnpm).
+//   local-pnp  → `yarn argent` (Yarn Plug'n'Play, which has no node_modules).
+//   local-npx  → `npx --no-install argent` (fallback when the local bin path
+//                can't be verified; never bare `npx`/`-y`, which can hang a
+//                TTY-less stdio server or silently network-install).
+export type McpCommandMode =
+  | { kind: "global" }
+  | { kind: "local-node"; binRelPath: string }
+  | { kind: "local-pnp" }
+  | { kind: "local-npx" };
+
+function buildMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServerEntry {
   // No env vars by default: the MCP server falls back to
   // `${homedir()}/.argent/mcp-calls.log` when ARGENT_MCP_LOG is unset, so we
   // keep this generated config portable — see issue #238.
-  return {
-    command: MCP_BINARY_NAME,
-    args: ["mcp"],
-  };
+  switch (mode.kind) {
+    case "local-node":
+      // `node` (not the .bin/argent shim) is Windows-safe — it spawns the real
+      // node binary instead of a .cmd/.ps1 shim. The relative path resolves
+      // against the client's cwd, which for a committed project-scope config is
+      // the project root.
+      return { command: "node", args: [mode.binRelPath, "mcp"] };
+    case "local-pnp":
+      return { command: "yarn", args: ["argent", "mcp"] };
+    case "local-npx":
+      return { command: "npx", args: ["--no-install", "argent", "mcp"] };
+    default:
+      return { command: MCP_BINARY_NAME, args: ["mcp"] };
+  }
 }
 
-export function getMcpEntry(): McpServerEntry {
-  return buildMcpEntry();
+export function getMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServerEntry {
+  return buildMcpEntry(mode);
+}
+
+// Resolve the MCP command shape for a committable (local) install rooted at
+// `root`: Yarn-PnP form, the node+relative-path form, or the npx fallback when
+// the local bin path can't be verified.
+export function resolveLocalCommandMode(root: string): McpCommandMode {
+  if (isYarnPnp(root)) return { kind: "local-pnp" };
+  const binRelPath = getLocalArgentBinRelPath(root);
+  if (binRelPath) return { kind: "local-node", binRelPath };
+  return { kind: "local-npx" };
 }
 
 function hasEnv(entry: McpServerEntry): entry is McpServerEntry & { env: Record<string, string> } {

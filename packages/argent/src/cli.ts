@@ -63,6 +63,8 @@ Usage: argent <command> [options]
 Commands:
   mcp         Start the MCP stdio server (used by editors)
   init        Initialize argent in the current workspace (MCP server + skills)
+              (--global [default] installs on PATH; --local commits a
+              devDependency setup the whole team gets on \`npm install\`)
   install     Alias for init
   update      Check for updates and refresh configuration
   uninstall   Remove argent configuration from the workspace

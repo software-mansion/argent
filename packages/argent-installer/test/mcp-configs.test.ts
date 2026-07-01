@@ -7,6 +7,7 @@ import { parse as parseJsonc } from "jsonc-parser";
 import {
   ALL_ADAPTERS,
   getMcpEntry,
+  resolveLocalCommandMode,
   addClaudePermission,
   removeClaudePermission,
   copyRulesAndAgents,
@@ -88,6 +89,92 @@ describe("getMcpEntry", () => {
     // per-user log path into ARGENT_MCP_LOG (issue #238). The MCP server
     // falls back to ${homedir()}/.argent/mcp-calls.log at runtime.
     expect(entry.env).toBeUndefined();
+  });
+
+  it("defaults to the global command when no mode is passed", () => {
+    expect(getMcpEntry({ kind: "global" })).toEqual({ command: "argent", args: ["mcp"] });
+  });
+
+  it("local-node runs `node <relative bin path> mcp`", () => {
+    expect(
+      getMcpEntry({ kind: "local-node", binRelPath: "node_modules/@swmansion/argent/dist/cli.js" })
+    ).toEqual({
+      command: "node",
+      args: ["node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+    });
+  });
+
+  it("local-pnp runs `yarn argent mcp`", () => {
+    expect(getMcpEntry({ kind: "local-pnp" })).toEqual({
+      command: "yarn",
+      args: ["argent", "mcp"],
+    });
+  });
+
+  it("local-npx runs `npx --no-install argent mcp` (never bare npx / -y)", () => {
+    expect(getMcpEntry({ kind: "local-npx" })).toEqual({
+      command: "npx",
+      args: ["--no-install", "argent", "mcp"],
+    });
+  });
+
+  it("local entries carry no env block", () => {
+    expect(getMcpEntry({ kind: "local-node", binRelPath: "x" }).env).toBeUndefined();
+    expect(getMcpEntry({ kind: "local-pnp" }).env).toBeUndefined();
+  });
+});
+
+// ── resolveLocalCommandMode ─────────────────────────────────────────────────
+
+describe("resolveLocalCommandMode", () => {
+  function stageLocalArgent(root: string): void {
+    const pkgDir = path.join(root, "node_modules", "@swmansion", "argent", "dist");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "node_modules", "@swmansion", "argent", "package.json"),
+      JSON.stringify({
+        name: "@swmansion/argent",
+        version: "1.0.0",
+        bin: { argent: "dist/cli.js" },
+      })
+    );
+    fs.writeFileSync(path.join(pkgDir, "cli.js"), "");
+  }
+
+  it("returns local-pnp for a Yarn PnP project", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    expect(resolveLocalCommandMode(tmpDir)).toEqual({ kind: "local-pnp" });
+  });
+
+  it("returns local-node with the resolved bin path when installed", () => {
+    stageLocalArgent(tmpDir);
+    expect(resolveLocalCommandMode(tmpDir)).toEqual({
+      kind: "local-node",
+      binRelPath: "node_modules/@swmansion/argent/dist/cli.js",
+    });
+  });
+
+  it("falls back to local-npx when the bin can't be resolved", () => {
+    expect(resolveLocalCommandMode(tmpDir)).toEqual({ kind: "local-npx" });
+  });
+
+  it("opencode writes the local-node entry as a command array", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+    const configPath = path.join(tmpDir, "opencode.json");
+    adapter.write(
+      configPath,
+      getMcpEntry({ kind: "local-node", binRelPath: "node_modules/@swmansion/argent/dist/cli.js" })
+    );
+    const cfg = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+      mcp: { argent: { command: string[]; type: string; enabled: boolean } };
+    };
+    expect(cfg.mcp.argent.command).toEqual([
+      "node",
+      "node_modules/@swmansion/argent/dist/cli.js",
+      "mcp",
+    ]);
+    expect(cfg.mcp.argent.type).toBe("local");
+    expect(cfg.mcp.argent.enabled).toBe(true);
   });
 });
 

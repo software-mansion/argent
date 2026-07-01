@@ -85,6 +85,8 @@ const NETWORK_FAILURE = oneOf(NETWORK_FAILURES);
 
 const AI_CLIENT = oneOf(AI_CLIENTS);
 
+const INSTALL_MODE = oneOf(["global", "local"] as const);
+
 const AI_TELEMETRY = {
   ai_client: AI_CLIENT,
 };
@@ -121,10 +123,21 @@ export const ALLOWED: ValidatorMap = {
     duration_ms: DURATION_MS,
     is_success: bool,
     editors_configured_count: COUNT,
+    install_mode: INSTALL_MODE,
     ...FAILURE_SIGNAL,
   },
   "installation:cli_init_cancel": {
-    step: oneOf(["global_install", "editors", "scope", "skills", "allowlist"] as const),
+    step: oneOf([
+      "global_install",
+      "editors",
+      "scope",
+      "skills",
+      "allowlist",
+      "install_mode",
+    ] as const),
+  },
+  "installation:install_mode_decision": {
+    install_mode: INSTALL_MODE,
   },
   "installation:global_install_decision": {
     // `from_tar` is intentionally absent; the installer skips that dev path.
@@ -139,6 +152,7 @@ export const ALLOWED: ValidatorMap = {
     editors: arrayOf(ADAPTER_NAME),
     detected_editor_count: COUNT,
     scope: oneOf(["local", "global", "custom"] as const),
+    install_mode: INSTALL_MODE,
   },
   "installation:allowlist_decision": {
     is_enabled: bool,
@@ -167,15 +181,18 @@ export const ALLOWED: ValidatorMap = {
   "installation:cli_update_start": {},
   "installation:cli_update_complete": {
     duration_ms: DURATION_MS,
+    install_mode: INSTALL_MODE,
   },
   "installation:cli_update_fail": {
     duration_ms: DURATION_MS,
+    install_mode: INSTALL_MODE,
     ...FAILURE_SIGNAL,
   },
   "installation:cli_uninstall_start": {},
   "installation:cli_uninstall_complete": {
     has_pruned_content: bool,
     has_uninstalled_package: bool,
+    install_mode: INSTALL_MODE,
     ...FAILURE_SIGNAL,
   },
   "tool:invoke": {

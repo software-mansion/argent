@@ -98,20 +98,45 @@ npm install -g @swmansion/argent
 argent init
 ```
 
+#### Share Argent with your team (committable install)
+
+By default Argent installs **globally**. To version Argent _with your repo_ so every
+teammate gets the same setup on `npm install` — no per-developer global install, no
+`argent init` — choose the local mode:
+
+```bash
+npx @swmansion/argent init --local
+```
+
+This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP
+configs that launch the project-local copy (`node node_modules/@swmansion/argent/dist/cli.js mcp`).
+Commit `package.json` + your lockfile, the generated MCP config (`.mcp.json`,
+`.cursor/mcp.json`, …), `.argent/install.json`, and the skills/rules/agents files.
+Teammates then just run `npm install`.
+
+Pass `--global` to force the default mode in scripts; `--local` and `--global` are
+mutually exclusive, and a non-interactive (`--yes`) run defaults to global.
+
+> Local mode is recommended on mainstream platforms (macOS, Linux x64, Windows x64),
+> which have prebuilt native binaries. On Linux arm64 / Windows arm a C/C++ toolchain
+> is required to build `tree-sitter` during `npm install`. The bare `argent` command
+> is not added to teammates' `PATH` in local mode — the committed MCP config runs the
+> project-local copy.
+
 ## CLI Reference
 
-| Command            | Description                                                            |
-| ------------------ | ---------------------------------------------------------------------- |
-| `argent init`      | Install globally and configure MCP in the current workspace            |
-| `argent install`   | Alias for `init` command                                               |
-| `argent update`    | Pull the latest version and refresh workspace configuration            |
-| `argent remove`    | Unregister the MCP server and uninstall the package                    |
-| `argent uninstall` | Alias for `remove` command                                             |
-| `argent mcp`       | Start MCP server instance, used internally by agent                    |
-| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local) |
-| `argent disable`   | Disable a feature flag (`--scope project` for project-local)           |
-| `argent flags`     | List available feature flags and their state                           |
-| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`            |
+| Command            | Description                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `argent init`      | Install and configure MCP in the current workspace (`--global` default, `--local` for a committable devDependency) |
+| `argent install`   | Alias for `init` command                                                                                           |
+| `argent update`    | Pull the latest version and refresh workspace configuration (respects the project's install mode)                  |
+| `argent remove`    | Unregister the MCP server and uninstall the package (the project's install mode; never the other)                  |
+| `argent uninstall` | Alias for `remove` command                                                                                         |
+| `argent mcp`       | Start MCP server instance, used internally by agent                                                                |
+| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                             |
+| `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                       |
+| `argent flags`     | List available feature flags and their state                                                                       |
+| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`                                                        |
 
 ## Supported Editors
 
