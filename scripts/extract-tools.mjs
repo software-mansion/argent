@@ -21,7 +21,7 @@ const toolsRoot = join(__dir, "..", "packages", "tool-server", "src", "tools");
 // Standard JS string/template-literal escapes this extractor unescapes when
 // rendering a captured description. Anything not listed here (e.g. \x41,
 // é) is left as-is rather than guessed at.
-const UNESCAPE_MAP = { n: "\n", r: "\r", t: "\t", "0": "\0" };
+const UNESCAPE_MAP = { n: "\n", r: "\r", t: "\t", 0: "\0" };
 
 function walk(dir) {
   const entries = [];
