@@ -412,6 +412,19 @@ export async function startNativeProfilerIos(
   // and is therefore already scoped without a capture strategy or detected PID.
   let detected: DetectedApp | null = null;
   let strategy: IosCaptureStrategy | null = null;
+
+  // Resolve the trace output path (which creates the debug dir) BEFORE the branch
+  // below. The malloc path terminates the running app for a clean cold start; if
+  // getDebugDir()'s mkdir failed AFTER that terminate, the app would be left dead
+  // with no relaunch (the best-effort relaunch only guards the start attempt).
+  // Doing it here means any mkdir failure happens before the app is touched.
+  const debugDir = await getDebugDir();
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
+    .slice(0, 15);
+  const outputFile = path.join(debugDir, `native-profiler-${timestamp}.trace`);
+
   if (useMallocStackLogging) {
     // malloc_stack_logging must cold-launch the app under `xctrace --device --launch`
     // (only `--launch` honours `--env MallocStackLogging=1`). On Xcode 26.4–27.0 the
@@ -478,13 +491,6 @@ export async function startNativeProfilerIos(
       );
     }
   }
-
-  const debugDir = await getDebugDir();
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
-    .slice(0, 15);
-  const outputFile = path.join(debugDir, `native-profiler-${timestamp}.trace`);
 
   api.recordingTimedOut = false;
   api.recordingExitedUnexpectedly = false;

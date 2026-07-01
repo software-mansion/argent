@@ -133,6 +133,45 @@ describe("native-profiler-start malloc_stack_logging", () => {
     expect(execCmds.some((c) => c.includes("get_app_container"))).toBe(true);
   });
 
+  it("does not terminate the app if the debug dir can't be created (malloc mode)", async () => {
+    // getDebugDir()'s mkdir runs BEFORE the terminate, so a failure (e.g. ENOSPC)
+    // must leave the running app untouched — never killed-without-relaunch.
+    const { spawnFn, execSyncFn } = mockChildProcess();
+    vi.doMock("child_process", () => ({
+      spawn: spawnFn,
+      execSync: execSyncFn,
+      execFile: vi.fn(),
+      execFileSync: vi.fn(),
+    }));
+    vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+      getDebugDir: vi.fn(async () => {
+        throw new Error("ENOSPC: no space left on device");
+      }),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+      listenForDarwinNotification: vi.fn(() => {
+        throw new Error("notifyutil unavailable in tests");
+      }),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+      waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
+    }));
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    await expect(
+      startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      })
+    ).rejects.toThrow(/ENOSPC/);
+
+    const execCmds = execSyncFn.mock.calls.map((c) => String(c[0]));
+    expect(execCmds.some((c) => c.includes("simctl terminate"))).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it("attaches (no launch/env) by default", async () => {
     const { spawnFn, execSyncFn } = mockChildProcess();
     applyCommonMocks(spawnFn, execSyncFn);
