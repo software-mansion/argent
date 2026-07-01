@@ -243,7 +243,7 @@ interface PruneOptions {
   includeSystem: boolean;
 }
 
-function attrIsTrue(attrs: Record<string, string>, key: string): boolean {
+export function attrIsTrue(attrs: Record<string, string>, key: string): boolean {
   return attrs[key] === "true";
 }
 
@@ -262,7 +262,7 @@ function isInteractive(attrs: Record<string, string>): boolean {
   return false;
 }
 
-function labelOf(attrs: Record<string, string>): string {
+export function labelOf(attrs: Record<string, string>): string {
   // The DescribeNode contract surfaces the screen-reader-meaningful label and
   // the user-typed text separately, so we prefer `content-desc` (the role
   // description / placeholder) and let `text` come through as `value` when

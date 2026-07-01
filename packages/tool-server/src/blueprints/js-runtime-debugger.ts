@@ -6,6 +6,8 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
+import { classifyDevice } from "../utils/device-info";
+import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
@@ -161,6 +163,18 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         failure_area: "tool_server",
         error_kind: "validation",
       });
+    }
+
+    // For a remote (cloud) sim the RN app reaches the developer's LOCAL Metro
+    // through a sim-remote reverse tunnel: the sim's localhost:<port> is
+    // forwarded to this host's Metro. The tool-server still talks to Metro
+    // directly on localhost — discoverMetro below is unchanged — so only the
+    // app→Metro hop needs the tunnel. proxyStart is idempotent, so re-ensuring
+    // it on every (re)connect is cheap; if the app launched before the tunnel
+    // existed it won't be in /json/list yet — the caller reloads/relaunches
+    // once the tunnel is up so it registers as a CDP target.
+    if (classifyDevice(deviceId) === "ios-remote") {
+      await proxyStart(deviceId, port);
     }
 
     const metro = await discoverMetro(port);

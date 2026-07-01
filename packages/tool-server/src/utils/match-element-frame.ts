@@ -3,6 +3,7 @@ import type { DescribeNode } from "../tools/describe/contract";
 import { describeIos } from "../tools/describe/platforms/ios";
 import { describeAndroid } from "../tools/describe/platforms/android";
 import { resolveDevice } from "./device-info";
+import { isTvOsSimulator } from "./ios-devices";
 import type { VariantMatch } from "./variant-proposals";
 
 export interface NormalizedFrame {
@@ -155,12 +156,15 @@ export async function captureElementFrame(
     // Chromium (CDP) devices have no adb/sim-server describe path; skip frame
     // auto-capture rather than shelling adb against a non-existent serial.
     if (device.platform === "chromium") return null;
+    // Resolve once, before the retry loop, so describeIos doesn't re-shell
+    // `xcrun` per attempt.
+    const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
     let bestPartial: NormalizedFrame | null = null;
     const startedAt = Date.now();
     for (let attempt = 0; attempt < attempts; attempt++) {
       const data =
         device.platform === "ios"
-          ? await describeIos(registry, device, {})
+          ? await describeIos(registry, device, {}, { isTvOs })
           : await describeAndroid(registry, udid);
       const tree = data?.tree ?? null;
       const hit = tree ? findElementMatch(tree, match) : null;

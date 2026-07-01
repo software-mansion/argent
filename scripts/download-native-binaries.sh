@@ -63,6 +63,56 @@ gh release download "${TAG}" \
   --clobber
 chmod +x "${IOS_BIN_DIR}/ax-service"
 
+# tvOS binaries (Apple TV support). The three tvOS injection dylibs share their
+# filenames with the iOS dylibs, so the release ships them as a tarball
+# (native-devtools-ios-tvos-dylibs.tar.gz) that we extract into dylibs/tvos/ —
+# the directory bootstrapDylibPathTvos() reads from. The two daemons
+# (tvos-ax-service spawned in-sim, tvos-hid-daemon on the host) have unique
+# names and download flat into bin/darwin/.
+#
+# These assets only exist on releases built with TV support. A pre-TV-support
+# tag (the optional [release-tag] arg lets you pull older releases) simply has
+# no tvOS artifacts, so a missing asset is skipped with a warning rather than
+# aborting the whole download (`gh release download` exits non-zero on no match,
+# which under `set -e` would otherwise leave a half-populated tree).
+TVOS_DYLIBS_DIR="${DYLIBS_DIR}/tvos"
+mkdir -p "${TVOS_DYLIBS_DIR}"
+
+echo "  Downloading tvOS dylibs..."
+TMP_TVOS_DYLIBS="$(mktemp -t native-devtools-ios-tvos-dylibs.XXXXXX.tar.gz)"
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "native-devtools-ios-tvos-dylibs.tar.gz" \
+  --output "${TMP_TVOS_DYLIBS}" \
+  --clobber; then
+  tar -xzf "${TMP_TVOS_DYLIBS}" -C "${TVOS_DYLIBS_DIR}"
+else
+  echo "  Skipping tvOS dylibs: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
+fi
+rm -f "${TMP_TVOS_DYLIBS}"
+
+echo "  Downloading tvos-ax-service..."
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "tvos-ax-service" \
+  --dir "${IOS_BIN_DIR}" \
+  --clobber; then
+  chmod +x "${IOS_BIN_DIR}/tvos-ax-service"
+else
+  echo "  Skipping tvos-ax-service: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
+fi
+
+echo "  Downloading tvos-hid-daemon..."
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "tvos-hid-daemon" \
+  --dir "${IOS_BIN_DIR}" \
+  --clobber; then
+  chmod +x "${IOS_BIN_DIR}/tvos-hid-daemon"
+else
+  echo "  Skipping tvos-hid-daemon: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
+fi
+
 echo "  Downloading argent-android-devtools.apk..."
 # The release publishes the APK under a stable name (no versioning in the
 # filename) so this script doesn't have to know the version ahead of time;
@@ -85,7 +135,12 @@ trap - EXIT
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
 if command -v codesign &>/dev/null; then
-  for f in "${DYLIBS_DIR}"/*.dylib "${IOS_BIN_DIR}/ax-service"; do
+  for f in \
+    "${DYLIBS_DIR}"/*.dylib \
+    "${TVOS_DYLIBS_DIR}"/*.dylib \
+    "${IOS_BIN_DIR}/ax-service" \
+    "${IOS_BIN_DIR}/tvos-ax-service" \
+    "${IOS_BIN_DIR}/tvos-hid-daemon"; do
     codesign -dvv "$f" 2>&1 || echo "Warning: signature verification failed for $f"
   done
 fi

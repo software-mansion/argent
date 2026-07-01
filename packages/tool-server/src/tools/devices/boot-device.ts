@@ -4,10 +4,12 @@ import { z } from "zod";
 import {
   FAILURE_CODES,
   FailureError,
+  ServiceNotFoundError,
   type Registry,
   type ToolCapability,
   type ToolDefinition,
 } from "@argent/registry";
+import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
 import {
   buildInitFailedResult,
   nativeDevtoolsRef,
@@ -29,6 +31,13 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import {
+  simctlBoot as simRemoteBoot,
+  simctlBootstatus as simRemoteBootstatus,
+  simctlListDevices as simRemoteListDevices,
+  simctlShutdown as simRemoteShutdown,
+} from "../../utils/sim-remote";
 import { listVvdImages } from "../../utils/vega-sdk";
 import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
 import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
@@ -109,6 +118,7 @@ type BootDeviceParams = z.infer<typeof zodSchema>;
 
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
+  | { platform: "ios-remote"; udid: string; booted: true }
   | { platform: "android"; serial: string; avdName: string; booted: true }
   | VegaBootResult
   | ElectronBootResult
@@ -456,9 +466,11 @@ async function bootIos(
   }
   await ensureDep("xcrun");
 
-  const simState = await listIosSimulators()
-    .then((sims) => sims.find((s) => s.udid === udid)?.state)
+  const simMatch = await listIosSimulators()
+    .then((sims) => sims.find((s) => s.udid === udid))
     .catch(() => undefined);
+  const simState = simMatch?.state;
+  const isTvOs = simMatch?.runtimeKind === "tv";
 
   // force=true on a running sim: shut it down so we can pre-write AX prefs.
   if (force && simState === "Booted") {
@@ -483,6 +495,53 @@ async function bootIos(
     }
   });
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
+
+  // tvOS only: a boot transition (Shutdown→Booted, or a force reboot) orphans
+  // the host-side HID daemon. Unlike the ax-service — which runs *inside* the
+  // sim via `simctl spawn` and is therefore killed by the reboot and respawned
+  // on the next describe — the tvos-hid-daemon runs on the host and holds a
+  // SimDeviceLegacyClient bound to the *previous* boot for its whole lifetime.
+  // The reboot invalidates that client, but the daemon process stays alive and
+  // its `navigate`/`type` sends are fire-and-forget, so a TV `button` press
+  // silently no-ops with no error and no recovery path (the daemon-exit
+  // reconnect never fires). Dropping the cached TvControl service here forces
+  // the next TV call to rebuild it with a fresh daemon bound to the new boot.
+  // Disposal is
+  // best-effort: ServiceNotFoundError just means nothing was cached (the common
+  // fresh-boot case), which is a no-op.
+  if (isTvOs && needsPreBoot) {
+    await registry.disposeService(`${TV_CONTROL_NAMESPACE}:${udid}`).catch((err: unknown) => {
+      if (err instanceof ServiceNotFoundError) return;
+      process.stderr.write(
+        `[boot-device ${udid.slice(0, 8)}] failed to recycle stale TvControl service after reboot (${
+          err instanceof Error ? err.message : String(err)
+        }); TV button presses may no-op until the tool-server restarts.\n`
+      );
+    });
+
+    // The same boot transition also wipes the simulator's launchd
+    // DYLD_INSERT_LIBRARIES, but the cached NativeDevtools service keeps a
+    // sticky `envSetup=true` flag from the *previous* boot — so its
+    // `ensureEnvReady()` short-circuits and never re-sets the env. The result:
+    // launch-app / restart-app produce an uninjected process and
+    // native-devtools-status stays `connected:false` forever, with no recovery
+    // short of a tool-server restart (requiresAppRestart's ensureEnvReady call
+    // can't help — same sticky flag). Dropping the cached service here forces
+    // the resolveService below to rebuild it with a fresh `envSetup=false`, so
+    // ensureEnv re-applies DYLD on this boot. The DYLD-clear-on-reboot is not
+    // strictly tvOS-specific, but we gate this on tvOS to match the validated
+    // repro and avoid changing the well-exercised iOS boot path; widen the gate
+    // if the same stuck-injection state is ever reproduced on an iOS reboot.
+    const ndUrn = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" }).urn;
+    await registry.disposeService(ndUrn).catch((err: unknown) => {
+      if (err instanceof ServiceNotFoundError) return;
+      process.stderr.write(
+        `[boot-device ${udid.slice(0, 8)}] failed to recycle stale NativeDevtools service after reboot (${
+          err instanceof Error ? err.message : String(err)
+        }); native-devtools may stay disconnected until the tool-server restarts.\n`
+      );
+    });
+  }
 
   // Best-effort fallback: no-op on the happy path (pref already cached from
   // pre-boot write). When the sim was already Booted without force, writes
@@ -517,6 +576,64 @@ async function bootIos(
     await execFileAsync("open", ["-a", "Simulator.app"]);
   }
   return { platform: "ios", udid, booted: true };
+}
+
+/**
+ * Boot a remote iOS simulator through `sim-remote`. Mirrors `bootIos` but:
+ *
+ * - Uses `sim-remote simctl` for boot/shutdown/bootstatus (no local xcrun).
+ * - Pre-warms the native-devtools blueprint so the dylib injection env is
+ *   set inside the remote sim before the app launches. Accessibility defaults
+ *   are applied lazily by the ax-service blueprint's `bootstrapAx` (which runs
+ *   the `defaults write` through the orchestrator's generic spawn) before the
+ *   first describe-driven tool — we have no filesystem access to the remote sim.
+ */
+async function bootIosRemote(
+  id: string,
+  registry: Registry,
+  force?: boolean
+): Promise<
+  { platform: "ios-remote"; udid: string; booted: true } | NativeDevtoolsInitFailedResult
+> {
+  await ensureDep("sim-remote");
+  const udid = stripRemotePrefix(id);
+
+  // Look up current state via sim-remote. Treat lookup failures as "unknown
+  // state" — the boot/bootstatus dance below tolerates an already-booted sim.
+  let simState: string | undefined;
+  try {
+    const list = await simRemoteListDevices();
+    outer: for (const devices of Object.values(list.devices)) {
+      for (const d of devices) {
+        if (d.udid === udid) {
+          simState = d.state;
+          break outer;
+        }
+      }
+    }
+  } catch {
+    simState = undefined;
+  }
+
+  if (force && simState === "Booted") {
+    await simRemoteShutdown(id).catch(() => undefined);
+  }
+
+  // Boot. `Booted` exit-code error from sim-remote means it's already up —
+  // benign; the bootstatus call below normalizes the state regardless.
+  await simRemoteBoot(id).catch((err: Error) => {
+    if (!/Booted/i.test(err.message)) throw err;
+  });
+  await simRemoteBootstatus(id, { boot: true });
+
+  const ndRef = nativeDevtoolsRef({ id, platform: "ios-remote", kind: "simulator" });
+  const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  const initFailure = ndApi.getInitFailure();
+  if (initFailure?.givenUp) {
+    return buildInitFailedResult(id, initFailure);
+  }
+
+  return { platform: "ios-remote", udid: id, booted: true };
 }
 
 // Tight budget for a hot boot attempt. A successful hot boot completes well
@@ -1224,6 +1341,7 @@ function bootVega(params: {
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
@@ -1263,6 +1381,9 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         );
       }
       if (hasUdid) {
+        if (classifyDevice(params.udid!) === "ios-remote") {
+          return bootIosRemote(params.udid!, registry, params.force);
+        }
         return bootIos(params.udid!, registry, params.force, params.headless);
       }
       if (hasAvd) {

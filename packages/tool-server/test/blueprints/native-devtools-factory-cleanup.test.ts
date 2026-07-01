@@ -38,6 +38,20 @@ vi.mock("@argent/native-devtools-ios", async () => {
   };
 });
 
+// These tests exercise the iOS factory's failure tolerance, not tvOS routing.
+// ensureEnv probes isTvOsSimulator() (an `xcrun simctl list`) before injecting;
+// the execFileMock below intercepts only getenv/setenv, so stub the probe to
+// false to keep that lookup from hanging on the mock's catch-all branch.
+vi.mock("../../src/utils/ios-devices", async () => {
+  const actual = await vi.importActual<typeof import("../../src/utils/ios-devices")>(
+    "../../src/utils/ios-devices"
+  );
+  return {
+    ...actual,
+    isTvOsSimulator: vi.fn(async () => false),
+  };
+});
+
 import type { DeviceInfo } from "@argent/registry";
 import {
   MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
