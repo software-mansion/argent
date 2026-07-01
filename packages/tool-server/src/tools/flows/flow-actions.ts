@@ -307,7 +307,9 @@ async function scrollToVisible(
     if (prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
       if (frame) return { frame };
-      return { reason: `reached the end of the scroll without finding ${describeSelector(target)}` };
+      return {
+        reason: `reached the end of the scroll without finding ${describeSelector(target)}`,
+      };
     }
     prevFp = fp;
 
@@ -334,7 +336,15 @@ async function resolveOrScroll(
 ): Promise<DescribeFrame | undefined> {
   const frame = await waitForFrame(registry, device, selector, signal);
   if (frame) return frame;
-  const scrolled = await scrollToVisible(registry, ctx, device, selector, "down", undefined, signal);
+  const scrolled = await scrollToVisible(
+    registry,
+    ctx,
+    device,
+    selector,
+    "down",
+    undefined,
+    signal
+  );
   return scrolled.frame;
 }
 
@@ -346,7 +356,15 @@ export async function runScrollTo(
   step: { target: FlowSelector; direction: ScrollDirection; within?: FlowSelector },
   signal?: AbortSignal
 ): Promise<DirectiveOutcome> {
-  const r = await scrollToVisible(registry, ctx, device, step.target, step.direction, step.within, signal);
+  const r = await scrollToVisible(
+    registry,
+    ctx,
+    device,
+    step.target,
+    step.direction,
+    step.within,
+    signal
+  );
   return { ok: Boolean(r.frame), reason: r.reason };
 }
 
@@ -467,7 +485,10 @@ export async function runAssert(
   }
 
   if (fetchError) return { ok: false, reason: `could not read the UI tree: ${fetchError}` };
-  return { ok: false, reason: assertReason(condition, selector, expectedText, textMatch, lastMatches) };
+  return {
+    ok: false,
+    reason: assertReason(condition, selector, expectedText, textMatch, lastMatches),
+  };
 }
 
 function assertReason(

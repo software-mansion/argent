@@ -1,8 +1,5 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
-import {
-  androidDevtoolsRef,
-  type AndroidDevtoolsApi,
-} from "../../blueprints/android-devtools";
+import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
   clipBoundsToScreen,
   deriveUiAutomatorRole,

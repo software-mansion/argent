@@ -9,10 +9,12 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // native-devtools is unavailable, as in these unit tests).
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/describe/platforms/ios", () => ({
-  describeIos: vi.fn(async (): Promise<DescribeTreeData> => ({
-    tree: currentTree(),
-    source: "ax-service",
-  })),
+  describeIos: vi.fn(
+    async (): Promise<DescribeTreeData> => ({
+      tree: currentTree(),
+      source: "ax-service",
+    })
+  ),
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
@@ -86,9 +88,7 @@ describe("loose (bare-string) selector resolution", () => {
   it("resolves a bare string against an identifier (testID) when no text matches", async () => {
     // A blue box exposed only via testID — no visible label "tap-box".
     currentTree = () =>
-      screen([
-        n({ identifier: "tap-box", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } }),
-      ]);
+      screen([n({ identifier: "tap-box", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]);
 
     await writeFlow("idtap", {
       launch: "com.acme.app",
@@ -143,9 +143,7 @@ describe("loose (bare-string) selector resolution", () => {
 
   it("an explicit { text } map stays strict and does NOT match a testID-only node", async () => {
     currentTree = () =>
-      screen([
-        n({ identifier: "tap-box", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } }),
-      ]);
+      screen([n({ identifier: "tap-box", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]);
 
     // Hand-authored map form (not via serializeFlow, which would collapse a
     // text-only selector back to a bare string ⇒ loose). parseFlow keeps the

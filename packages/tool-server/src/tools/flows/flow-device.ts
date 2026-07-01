@@ -80,7 +80,9 @@ export async function resolveFlowDevice(
     if (id) return resolveDevice(id);
   }
   if (scoped.length === 0) {
-    const what = opts.platform ? `No booted ${opts.platform} device found.` : "No booted device found.";
+    const what = opts.platform
+      ? `No booted ${opts.platform} device found.`
+      : "No booted device found.";
     throw deviceResolutionError(`${what} Pass a device id or platform explicitly.`, devices);
   }
   throw deviceResolutionError(

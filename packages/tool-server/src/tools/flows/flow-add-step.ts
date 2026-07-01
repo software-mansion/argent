@@ -50,10 +50,13 @@ async function captureTapSelector(
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(node);
-    if (!selector) return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
+    if (!selector)
+      return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
     return { selector };
   } catch (err) {
-    return { warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates` };
+    return {
+      warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,
+    };
   }
 }
 
@@ -168,7 +171,12 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         // The step ran live with the full args (incl. the device id), but the
         // recorded form drops the device id so the flow stays portable — the
         // runner injects whatever device it resolves at replay.
-        step = { kind: "tool", name: params.command, args: stripDeviceKeys(args), delayMs: params.delayMs };
+        step = {
+          kind: "tool",
+          name: params.command,
+          args: stripDeviceKeys(args),
+          delayMs: params.delayMs,
+        };
       }
 
       const { flowFile, savedTo } = await appendStepToActiveFlow(step);

@@ -18,18 +18,18 @@ Flows store **no device id**: the runner binds a device (the single booted one, 
 
 Beyond raw `tool:` steps and `echo:`, flows support declarative directives interpreted by the runner (they are **not** agent-callable tools):
 
-| Directive | YAML | Meaning |
-| --- | --- | --- |
-| `tap` | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }` | tap an element by selector (auto-waits), or a raw normalized point |
-| `type` | `- type: { into: email, text: "a@b.com" }` | focus a field, type, then press Enter to submit + dismiss the keyboard |
-| `scroll-to` | `- scroll-to: { target: "Order #1234", direction: down }` | momentum-free scroll until the target is visible |
-| `await` | `- await: { visible: Home }` | wait for a UI condition (sugar over `await-ui-element`) |
-| `wait` | `- wait: 500` | pause for a fixed number of milliseconds (last resort — prefer `await`) |
-| `assert` | `- assert: { visible: Welcome }` | check a condition, hard-fail if it never holds |
-| `snapshot` | `- snapshot: { name: home, maxMismatch: 0.5 }` | diff a screenshot against a stored baseline |
-| `run` | `- run: login` | execute a fragment's steps inline |
+| Directive   | YAML                                                      | Meaning                                                                 |
+| ----------- | --------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `tap`       | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }`            | tap an element by selector (auto-waits), or a raw normalized point      |
+| `type`      | `- type: { into: email, text: "a@b.com" }`                | focus a field, type, then press Enter to submit + dismiss the keyboard  |
+| `scroll-to` | `- scroll-to: { target: "Order #1234", direction: down }` | momentum-free scroll until the target is visible                        |
+| `await`     | `- await: { visible: Home }`                              | wait for a UI condition (sugar over `await-ui-element`)                 |
+| `wait`      | `- wait: 500`                                             | pause for a fixed number of milliseconds (last resort — prefer `await`) |
+| `assert`    | `- assert: { visible: Welcome }`                          | check a condition, hard-fail if it never holds                          |
+| `snapshot`  | `- snapshot: { name: home, maxMismatch: 0.5 }`            | diff a screenshot against a stored baseline                             |
+| `run`       | `- run: login`                                            | execute a fragment's steps inline                                       |
 
-A **selector** is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. A bare string is a *loose* selector: it resolves **identifier-first, then falls back to text** (label/value), so `tap: Login` matches a `testID="Login"` or, failing that, visible text "Login" — no need to know which. (Loose fallback applies to `tap`, `type.into`, `assert`, `scroll-to`; `await` delegates to the wait tool and stays text-only.) Use the map form to be strict: `{ identifier: submit-btn }` (identifier only) or `{ text: Login }` (text only, no fallback).
+A **selector** is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. A bare string is a _loose_ selector: it resolves **identifier-first, then falls back to text** (label/value), so `tap: Login` matches a `testID="Login"` or, failing that, visible text "Login" — no need to know which. (Loose fallback applies to `tap`, `type.into`, `assert`, `scroll-to`; `await` delegates to the wait tool and stays text-only.) Use the map form to be strict: `{ identifier: submit-btn }` (identifier only) or `{ text: Login }` (text only, no fallback).
 
 For `await`/`assert` the **condition is the key**, and its value is the selector:
 

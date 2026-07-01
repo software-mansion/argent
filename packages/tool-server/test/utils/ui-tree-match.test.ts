@@ -55,12 +55,22 @@ describe("ui-tree-match", () => {
   });
 
   it("deriveSelector prefers identifier, then text, then specific role", () => {
-    expect(deriveSelector(node({ identifier: "id1", label: "x", frame: { x: 0, y: 0, width: 0.1, height: 0.1 } }))).toEqual({ identifier: "id1" });
-    expect(deriveSelector(node({ label: "Hi", frame: { x: 0, y: 0, width: 0.1, height: 0.1 } }))).toEqual({ text: "Hi" });
+    expect(
+      deriveSelector(
+        node({ identifier: "id1", label: "x", frame: { x: 0, y: 0, width: 0.1, height: 0.1 } })
+      )
+    ).toEqual({ identifier: "id1" });
+    expect(
+      deriveSelector(node({ label: "Hi", frame: { x: 0, y: 0, width: 0.1, height: 0.1 } }))
+    ).toEqual({ text: "Hi" });
     // generic role → no stable selector
-    expect(deriveSelector(node({ role: "AXGroup", frame: { x: 0, y: 0, width: 0.1, height: 0.1 } }))).toBeNull();
+    expect(
+      deriveSelector(node({ role: "AXGroup", frame: { x: 0, y: 0, width: 0.1, height: 0.1 } }))
+    ).toBeNull();
     // specific role → role selector
-    expect(deriveSelector(node({ role: "AXButton", frame: { x: 0, y: 0, width: 0.1, height: 0.1 } }))).toEqual({ role: "AXButton" });
+    expect(
+      deriveSelector(node({ role: "AXButton", frame: { x: 0, y: 0, width: 0.1, height: 0.1 } }))
+    ).toEqual({ role: "AXButton" });
   });
 
   it("evaluateCondition handles exists/visible/hidden/text", () => {

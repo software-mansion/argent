@@ -577,7 +577,11 @@ describe("flow-execute", () => {
 
     // Echoes
     expect(result.steps[0]).toMatchObject({ kind: "echo", status: "pass", message: "Tap button" });
-    expect(result.steps[2]).toMatchObject({ kind: "echo", status: "pass", message: "Take screenshot" });
+    expect(result.steps[2]).toMatchObject({
+      kind: "echo",
+      status: "pass",
+      message: "Take screenshot",
+    });
 
     // Tool calls
     expect(result.steps[1]).toMatchObject({
@@ -666,7 +670,10 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "error-test.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "error-test", project_root: tmpDir, device: DEVICE });
+    const result = await runFlow.execute(
+      {},
+      { name: "error-test", project_root: tmpDir, device: DEVICE }
+    );
     assertFlowRunResult(result);
 
     // tap errors (recorded), the trailing echo is skipped.
@@ -800,7 +807,10 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "no-gate.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "no-gate", project_root: tmpDir, device: DEVICE });
+    const result = await runFlow.execute(
+      {},
+      { name: "no-gate", project_root: tmpDir, device: DEVICE }
+    );
 
     expect(result).toHaveProperty("steps");
     expect((result as { steps: unknown[] }).steps).toHaveLength(1);
@@ -844,7 +854,10 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "empty-flow.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "empty-flow", project_root: tmpDir, device: DEVICE });
+    const result = await runFlow.execute(
+      {},
+      { name: "empty-flow", project_root: tmpDir, device: DEVICE }
+    );
 
     expect(result).toHaveProperty("steps");
     expect((result as { steps: unknown[] }).steps).toEqual([]);
@@ -867,7 +880,10 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "echo-only.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "echo-only", project_root: tmpDir, device: DEVICE });
+    const result = await runFlow.execute(
+      {},
+      { name: "echo-only", project_root: tmpDir, device: DEVICE }
+    );
 
     expect(result).toHaveProperty("steps");
     const steps = (result as { steps: { kind: string; status: string; message?: string }[] }).steps;
@@ -900,7 +916,10 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "mid-error.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "mid-error", project_root: tmpDir, device: DEVICE });
+    const result = await runFlow.execute(
+      {},
+      { name: "mid-error", project_root: tmpDir, device: DEVICE }
+    );
 
     expect(result).toHaveProperty("steps");
     const steps = (result as { steps: { kind: string }[] }).steps;

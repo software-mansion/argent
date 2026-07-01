@@ -113,7 +113,7 @@ describe("flow-execute with await-ui-element gating", () => {
     const controller = new AbortController();
 
     await tool.execute(
-      { },
+      {},
       { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
       { signal: controller.signal } as never
     );
