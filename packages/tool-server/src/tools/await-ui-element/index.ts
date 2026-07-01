@@ -1,21 +1,27 @@
 import { z } from "zod";
 import type {
-  DeviceInfo,
   Registry,
   ServiceRef,
   ToolCapability,
   ToolContext,
   ToolDefinition,
 } from "@argent/registry";
-import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { sleepOrAbort } from "../../utils/timing";
+import { sleepOrAbort, settleWithin } from "../../utils/timing";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
-import { describeIos, iosRequires } from "../describe/platforms/ios";
-import { describeAndroid, androidRequires } from "../describe/platforms/android";
-import { describeChromium } from "../describe/platforms/chromium";
+import {
+  includesCI,
+  isVisible,
+  nodeText,
+  firstInReadingOrder,
+  walkMatches,
+} from "../describe/match";
+import { fetchDescribeTree, appendDescribeDiagnostics } from "../describe/fetch-tree";
+import { iosRequires } from "../describe/platforms/ios";
+import { androidRequires } from "../describe/platforms/android";
 
 // Tool id. Exported so run-sequence can both allow this tool and recognise its
 // result shape (it returns { success: false } instead of throwing on an unmet
@@ -137,14 +143,11 @@ const capability: ToolCapability = {
 };
 
 // ── Tree matching ────────────────────────────────────────────────────────
-
-function nodeText(node: DescribeNode): string {
-  return [node.label, node.value].filter(Boolean).join(" ");
-}
-
-function includesCI(haystack: string | undefined, needle: string): boolean {
-  return Boolean(haystack) && haystack!.toLowerCase().includes(needle.toLowerCase());
-}
+//
+// The pure tree primitives (`includesCI`, `nodeText`, `isVisible`,
+// `firstInReadingOrder`, the root-excluding `walkMatches`) live in
+// `../describe/match` so `find` reuses the same hardened root-exclusion and
+// reading-order rules. Only the selector-shaped predicate stays local.
 
 function matchNode(node: DescribeNode, selector: Selector): boolean {
   if (selector.text !== undefined) {
@@ -161,68 +164,12 @@ function matchNode(node: DescribeNode, selector: Selector): boolean {
   return true;
 }
 
-function collectMatches(node: DescribeNode, selector: Selector, acc: DescribeNode[]): void {
-  if (matchNode(node, selector)) acc.push(node);
-  for (const child of node.children) collectMatches(child, selector, acc);
-}
-
-// Every node matching the selector in the subtree, EXCLUDING `root` itself.
-//
-// `root` is the top-level container describe puts at the head of the tree. On
-// iOS / Android it's a synthetic full-screen node (iOS `AXGroup`, Android
-// `hierarchy`/`Screen`; frame `0,0,1,1`); on Chromium it's the REAL `<html>`
-// element (`describeChromium` walks `document.documentElement`), framed from
-// `getBoundingClientRect` rather than a synthetic `0,0,1,1`. Whatever its frame,
-// `describe` renders this node only as a non-selectable `ROOT` header line, never
-// as a matchable element, and its frame always passes `isVisible`. Matching it
-// would let a role selector that is a substring of the root role (e.g.
-// `role:"AXGroup"`, also iOS's default role for untyped elements) satisfy
-// `visible`/`exists` on any screen — including an empty AX tree — and make
-// `hidden` impossible. So we skip it, walking `root.children` only — the one rule
-// we share with format-tree. (Chromium side effect: the `<html>` element's own
-// id / aria-label / author role sit on this excluded root, so a selector
-// targeting those attributes matches nothing there.)
-//
-// Past that root exclusion we do NOT mirror describe's rendered body: describe
-// drops structural / unlabeled nodes through a content-and-role filter before
-// printing, but `findAll` tests every remaining node. So a role- or
-// identifier-only selector can match a container (e.g. an unlabeled `AXGroup`)
-// that never appears in describe's output — keep that in mind when a
-// `visible`/`exists` selector is broad. A substring selector can also match
-// several real nodes, so conditions are evaluated across the whole set (see
-// evaluateMatches). Exported for unit tests.
+// Every node matching the selector in the subtree, EXCLUDING the synthetic root
+// (see `walkMatches`). A substring selector can match several real nodes, so
+// conditions are evaluated across the whole set (see evaluateMatches). Exported
+// for unit tests.
 export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
-  const acc: DescribeNode[] = [];
-  for (const child of root.children) collectMatches(child, selector, acc);
-  return acc;
-}
-
-// describe prunes off-screen / zero-size nodes on Chromium and the compressed
-// Android dump, and iOS AX only returns on-screen leaves — so a non-zero frame
-// area is a cheap, reliable proxy for "visible".
-function isVisible(node: DescribeNode): boolean {
-  return node.frame.width > 0 && node.frame.height > 0;
-}
-
-// The describe tool renders iOS leaves sorted into reading order (top-to-bottom,
-// then left-to-right) via format-tree's renderFlat, so the element the agent
-// "sees first" is the one with the smallest (y, then x). The `text` verdict and
-// the timeout note key off a single element, so pick that same one — otherwise
-// they'd refer to whichever node DFS happened to reach first, which on iOS can
-// differ from what the agent read at the top of describe. Returns undefined for
-// an empty set.
-function firstInReadingOrder(matches: DescribeNode[]): DescribeNode | undefined {
-  let best: DescribeNode | undefined;
-  for (const n of matches) {
-    if (
-      best === undefined ||
-      n.frame.y < best.frame.y ||
-      (n.frame.y === best.frame.y && n.frame.x < best.frame.x)
-    ) {
-      best = n;
-    }
-  }
-  return best;
+  return walkMatches(root, (n) => matchNode(n, selector));
 }
 
 // Evaluate the condition over ALL elements matching the selector, not just the
@@ -268,21 +215,6 @@ function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
   return Boolean(data.hint || data.should_restart || everMatched);
 }
 
-// Fold an unreliable-read hint / restart prompt onto a timeout note so the agent
-// learns the real cause (degraded AX, native injection pending) rather than a
-// bare "no element matched".
-function appendDiagnostics(base: string, lastData: DescribeTreeData | null): string {
-  if (!lastData) return base;
-  const extras: string[] = [];
-  if (lastData.should_restart) {
-    extras.push(
-      "the foreground app may need a restart for native inspection — call restart-app and retry"
-    );
-  }
-  if (lastData.hint) extras.push(lastData.hint);
-  return extras.length === 0 ? base : `${base} (${extras.join("; ")})`;
-}
-
 function timeoutNote(
   params: Params,
   lastTree: DescribeNode | null,
@@ -314,47 +246,7 @@ function timeoutNote(
     default:
       base = "no element matched the selector before timeout";
   }
-  return appendDiagnostics(base, lastData);
-}
-
-// ── Per-fetch deadline / abort ─────────────────────────────────────────────
-
-type Settled<T> =
-  | { type: "value"; value: T }
-  | { type: "error"; error: string }
-  | { type: "timeout" }
-  | { type: "aborted" };
-
-// Race a tree fetch against the remaining wait budget and the abort signal. The
-// underlying describe fetch isn't cancellable (no AbortSignal reaches adb /
-// AXRuntime), so a slow or hung fetch — e.g. the Android `uiautomator dump`
-// fallback, which allows up to 20s — would otherwise blow past `timeoutMs` and
-// ignore an abort that arrives mid-fetch. We can't kill the orphaned fetch, but
-// we stop waiting on it; its eventual settle is consumed here (handlers attached
-// up front) so it can't surface as an unhandled rejection.
-function settleWithin<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<Settled<T>> {
-  return new Promise((resolve) => {
-    let done = false;
-    const teardown: Array<() => void> = [];
-    const finish = (r: Settled<T>) => {
-      if (done) return;
-      done = true;
-      for (const fn of teardown) fn();
-      resolve(r);
-    };
-    // Attach the settle handlers up front so a late settle from an abandoned
-    // fetch is always consumed (no unhandled rejection) even after we've moved on.
-    p.then(
-      (value) => finish({ type: "value", value }),
-      (err) => finish({ type: "error", error: err instanceof Error ? err.message : String(err) })
-    );
-    if (signal?.aborted) return finish({ type: "aborted" });
-    const onAbort = () => finish({ type: "aborted" });
-    signal?.addEventListener("abort", onAbort, { once: true });
-    teardown.push(() => signal?.removeEventListener("abort", onAbort));
-    const timer = setTimeout(() => finish({ type: "timeout" }), Math.max(0, ms));
-    teardown.push(() => clearTimeout(timer));
-  });
+  return appendDescribeDiagnostics(base, lastData);
 }
 
 // ── Tool ─────────────────────────────────────────────────────────────────
@@ -364,20 +256,6 @@ function settleWithin<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promi
 // rather than through the tool's own services() declaration. Only the Chromium
 // CDP session flows in as a normal service.
 export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Params, WaitResult> {
-  async function fetchTree(
-    device: DeviceInfo,
-    params: Params,
-    services: Record<string, unknown>
-  ): Promise<DescribeTreeData> {
-    if (device.platform === "ios") {
-      return describeIos(registry, device, { bundleId: params.bundleId });
-    }
-    if (device.platform === "android") {
-      return describeAndroid(registry, device.id);
-    }
-    return describeChromium(services.chromium as ChromiumCdpApi);
-  }
-
   return {
     id: AWAIT_UI_ELEMENT_TOOL_ID,
     description: `Block until a UI element reaches an expected state or a timeout elapses, so you don't have to poll screenshot/describe yourself.
@@ -445,7 +323,11 @@ or before tapping an element that appears asynchronously.`,
         // describe can't overshoot timeoutMs, and an abort mid-fetch is observed
         // promptly instead of after the fetch resolves.
         const remaining = Math.max(0, deadline - Date.now());
-        const settled = await settleWithin(fetchTree(device, params, services), remaining, signal);
+        const settled = await settleWithin(
+          fetchDescribeTree(registry, device, params, services),
+          remaining,
+          signal
+        );
 
         if (settled.type === "aborted") return cancelled();
         if (settled.type === "timeout") {

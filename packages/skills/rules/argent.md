@@ -45,7 +45,9 @@ Before **every** tap, you MUST call a discovery tool and extract coordinates fro
 
 `native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point (iOS only).
 
-Whenever something changed YOU MUST first call `describe`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
+Alternatively, for the common "locate this element and tap/type into it" case, use `find` — it matches the same accessibility/DOM tree by text/label/value/role/id and performs the action in one call, so you never derive coordinates yourself. It still uses a discovery tool internally, so it satisfies this rule; fall back to `describe` when you need the whole screen or `find` reports an ambiguous `matchCount`.
+
+Whenever something changed YOU MUST first call `describe`, `find`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
 If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
 
@@ -73,7 +75,7 @@ Decision order:
 - All simulator/emulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
-- Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
+- Interaction tools (`find`, `gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.

@@ -88,7 +88,7 @@ Mind the react-native and ios-native profiler selection mentioned above when sta
 
 #### Annotate every interaction
 
-After each `gesture-tap` or `gesture-swipe` call, record an annotation using the returned `timestampMs`. Compute `offsetMs = timestampMs - startedAtEpochMs`. Do this for _every_ interaction — including back-navigation swipes, not just the primary action. Pass all collected annotations to `react-profiler-analyze` in Step 3.
+After each `gesture-tap`, `gesture-swipe`, or `find` call that performs `action: "tap"` / `action: "focus"`, record an annotation using the returned `timestampMs` (`find` exposes it as `actionResult.timestampMs` for `tap` / `focus`). Compute `offsetMs = timestampMs - startedAtEpochMs`. Do this for _every_ interaction — including back-navigation swipes, not just the primary action. Pass all collected annotations to `react-profiler-analyze` in Step 3. If text entry timing matters, use `find` `action: "focus"` or `gesture-tap` to capture the focus timestamp, then call `keyboard`; `find` `type` / `fill` actions do not expose a timestamp.
 
 ### Step 2: Stop and collect
 
@@ -99,7 +99,7 @@ If `fiber_renders_captured: 0`, warn the user — React commit data may be missi
 
 Call `react-profiler-analyze` with `port`, `device_id`, `project_root`, `platform`, and `rn_version`. The report includes metadata such as `reactCompilerEnabled`, `strictModeEnabled`, and `buildMode` — check these in the returned markdown report.
 
-If you performed interactions using `gesture-tap`/`gesture-swipe`, pass `annotations` to mark when each action occurred. Each annotation's `offsetMs` must be computed as `tapTimestampMs - startedAtEpochMs`, where `tapTimestampMs` is the `timestampMs` returned by the gesture-tap/gesture-swipe tool and `startedAtEpochMs` was returned by `react-profiler-start`. Do **not** use `Date.now()` for this calculation — only server-side timestamps from the tool return values.
+If you performed interactions using `gesture-tap`, `gesture-swipe`, or `find` tap/focus actions, pass `annotations` to mark when each action occurred. Each annotation's `offsetMs` must be computed as `interactionTimestampMs - startedAtEpochMs`, where `interactionTimestampMs` is the server-side `timestampMs` returned by the interaction tool (`actionResult.timestampMs` for `find`) and `startedAtEpochMs` was returned by `react-profiler-start`. Do **not** use `Date.now()` for this calculation.
 
 If dual profiling, also call `native-profiler-analyze`, then **you must** call `profiler-combined-report` for the cross-correlated view — do not skip this step when both profilers ran; the combined report surfaces correlations that individual reports miss.
 

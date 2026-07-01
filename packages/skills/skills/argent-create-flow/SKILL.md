@@ -12,7 +12,7 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 | Tool                     | Purpose                                                                    |
 | ------------------------ | -------------------------------------------------------------------------- |
 | `flow-start-recording`   | Start recording — takes a name and executionPrerequisite, creates the file |
-| `flow-add-step`          | Execute a tool call live and record it if it succeeds                      |
+| `flow-add-step`          | Execute a tool call live and record it when the call succeeds              |
 | `flow-add-echo`          | Add a label/comment that prints during replay                              |
 | `flow-finish-recording`  | Stop recording and get a summary                                           |
 | `flow-read-prerequisite` | Read a flow's execution prerequisite without running it                    |
@@ -225,4 +225,4 @@ Apply these when recording new flows to reduce future breakage:
 - **Add screenshot steps after critical navigation.** Insert `screenshot` steps after screen transitions. These produce images in the flow result you can inspect during diagnosis.
 - **Write specific executionPrerequisites.** `"App on home tab, user logged in, simulator UDID is <X>"` — not `"App running"`. Verify with `screenshot` + `describe` before acknowledging.
 - **Prefer launch-app / open-url over navigation chains.** Deep links are more resilient to layout changes than tap sequences.
-- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `describe` to find the element by label and update coordinates. Only use `screenshot` for permission or system overlays when `describe` cannot expose the target reliably.
+- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `find` with `action: "exists"` for a quick presence check, or use `find`'s `match.tapPoint`, `describe`, or `debugger-component-tree` to read the target's current coordinates, then edit the YAML tap step. Only use `screenshot` for permission or system overlays when tree-based discovery cannot expose the target reliably.

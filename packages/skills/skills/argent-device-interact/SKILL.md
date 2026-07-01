@@ -30,7 +30,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`.
 4. **Tap a text field before typing**, then use `keyboard` to enter text.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
+6. **For direct locate-then-act interactions, prefer `find`.** It uses the same tree as `describe` and taps/types without you reading coordinates. Use `describe` first when you need the whole screen, need to disambiguate multiple matches, or `find` reports an ambiguous `matchCount`. Do not navigate from screenshots on regular in-app screens unless tree-based discovery failed. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
 ## 3. Opening Apps
 
@@ -54,25 +54,26 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool               | Notes                                                            |
-| ----------------- | ------------------ | ---------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`     | Batch steps in one call (no intermediate screenshots)            |
-| Open an app       | `launch-app`       | **Always — never tap home-screen icons**                         |
-| Restart an app    | `restart-app`      | Terminate and relaunch by bundle ID                              |
-| Open URL/scheme   | `open-url`         | Web pages, deep links, URL schemes                               |
-| Single tap        | `gesture-tap`      | Buttons, links, checkboxes                                       |
-| Scroll/swipe      | `gesture-swipe`    | Straight-line scroll or swipe                                    |
-| Scroll (Chromium) | `gesture-scroll`   | Wheel-based; deltas are window fractions, positive deltaY = down |
-| Drag (Chromium)   | `gesture-drag`     | Sliders, drag-and-drop, text selection                           |
-| Long press        | `gesture-custom`   | Context menus, drag start                                        |
-| Drag & drop       | `gesture-custom`   | Complex drag interactions                                        |
-| Pinch/zoom        | `gesture-pinch`    | Two-finger pinch with auto-interpolation                         |
-| Rotation          | `gesture-rotate`   | Two-finger rotation with auto-interpolation                      |
-| Custom gesture    | `gesture-custom`   | Arbitrary touch sequences, optional interpolation                |
-| Hardware key      | `button`           | Home, back, power, volume, appSwitch, actionButton               |
-| Type text         | `keyboard`         | iOS+Android. Supports Enter, Escape, arrows                      |
-| Rotate device     | `rotate`           | Orientation changes                                              |
-| Wait for UI       | `await-ui-element` | Block until an element is visible/hidden/exists/contains text    |
+| Action            | Tool               | Notes                                                                                                                              |
+| ----------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Locate + act      | `find`             | Locate an element by text/label/value/role/id and tap/type/fill/read it in one call — skips the describe → read-coords → tap cycle |
+| Multiple actions  | `run-sequence`     | Batch steps in one call (no intermediate screenshots)                                                                              |
+| Open an app       | `launch-app`       | **Always — never tap home-screen icons**                                                                                           |
+| Restart an app    | `restart-app`      | Terminate and relaunch by bundle ID                                                                                                |
+| Open URL/scheme   | `open-url`         | Web pages, deep links, URL schemes                                                                                                 |
+| Single tap        | `gesture-tap`      | Buttons, links, checkboxes                                                                                                         |
+| Scroll/swipe      | `gesture-swipe`    | Straight-line scroll or swipe                                                                                                      |
+| Scroll (Chromium) | `gesture-scroll`   | Wheel-based; deltas are window fractions, positive deltaY = down                                                                   |
+| Drag (Chromium)   | `gesture-drag`     | Sliders, drag-and-drop, text selection                                                                                             |
+| Long press        | `gesture-custom`   | Context menus, drag start                                                                                                          |
+| Drag & drop       | `gesture-custom`   | Complex drag interactions                                                                                                          |
+| Pinch/zoom        | `gesture-pinch`    | Two-finger pinch with auto-interpolation                                                                                           |
+| Rotation          | `gesture-rotate`   | Two-finger rotation with auto-interpolation                                                                                        |
+| Custom gesture    | `gesture-custom`   | Arbitrary touch sequences, optional interpolation                                                                                  |
+| Hardware key      | `button`           | Home, back, power, volume, appSwitch, actionButton                                                                                 |
+| Type text         | `keyboard`         | iOS+Android. Supports Enter, Escape, arrows                                                                                        |
+| Rotate device     | `rotate`           | Orientation changes                                                                                                                |
+| Wait for UI       | `await-ui-element` | Block until an element is visible/hidden/exists/contains text                                                                      |
 
 ## 5. Finding Tap Targets
 
@@ -80,6 +81,7 @@ IMPORTANT. When moved to a different screen after an action or do not know the c
 
 | App type                          | Discovery tool            | What it returns                                                                                                                                                                                                                                     |
 | --------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Locate-and-act shortcut           | `find`                    | Matches the current accessibility/DOM tree by text/label/value/role/id and can tap/type/fill/read in one call. Prefer this for a specific visible target; use `describe` when you need the full screen or must disambiguate several matches         |
 | Target app discovery              | `describe`                | Accessibility element tree for the current device screen (iOS AX-service, Android uiautomator, or Chromium DOM walker) with normalized frame coordinates. Works on any app, system dialogs, and Home screen — no app restart or `bundleId` required |
 | React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                                                                                                                                       |
 | App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                                                                                                                                |
@@ -176,6 +178,24 @@ Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow
 ```
 
 Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
+
+### find — Locate an element and optionally act on it
+
+`find` collapses the usual `describe` → read coordinates → `gesture-tap` cycle into one call: it matches the same accessibility/DOM tree as `describe`, picks the element, and performs an action — so you do **not** call `describe` first or compute tap coordinates yourself for the common locate-then-act case. (iOS / Android / Chromium; not Vega.)
+
+```json
+{ "udid": "<UDID>", "query": "Sign In", "by": "text", "action": "tap" }
+```
+
+- `query`: case-insensitive substring matched against the attribute named by `by`.
+- `by`: `any` (label/value/id — default), `text` (label or value), `label`, `value`, `role`, or `id`.
+- `action`: `tap` (default, centre), `focus`, `type` (focus + type `text`), `fill` (focus + clear + type `text`), `exists` (single presence check, no wait), `wait` (block until visible, `timeoutMs` default 5000ms), `get-text`, `get-attrs`.
+- `text`: the string to enter, required for `type` / `fill`.
+- `index`: when several match, which one to act on (0 = topmost in reading order). `matchCount` counts the matches `index` can address — **visible** matches for the acting actions (`tap`/`focus`/`type`/`fill`) and `wait`, but **all** matches for the read-only checks (`exists`/`get-text`/`get-attrs`) — so if it is `> 1`, narrow `query` or set `index`.
+- By default a **single snapshot** is taken (no wait). Set `timeoutMs` to poll until the element appears before acting (turns `find … tap` into wait-then-tap).
+- Returns `{ found, matchCount, match?, actionResult?, elapsed, note? }`. `found: false` carries a `note` explaining why (no match / not visible / index out of range / degraded read). It does **not** throw, so still confirm `found` before assuming the action ran.
+
+Use `describe` instead when you need the whole screen, are disambiguating a crowded layout, or `find` reports an ambiguous `matchCount`.
 
 ### await-ui-element — Block until a UI element reaches a state
 
