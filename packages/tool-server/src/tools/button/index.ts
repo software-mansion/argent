@@ -4,6 +4,7 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { resolveDevice } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
+import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../../utils/android-input";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -70,6 +71,15 @@ Fails if the simulator-server / emulator backend is not reachable for the given 
         device,
         `button '${params.button}' is not available on ${device.platform}`
       );
+    }
+    if (device.platform === "android") {
+      // Android presses go over `adb shell input keyevent`, not the
+      // simulator-server's HID transport, which the guest silently drops on AVDs
+      // created with `hw.keyboard = no` / `hw.mainKeys = no`. adb lands
+      // regardless and surfaces a failure as a throw. The BUTTONS_BY_PLATFORM
+      // guard above guarantees a keycode exists for every accepted button.
+      await injectAndroidKeycode(params.udid, ANDROID_BUTTON_KEYCODES[params.button]!);
+      return { pressed: params.button };
     }
     const api = services.simulatorServer as SimulatorServerApi;
     sendCommand(api, {
