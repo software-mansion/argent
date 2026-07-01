@@ -214,7 +214,11 @@ trainer = LigerCETrainer(
         save_total_limit=int(os.environ.get("SAVE_TOTAL_LIMIT", "2")),
         optim="adamw_8bit", gradient_checkpointing=False, fp16=False, bf16=True,
         lr_scheduler_type="cosine", report_to="none", remove_unused_columns=False, output_dir="./out"))
-trainer.train()
+import glob as _glob
+_cks = sorted(_glob.glob("./out/checkpoint-*"), key=lambda p: int(p.rsplit("-", 1)[-1]))
+_resume = _cks[-1] if _cks else None
+print(f"resume_from_checkpoint = {_resume}", flush=True)
+trainer.train(resume_from_checkpoint=_resume)
 model.save_pretrained(OUT_DIR)
 tok.save_pretrained(OUT_DIR)
 open("./TRAIN_OK.txt", "w").write("ok")
