@@ -1656,4 +1656,43 @@ describe("installer preserves foreign MCP config", () => {
     expect(after.servers).toHaveProperty("myserver");
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("Codex remove keeps an unrelated server's empty args and a sibling empty table (TOML)", () => {
+    // Same "only touch argent" contract as the JSON adapters above, but for the
+    // TOML-backed Codex config: writeTomlOrRemove used to deep-prune the whole
+    // tree (pruneEmptyConfig), silently stripping a foreign server's `args = []`
+    // and any sibling empty table alongside deleting the argent entry.
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const configPath = path.join(dir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      'model = "o3"\n\n' +
+        "[other_section]\n\n" +
+        "[mcp_servers.other]\n" +
+        'command = "other-bin"\n' +
+        "args = []\n\n" +
+        "[mcp_servers.argent]\n" +
+        'command = "argent"\n' +
+        'args = ["mcp"]\n'
+    );
+    expect(adapter.remove(configPath)).toBe(true);
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).not.toContain("mcp_servers.argent");
+    expect(after).toContain('model = "o3"');
+    expect(after).toContain("[other_section]");
+    expect(after).toContain("[mcp_servers.other]");
+    expect(after).toContain("args = []");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("Codex remove deletes the file when argent was the only content (TOML)", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const configPath = path.join(dir, "config.toml");
+    fs.writeFileSync(configPath, '[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n');
+    expect(adapter.remove(configPath)).toBe(true);
+    expect(fs.existsSync(configPath)).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });

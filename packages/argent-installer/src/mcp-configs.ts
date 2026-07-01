@@ -99,23 +99,6 @@ function removeDirIfEmpty(dirPath: string): void {
   }
 }
 
-function pruneEmptyConfig(value: unknown): unknown | undefined {
-  if (Array.isArray(value)) {
-    return value.length > 0 ? value : undefined;
-  }
-
-  if (value && typeof value === "object") {
-    const cleaned: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      const next = pruneEmptyConfig(entry);
-      if (next !== undefined) cleaned[key] = next;
-    }
-    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
-  }
-
-  return value;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -152,15 +135,20 @@ function writeJsonOrRemove(filePath: string, data: Record<string, unknown>): voi
   writeJson(filePath, data);
 }
 
+// Writes `data` unchanged, except: when it has no own keys the file (and an
+// empty parent directory) is removed instead. Mirrors writeJsonOrRemove (see
+// its comment above) — this deliberately does NOT recursively prune empty
+// tables/arrays, so a foreign TOML server's `args = []` and any sibling empty
+// value survive. Callers collapse their own emptied argent container via
+// deleteIfEmpty before calling here.
 function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): void {
-  const cleaned = pruneEmptyConfig(data);
-  if (!isRecord(cleaned)) {
+  if (Object.keys(data).length === 0) {
     fs.rmSync(filePath, { force: true });
     removeDirIfEmpty(path.dirname(filePath));
     return;
   }
 
-  writeToml(filePath, cleaned);
+  writeToml(filePath, data);
 }
 
 // ── Cursor adapter ────────────────────────────────────────────────────────────
@@ -639,6 +627,7 @@ const codexAdapter: McpConfigAdapter = {
     const servers = config.mcp_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
+    deleteIfEmpty(config, "mcp_servers");
     writeTomlOrRemove(configPath, config);
     return true;
   },
