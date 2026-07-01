@@ -24,6 +24,28 @@ try {
   /* no state file or unreadable — nothing to clean up */
 }
 
+// node-pty (optional dep, used by `argent lens`'s agent PTY proxy) ships its
+// macOS prebuilt `spawn-helper` WITHOUT the executable bit, so the very first
+// pty.spawn() fails with "posix_spawnp failed". Restore +x on every prebuild's
+// helper. Best-effort and macOS-only: skip silently when node-pty isn't
+// installed (the lens command then falls back to a new terminal window).
+if (process.platform === "darwin") {
+  try {
+    const ptyDir = path.dirname(require.resolve("node-pty/package.json"));
+    const prebuilds = path.join(ptyDir, "prebuilds");
+    for (const entry of fs.readdirSync(prebuilds)) {
+      const helper = path.join(prebuilds, entry, "spawn-helper");
+      try {
+        fs.chmodSync(helper, 0o755);
+      } catch {
+        /* no helper for this arch — ignore */
+      }
+    }
+  } catch {
+    /* node-pty not installed or layout changed — lens falls back gracefully */
+  }
+}
+
 if (process.env.ARGENT_SKIP_POSTINSTALL === "1") {
   process.exit(0);
 }

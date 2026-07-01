@@ -66,9 +66,16 @@ function extractBearerToken(authHeader: string | undefined): string | null {
 // `~/.argent/flags.json` (and project override) each time — so toggling
 // `argent enable/disable <flag>` takes effect on the next `tools/list` without
 // restarting the long-lived tool-server. Tools without a `featureFlag` are
-// always exposed (no flag read).
-function isToolExposed(def: { featureFlag?: string } | undefined): boolean {
-  return !!def && (!def.featureFlag || isFlagEnabled(def.featureFlag));
+// always exposed (no flag read). A `hideWhen` predicate (also re-checked here per
+// request) hides a tool against live server state even when its flag is on — used
+// so `await_user_selection` vanishes during an `argent lens` CLI session.
+function isToolExposed(
+  def: { featureFlag?: string; hideWhen?: () => boolean } | undefined
+): boolean {
+  if (!def) return false;
+  if (def.featureFlag && !isFlagEnabled(def.featureFlag)) return false;
+  if (def.hideWhen?.()) return false;
+  return true;
 }
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {

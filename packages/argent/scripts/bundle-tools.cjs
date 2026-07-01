@@ -578,7 +578,11 @@ buildBundle({
 const ESM_BUNDLES = [
   { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
   { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
-  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands" },
+  // node-pty is a native addon `argent lens` loads at runtime (the agent PTY
+  // proxy). esbuild can't inline a .node, so keep it external — the CLI bundle
+  // `require()`s it from the published package's optional dependency. Absent
+  // install → loadNodePty() returns null → lens falls back to a new window.
+  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
 ];
 for (const b of ESM_BUNDLES) {
   buildBundle({ ...b, format: "esm" });

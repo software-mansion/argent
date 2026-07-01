@@ -151,6 +151,41 @@ trap - EXIT
 
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
+# Verify the downloaded injection dylibs carry the expected Mach-O platform.
+# This is the exact failure a mis-built release can reintroduce: a tvOS-built
+# libArgentInjectionBootstrap.dylib landing in the flat iOS slot. dyld silently
+# skips a DYLD_INSERT_LIBRARIES library whose LC_BUILD_VERSION platform does not
+# match the process, so native-devtools never injects on an iOS simulator and
+# every native-* tool returns restart_required — with no error at download,
+# sign, or pack time. Fail loudly here rather than bundle a dead dylib.
+# vtool is macOS-only; on hosts without it (non-macOS) the check is skipped.
+if command -v vtool &>/dev/null; then
+  echo "Verifying dylib platforms..."
+  dylib_verify_failed=0
+  assert_dylib_platform() { # <file> <expected-platform>
+    local f="$1" want="$2" arch got
+    [ -f "$f" ] || return 0  # tvOS dylibs are absent on pre-Apple-TV tags
+    for arch in arm64 x86_64; do
+      got="$(vtool -arch "$arch" -show-build "$f" 2>/dev/null | awk '/platform/{print $2}')"
+      if [ "$got" != "$want" ]; then
+        echo "  ERROR: ${f} (${arch}) is '${got:-<none>}', expected ${want}" >&2
+        dylib_verify_failed=1
+      fi
+    done
+  }
+  for d in libNativeDevtoolsIos libKeyboardPatch libArgentInjectionBootstrap; do
+    assert_dylib_platform "${DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
+    assert_dylib_platform "${TVOS_DYLIBS_DIR}/${d}.dylib" TVOSSIMULATOR
+  done
+  if [ "${dylib_verify_failed}" -ne 0 ]; then
+    echo "Dylib platform verification failed for release '${TAG}'. The release" >&2
+    echo "shipped a mis-platformed dylib (see above) — refusing to use it. Fix" >&2
+    echo "the build-native-binaries workflow / re-publish the release, then retry." >&2
+    exit 1
+  fi
+  echo "Dylib platforms OK (iOS=IOSSIMULATOR, tvOS=TVOSSIMULATOR where present)."
+fi
+
 if command -v codesign &>/dev/null; then
   for f in \
     "${DYLIBS_DIR}"/*.dylib \
