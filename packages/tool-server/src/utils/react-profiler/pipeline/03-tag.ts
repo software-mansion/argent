@@ -29,11 +29,14 @@ import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline
 //    token (`CMMotionManager`, `CMMotionActivity` — real Apple CoreMotion SDK
 //    class names, nothing to do with animation) reads as a match with no
 //    boundary at all to reject it. Requiring the token be preceded by a
-//    lowercase/digit (a genuine PascalCase word-start) or start-of-string
-//    closes that off. The cost: a small number of HYPOTHETICAL
-//    acronym-prefixed *animation* names (`SVGAnimatedPath`,
-//    `HTTPTransitionHandler`) would also stop matching — accepted, since
-//    there's no confirmed real-world instance of that shape, whereas
+//    LOWERCASE letter (a genuine PascalCase word-start) or start-of-string
+//    closes that off. Deliberately NOT digits here — unlike the trailing
+//    side, a digit immediately before the token (`G2MotionSensor`,
+//    `IMU2MotionTracker`) is itself the tail of an acronym/model-number
+//    prefix, not a real word boundary, and allowing it reopened the same
+//    false-positive class with a different-shaped acronym. The cost of the
+//    leading boundary: a few acronym-prefixed *animation* names (e.g. a
+//    hypothetical `SVGAnimatedPath`) also stop matching — accepted, since
 //    silently excluding a real non-animation component (a false positive)
 //    hides a real perf finding entirely with no trace, the more severe
 //    failure mode of the two.
@@ -44,8 +47,7 @@ import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline
 // `SubMotion`) — that would need a semantic allow/deny list, not a regex — so
 // that narrower class of false positive remains a known, documented
 // limitation.
-const ANIMATED_PATTERN =
-  /(?:^|(?<=[a-z0-9]))(Animated|Animation|Transition|Motion)(?=[A-Z0-9_]|$)/;
+const ANIMATED_PATTERN = /(?:^|(?<=[a-z]))(Animated|Animation|Transition|Motion)(?=[A-Z0-9_]|$)/;
 const RECYCLER_CHILD_PATTERN = /(ListItem|CellItem|Cell|Row|Item)$/i;
 const RECYCLER_PARENT_PATTERN =
   /^(FlatList|SectionList|VirtualizedList|FlashList|RecyclerListView)/i;

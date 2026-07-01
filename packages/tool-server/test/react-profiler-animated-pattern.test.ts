@@ -99,4 +99,16 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
       expect(tagged.components.get(n)!.isAnimated).toBe(false);
     }
   });
+  it("does NOT tag a digit-suffixed acronym prefix either", () => {
+    // The leading boundary must reject digits too, not just uppercase — a
+    // digit immediately before the token is the tail of an acronym/model
+    // number (G2, IMU2, BLE4, L3), not a real PascalCase word start. Allowing
+    // digits here (matching the trailing side's digit allowance) reopened the
+    // same CMMotionManager-class false positive with a different acronym shape.
+    const names = ["G2MotionSensor", "IMU2MotionTracker", "BLE4MotionBeacon", "L3MotionFilter"];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated).toBe(false);
+    }
+  });
 });
