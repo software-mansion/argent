@@ -4,6 +4,7 @@ const execFileMock = vi.fn();
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const { EventEmitter } = await import("node:events");
   return {
     ...actual,
     execFile: (
@@ -17,6 +18,40 @@ vi.mock("node:child_process", async () => {
       const result = execFileMock(cmd, args, options);
       if (result instanceof Error) callback(result, { stdout: "", stderr: "" });
       else callback(null, result ?? { stdout: "", stderr: "" });
+    },
+    // `runVega` now uses spawn (for `detached`), so route the vega CLI calls
+    // through the same execFileMock and surface the result as a fake child that
+    // emits stdout then `close`. An Error result emits `error` (mirrors a failed /
+    // timed-out CLI). Only the vega path spawns here — adb/emulator/ps stay on
+    // execFile above.
+    spawn: (cmd: string, args: readonly string[]) => {
+      const result = execFileMock(cmd, args, undefined);
+      const mkStream = () => {
+        const s = new EventEmitter() as any;
+        s.setEncoding = () => {};
+        s.destroy = () => {};
+        return s;
+      };
+      const child = new EventEmitter() as any;
+      // 0 (not a real OS pid) on purpose: this mock only drives the happy path
+      // (`close`, code 0), so reapVegaGroup never runs — but if a future timeout-path
+      // test were ever routed through it, `pid <= 1` makes the reap a no-op rather than
+      // letting `process.kill(-pid)` signal a real process group.
+      child.pid = 0;
+      child.stdout = mkStream();
+      child.stderr = mkStream();
+      child.kill = () => true;
+      setImmediate(() => {
+        if (result instanceof Error) {
+          child.emit("error", result);
+          return;
+        }
+        const out = (result ?? { stdout: "", stderr: "" }) as { stdout?: string; stderr?: string };
+        if (out.stdout) child.stdout.emit("data", out.stdout);
+        if (out.stderr) child.stderr.emit("data", out.stderr);
+        child.emit("close", 0, null);
+      });
+      return child;
     },
   };
 });
@@ -157,6 +192,34 @@ describe("list-devices", () => {
 
     // AVDs list comes from `emulator -list-avds`.
     expect(result.avds).toEqual([{ name: "Pixel_3a_API_34" }, { name: "Pixel_7_API_34" }]);
+  });
+
+  it("readAvdName prefers the modern avd_name prop over the legacy one (now probed concurrently)", async () => {
+    // The two getprops run in parallel (so a wedged device costs 5s, not 10s), but
+    // precedence must be unchanged: `ro.boot.qemu.avd_name` (modern, emulator 30+)
+    // wins over `ro.kernel.qemu.avd_name` (legacy) when BOTH answer. The first test
+    // above covers the legacy-only fallback; this pins the both-present ordering so the
+    // parallelization can't silently flip it.
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        const shellCmd = args[3] ?? "";
+        if (shellCmd.includes("ro.boot.qemu.avd_name"))
+          return { stdout: "ModernName\n", stderr: "" };
+        if (shellCmd.includes("ro.kernel.qemu.avd_name"))
+          return { stdout: "LegacyName\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    const android = result.devices.filter((d) => d.platform === "android") as Array<{
+      avdName: string | null;
+    }>;
+    expect(android).toHaveLength(1);
+    expect(android[0]!.avdName).toBe("ModernName");
   });
 
   it("silently omits iOS when xcrun is unavailable — other platforms still returned", async () => {

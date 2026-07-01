@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { listAndroidDevices, listAvds, consolePortFromAdbSerial } from "../../utils/adb";
+import {
+  listAndroidDevices,
+  listAvds,
+  consolePortFromAdbSerial,
+  ADB_DEVICES_TIMEOUT_MS,
+} from "../../utils/adb";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
@@ -79,6 +84,65 @@ async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
   return shadows;
 }
 
+// Hard backstop so no single discovery branch can stall this `alwaysLoad` tool,
+// which runs at session start and frequently after. The per-call subprocess
+// timeouts (and the no-stacking fix in listVegaDevices) already bound each
+// branch; this is defence-in-depth against an *unforeseen* stall — an OS-level
+// spawn hang, a future serial call added with no timeout — so the worst case is a
+// partial list with a logged note, never a 40s "hang". Mirrors the existing
+// `.catch(() => [])` degradation, just for slowness rather than errors.
+//
+// Critically this must sit ABOVE every branch's full per-call worst case, or it
+// stops being a last-resort backstop and starts truncating branches that would
+// have completed — dropping a real device from the list. Summing each branch's
+// own bounded subprocess calls (an invariant test in list-devices-deadline.test.ts
+// guards these so a future timeout bump can't silently breach the deadline):
+//   - Vega (the long pole): a non-timeout `device list` failure or an empty list
+//     that triggers the `device info` recovery runs, serially, the 6s list timeout
+//     + TWO 5s `ps` probes (the recovery gate in listVegaDevices plus the
+//     `-d emulator-<port>` selector probe inside runVegaDevice) + the 4s `device
+//     info` timeout = ~20s worst case. (A *timed-out* list skips the recovery
+//     entirely — see listVegaDevices — so the wedged-VVD case is just ~6s.)
+//   - Android: one bounded `adb devices` call (6s) + ~5s concurrent getprop
+//     enrichment = ~11s.
+//   - iOS / AVD-list / Chromium self-bound by their own subprocess/socket timeouts
+//     (iOS `simctl` ~10s, AVD-list ~5s, Chromium <1s) — all comfortably under 25s.
+// The Vega binary resolution (`resolveVegaBinary`) runs first but is memoized and
+// returns the instant `vega` is found, so it adds ~0 in practice; only a pathological
+// cold-session `command -v` shell-fork hang would add up to ~4s on top of the 20s,
+// still inside the deadline. 25s clears the ~20s Vega long pole with margin, so a
+// branch merely hitting its own (foreseen) per-call timeouts always completes rather
+// than being cut off; only a genuinely unforeseen hang reaches the backstop. Still
+// well below the ~40s stall this whole fix targets. The two Vega `ps` reads are local
+// process-table reads (never a device round-trip), so this 20s figure is a
+// pathological host-load ceiling, not the realistic wedged-device cost (~6s).
+//
+// Note: this is a *deadline*, not cancellation — on timeout it resolves the
+// fallback while the underlying branch keeps running to completion in the
+// background. That's fine here because the per-call subprocess timeouts bound the
+// branch, so it settles shortly after rather than leaking work indefinitely.
+export const BRANCH_DEADLINE_MS = 25_000;
+
+export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => {
+          process.stderr.write(
+            `[list-devices] ${label} discovery exceeded ${BRANCH_DEADLINE_MS}ms; ` +
+              `returning partial results (a wedged device or its CLI is unresponsive)\n`
+          );
+          resolve(fallback);
+        }, BRANCH_DEADLINE_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
@@ -96,15 +160,39 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {
+    // Every branch gets the same hard deadline so no single one can stall this
+    // `alwaysLoad` tool. The Android/Vega branches are the ones that actually shell
+    // out to potentially-wedged devices; iOS / AVD-list / Chromium already self-bound
+    // with their own short subprocess/socket timeouts, but wrapping them too makes the
+    // "no branch can hang the fan-out" guarantee universal at near-zero cost (the
+    // timer is cleared on the fast happy path). The deadline only substitutes a
+    // fallback on *slowness*; a rejection still propagates exactly as before — so the
+    // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
     const [ios, android, avds, chromium, vega] = await Promise.all([
-      listIosSimulators(),
-      // Opt into runtimeKind enrichment: list-devices surfaces TV vs mobile to
-      // the agent, so the extra feature probe per device is warranted here (the
-      // boot-loop poller deliberately omits it).
-      listAndroidDevices({ runtimeKind: true }).catch(() => []),
-      listAvds(),
-      discoverChromiumDevices().catch(() => []),
-      listVegaDevices().catch(() => []),
+      withDeadline(listIosSimulators(), [], "ios"),
+      withDeadline(
+        // Opt into runtimeKind enrichment (list-devices surfaces TV vs mobile to
+        // the agent, so the extra feature probe per device is warranted here — the
+        // boot-loop poller deliberately omits it), and pass the tight `adb devices`
+        // bound (NOT boot-device's 30s default) so the Android branch self-bounds
+        // under BRANCH_DEADLINE_MS — see ADB_DEVICES_TIMEOUT_MS.
+        listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS }).catch(
+          () => []
+        ),
+        [],
+        "android"
+      ),
+      withDeadline(listAvds(), [], "avds"),
+      withDeadline(
+        discoverChromiumDevices().catch(() => []),
+        [],
+        "chromium"
+      ),
+      withDeadline(
+        listVegaDevices().catch(() => []),
+        [],
+        "vega"
+      ),
     ]);
     const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
     iosTagged.sort(sortIos);

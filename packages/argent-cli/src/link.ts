@@ -289,6 +289,10 @@ async function preflightHealth(
       signal: controller.signal,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
+    // Drain the (large) /tools body so undici frees the keep-alive socket
+    // immediately; an unread body otherwise keeps the socket ref'd until the
+    // server's idle keepAliveTimeout (~5s), lingering the command after it's done.
+    await res.body?.cancel().catch(() => {});
     if (!res.ok) {
       const hint =
         res.status === 401
