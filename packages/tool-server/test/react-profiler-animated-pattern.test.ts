@@ -71,22 +71,32 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
       expect(tagged.components.get(n)!.isAnimated).toBe(false);
     }
   });
-  it("DOES still tag real animation components with a digit/underscore/acronym boundary", () => {
-    // A leading-boundary requirement (preceded by lowercase/digit) would reject
-    // these — acronym-prefixed wrapper names and digit/underscore suffixes are
-    // common in real component trees and must still be recognized as animated.
-    const names = [
-      "Animated2",
-      "Animated_View",
-      "Motion360Player",
-      "HTTPTransitionHandler",
-      "SVGAnimatedPath",
-      "URLAnimation",
-      "IOSMotionView",
-    ];
+  it("DOES still tag real animation components with a digit/underscore suffix", () => {
+    // A digit/underscore right after the token is a legitimate PascalCase
+    // continuation (numbered/keyed variants) and must still be recognized.
+    const names = ["Animated2", "Animated_View", "Motion360Player"];
     const tagged = tag(enrich(names));
     for (const n of names) {
       expect(tagged.components.get(n)!.isAnimated).toBe(true);
+    }
+  });
+  it("does NOT tag a real, non-animation acronym-prefixed name", () => {
+    // Without a leading-boundary requirement, an acronym immediately followed
+    // by the token (no lowercase-to-uppercase transition) reads as a match
+    // with nothing to reject it. CMMotionManager/CMMotionActivity are real
+    // Apple CoreMotion SDK class names with nothing to do with animation —
+    // a React Native wrapper/bridge component plausibly named after them must
+    // not be silently excluded from profiler findings.
+    const names = [
+      "CMMotionManager",
+      "CMMotionActivity",
+      "IOMotionSensor",
+      "RNMotionDetector",
+      "GPSMotionTracker",
+    ];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated).toBe(false);
     }
   });
 });
