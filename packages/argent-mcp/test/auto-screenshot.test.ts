@@ -195,6 +195,11 @@ describe("shouldAutoScreenshot — unified surface", () => {
     for (const t of [
       "gesture-tap",
       "gesture-swipe",
+      "gesture-scroll",
+      "gesture-drag",
+      "gesture-custom",
+      "gesture-pinch",
+      "gesture-rotate",
       "button",
       "keyboard",
       "rotate",
@@ -202,6 +207,9 @@ describe("shouldAutoScreenshot — unified surface", () => {
       "restart-app",
       "open-url",
       "describe",
+      // `find`'s default action is a tap, which can trigger a transition worth
+      // capturing — so it must auto-screenshot like the other interaction tools.
+      "find",
       "run-sequence",
     ]) {
       expect(shouldAutoScreenshot(t)).toBe(true);

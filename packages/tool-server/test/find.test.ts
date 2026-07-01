@@ -430,7 +430,7 @@ describe("find tool", () => {
   });
 
   // ── fill ──
-  it("`fill` focuses (centre), clears value.length+buffer chars, then types", async () => {
+  it("`fill` focuses (centre), clears the field's text length + buffer, then types", async () => {
     const { api } = makeSequencedAXService([
       axResponse([{ label: "Field", value: "abcd", frame: FRAME, traits: ["textfield"] }]),
     ]);
@@ -440,37 +440,116 @@ describe("find tool", () => {
       { udid: IOS_UDID, query: "Field", by: "label", action: "fill", text: "new", index: 0 }
     );
     expect(result.found).toBe(true);
-    expect(backspaces(invocations)).toHaveLength(4 + 2); // "abcd" length 4 + CLEAR_BUFFER 2
-    expect(result.actionResult).toMatchObject({ kind: "fill", typed: "new", clearedChars: 6 });
+    // clear length = max(label "Field"=5, value "abcd"=4) + CLEAR_BUFFER 2
+    expect(backspaces(invocations)).toHaveLength(5 + 2);
+    expect(result.actionResult).toMatchObject({ kind: "fill", typed: "new", clearedChars: 7 });
     expect(invocations[0]!.toolId).toBe("gesture-tap");
     expect(invocations[0]!.args).toMatchObject({ x: CENTER.x, y: CENTER.y }); // centre focus
     expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "new" } });
   });
 
-  it("`fill` clears CLEAR_BUFFER chars for an empty/undefined-value field, capped at MAX_CLEAR_CHARS", async () => {
-    // empty value → 2 backspaces
-    const empty = makeSequencedAXService([
-      axResponse([{ label: "F", value: "", frame: FRAME, traits: ["textfield"] }]),
-    ]);
-    const t1 = iosTool(empty.api);
-    await t1.tool.execute(
+  it("`fill` clears text carried in `label` when `value` is unset (Android bare EditText)", async () => {
+    // An Android EditText WITHOUT a content-desc surfaces its typed text as
+    // `label` with `value` unset. Sizing the clear from `value` alone would send
+    // only CLEAR_BUFFER backspaces and type the new text on top of the leftover
+    // (filling "old@example.com" with "new@x.io" → "old@example.cnew@x.io").
+    // max(value,label) sizes it from `label` here — reliable on Android.
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<hierarchy rotation="0">` +
+      `<node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">` +
+      `<node text="old@example.com" class="android.widget.EditText" clickable="true" focusable="true" bounds="[50,300][1030,400]" />` +
+      `</node>` +
+      `</hierarchy>`;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const { registry, invocations } = makeMockRegistry({ android });
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
       {},
-      { udid: IOS_UDID, query: "F", by: "label", action: "fill", text: "x", index: 0 }
+      {
+        udid: ANDROID_SERIAL,
+        query: "old@example.com",
+        by: "label",
+        action: "fill",
+        text: "new@x.io",
+        index: 0,
+      }
     );
-    expect(backspaces(t1.invocations)).toHaveLength(2);
+    expect(result.found).toBe(true);
+    expect(result.match).toMatchObject({ matchedField: "label", label: "old@example.com" });
+    // 15 (label length) + CLEAR_BUFFER 2 — NOT the 2 the value-only path would send
+    expect(backspaces(invocations)).toHaveLength(15 + 2);
+    expect((result.actionResult as { clearedChars: number }).clearedChars).toBe(17);
+    expect(result.note ?? "").not.toMatch(/capped/i);
+    expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "new@x.io" } });
+  });
 
-    // very long value → capped at MAX_CLEAR_CHARS (64)
-    const longVal = "a".repeat(200);
-    const long = makeSequencedAXService([
-      axResponse([{ label: "F", value: longVal, frame: FRAME, traits: ["textfield"] }]),
-    ]);
-    const t2 = iosTool(long.api);
-    const r2 = await t2.tool.execute(
-      {},
-      { udid: IOS_UDID, query: "F", by: "label", action: "fill", text: "x", index: 0 }
+  it("`fill` on Chromium clears to the cap and warns — the live text isn't in the a11y snapshot", async () => {
+    // describeChromium.accessibleName prefers a static aria-label / placeholder
+    // over el.value, and value (ownText) is always empty for a form control, so a
+    // populated <input placeholder="Email"> is described as label="Email",
+    // value=unset — the live content length is unknowable. Sizing from `label`
+    // (5) would leave a longer value behind silently; instead we clear up to the
+    // cap and flag it.
+    const tree = {
+      role: "textbox",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "textbox",
+          label: "Email", // a placeholder, NOT the live value
+          frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.05 },
+          children: [],
+        },
+      ],
+    };
+    const { registry, invocations } = makeMockRegistry({});
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      { udid: CHROMIUM_ID, query: "Email", by: "label", action: "fill", text: "new@x.io", index: 0 }
     );
-    expect(backspaces(t2.invocations)).toHaveLength(64);
-    expect((r2.actionResult as { clearedChars: number }).clearedChars).toBe(64);
+    expect(result.found).toBe(true);
+    // full MAX_CLEAR_CHARS clear, not the 7 that label="Email" (5)+buffer implies
+    expect(backspaces(invocations)).toHaveLength(64);
+    expect((result.actionResult as { clearedChars: number }).clearedChars).toBe(64);
+    expect(result.note).toMatch(/chromium/i);
+    expect(result.note).toMatch(/verify/i);
+    expect(result.note ?? "").not.toMatch(/capped/i); // it's the unknown-length caveat, not the cap
+    expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "new@x.io" } });
+  });
+
+  it("`fill` sizes from the field text, and only warns `capped` past MAX_CLEAR_CHARS chars", async () => {
+    const fillIos = async (value: string) => {
+      const svc = makeSequencedAXService([
+        axResponse([{ label: "F", value, frame: FRAME, traits: ["textfield"] }]),
+      ]);
+      const t = iosTool(svc.api);
+      const r = await t.tool.execute(
+        {},
+        { udid: IOS_UDID, query: "F", by: "label", action: "fill", text: "x", index: 0 }
+      );
+      return { backspaces: backspaces(t.invocations).length, note: r.note ?? "", result: r };
+    };
+
+    // short field → value.length + CLEAR_BUFFER, no cap warning
+    const short = await fillIos("abcd");
+    expect(short.backspaces).toBe(4 + 2);
+    expect(short.note).not.toMatch(/capped/i);
+
+    // exactly MAX_CLEAR_CHARS chars → the 64 backspaces fully clear it, so NO
+    // spurious cap warning (the off-by-CLEAR_BUFFER boundary).
+    const exact = await fillIos("a".repeat(64));
+    expect(exact.backspaces).toBe(64);
+    expect(exact.note).not.toMatch(/capped/i);
+
+    // longer than the cap → genuinely may be incomplete → warn.
+    const over = await fillIos("a".repeat(65));
+    expect(over.backspaces).toBe(64);
+    expect(over.note).toMatch(/capped/i);
   });
 
   it("`fill` warns on a masked password field with an unknown length", async () => {
