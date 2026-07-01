@@ -234,14 +234,21 @@ export function buildSeedPrompt(): string {
     "You are running inside an Argent Lens CLI session. The user has the Argent Lens",
     "preview window open and bound to THIS terminal.",
     "",
-    "When the user asks you to redesign or restyle UI, use the `propose_variant` Argent",
-    "tool to stage at least two visual variants per element. After proposing every",
-    "element, end your turn — you never block waiting for a pick in this session (their",
-    "feedback comes back to you as a message).",
+    "Match your response to the request. If it has a single obvious outcome — moving or",
+    "renaming something, tweaking one value, or anything with no meaningful design",
+    "alternatives — just make the change directly and report what you did; do not",
+    'manufacture variants. Only when the request is genuinely open-ended ("restyle",',
+    '"redesign", "make it nicer", or anything with a real design space) should you stage',
+    "variants with the `propose_variant` Argent tool — at least two per element so the",
+    "user has a real choice.",
     "",
-    "The user reviews the variants in the Lens window; their feedback arrives here as a",
-    'normal message prefixed "[Argent Lens]" (which variants they chose, comments, and',
-    "change requests). Act on it by proposing refined variants the same way.",
+    "Either way, end your turn when you're done — you never block waiting for a pick in",
+    "this session (feedback comes back to you as a message).",
+    "",
+    "The user reviews any staged variants in the Lens window; their feedback arrives here",
+    'as a normal message prefixed "[Argent Lens]" (the variants they chose, comments, and',
+    "change requests). Act on it the same way — direct edits for concrete fixes, fresh",
+    "variants only where the design is still open.",
     "",
     "Wait for the user's first instruction.",
   ].join(" ");
@@ -301,10 +308,34 @@ export function formatLensFeedback(o: LensOutcome): string {
     ? parts.join(". ")
     : "No specific picks were made; review the current variants in the preview window.";
 
+  // Steer the next turn by what the feedback actually asks for, rather than
+  // demanding a fresh batch of variants every round. A pick with no attached
+  // direction is an approval — apply it and stop; only open-ended direction
+  // (a comment on a pick, an element note, or an on-screen annotation)
+  // warrants staging new variants.
+  const chosenWithComment = chosen.filter((s) => s.comment);
+  const hasDirection =
+    chosenWithComment.length > 0 ||
+    notedNoPick.length > 0 ||
+    o.annotations.length > 0 ||
+    Boolean(o.globalComment);
+
+  const applyChosen = chosen.length
+    ? "Apply the chosen variants to their source files where given. "
+    : "";
+
+  const closing = hasDirection
+    ? "Handle each request with the smallest change that satisfies it: for a single " +
+      "obvious outcome (a move, rename, or one-value tweak) just make the edit and report " +
+      "it; stage fresh propose_variant options (at least two per element) only where the " +
+      "direction is genuinely open-ended. Then end your turn."
+    : "Nothing further is requested — make no other changes unless the user asks, and end " +
+      "your turn.";
+
   return flattenLine(
     `[Argent Lens] Feedback from the preview window (round ${o.round}). ${body}. ` +
-      "Apply the chosen variants to their source files where given, then refine the design with " +
-      "propose_variant (at least two variants per element), and end your turn."
+      applyChosen +
+      closing
   );
 }
 

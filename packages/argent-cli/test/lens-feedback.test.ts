@@ -105,12 +105,26 @@ describe("formatLensFeedback", () => {
     expect(formatLensFeedback(outcome())).toContain("No specific picks");
   });
 
-  it("steers the agent back to propose_variant and to end its turn (no blocking await)", () => {
-    const out = formatLensFeedback(outcome());
+  it("offers propose_variant only when there's open-ended direction, and ends the turn", () => {
+    const out = formatLensFeedback(outcome({ globalComment: "make the header feel bolder" }));
     expect(out).toContain("propose_variant");
     expect(out).toContain("end your turn");
     // The await tool is hidden in a CLI session, so feedback never names it.
     expect(out).not.toContain("await_user_selection");
+  });
+
+  it("does not push new variants when the feedback is a plain approval", () => {
+    const out = formatLensFeedback(
+      outcome({
+        selections: [
+          { element: "CTA", match: { by: "text", value: "Go" }, chosenVariant: { name: "A" } },
+        ],
+        globalComment: "",
+      })
+    );
+    // A pick with no attached direction is an approval — stop, don't re-propose.
+    expect(out).not.toContain("propose_variant");
+    expect(out).toContain("end your turn");
   });
 });
 
