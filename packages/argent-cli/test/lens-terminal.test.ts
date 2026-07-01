@@ -40,6 +40,15 @@ describe("flattenLine", () => {
   it("trims the result", () => {
     expect(flattenLine("  \n hi \n ")).toBe("hi");
   });
+  it("collapses a lone CR (composer submit key) so it can't submit early", () => {
+    // A bare \r without a following \n must not survive — a TUI composer reads
+    // it as Enter and would submit the partial prompt.
+    expect(flattenLine("make it blue\rand rounded")).toBe("make it blue and rounded");
+    expect(flattenLine("a\r\rb")).toBe("a b");
+  });
+  it("preserves interior tabs and single spaces", () => {
+    expect(flattenLine("a\tb c")).toBe("a\tb c");
+  });
 });
 
 describe("buildSpawnScript", () => {

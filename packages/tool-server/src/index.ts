@@ -224,6 +224,20 @@ export function start(): void {
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
     variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
     cancelPendingClose();
+
+    // Drain any simulators Lens booted headless for a CLI session. The happy
+    // path drains via onCliSessionChanged(false) when the CLI ends the session,
+    // but a server-initiated exit (signal, idle timeout) never gets that POST —
+    // without this the headless sim (no GUI window) is left Booted and orphaned.
+    // Idempotent: takeOwnedDevices drains the set once, so it's [] here if the
+    // CLI already ended cleanly.
+    const ownedDevices = variantProposalStore.takeOwnedDevices();
+    if (ownedDevices.length) {
+      await shutdownOwnedDevices(ownedDevices).catch(() => {
+        /* best-effort: a device already gone must not block shutdown */
+      });
+    }
+
     previewWindow.dispose();
     updateChecker.dispose();
     stopWatcher();

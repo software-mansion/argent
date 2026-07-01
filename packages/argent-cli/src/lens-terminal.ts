@@ -75,10 +75,14 @@ export function shellQuote(s: string): string {
 }
 
 /** Collapse a multi-line string into a single line — AppleScript string
- * literals can't carry raw newlines, and `write text` would treat each embedded
- * newline as a separate Enter (submitting a partial prompt to the TUI). */
+ * literals can't carry raw newlines, and `write text` (and a PTY composer)
+ * would treat an embedded line break as a separate Enter (submitting a partial
+ * prompt to the TUI). A TUI composer submits on CR *or* LF, so a lone `\r` with
+ * no following `\n` must be collapsed too — otherwise it slips through and
+ * submits the prompt early. Runs of CR/LF (with surrounding whitespace) become a
+ * single space; interior tabs and single spaces are preserved. */
 export function flattenLine(s: string): string {
-  return s.replace(/\s*\r?\n\s*/g, " ").trim();
+  return s.replace(/\s*[\r\n]+\s*/g, " ").trim();
 }
 
 /**

@@ -2195,8 +2195,15 @@
         } else if (kind === "boot") {
           b.addEventListener("click", () => {
             b.blur();
-            if (onAct) onAct();
-            bootDevice(s.udid, b).catch((err) => setStatus(String(err.message || err), "error"));
+            // Keep the row visible during boot so its in-row "Booting…" progress
+            // shows (closing the menu first would hide the very button
+            // bootDevice updates). Dismiss only once boot+connect succeeds; on
+            // failure the row stays so the reset button + error are visible.
+            bootDevice(s.udid, b)
+              .then(() => {
+                if (onAct) onAct();
+              })
+              .catch((err) => setStatus(String(err.message || err), "error"));
           });
         }
         return b;
@@ -3321,10 +3328,18 @@
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ id: a.id, remember }),
-              }).catch(() => {
-                // Let the user retry if the POST failed to land.
-                apPicked = null;
-              });
+              })
+                .then((res) => {
+                  // fetch only rejects on a network error, not a non-2xx status
+                  // (e.g. the flag was toggled off mid-session → 404). Reset so
+                  // the picker re-shows and the user can retry, rather than
+                  // staying hidden forever with no agent bound.
+                  if (!res.ok) apPicked = null;
+                })
+                .catch(() => {
+                  // Network failure — let the user retry.
+                  apPicked = null;
+                });
             });
             apListEl.appendChild(btn);
           }
