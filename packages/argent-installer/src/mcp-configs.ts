@@ -392,25 +392,27 @@ const windsurfAdapter: McpConfigAdapter = {
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
+  // JSONC-safe allowlist edits (see the Cursor adapter): the argent entry lives
+  // in this same mcp_config.json, and `init` runs write() (comment-preserving)
+  // before addAllowlist(). The old readJson path choked on any user comment and
+  // silently skipped the toggle; editJsoncFile targets just the argent entry's
+  // alwaysAllow key so comments and foreign servers survive.
   addAllowlist(): void {
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
-    const entry = servers[MCP_SERVER_KEY];
-    if (!entry) return;
-    entry.alwaysAllow = ["*"];
-    writeJson(configPath, config);
+    const config = readJsonc(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return;
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], ["*"]);
   },
 
   removeAllowlist(): void {
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     if (!fs.existsSync(configPath)) return;
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
-    const entry = servers[MCP_SERVER_KEY];
+    const config = readJsonc(configPath);
+    const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
+    const entry = servers?.[MCP_SERVER_KEY];
     if (!entry?.alwaysAllow) return;
-    delete entry.alwaysAllow;
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], undefined);
   },
 };
 
@@ -542,6 +544,11 @@ const geminiAdapter: McpConfigAdapter = {
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
+  // JSONC-safe allowlist edits (see the Cursor adapter): the argent entry lives
+  // in this same settings.json, and `init` runs write() (comment-preserving)
+  // before addAllowlist(). The old readJson path choked on any user comment and
+  // silently skipped the toggle; editJsoncFile targets just the argent entry's
+  // trust key so comments and foreign servers survive.
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
 
@@ -549,12 +556,10 @@ const geminiAdapter: McpConfigAdapter = {
       return;
     }
 
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
-    const entry = servers[MCP_SERVER_KEY];
-    if (!entry) return;
-    entry.trust = true;
-    writeJson(configPath, config);
+    const config = readJsonc(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return;
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "trust"], true);
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
@@ -564,12 +569,11 @@ const geminiAdapter: McpConfigAdapter = {
       return;
     }
 
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
     const entry = servers?.[MCP_SERVER_KEY];
     if (!entry?.trust) return;
-    delete entry.trust;
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "trust"], undefined);
   },
 };
 
@@ -894,26 +898,32 @@ const kiroAdapter: McpConfigAdapter = {
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
+  // JSONC-safe allowlist edits (see the Cursor adapter): .kiro/settings/mcp.json
+  // is JSONC, the argent entry lives in it, and `init` runs write() (comment-
+  // preserving) before addAllowlist(). The old readJson path choked on any user
+  // comment and silently skipped the toggle; editJsoncFile targets just the
+  // argent entry's autoApprove key so comments and foreign servers survive.
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath) return;
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
-    const entry = servers[MCP_SERVER_KEY];
-    if (!entry) return;
-    entry.autoApprove = [...KIRO_AUTO_APPROVE_ALL];
-    writeJson(configPath, config);
+    const config = readJsonc(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return;
+    editJsoncFile(
+      configPath,
+      ["mcpServers", MCP_SERVER_KEY, "autoApprove"],
+      [...KIRO_AUTO_APPROVE_ALL]
+    );
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath || !fs.existsSync(configPath)) return;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
     const entry = servers?.[MCP_SERVER_KEY];
     if (!entry?.autoApprove) return;
-    delete entry.autoApprove;
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "autoApprove"], undefined);
   },
 };
 
