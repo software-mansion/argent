@@ -1,4 +1,4 @@
-import { exec as nodeExec, type ExecOptions } from "child_process";
+import { execFile as nodeExecFile, type ExecFileOptions } from "child_process";
 import { promisify } from "util";
 
 export const DEFAULT_EXEC_TIMEOUT_MS = 60_000;
@@ -14,13 +14,16 @@ export const DEFAULT_EXEC_TIMEOUT_MS = 60_000;
 export const DEFAULT_EXEC_MAX_BUFFER = 256 * 1024 * 1024;
 
 /**
- * Async wrapper around `exec` that always supplies a timeout and a generous
- * `maxBuffer`.
+ * Async wrapper around `execFile` that always supplies a timeout and a generous
+ * `maxBuffer`, and never goes through a shell: the command and its arguments are
+ * passed as a discrete argv array, so a value like a trace-file path can't be
+ * re-parsed by /bin/sh (shell-injection). `exec`/`execSync` build a single
+ * `/bin/sh -c` string and must not be used here.
  *
- * This MUST stay async (`exec` + `await`), never `execSync`. A single
+ * This MUST stay async (`execFile` + `await`), never `execFileSync`. A single
  * `native-profiler-stop` runs four `xctrace export` passes (TOC discovery, CPU,
  * hangs, leaks); under the host-wide `--all-processes` capture each pass exports
- * tens of MB and the whole stop takes ~30s+. With `execSync` that work freezes
+ * tens of MB and the whole stop takes ~30s+. With a sync exec that work freezes
  * the tool-server's event loop for the full duration, so its `/tools` health
  * endpoint stops answering. The MCP client treats a health check that misses
  * its 2s window as a dead server, respawns a replacement tool-server, and
@@ -31,15 +34,16 @@ export const DEFAULT_EXEC_MAX_BUFFER = 256 * 1024 * 1024;
  * The `timeout` still caps a genuinely-stuck `xctrace` so it cannot hang the
  * stop forever; with async exec that timeout no longer also pins the event loop.
  */
-export async function execAsyncWithTimeout(
-  command: string,
-  options: ExecOptions = {}
+export async function execFileAsyncWithTimeout(
+  file: string,
+  args: readonly string[],
+  options: ExecFileOptions = {}
 ): Promise<{ stdout: string; stderr: string }> {
   // `promisify` is resolved per-call (not at module load) so that test suites
-  // which `vi.doMock("child_process", …)` without an `exec` export can still
+  // which `vi.doMock("child_process", …)` without an `execFile` export can still
   // import this module — matching the original lazy `execSync` usage.
-  const execAsync = promisify(nodeExec);
-  const { stdout, stderr } = await execAsync(command, {
+  const execFileAsync = promisify(nodeExecFile);
+  const { stdout, stderr } = await execFileAsync(file, args as string[], {
     timeout: DEFAULT_EXEC_TIMEOUT_MS,
     maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     encoding: "utf-8",
