@@ -246,6 +246,18 @@ export class VariantProposalStore {
   private waitersList: Waiter[] = [];
   /** Frozen result of the current round once the user submits. */
   private lastOutcome: Extract<AwaitOutcome, { status: "completed" }> | null = null;
+  /**
+   * Completed outcomes that finished with no `await_user_selection` parked to
+   * receive them directly (submitSelection's "no waiter" branch), queued in
+   * completion order. `autoRollIfCompleted` rolls into a fresh round on the
+   * very next `propose_variant` regardless of whether the outcome was ever
+   * retrieved — so this queue, unlike `lastOutcome`/`completed`/`consumed`
+   * (which describe only the CURRENT round), survives `reset()` and is
+   * drained first by `awaitSelection`, oldest first. Without it, a human's
+   * already-submitted selection is destroyed the moment the next
+   * `propose_variant` call rolls the round out from under it.
+   */
+  private pendingOutcomes: Array<Extract<AwaitOutcome, { status: "completed" }>> = [];
 
   /** Begin a fresh round, discarding the previous one's proposals/selections. */
   reset(): void {
@@ -316,10 +328,19 @@ export class VariantProposalStore {
     }
   }
 
-  private autoRollIfConsumed(): void {
-    // A completed round that has already been handed to the agent is closed —
-    // the next proposal starts a clean round automatically.
-    if (this.completed && this.consumed) this.reset();
+  private autoRollIfCompleted(): void {
+    // A completed round is closed — the next proposal starts a clean round
+    // automatically. This rolls whether or not the outcome was already
+    // consumed: a round can be `completed && !consumed` when the user submits
+    // with no await parked. Staging a new element onto such a round would
+    // append it after the frozen `lastOutcome`, so the next await would return
+    // the pre-submit outcome and silently drop the new element. `reset()`
+    // itself doesn't lose the unconsumed outcome — `submitSelection` already
+    // queued it in `pendingOutcomes`, which `reset()` deliberately leaves
+    // untouched — so rolling here is safe: it guarantees a post-completed
+    // proposal is presented AND the earlier outcome is still delivered on the
+    // next await.
+    if (this.completed) this.reset();
   }
 
   proposeVariant(input: {
@@ -342,7 +363,7 @@ export class VariantProposalStore {
     variantCount: number;
     totalElements: number;
   } {
-    this.autoRollIfConsumed();
+    this.autoRollIfCompleted();
 
     // Remember which device these variants are for, so the window streams it
     // directly. Last non-empty value wins; usually set once on the first call.
@@ -415,15 +436,16 @@ export class VariantProposalStore {
   setCliSession(active: boolean, agents: Array<{ id: string; name: string }> = []): void {
     const transitioned = this.cliSession !== active;
     // A CLI session must start from a clean round when there is leftover round
-    // state to clear. Without this, a completed round left over from a prior
-    // (possibly non-CLI) flow — e.g. an await_user_selection that timed out
-    // (waiter removed, `consumed` still false) and was then submitted, leaving
-    // completed=true/consumed=false — or an unsubmitted round with staged
-    // proposals would be APPENDED to by the session's first propose_variant
-    // (autoRollIfConsumed only resets on completed && consumed) instead of
-    // opening a fresh one. Reset only when such state exists so a clean start
-    // isn't needlessly bumped past round 1. (reset() does not clear cliSession /
-    // device / owned-devices, so it's safe to call here.)
+    // state to clear. `autoRollIfCompleted` (run by propose_variant) only rolls
+    // a *completed* round, so an unsubmitted round with staged proposals would
+    // otherwise be APPENDED to by the session's first propose_variant instead of
+    // opening a fresh one. A completed round left over from a prior (possibly
+    // non-CLI) flow — e.g. an await_user_selection that timed out (waiter
+    // removed, `consumed` still false) and was then submitted, leaving
+    // completed=true/consumed=false — is rolled here too so the session starts
+    // clean. Reset only when such state exists so a clean start isn't needlessly
+    // bumped past round 1. (reset() does not clear cliSession / device /
+    // owned-devices, so it's safe to call here.)
     if (transitioned && active && (this.completed || this.proposals.length > 0)) this.reset();
     this.cliSession = active;
     this.lensAgents = active ? agents.map((a) => ({ ...a })) : [];
@@ -540,17 +562,27 @@ export class VariantProposalStore {
     const round = this.round;
     const toSettle = this.waitersList.filter((w) => !w.settled && w.round === round);
     this.waitersList = this.waitersList.filter((w) => w.round !== round || w.settled);
-    if (toSettle.length > 0) this.consumed = true;
-    // In a CLI Lens session no await_user_selection consumes the round — the
-    // `argent lens` watcher reads the frozen outcome over HTTP and types it into
-    // the agent terminal. Mark the round consumed here too, so the agent's next
-    // propose_variant opens a FRESH round (the preview UI keys "new round" off
-    // the round number, and getLastOutcome stops returning a stale outcome)
-    // rather than appending to this already-submitted one.
-    if (this.cliSession) this.consumed = true;
-    for (const w of toSettle) {
-      w.settled = true;
-      w.settle(this.lastOutcome);
+    if (toSettle.length > 0) {
+      this.consumed = true;
+      for (const w of toSettle) {
+        w.settled = true;
+        w.settle(this.lastOutcome);
+      }
+    } else if (this.cliSession) {
+      // In a CLI Lens session no await_user_selection consumes the round — the
+      // `argent lens` watcher reads the frozen outcome over HTTP and types it
+      // into the agent terminal. Mark the round consumed here too, so the
+      // agent's next propose_variant opens a FRESH round (the preview UI keys
+      // "new round" off the round number, and getLastOutcome stops returning a
+      // stale outcome) rather than appending to this already-submitted one.
+      // No outcome is queued: the CLI watcher already read it over HTTP, and
+      // nothing drains `pendingOutcomes` in a CLI session (no await is parked).
+      this.consumed = true;
+    } else {
+      // No waiter was parked to receive this outcome directly. Queue it so a
+      // later await_user_selection still gets it, even across an intervening
+      // propose_variant that rolls the round (see `pendingOutcomes`' doc).
+      this.pendingOutcomes.push(this.lastOutcome);
     }
     this.events.emit("changed");
     this.events.emit("selectionSubmitted");
@@ -617,6 +649,20 @@ export class VariantProposalStore {
    * round is superseded), so concurrent / re-entrant awaits never strand.
    */
   awaitSelection(opts: { signal?: AbortSignal; timeoutMs: number }): Promise<AwaitOutcome> {
+    // Deliver the OLDEST undelivered outcome first, even if propose_variant
+    // has since rolled the store into a fresh round for new elements — this
+    // outcome is real, already-decided-by-the-human data and must never be
+    // silently lost to a later roll. See `pendingOutcomes`' doc comment.
+    if (this.pendingOutcomes.length > 0) {
+      const outcome = this.pendingOutcomes.shift()!;
+      // If no roll has happened since (the outcome belongs to the still-current
+      // round), mark it consumed too — otherwise a second bare await, with
+      // nothing left to settle it, would park until timeout and misreport
+      // "not completed yet" for a round that's already done.
+      if (outcome.round === this.round) this.consumed = true;
+      return Promise.resolve(outcome);
+    }
+
     // A completed round whose result the agent already consumed is closed.
     // Don't re-park (that would block forever); tell the agent to propose anew.
     if (this.completed && this.consumed) {
@@ -626,13 +672,6 @@ export class VariantProposalStore {
           "The previous selection round was already returned. Call propose_variant to stage " +
           "new variants before awaiting again.",
       });
-    }
-
-    // Submitted but no waiter was parked to receive it → hand back the frozen
-    // outcome and close the round.
-    if (this.completed && !this.consumed) {
-      this.consumed = true;
-      return Promise.resolve(this.lastOutcome ?? this.buildOutcome());
     }
 
     if (this.proposals.length === 0) {

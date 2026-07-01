@@ -447,14 +447,17 @@ describe("VariantProposalStore — CLI Lens session (`argent lens`)", () => {
     expect(s.getLastOutcome()).toBeNull();
   });
 
-  it("without a CLI session, a submitted-but-unconsumed round is NOT auto-rolled", () => {
+  it("without a CLI session, a submitted-but-unconsumed round rolls on the next propose", () => {
     const s = new VariantProposalStore();
     expect(s.proposeVariant({ element: "Foo", variant: variant("Bold") }).round).toBe(1);
-    s.submitSelection({ selections: [] }); // no waiter parked → unconsumed
-    // Legacy (non-CLI) behaviour is unchanged: the next propose appends to round 1.
+    s.submitSelection({ selections: [] }); // no waiter parked → completed && !consumed
+    // The next propose opens a FRESH round rather than appending behind the
+    // frozen outcome (appending would silently drop the new element). The
+    // earlier submitted outcome is not lost — it is queued in `pendingOutcomes`
+    // and delivered on the next await, so rolling here is safe.
     const r = s.proposeVariant({ element: "Bar", variant: variant("Tall") });
-    expect(r.round).toBe(1);
-    expect(r.totalElements).toBe(2);
+    expect(r.round).toBe(2);
+    expect(r.totalElements).toBe(1);
   });
 
   it("beginning a CLI session clears a leftover submitted round from a prior flow", () => {
