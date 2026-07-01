@@ -35,14 +35,8 @@ concurrency:
   group: vega-vvd-e2e-${{ github.ref }}
   cancel-in-progress: true
 
-# Third-party actions and the fixture are pinned to immutable refs (commit SHA /
-# content checksum) rather than mutable `@main` / `:latest` tags: this job runs
-# on `pull_request` (untrusted), so a floating ref could change under the
-# workflow with no diff. Re-pin deliberately when bumping. The
-# vega-virtual-device-host image is no longer pulled from a registry — the action
-# builds it on the runner from its bundled Dockerfile, which is pinned at the
-# action ref below (and carries the SDK version via `.sdk-version`), cached via
-# the GitHub Actions cache.
+# Third-party actions and the fixture are pinned to immutable refs (this job runs
+# on untrusted `pull_request`). Re-pin deliberately when bumping.
 env:
   KEPLER_FIXTURE_URL: "https://github.com/finloop/vega-virtual-device-action/releases/download/fixtures-keplervideoapp-0.22.1/keplervideoapp_aarch64.vpkg"
   # Verified against the downloaded fixture below (the release tag is mutable).
@@ -56,8 +50,7 @@ jobs:
     # unchanged inside it — same glibc, no cross-version skew.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # The action builds the vega-virtual-device-host image on the runner (no
-    # registry pull), so only contents: read (for checkout) is needed.
+    # The action builds the host image on the runner (no registry pull).
     permissions:
       contents: read
 
@@ -111,9 +104,8 @@ jobs:
 
       - name: Boot VVD; drive remote + screenshot
         id: vvd
-        # No `image:` input → the action builds the vega-virtual-device-host image
-        # on the runner from its bundled Dockerfile (SDK pinned via the action's
-        # .sdk-version), cached via the GitHub Actions cache.
+        # No `image:` → the action builds the host image on the runner, with the
+        # SDK version pinned via the action's `.sdk-version`.
         uses: finloop/vega-virtual-device-action/vega-virtual-device-action@a0f17767abafb27ec9b58974d94643fc46a4a35d # main
         with:
           boot-timeout: 420
