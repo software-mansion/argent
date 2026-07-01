@@ -19,7 +19,10 @@ vi.mock("../src/utils/android-profiler/pipeline/run-tp", async (importActual) =>
   }),
   runTpInline: vi.fn(async () => inlineResponse),
 }));
-import { runAndroidProfilerPipeline } from "../src/utils/android-profiler/pipeline/index";
+import {
+  runAndroidProfilerPipeline,
+  runAndroidStackQuery,
+} from "../src/utils/android-profiler/pipeline/index";
 const TRACE_START_NS = 9_100_000_000_000_000n; // ~105 days uptime, > 2^53
 describe("android profiler pipeline handles bigint native-ns columns", () => {
   beforeEach(() => {
@@ -92,5 +95,75 @@ describe("android profiler pipeline handles bigint native-ns columns", () => {
     const result = await runAndroidProfilerPipeline("/fake.pftrace", "com.example.app");
     expect(result.uiHangs).toHaveLength(1);
     expect(result.uiHangs[0]!.severity).toBe("RED");
+  });
+});
+
+describe("android stack drill-down handles bigint native-ns columns", () => {
+  beforeEach(() => {
+    queryResponses.length = 0;
+    inlineResponse = [];
+  });
+
+  it("renders the hang-stacks drill-down for a bigint ts_ns/dur_ns hang without throwing", async () => {
+    // renderHangStacksAndroid reads the hang's own ts_ns/dur_ns and does
+    // `startNs + dur_ns` and `dur_ns / 1_000_000`. ts_ns is an absolute
+    // CLOCK_MONOTONIC value and dur_ns can likewise decode as bigint once it
+    // exceeds 2^53 (see readCell) — so both arrive as bigint here, exactly as
+    // the WASM engine hands them back on a long-uptime device. Without the
+    // Number() coercions the arithmetic throws "Cannot mix BigInt and other
+    // types". state total_dur_ns stays a plain Number: it is a hang-window-
+    // clipped duration sum (hang-state-breakdown.sql), always well under 2^53.
+    const HANG_TS_NS = TRACE_START_NS + 1_000_000_000n; // absolute, > 2^53
+    const HANG_DUR_NS = 9_500_000_000_000_000n; // > 2^53 → decodes as bigint
+    expect(Number.isSafeInteger(Number(HANG_TS_NS))).toBe(false);
+    expect(Number.isSafeInteger(Number(HANG_DUR_NS))).toBe(false);
+    const expectedDurationMs = Math.round(Number(HANG_DUR_NS) / 1_000_000);
+
+    queryResponses.push(
+      {
+        name: "ui-hangs.sql",
+        rows: [
+          {
+            kind: "jank",
+            ts_ns: HANG_TS_NS,
+            dur_ns: HANG_DUR_NS,
+            process_name: "com.example.app",
+            reason: "App Deadline Missed",
+            error_id: null,
+          },
+        ],
+      },
+      {
+        name: "hang-state-breakdown.sql",
+        rows: [
+          {
+            state: "Uninterruptible Sleep",
+            blocked_function: "do_page_fault",
+            total_dur_ns: 400_000_000, // Number: clipped duration sum, < 2^53
+            occurrences: 3,
+          },
+        ],
+      },
+      {
+        name: "hang-main-thread-samples.sql",
+        rows: [{ ts_ns: HANG_TS_NS + 500_000_000n, callstack_text: "main <- onDraw <- inflate" }],
+      }
+    );
+
+    const out = await runAndroidStackQuery({
+      tracePath: "/fake.pftrace",
+      mode: "hang_stacks",
+      appPackage: "com.example.app",
+      hangIndex: 0,
+      topN: 15,
+    });
+
+    // (b) correct millisecond math from the bigint dur_ns in the header, and the
+    // state row's Number ns → ms conversion, both survive the coercion.
+    expect(out).toContain(`## Hang #0 — jank (${expectedDurationMs}ms)`);
+    expect(out).toContain("reason: `App Deadline Missed`");
+    expect(out).toContain("| Uninterruptible Sleep | `do_page_fault` | 400ms |");
+    expect(out).toContain("### Main-thread Samples During Hang");
+    expect(out).toContain("main <- onDraw <- inflate");
   });
 });
