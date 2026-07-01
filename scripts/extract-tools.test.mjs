@@ -141,3 +141,29 @@ test("a description-less tool does not borrow the next tool's description", () =
     "a description-less tool borrowed the following tool's description"
   );
 });
+
+test("tools with mixed description forms in one file are both captured", () => {
+  // Position-based (not delimiter-form-priority) matching: an earlier tool's
+  // double-quoted description must not be lost to a LATER tool's template
+  // literal. A form-priority scan would grab the later template ahead of the
+  // nearer double-quoted one, then drop the earlier tool.
+  const src = `
+    export const first = defineTool({
+      id: "first-tool",
+      description: "First tool, plain double-quoted description.",
+      handler: async () => {},
+    });
+    export const second = defineTool({
+      id: "second-tool",
+      description: \`Second tool, a template-literal description with some length.\`,
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(byName["first-tool"], "First tool, plain double-quoted description.");
+  assert.equal(
+    byName["second-tool"],
+    "Second tool, a template-literal description with some length."
+  );
+});

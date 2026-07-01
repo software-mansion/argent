@@ -50,43 +50,47 @@ export function extractToolsFromSource(src, filePath = "<source>") {
   while ((idMatch = idPattern.exec(src)) !== null) {
     const id = idMatch[1];
 
-    // Search forward from this `id:` for the tool's own `description:` value,
-    // matched together WITH its closing delimiter. No fixed-size window, so a
-    // long multi-line template-literal description — whose closing delimiter can
-    // sit thousands of chars past the `id:` (run-sequence's is ~3000) — is still
-    // captured in full. Anchoring on the closing delimiter also means an `id:`
-    // token that appears INSIDE the description text (e.g. a structured example
-    // such as `{ id: "menu-item" }`) can't truncate the capture; a fixed window
-    // or a "stop at the next `id:`" bound would drop the tool and silently skip
-    // it from the downstream `spidershield` security scan.
+    // Find the tool's own `description:` by POSITION — the nearest `description:`
+    // after this `id:`, parsed with its actual closing delimiter. Position (not
+    // delimiter-form priority) matters when tools in one file use different
+    // description forms: a form-priority scan (template, then double, then single)
+    // could grab a LATER tool's template literal ahead of THIS tool's nearer
+    // double-quoted one, then reject it as belonging to a later id and drop this
+    // tool. Matching to the closing delimiter also means an `id:`/`description:`
+    // token appearing INSIDE the description text (e.g. a structured example
+    // `{ id: "menu-item" }`) can't truncate the capture — a fixed window or a
+    // "stop at the next `id:`" bound would silently drop the tool from the
+    // downstream `spidershield` security scan.
     const afterId = src.slice(idMatch.index + idMatch[0].length);
+    const descKeyword = afterId.match(/\bdescription:\s*/);
 
-    // Template literal description first. Allow escaped backticks (\`) inside the
-    // literal so inline code like `adb pull` doesn't truncate the captured
-    // description. The class matches either an escape sequence (\\.) or any char
-    // that isn't ` or \. Then fall back to double- and single-quoted forms.
-    let descMatch = afterId.match(/\bdescription:\s*`((?:\\.|[^`\\])*)`/);
-    if (!descMatch) {
-      // Double-quoted description
-      descMatch = afterId.match(/\bdescription:\s*"((?:[^"\\]|\\.)*)"/);
-    }
-    if (!descMatch) {
-      // Single-quoted description
-      descMatch = afterId.match(/\bdescription:\s*'((?:[^'\\]|\\.)*)'/);
+    let description = null;
+    if (
+      descKeyword &&
+      // No other tool `id:` between this `id:` and its `description:` ⇒ the
+      // description is this tool's own, not a later tool's borrowed one.
+      !/\bid:\s*["'][^"']+["']/.test(afterId.slice(0, descKeyword.index))
+    ) {
+      const value = afterId.slice(descKeyword.index + descKeyword[0].length);
+      const delim = value[0];
+      // Template literal allows escaped backticks (\`) so inline code like
+      // `adb pull` doesn't truncate; the quoted forms allow the standard escapes.
+      const valueMatch =
+        delim === "`"
+          ? value.match(/^`((?:\\.|[^`\\])*)`/)
+          : delim === '"'
+            ? value.match(/^"((?:[^"\\]|\\.)*)"/)
+            : delim === "'"
+              ? value.match(/^'((?:[^'\\]|\\.)*)'/)
+              : null;
+      if (valueMatch) {
+        // Unescape template-literal escapes (\` \$ \\) so the description reads
+        // as the rendered string, not the source form.
+        description = valueMatch[1].replace(/\\([`$\\])/g, "$1").trim();
+      }
     }
 
-    // Guard against borrowing a LATER tool's description: if another tool `id:`
-    // declaration sits between this `id:` and the matched `description:`, this
-    // tool has no description of its own — a description-less tool must not
-    // inherit the next tool's.
-    if (descMatch && /\bid:\s*["'][^"']+["']/.test(afterId.slice(0, descMatch.index))) {
-      descMatch = null;
-    }
-
-    if (descMatch) {
-      // Unescape template-literal escapes (\` \$ \\) so the description reads
-      // as the rendered string, not the source form.
-      const description = descMatch[1].replace(/\\([`$\\])/g, "$1").trim();
+    if (description !== null) {
       tools.push({
         name: id,
         description,
