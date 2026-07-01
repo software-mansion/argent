@@ -19,4 +19,45 @@ describe("ScreencastManager recovers after a failed start", () => {
     await mgr.start();
     expect(send.mock.calls.filter((c) => c[0] === "Page.startScreencast").length).toBe(1);
   });
+
+  it("does not strand a concurrent joiner when the owner's start rejects", async () => {
+    // The owner's Page.startScreencast is gated so a second caller can join
+    // while it is in flight, then the owner's start rejects. The joiner must
+    // reject too (not hold a session for a screencast that never started), the
+    // refcount must drain to 0, and a later start must re-issue cleanly.
+    let releaseFirst!: (fail: boolean) => void;
+    const firstGate = new Promise<boolean>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    const send = vi.fn(async (method: string) => {
+      if (method === "Page.startScreencast") {
+        calls += 1;
+        if (calls === 1 && (await firstGate)) throw new Error("transient");
+      }
+      return {};
+    });
+    const cdp = { events: new TypedEventEmitter(), send } as never;
+    const mgr = new ScreencastManager(
+      cdp,
+      new TypedEventEmitter() as never,
+      { recordFrame: () => {} } as never
+    );
+
+    const owner = mgr.start(); // owner: startScreencast is in flight (gated)
+    const joiner = mgr.start(); // joiner: enters while the owner's start is in flight
+    // Attach rejection handlers before releasing the gate (no unhandled reject).
+    const ownerRejects = expect(owner).rejects.toThrow(/transient/);
+    const joinerRejects = expect(joiner).rejects.toThrow(/transient/);
+    await Promise.resolve();
+    releaseFirst(true); // fail the owner's start
+    await ownerRejects;
+    await joinerRejects;
+
+    // Fully drained: a fresh start re-issues Page.startScreencast and succeeds.
+    send.mockClear();
+    const recovered = await mgr.start();
+    expect(recovered).toBeTruthy();
+    expect(send.mock.calls.filter((c) => c[0] === "Page.startScreencast").length).toBe(1);
+  });
 });

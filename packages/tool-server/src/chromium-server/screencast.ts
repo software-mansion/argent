@@ -17,6 +17,11 @@ import type { ScreencastFrame, ScreencastOpts, ScreencastSession, ServerEvents }
 export class ScreencastManager {
   private activeCount = 0;
   private currentOpts: ScreencastOpts | null = null;
+  // The in-flight Page.startScreencast promise for the first subscriber, shared
+  // so concurrent joiners await the SAME start instead of assuming a live
+  // session (and stranding themselves on a frame-less stream if it fails). Null
+  // when no start is in flight (idle, or a live session already running).
+  private startInFlight: Promise<void> | null = null;
   private lastFrame: ScreencastFrame | null = null;
   private cdpListenerInstalled = false;
 
@@ -39,27 +44,41 @@ export class ScreencastManager {
   async start(opts: ScreencastOpts = {}): Promise<ScreencastSession> {
     this.installCdpListenerOnce();
 
-    this.activeCount += 1;
-    if (this.activeCount === 1) {
+    if (this.startInFlight) {
+      // A first caller is mid-Page.startScreencast. Join the SAME in-flight start
+      // rather than assuming a live session: await it so a transient failure
+      // fails us too, and only take a refcount once the screencast is actually
+      // running. Incrementing before this await — as the naive refcount did —
+      // strands this caller on a frame-less stream when the owner's start
+      // rejects (activeCount never drains to 0, so no later start re-issues).
+      await this.startInFlight;
+      if (this.optsDiffer(opts, this.currentOpts)) this.warnOptsIgnored();
+      this.activeCount += 1;
+    } else if (this.activeCount === 0) {
+      // First subscriber, nothing in flight: issue Page.startScreencast and
+      // publish the promise so concurrent joiners await it. On failure nothing
+      // is left behind — no refcount, no currentOpts, no phantom session — so
+      // the next start() re-issues cleanly.
       this.currentOpts = opts;
+      const inFlight = this.cdp
+        .send("Page.startScreencast", this.toCdpStartArgs(opts))
+        .then(() => undefined);
+      this.startInFlight = inFlight;
       try {
-        await this.cdp.send("Page.startScreencast", this.toCdpStartArgs(opts));
+        await inFlight;
       } catch (err) {
-        // Roll the refcount back so a transient failure doesn't wedge the
-        // manager: the caller never receives a session handle to undo the
-        // increment, so the next start() must see activeCount back at 0 and
-        // re-issue Page.startScreencast instead of assuming a live session.
-        this.activeCount = Math.max(0, this.activeCount - 1);
-        this.currentOpts = null;
+        if (this.startInFlight === inFlight) {
+          this.startInFlight = null;
+          this.currentOpts = null;
+        }
         throw err;
       }
-    } else if (this.optsDiffer(opts, this.currentOpts)) {
-      // Subsequent callers join the existing session and accept whatever
-      // format / quality / size the first caller chose. Forcing a restart
-      // would tear down the first caller's stream mid-frame.
-      process.stderr.write(
-        `[chromium-screencast] additional caller requested screencast opts that differ from the active session; ignoring (first writer wins).\n`
-      );
+      if (this.startInFlight === inFlight) this.startInFlight = null;
+      this.activeCount += 1;
+    } else {
+      // A live session is already running: join it (first writer wins on opts).
+      if (this.optsDiffer(opts, this.currentOpts)) this.warnOptsIgnored();
+      this.activeCount += 1;
     }
 
     let stopped = false;
@@ -83,9 +102,19 @@ export class ScreencastManager {
   async forceStop(): Promise<void> {
     this.activeCount = 0;
     this.currentOpts = null;
+    this.startInFlight = null;
     await this.cdp.send("Page.stopScreencast").catch(() => {
       /* ignore */
     });
+  }
+
+  private warnOptsIgnored(): void {
+    // Subsequent callers join the existing session and accept whatever format /
+    // quality / size the first caller chose. Forcing a restart would tear down
+    // the first caller's stream mid-frame.
+    process.stderr.write(
+      `[chromium-screencast] additional caller requested screencast opts that differ from the active session; ignoring (first writer wins).\n`
+    );
   }
 
   private installCdpListenerOnce(): void {
