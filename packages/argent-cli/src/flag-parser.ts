@@ -94,6 +94,11 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
   // an array field appends; a second value for a scalar field overwrites
   // (with a warning would be nice but we keep it silent to avoid stderr noise).
   const seenArrayFields = new Set<string>();
+  // Track which fields were set via `--field-json`, independent of order: a
+  // field touched by BOTH `--field` (scalar-array form) and `--field-json` is
+  // ambiguous no matter which came first, so both directions must throw rather
+  // than one silently overwriting/discarding the other's value.
+  const jsonFields = new Set<string>();
 
   function takeNext(i: number, flag: string): { value: string; nextIndex: number } {
     if (i + 1 >= argv.length) {
@@ -146,7 +151,15 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       const fieldName = flag.slice(0, -"-json".length);
       const { value, nextIndex } =
         inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, flag);
+      if (seenArrayFields.has(fieldName)) {
+        // A prior --${fieldName} (scalar-array form) already populated this
+        // field; overwriting it here would silently discard those values.
+        throw new FlagParseException(
+          `--${fieldName} and --${flag} cannot be mixed for the same field; pass it entirely as --${flag} '<json>' or --args '<json>'`
+        );
+      }
       args[fieldName] = parseJsonOrThrow(value, `--${flag}`);
+      jsonFields.add(fieldName);
       i = nextIndex;
       continue;
     }
@@ -192,17 +205,18 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       const { value, nextIndex } =
         inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, flag);
       const coerced = coerceScalar(value, itemType, flag);
-      if (!seenArrayFields.has(flag)) {
-        args[flag] = [coerced];
-        seenArrayFields.add(flag);
-      } else if (Array.isArray(args[flag])) {
-        (args[flag] as unknown[]).push(coerced);
-      } else {
-        // --${flag}-json replaced the array with a non-array value in between
-        // two array-form occurrences; appending would throw a raw TypeError.
+      if (jsonFields.has(flag)) {
+        // --${flag}-json already set this field (in either order relative to
+        // this occurrence); mixing the two forms is ambiguous and one would
+        // silently clobber or corrupt the other's value.
         throw new FlagParseException(
           `--${flag} and --${flag}-json cannot be mixed for the same field; pass it entirely as --${flag}-json '<json>' or --args '<json>'`
         );
+      } else if (!seenArrayFields.has(flag)) {
+        args[flag] = [coerced];
+        seenArrayFields.add(flag);
+      } else {
+        (args[flag] as unknown[]).push(coerced);
       }
       if (inlineValue === undefined) i = nextIndex;
       continue;
