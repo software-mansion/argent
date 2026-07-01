@@ -14,7 +14,7 @@ import {
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
-import { fetchFlowTree } from "./flow-native-tree";
+import { fetchFlowTree } from "./flow-ios-tree";
 import type { FlowSelector, ScrollDirection } from "./flow-utils";
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */

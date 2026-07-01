@@ -17,7 +17,7 @@ export interface DescribeNode {
   identifier?: string;
   value?: string;
   // Text hoisted up from descendant nodes during the flow adapters' flatten
-  // pass (see flow-native-tree / flow-android-tree). The flat-leaves shape
+  // pass (see flow-ios-tree / flow-android-tree). The flat-leaves shape
   // discards nesting, so a testID container's own `label`/`value` is empty even
   // when it visibly wraps text (e.g. a counter whose number is a child `Text`).
   // `subtreeText` carries that descendant text so an `assert`/`text` check can

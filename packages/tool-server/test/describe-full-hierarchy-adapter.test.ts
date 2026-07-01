@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adaptFullHierarchyToDescribeResult } from "../src/tools/flows/flow-native-tree";
+import { adaptFullHierarchyToDescribeResult } from "../src/tools/flows/flow-ios-tree";
 import { evaluateCondition, findAll, selectorToFrame } from "../src/utils/ui-tree-match";
 
 // A getFullHierarchy payload shaped like SerializeView output: a window spanning
