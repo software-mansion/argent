@@ -133,4 +133,51 @@ describe("ScreencastManager recovers after a failed start", () => {
     await mgr.start();
     expect(send.mock.calls.filter((c) => c[0] === "Page.startScreencast").length).toBe(1);
   });
+
+  it("a phantom session's stop() does not steal a later live session's refcount", async () => {
+    // forceStop() supersedes an owner's in-flight start; that start then
+    // SUCCEEDS anyway (this is the same race the two tests above cover, which
+    // assert no refcount is taken). This test goes one step further: a real
+    // session B then starts on the same manager, and the phantom session's
+    // stop() must be a true no-op — not decrement activeCount and potentially
+    // tear down B's live stream out from under it.
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    let startCalls = 0;
+    const send = vi.fn(async (method: string) => {
+      if (method === "Page.startScreencast") {
+        startCalls += 1;
+        if (startCalls === 1) await startGate;
+      }
+      return {};
+    });
+    const cdp = { events: new TypedEventEmitter(), send } as never;
+    const mgr = new ScreencastManager(
+      cdp,
+      new TypedEventEmitter() as never,
+      { recordFrame: () => {} } as never
+    );
+    const stopCount = () => send.mock.calls.filter((c) => c[0] === "Page.stopScreencast").length;
+
+    const phantomStarting = mgr.start(); // startScreencast gated (in flight)
+    await Promise.resolve();
+    await mgr.forceStop(); // supersedes the in-flight start (calls stopScreencast once)
+    releaseStart(); // the superseded start now resolves successfully anyway
+    const phantom = await phantomStarting;
+
+    // A real session B starts fresh (activeCount was drained to 0 by forceStop).
+    send.mockClear();
+    const b = await mgr.start();
+    expect(stopCount()).toBe(0);
+
+    // The phantom's stop() must not touch B's session.
+    await phantom.stop();
+    expect(stopCount()).toBe(0);
+
+    // B's own stop() still works normally.
+    await b.stop();
+    expect(stopCount()).toBe(1);
+  });
 });

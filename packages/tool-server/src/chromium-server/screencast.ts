@@ -44,6 +44,15 @@ export class ScreencastManager {
   async start(opts: ScreencastOpts = {}): Promise<ScreencastSession> {
     this.installCdpListenerOnce();
 
+    // Tracks whether THIS call actually took a refcount slot. A call whose
+    // underlying Page.startScreencast raced a forceStop() and lost (the
+    // `startInFlight === inFlight` guards below) must return a session whose
+    // stop() is a true no-op — otherwise, once a later legitimate session
+    // starts and takes the same slot index, this phantom's stop() would
+    // decrement activeCount and potentially fire Page.stopScreencast for a
+    // stream this caller was never actually subscribed to.
+    let acquired = false;
+
     if (this.startInFlight) {
       // A first caller is mid-Page.startScreencast. Join the SAME in-flight start
       // rather than assuming a live session: await it so a transient failure
@@ -60,6 +69,7 @@ export class ScreencastManager {
       if (this.activeCount > 0) {
         if (this.optsDiffer(opts, this.currentOpts)) this.warnOptsIgnored();
         this.activeCount += 1;
+        acquired = true;
       }
     } else if (this.activeCount === 0) {
       // First subscriber, nothing in flight: issue Page.startScreencast and
@@ -83,21 +93,24 @@ export class ScreencastManager {
       if (this.startInFlight === inFlight) {
         this.startInFlight = null;
         this.activeCount += 1;
+        acquired = true;
       }
       // else: a forceStop()/dispose superseded this start while it was in flight,
       // so the screencast we started is already torn down — don't take a refcount
-      // for it (the returned session's stop() is then a harmless no-op). Mirrors
-      // the catch path's `startInFlight === inFlight` identity guard.
+      // for it (`acquired` stays false, so the returned session's stop() is a
+      // true no-op). Mirrors the catch path's `startInFlight === inFlight`
+      // identity guard.
     } else {
       // A live session is already running: join it (first writer wins on opts).
       if (this.optsDiffer(opts, this.currentOpts)) this.warnOptsIgnored();
       this.activeCount += 1;
+      acquired = true;
     }
 
     let stopped = false;
     const session: ScreencastSession = {
       stop: async () => {
-        if (stopped) return;
+        if (stopped || !acquired) return;
         stopped = true;
         this.activeCount = Math.max(0, this.activeCount - 1);
         if (this.activeCount === 0) {
