@@ -3,7 +3,12 @@ import { describe, it, expect, vi } from "vitest";
 // Capture the adb command strings instead of shelling out to a real device.
 // Keep `shellQuote` real (android-input relies on it) — only stub the transport.
 // `vi.hoisted` so the mock fn exists when the hoisted `vi.mock` factory runs.
-const { adbShell } = vi.hoisted(() => ({ adbShell: vi.fn(async () => "") }));
+const { adbShell } = vi.hoisted(() => ({
+  // Typed params so `adbShell.mock.calls[0]` is a `[serial, cmd, opts?]` tuple
+  // (an untyped `vi.fn(async () => "")` infers a zero-arg call and TS2493s on
+  // destructuring — vitest transforms tests with esbuild, so only `tsc` catches it).
+  adbShell: vi.fn(async (_serial: string, _cmd: string, _opts?: unknown): Promise<string> => ""),
+}));
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   adbShell,
