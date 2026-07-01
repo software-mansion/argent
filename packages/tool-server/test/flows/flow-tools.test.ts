@@ -339,6 +339,30 @@ describe("flow-add-step", () => {
     ]);
   });
 
+  it("records an `exists` find that returns found:false (a valid absent answer, not a miss)", async () => {
+    const registry = createMockRegistry({
+      find: { result: { found: false, action: "exists", matchCount: 0 } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "exists-false-recording", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    // Must NOT throw: for `exists`, found:false is the successful "not present"
+    // result, so the step is recorded rather than aborting the recording.
+    const result = await tool.execute(
+      {},
+      { command: "find", args: '{"query":"Spinner","by":"text","action":"exists"}' }
+    );
+    expect(result.toolResult).toMatchObject({ found: false, action: "exists" });
+    const flow = parseFlow(result.flowFile);
+    expect(flow.steps).toEqual([
+      { kind: "tool", name: "find", args: { query: "Spinner", by: "text", action: "exists" } },
+    ]);
+  });
+
   it("handles omitted args", async () => {
     const registry = createMockRegistry({
       screenshot: { result: { url: "http://..." } },

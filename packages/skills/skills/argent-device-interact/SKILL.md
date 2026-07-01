@@ -193,7 +193,7 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 - `by`: `any` (label/value/id — default), `text` (label or value), `label`, `value`, `role`, or `id`.
 - `action`: `tap` (default, centre), `focus`, `type` (focus + type `text`), `fill` (focus + clear + type `text`), `exists` (single presence check, no wait), `wait` (block until visible, `timeoutMs` default 5000ms), `get-text`, `get-attrs`.
 - `text`: the string to enter, required for `type` / `fill`.
-- `index`: when several match, which one to act on (0 = topmost in reading order). The result's `matchCount` reports how many matched — if it is `> 1`, narrow `query` or set `index`.
+- `index`: when several match, which one to act on (0 = topmost in reading order). `matchCount` counts the matches `index` can address — **visible** matches for the acting actions (`tap`/`focus`/`type`/`fill`) and `wait`, but **all** matches for the read-only checks (`exists`/`get-text`/`get-attrs`) — so if it is `> 1`, narrow `query` or set `index`.
 - By default a **single snapshot** is taken (no wait). Set `timeoutMs` to poll until the element appears before acting (turns `find … tap` into wait-then-tap).
 - Returns `{ found, matchCount, match?, actionResult?, elapsed, note? }`. `found: false` carries a `note` explaining why (no match / not visible / index out of range / degraded read). It does **not** throw, so still confirm `found` before assuming the action ran.
 
