@@ -23,6 +23,40 @@ interface XcodeVersion {
   minor: number;
 }
 
+/**
+ * Why a given strategy was chosen. Callers that need to explain or gate on the
+ * decision (e.g. the malloc_stack_logging guard, which rejects when the strategy
+ * isn't `device`) can attribute the outcome accurately instead of assuming it is
+ * always a degraded Xcode.
+ */
+export type CaptureStrategyReason =
+  | { kind: "env-override"; strategyName: IosCaptureStrategy["name"] }
+  | { kind: "degraded-xcode"; major: number; minor: number }
+  | { kind: "default" };
+
+export interface CaptureStrategyDecision {
+  strategy: IosCaptureStrategy;
+  reason: CaptureStrategyReason;
+  /** Set when ARGENT_IOS_CAPTURE held an unrecognised value that was ignored. */
+  invalidOverride?: string;
+}
+
+type OverrideParse =
+  | { kind: "device" }
+  | { kind: "all-processes" }
+  | { kind: "none" }
+  | { kind: "invalid"; raw: string };
+
+function parseEnvOverride(): OverrideParse {
+  const raw = process.env[ENV_OVERRIDE]?.trim().toLowerCase();
+  if (!raw) return { kind: "none" };
+  if (raw === "device") return { kind: "device" };
+  if (raw === "all-processes" || raw === "all_processes" || raw === "allprocesses") {
+    return { kind: "all-processes" };
+  }
+  return { kind: "invalid", raw };
+}
+
 function readActiveXcodeVersion(): XcodeVersion | null {
   try {
     // `xcodebuild -version` honours DEVELOPER_DIR / xcode-select and prints
@@ -52,38 +86,68 @@ function isDegraded({ major, minor }: XcodeVersion): boolean {
   return major >= 27;
 }
 
-function fromEnv(): IosCaptureStrategy | null {
-  const raw = process.env[ENV_OVERRIDE]?.trim().toLowerCase();
-  if (!raw) return null;
-  if (raw === "device") return deviceStrategy;
-  if (raw === "all-processes" || raw === "all_processes" || raw === "allprocesses") {
-    return allProcessesStrategy;
+/**
+ * Resolve the capture strategy **and why** it was chosen, with **no side effects**
+ * — nothing is written to stderr. Callers that log the decision (the normal record
+ * flow, via {@link selectIosCaptureStrategy}) can do so; callers that may reject
+ * the decision outright (the malloc_stack_logging guard) get the reason without a
+ * misleading "using the all-processes fallback" line that never actually happens.
+ */
+export function resolveIosCaptureStrategy(): CaptureStrategyDecision {
+  const override = parseEnvOverride();
+  if (override.kind === "device") {
+    return {
+      strategy: deviceStrategy,
+      reason: { kind: "env-override", strategyName: deviceStrategy.name },
+    };
   }
-  process.stderr.write(
-    `[native-profiler] ignoring unrecognised ${ENV_OVERRIDE}="${raw}" ` +
-      `(expected "device" or "all-processes"); falling back to auto-detection.\n`
-  );
-  return null;
-}
+  if (override.kind === "all-processes") {
+    return {
+      strategy: allProcessesStrategy,
+      reason: { kind: "env-override", strategyName: allProcessesStrategy.name },
+    };
+  }
 
-export function selectIosCaptureStrategy(): IosCaptureStrategy {
-  const override = fromEnv();
-  if (override) {
-    process.stderr.write(
-      `[native-profiler] using "${override.name}" capture (forced via ${ENV_OVERRIDE}).\n`
-    );
-    return override;
-  }
+  const invalidOverride = override.kind === "invalid" ? override.raw : undefined;
 
   const version = readActiveXcodeVersion();
   if (version && isDegraded(version)) {
-    process.stderr.write(
-      `[native-profiler] Xcode ${version.major}.${version.minor} has the xctrace ` +
-        `--device recording-start deadlock; using the "${allProcessesStrategy.name}" ` +
-        `capture fallback. Override with ${ENV_OVERRIDE}=device.\n`
-    );
-    return allProcessesStrategy;
+    return {
+      strategy: allProcessesStrategy,
+      reason: { kind: "degraded-xcode", major: version.major, minor: version.minor },
+      invalidOverride,
+    };
   }
 
-  return deviceStrategy;
+  return { strategy: deviceStrategy, reason: { kind: "default" }, invalidOverride };
+}
+
+export function selectIosCaptureStrategy(): IosCaptureStrategy {
+  const decision = resolveIosCaptureStrategy();
+
+  if (decision.invalidOverride) {
+    process.stderr.write(
+      `[native-profiler] ignoring unrecognised ${ENV_OVERRIDE}="${decision.invalidOverride}" ` +
+        `(expected "device" or "all-processes"); falling back to auto-detection.\n`
+    );
+  }
+
+  switch (decision.reason.kind) {
+    case "env-override":
+      process.stderr.write(
+        `[native-profiler] using "${decision.strategy.name}" capture (forced via ${ENV_OVERRIDE}).\n`
+      );
+      break;
+    case "degraded-xcode":
+      process.stderr.write(
+        `[native-profiler] Xcode ${decision.reason.major}.${decision.reason.minor} has the xctrace ` +
+          `--device recording-start deadlock; using the "${allProcessesStrategy.name}" ` +
+          `capture fallback. Override with ${ENV_OVERRIDE}=device.\n`
+      );
+      break;
+    case "default":
+      break;
+  }
+
+  return decision.strategy;
 }

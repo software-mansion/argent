@@ -1,4 +1,4 @@
-import { spawn, execSync, type ChildProcess } from "child_process";
+import { spawn, execSync, execFileSync, type ChildProcess } from "child_process";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
@@ -14,7 +14,12 @@ import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
-import { selectIosCaptureStrategy } from "../../../../utils/ios-profiler/capture-strategy";
+import {
+  selectIosCaptureStrategy,
+  resolveIosCaptureStrategy,
+  type IosCaptureStrategy,
+  type CaptureStrategyReason,
+} from "../../../../utils/ios-profiler/capture-strategy";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 import { formatTraceFreshness } from "../../../../utils/profiler-shared/freshness";
@@ -129,29 +134,7 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
     );
   }
 
-  let listAppsOutput: string;
-  try {
-    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new FailureError(
-      `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
-        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
-      {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_LIST_FAILED,
-        failure_stage: "native_profiler_list_installed_apps",
-        failure_area: "tool_server",
-        error_kind: "subprocess",
-        ...subprocessFailureMetadata(err, "xcrun_simctl"),
-      },
-      { cause: err instanceof Error ? err : new Error(String(err)) }
-    );
-  }
-
-  const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
+  const installedApps = getInstalledApps(udid);
 
   const runningUserApps: { info: AppInfo; pid: number }[] = [];
   for (const [, info] of Object.entries(installedApps)) {
@@ -224,6 +207,118 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
   return { executable: name, pid: null };
 }
 
+function getInstalledApps(udid: string): Record<string, AppInfo> {
+  let listAppsOutput: string;
+  try {
+    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new FailureError(
+      `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_LIST_FAILED,
+        failure_stage: "native_profiler_list_installed_apps",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata(err, "xcrun_simctl"),
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
+  }
+  return JSON.parse(listAppsOutput);
+}
+
+/** Resolve the .app bundle path xctrace's `--launch` needs (malloc_stack_logging mode). */
+function getAppBundlePath(udid: string, bundleId: string): string {
+  let appPath: string;
+  try {
+    appPath = execFileSync("xcrun", ["simctl", "get_app_container", udid, bundleId, "app"], {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    }).trim();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new FailureError(
+      `Failed to resolve the .app bundle path for "${bundleId}" on simulator ${udid} ` +
+        `(required to cold-launch with malloc_stack_logging). Underlying error: ${msg}`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_BUNDLE_PATH_FAILED,
+        failure_stage: "native_profiler_resolve_app_bundle_path",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata(err, "xcrun_simctl"),
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
+  }
+  if (!appPath) {
+    throw new FailureError(
+      `simctl resolved an empty .app bundle path for "${bundleId}" on simulator ${udid} ` +
+        `(required to cold-launch with malloc_stack_logging). Verify the app is installed.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_BUNDLE_PATH_FAILED,
+        failure_stage: "native_profiler_resolve_app_bundle_path",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
+  }
+  return appPath;
+}
+
+/**
+ * malloc_stack_logging cold-launches the app by .app path, which needs the bundle
+ * id. Resolve the target AppInfo: an explicit app_process is matched against
+ * installed user apps by CFBundleExecutable or display name; otherwise fall back
+ * to the single running user app (same disambiguation as detectRunningApp).
+ */
+function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
+  if (appProcess) {
+    const installed = getInstalledApps(udid);
+    for (const [, info] of Object.entries(installed)) {
+      if (
+        info.ApplicationType === "User" &&
+        (info.CFBundleExecutable === appProcess || info.CFBundleDisplayName === appProcess)
+      ) {
+        return info;
+      }
+    }
+    throw new FailureError(
+      `No installed user app matching "${appProcess}" found on simulator ${udid}. ` +
+        `Pass the exact CFBundleExecutable or display name, or omit app_process to auto-detect the running app.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_LAUNCH_APP_NOT_FOUND,
+        failure_stage: "native_profiler_resolve_app_for_launch",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
+  }
+  const runningUserApps = enumerateRunningUserApps(udid);
+  if (runningUserApps.length > 1) {
+    const appList = runningUserApps
+      .map(
+        ({ info }) =>
+          `  - ${info.CFBundleExecutable} (${info.CFBundleIdentifier}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
+      )
+      .join("\n");
+    throw new FailureError(
+      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable or display name of the app you want to profile.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_MULTIPLE_RUNNING_USER_APPS,
+        failure_stage: "native_profiler_resolve_app_for_launch",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  return runningUserApps[0].info;
+}
+
 async function registerStartupNotify(name: string): Promise<NotifyHandle | null> {
   let handle: NotifyHandle;
   try {
@@ -277,10 +372,52 @@ export function handleXctraceExit(
   api.lastExitInfo = { code, signal };
 }
 
+/**
+ * malloc_stack_logging must cold-launch the app under `xctrace --device --launch`.
+ * When the resolved capture strategy is NOT `device`, the cold launch can't run, so
+ * we refuse — but attribute the refusal to the ACTUAL cause so the message and the
+ * telemetry `error_code` don't blame a degraded Xcode that may not be present:
+ *   - `env-override`   → the operator forced `ARGENT_IOS_CAPTURE=all-processes`;
+ *   - `degraded-xcode` → the active Xcode has the `--device` recording-start deadlock.
+ */
+function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureError {
+  if (reason.kind === "env-override") {
+    return new FailureError(
+      `malloc_stack_logging must cold-launch the app under \`xctrace --device\`, but ` +
+        `ARGENT_IOS_CAPTURE="${reason.strategyName}" forces the "${reason.strategyName}" capture ` +
+        `strategy, which attaches host-wide and cannot \`--launch\` a cold start. Unset ` +
+        `ARGENT_IOS_CAPTURE (or set it to "device") to use malloc_stack_logging, or re-run without ` +
+        `malloc_stack_logging (leaks are still detected, just unattributed).`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_STRATEGY_OVERRIDE,
+        failure_stage: "native_profiler_start_malloc_capability",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  const versionNote =
+    reason.kind === "degraded-xcode" ? `Xcode ${reason.major}.${reason.minor}` : "the active Xcode";
+  return new FailureError(
+    `malloc_stack_logging needs to cold-launch the app under \`xctrace --device\`, but ` +
+      `${versionNote} has the --device recording-start deadlock (26.4–27.0), so it would ` +
+      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging ` +
+      `(leaks are still detected, just unattributed), profile on a non-degraded Xcode, or set ` +
+      `ARGENT_IOS_CAPTURE=device to force the device path if you know it works on your host.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_DEGRADED_XCODE,
+      failure_stage: "native_profiler_start_malloc_capability",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
 export interface IosStartParams {
   device_id: string;
   app_process?: string;
   template_path?: string;
+  malloc_stack_logging?: boolean;
 }
 
 export async function startNativeProfilerIos(
@@ -300,38 +437,99 @@ export async function startNativeProfilerIos(
   }
 
   const templatePath = params.template_path ?? resolveDefaultTemplatePath();
-  const detected = params.app_process
-    ? resolveExplicitApp(params.device_id, params.app_process)
-    : detectRunningApp(params.device_id);
-  const appProcess = detected.executable;
 
-  // Pick the capture approach for this environment. On Xcode versions where
-  // `xctrace --device` works this is the original device/attach path; on the
-  // 26.4–27.0 regression (where --device deadlocks) it is the host-wide
-  // --all-processes fallback, filtered to the app PID. See capture-strategy.
-  const strategy = selectIosCaptureStrategy();
-  // The all-processes fallback records host-wide and isolates the app by PID, so
-  // it can only run when the target is actually running (PID known).
-  if (strategy.name === "all-processes" && detected.pid == null) {
-    throw new FailureError(
-      `The all-processes capture fallback needs the target app to be running so its ` +
-        `samples can be isolated by PID, but no running PID was found for "${appProcess}". ` +
-        `Launch the app first using \`launch-app\`, then retry.`,
-      {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_NO_RUNNING_USER_APPS,
-        failure_stage: "native_profiler_start_app_detect",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
-  }
+  // Default flow attaches to the running app (preserves state, no overhead).
+  // malloc_stack_logging mode instead cold-launches the app *under* xctrace with
+  // MallocStackLogging=1 so the malloc library records allocation backtraces from
+  // the first allocation — without that, leaks are detected but unattributable
+  // ("<Call stack limit reached>"). `--env` is only honoured with `--launch`,
+  // which needs the .app path rather than the executable name or PID.
+  const useMallocStackLogging = params.malloc_stack_logging === true;
+  let appProcess: string;
+  let launchBundlePath: string | null = null;
+  // Bundle id of the app the malloc path terminated for its clean cold start, so a
+  // failed start can best-effort relaunch it instead of leaving the user's app dead.
+  let mallocRelaunchBundleId: string | null = null;
+  // Normal (attach / all-processes) flow only — both stay null in
+  // malloc_stack_logging mode, which cold-launches by .app path under `--device`
+  // and is therefore already scoped without a capture strategy or detected PID.
+  let detected: DetectedApp | null = null;
+  let strategy: IosCaptureStrategy | null = null;
 
+  // Resolve the trace output path (which creates the debug dir) BEFORE the branch
+  // below. The malloc path terminates the running app for a clean cold start; if
+  // getDebugDir()'s mkdir failed AFTER that terminate, the app would be left dead
+  // with no relaunch (the best-effort relaunch only guards the start attempt).
+  // Doing it here means any mkdir failure happens before the app is touched.
   const debugDir = await getDebugDir();
   const timestamp = new Date()
     .toISOString()
     .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
     .slice(0, 15);
   const outputFile = path.join(debugDir, `native-profiler-${timestamp}.trace`);
+
+  if (useMallocStackLogging) {
+    // malloc_stack_logging must cold-launch the app under `xctrace --device --launch`
+    // (only `--launch` honours `--env MallocStackLogging=1`). On Xcode 26.4–27.0 the
+    // `--device` recording-start handshake is broken (see capture-strategy), so this
+    // would terminate the running app and then capture an empty trace — the opposite
+    // of the feature's purpose, surfaced only as a downstream "Analysis failed". Refuse
+    // up front, BEFORE touching the running app, unless the operator forces the device
+    // path via ARGENT_IOS_CAPTURE=device. Use the SIDE-EFFECT-FREE resolver so this
+    // guard doesn't emit selectIosCaptureStrategy()'s "using the all-processes
+    // fallback" stderr line immediately before throwing (that fallback never runs
+    // here); the reason it returns also lets the refusal name its actual cause
+    // (forced override vs. degraded Xcode) rather than always blaming the Xcode.
+    const captureDecision = resolveIosCaptureStrategy();
+    if (captureDecision.strategy.name !== "device") {
+      throw mallocNonDeviceStrategyError(captureDecision.reason);
+    }
+    const info = resolveAppForLaunch(params.device_id, params.app_process);
+    appProcess = info.CFBundleExecutable;
+    launchBundlePath = getAppBundlePath(params.device_id, info.CFBundleIdentifier);
+    // Terminate any running instance so xctrace owns a clean cold launch with the
+    // env var set from process start (best-effort; not-running is fine).
+    try {
+      execFileSync("xcrun", ["simctl", "terminate", params.device_id, info.CFBundleIdentifier], {
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        stdio: "ignore",
+      });
+      // The terminate SUCCEEDED, so the app was actually running and we own killing
+      // it. Only now mark it for best-effort relaunch on a later start failure — if
+      // the app was NOT running (terminate throws below), relaunching would foreground
+      // an app the user never had open, the opposite of "restore what we killed".
+      mallocRelaunchBundleId = info.CFBundleIdentifier;
+    } catch {
+      // app was not running — nothing to terminate, and nothing to restore
+    }
+  } else {
+    detected = params.app_process
+      ? resolveExplicitApp(params.device_id, params.app_process)
+      : detectRunningApp(params.device_id);
+    appProcess = detected.executable;
+
+    // Pick the capture approach for this environment. On Xcode versions where
+    // `xctrace --device` works this is the original device/attach path (which
+    // attaches by PID — immune to Xcode 26.5's display-name `--attach` matching);
+    // on the 26.4–27.0 regression (where --device deadlocks) it is the host-wide
+    // --all-processes fallback, filtered to the app PID. See capture-strategy.
+    strategy = selectIosCaptureStrategy();
+    // The all-processes fallback records host-wide and isolates the app by PID, so
+    // it can only run when the target is actually running (PID known).
+    if (strategy.name === "all-processes" && detected.pid == null) {
+      throw new FailureError(
+        `The all-processes capture fallback needs the target app to be running so its ` +
+          `samples can be isolated by PID, but no running PID was found for "${appProcess}". ` +
+          `Launch the app first using \`launch-app\`, then retry.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_NO_RUNNING_USER_APPS,
+          failure_stage: "native_profiler_start_app_detect",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+  }
 
   api.recordingTimedOut = false;
   api.recordingExitedUnexpectedly = false;
@@ -340,20 +538,47 @@ export async function startNativeProfilerIos(
   const attemptStart = async (): Promise<{ child: ChildProcess; pid: number }> => {
     api.appProcess = appProcess;
     api.traceFile = outputFile;
-    // Null for the device strategy (already scoped by --attach); the app PID for
-    // the host-wide all-processes fallback, used to filter the exported samples.
-    api.cpuFilterPid = strategy.cpuFilterPid(detected);
+    // Null for the device strategy (already scoped by --attach) and for a
+    // malloc_stack_logging cold launch (scoped by --launch on --device); the app
+    // PID only for the host-wide all-processes fallback, to filter the samples.
+    api.cpuFilterPid = strategy ? strategy.cpuFilterPid(detected!) : null;
 
     const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
     const notify = await registerStartupNotify(notifyName);
 
-    const xctraceArgs = strategy.buildRecordArgs({
-      templatePath,
-      deviceId: params.device_id,
-      target: detected,
-      outputFile,
-      notifyName: notify ? notifyName : undefined,
-    });
+    let xctraceArgs: string[];
+    if (useMallocStackLogging) {
+      // malloc_stack_logging cold launch: `--env` only applies to `--launch`, and
+      // the launched command must be the final argument (everything after `--` is
+      // the target plus its args). The degraded-Xcode guard above guarantees the
+      // `--device` path is viable here (or ARGENT_IOS_CAPTURE=device forced it).
+      xctraceArgs = [
+        "record",
+        "--template",
+        templatePath,
+        "--device",
+        params.device_id,
+        "--output",
+        outputFile,
+        "--no-prompt",
+        "--env",
+        "MallocStackLogging=1",
+      ];
+      if (notify) {
+        xctraceArgs.push("--notify-tracing-started", notifyName);
+      }
+      xctraceArgs.push("--launch", "--", launchBundlePath!);
+    } else {
+      // Normal flow: let the selected capture strategy (device --attach by PID, or
+      // host-wide --all-processes) build the argv.
+      xctraceArgs = strategy!.buildRecordArgs({
+        templatePath,
+        deviceId: params.device_id,
+        target: detected!,
+        outputFile,
+        notifyName: notify ? notifyName : undefined,
+      });
+    }
 
     const xctraceProcess = spawn("xctrace", xctraceArgs, {
       stdio: ["ignore", "pipe", "pipe"],
@@ -395,8 +620,10 @@ export async function startNativeProfilerIos(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // Cold-start retry only applies when attaching by name (device strategy);
-        // the all-processes fallback doesn't attach, so it can't hit this.
-        const isColdStart = strategy.attachesByName && msg.includes(COLD_START_SIGNATURE);
+        // the all-processes fallback doesn't attach, and malloc_stack_logging
+        // cold-launches by path (no strategy), so neither can hit this.
+        const isColdStart =
+          (strategy?.attachesByName ?? false) && msg.includes(COLD_START_SIGNATURE);
         if (!isColdStart) throw err;
         if (attempt >= MAX_START_ATTEMPTS) break;
         process.stderr.write(
@@ -421,7 +648,26 @@ export async function startNativeProfilerIos(
     );
   };
 
-  const { child: xctraceProcess, pid: xctracePid } = await startWithRetry();
+  let started: { child: ChildProcess; pid: number };
+  try {
+    started = await startWithRetry();
+  } catch (err) {
+    // malloc_stack_logging terminated the running app for a clean cold start. If the
+    // capture never started, best-effort relaunch it so we don't leave the user with a
+    // dead app — the default attach path never terminates, so only this path needs it.
+    if (mallocRelaunchBundleId) {
+      try {
+        execFileSync("xcrun", ["simctl", "launch", params.device_id, mallocRelaunchBundleId], {
+          timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+          stdio: "ignore",
+        });
+      } catch {
+        // best-effort restore; surface the original start failure regardless
+      }
+    }
+    throw err;
+  }
+  const { child: xctraceProcess, pid: xctracePid } = started;
 
   api.profilingActive = true;
   api.wallClockStartMs = Date.now();
