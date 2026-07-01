@@ -31,6 +31,13 @@ vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryDir: () => "/fake/bin",
 }));
 
+// The factory now probes the runtime kind to reject tvOS sims. Mock it to the
+// iOS path (false) so these spawn/stdio tests stay hermetic — no real `simctl`,
+// which would otherwise hang the fake-timer test waiting on a child process.
+vi.mock("../src/utils/ios-devices", () => ({
+  isTvOsSimulator: vi.fn(async () => false),
+}));
+
 function makeFakeProc() {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: Readable;

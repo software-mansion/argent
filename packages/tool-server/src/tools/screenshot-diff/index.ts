@@ -105,9 +105,16 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
   zodSchema,
   capability,
   fileInputs,
-  services: (params): Record<string, ServiceRef> => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    // Only request the SimulatorServer when a live capture is actually needed.
+    // Requesting it unconditionally causes it to be resolved (and started) even
+    // for pure static-PNG diffs, which fails on tvOS simulators that have no
+    // SimulatorServer backend.
+    if (params.captureBaseline || params.captureCurrent) {
+      return { simulatorServer: simulatorServerRef(resolveDevice(params.udid)) };
+    }
+    return {};
+  },
   async execute(services, params, options) {
     return executeScreenshotDiffTool(services, params, options);
   },

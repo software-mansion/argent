@@ -21,7 +21,7 @@
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
-    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs scripts/extract-tools.test.mjs",
+    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs scripts/extract-tools.test.mjs scripts/next-canary-version.test.mjs",
     "check:versions": "node scripts/check-workspace-versions.mjs"
   },
   "devDependencies": {
