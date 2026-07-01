@@ -137,15 +137,44 @@ describe("identity – fingerprint-derived id", () => {
     expect(versionNibble(id)).toBe("4");
   });
 
-  it("converges on the deterministic id when two migrations race", async () => {
+  it("converges on the deterministic id across independent resolves (idempotent migration)", async () => {
+    // readOrCreateAnonId is synchronous and memoizes via the module-level cache,
+    // so two Promise.resolve().then() calls would run serially and the second
+    // would trivially hit the cache without re-entering the migration path.
+    // Clear the cache between resolves so the second genuinely re-runs the
+    // migration decision as a separate process would, and spy on renameSync to
+    // prove the second resolve — seeing stored === target — does NOT rewrite.
+    // The deterministic v5 value is exactly what makes concurrent migrators
+    // converge, so an independent second resolve must land on the same id.
     fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
     fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
-    const [a, b] = await Promise.all([
-      Promise.resolve().then(() => readOrCreateAnonId(() => FP)),
-      Promise.resolve().then(() => readOrCreateAnonId(() => FP)),
-    ]);
-    expect(a).toBe(b);
-    expect(versionNibble(a)).toBe("5");
+
+    let renameCount = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs")>();
+      return {
+        ...actual,
+        renameSync: vi.fn((oldPath: fs.PathLike, newPath: fs.PathLike) => {
+          renameCount += 1;
+          return actual.renameSync(oldPath, newPath);
+        }),
+      };
+    });
+    try {
+      const mod = await import("../src/identity.js");
+      const a = mod.readOrCreateAnonId(() => FP);
+      expect(versionNibble(a)).toBe("5");
+      expect(renameCount).toBe(1); // first resolve migrates the legacy id
+      mod._resetIdentityCacheForTest();
+      const b = mod.readOrCreateAnonId(() => FP);
+      expect(b).toBe(a); // converges on the same deterministic id
+      expect(renameCount).toBe(1); // idempotent: no second rewrite
+      expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(a);
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+    }
   });
 });
 
@@ -238,6 +267,98 @@ describe("identity – fingerprint migration rewrites", () => {
       expect(() => mod.readOrCreateAnonId(resolver)).toThrow();
       expect(() => mod.readOrCreateAnonId(resolver)).toThrow();
       expect(resolver).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+    }
+  });
+
+  it("self-heals a corrupt file by claiming it aside, never unlinking the id path by name", async () => {
+    // Regression guard for the concurrent-self-heal clobber: with no fingerprint
+    // and a corrupt file squatting the path, the first mutation on the id path
+    // MUST be the no-overwrite link() (so a valid id a racer published is adopted
+    // on EEXIST), and the corrupt occupant must be cleared by CLAIMING it aside
+    // (atomic rename → private temp), NEVER by unlinking finalPath by name (which
+    // is a TOCTOU that would delete a racer's valid id and split one machine into
+    // two distinct_ids).
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), "", { mode: 0o644 }); // corrupt: empty
+
+    const ops: string[] = [];
+    vi.resetModules();
+    vi.doMock("node:fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs")>();
+      const idPath = identityFilePath();
+      return {
+        ...actual,
+        linkSync: vi.fn((existing: fs.PathLike, target: fs.PathLike) => {
+          if (String(target) === idPath) ops.push("link");
+          return actual.linkSync(existing, target);
+        }),
+        renameSync: vi.fn((oldPath: fs.PathLike, newPath: fs.PathLike) => {
+          if (String(oldPath) === idPath) ops.push("rename"); // claim the occupant aside
+          return actual.renameSync(oldPath, newPath);
+        }),
+        unlinkSync: vi.fn((p: fs.PathLike) => {
+          if (String(p) === idPath) ops.push("unlink-idpath"); // must never happen
+          return actual.unlinkSync(p);
+        }),
+      };
+    });
+    try {
+      const mod = await import("../src/identity.js");
+      const id = mod.readOrCreateAnonId(() => null);
+      expect(id).toMatch(/^[0-9a-f-]{36}$/);
+      expect(versionNibble(id)).toBe("4");
+      // The first id-path mutation is a link (adopt-the-winner), not a removal.
+      expect(ops[0]).toBe("link");
+      // The id path is NEVER unlinked by name — the corrupt file is claimed aside.
+      expect(ops).not.toContain("unlink-idpath");
+      // The occupant is cleared by an atomic rename aside, after the link collided.
+      expect(ops).toContain("rename");
+      expect(ops.indexOf("link")).toBeLessThan(ops.indexOf("rename"));
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+    }
+  });
+
+  it("adopts a valid id a racer publishes into the corrupt-heal gap (converges, never clobbers)", async () => {
+    // Direct reproduction of the two-minter split (F1): no fingerprint, a corrupt
+    // file squats the path, and a racer publishes a VALID id into the gap between
+    // the corrupt-check and the claim. The claim renames whatever is at the path
+    // right now — so it grabs the racer's valid id and the code must ADOPT it
+    // (return + persist it), never mint a fresh random over it. Under an
+    // unlink-by-name heal the racer's id would be destroyed and this machine would
+    // report a different distinct_id.
+    const RACER_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), "", { mode: 0o644 }); // corrupt: empty
+
+    let injected = false;
+    vi.resetModules();
+    vi.doMock("node:fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs")>();
+      const idPath = identityFilePath();
+      return {
+        ...actual,
+        renameSync: vi.fn((oldPath: fs.PathLike, newPath: fs.PathLike) => {
+          // Just before the claim renames the occupant aside, a racer publishes a
+          // valid id into the gap — the claim must relocate (and adopt) THAT.
+          if (!injected && String(oldPath) === idPath) {
+            injected = true;
+            actual.writeFileSync(idPath, RACER_ID, { mode: 0o600 });
+          }
+          return actual.renameSync(oldPath, newPath);
+        }),
+      };
+    });
+    try {
+      const mod = await import("../src/identity.js");
+      const id = mod.readOrCreateAnonId(() => null);
+      expect(injected).toBe(true); // the racer did publish into the gap
+      expect(id).toBe(RACER_ID); // adopted the racer's valid id, did not clobber it
+      expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(RACER_ID);
     } finally {
       vi.doUnmock("node:fs");
       vi.resetModules();

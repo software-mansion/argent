@@ -71,24 +71,14 @@ export function readOrCreateAnonId(resolveFingerprint?: () => string | null): st
     return stored;
   }
 
-  // No fingerprint and no valid stored id. If a regular file occupies the path
-  // but holds invalid content (corrupt / empty / unreadable), remove it first:
-  // mintRandomId publishes with a no-overwrite link(), which would fail forever
-  // over an occupied path and silently kill telemetry. Routing through
-  // mintRandomId (rather than an unconditional overwrite) keeps its concurrency
-  // guarantee — if a racer publishes a VALID id after our unlink, link() fails
-  // EEXIST and we adopt the racer's value instead of clobbering it. A symlink /
-  // non-regular file is left untouched so mintRandomId still fails closed
-  // (it throws rather than following the symlink).
-  if (isCorruptIdFile(finalPath)) {
-    try {
-      fs.unlinkSync(finalPath);
-    } catch {
-      // Couldn't remove it; mintRandomId surfaces the failure after its retries.
-    }
-  }
-
-  // Brand-new install with no fingerprint available: mint a random id.
+  // No fingerprint and no valid stored id: mint a random id. A corrupt / empty
+  // regular file squatting the path (e.g. a truncated prior write from a legacy
+  // or external writer) is cleared inside mintRandomId, behind its no-overwrite
+  // link() — never by an up-front unlink. Crucially the corrupt occupant is
+  // removed by CLAIMING it (atomic rename aside + inspect), not by unlinking the
+  // path by name: so a valid id a concurrent self-healer publishes into the
+  // check→clear gap is adopted, not destroyed — two concurrent heals converge on
+  // one id instead of splitting a machine into two distinct_ids.
   return mintRandomId(finalPath);
 }
 
@@ -179,7 +169,10 @@ function writeIdFileAtomic(finalPath: string, id: string): void {
 function mintRandomId(finalPath: string): string {
   fs.mkdirSync(argentHomeDir(), { recursive: true });
 
-  const uuid = crypto.randomUUID();
+  // The id we publish. Starts random; if a corrupt-file self-heal below claims a
+  // valid id that a racer published into the gap, we switch to adopting THAT
+  // value and republish it on the next iteration, so concurrent heals converge.
+  let value: string = crypto.randomUUID();
 
   // The random tmp path should be unique; retry defensively anyway.
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -199,7 +192,7 @@ function mintRandomId(finalPath: string): string {
     // EIO) must not leave a `.telemetry-id.tmp.*` orphan behind.
     try {
       try {
-        fs.writeSync(fd, uuid);
+        fs.writeSync(fd, value);
         fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);
@@ -207,18 +200,36 @@ function mintRandomId(finalPath: string): string {
 
       // POSIX rename() would replace; link() gives us no-overwrite publish.
       fs.linkSync(tmpPath, finalPath);
-      cached = { path: finalPath, id: uuid };
-      return uuid;
+      cached = { path: finalPath, id: value };
+      return value;
     } catch (err) {
       // openSync's EEXIST is handled above; the only EEXIST reaching here is
-      // from linkSync, i.e. another process published first.
+      // from linkSync, i.e. something already occupies the final path.
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
         const beatUs = tryReadId(finalPath);
         if (beatUs) {
+          // A racer published a VALID id first — adopt it, never clobber. This
+          // is the concurrency guarantee: whoever links first wins.
           cached = { path: finalPath, id: beatUs };
           return beatUs;
         }
-        // Final file vanished between link and read; retry.
+        // The occupant is not a valid id. If a corrupt / empty *regular* file
+        // squats the path (the self-heal case — a truncated prior write from a
+        // legacy or external writer), clear it so the retry can publish. We must
+        // NOT unlink finalPath by name: the tryReadId above and the removal are
+        // not atomic, so a valid id a racer publishes into that gap would be
+        // deleted by name, splitting the machine. claimCorruptOccupant instead
+        // moves the occupant aside atomically (rename) and inspects it — if the
+        // gap turned it into a valid id we adopt that value (republished on the
+        // next iteration) rather than destroying it. A symlink / non-regular file
+        // is left untouched (isCorruptIdFile is false for it) so we still fail
+        // closed and throw.
+        if (isCorruptIdFile(finalPath)) {
+          const adopted = claimCorruptOccupant(finalPath);
+          if (adopted) value = adopted;
+        }
+        // Occupant vanished / was cleared, or we adopted a racer's id to
+        // republish: retry.
         continue;
       }
       throw err;
@@ -231,6 +242,44 @@ function mintRandomId(finalPath: string): string {
     }
   }
   throw new Error("telemetry: failed to create anonymous identity after retries");
+}
+
+// Clear a non-id occupant squatting the identity path during a mint retry,
+// without ever deleting a valid id by name. Unlinking finalPath directly is a
+// TOCTOU: the caller's tryReadId (which rejected the occupant) and the removal
+// are separate syscalls, so a valid id a racer publishes into that gap would be
+// unlinked by name — splitting the machine into two distinct_ids. Instead we
+// CLAIM the current occupant with an atomic rename aside: rename() relocates
+// whatever inode is at finalPath right now without destroying it. We then
+// inspect the relocated copy — if the gap had turned it into a valid id, its
+// value is returned so the caller republishes and adopts it (converging both
+// heals on one id); if it really was corrupt it is dropped and null is returned
+// so the caller retries its own publish. A rename that fails (racer already
+// cleared/moved it) also yields null → the caller re-evaluates.
+function claimCorruptOccupant(finalPath: string): string | null {
+  const claimed = path.join(
+    argentHomeDir(),
+    `.telemetry-id.corrupt.${process.pid}.${crypto.randomUUID()}`
+  );
+  try {
+    fs.renameSync(finalPath, claimed);
+  } catch {
+    return null;
+  }
+  let grabbed: string | null;
+  try {
+    grabbed = tryReadId(claimed);
+  } finally {
+    // The relocated copy is our private temp now; drop it. An adopted id lives on
+    // as a string value (republished by the caller), independent of this inode,
+    // so removing the copy loses nothing.
+    try {
+      fs.unlinkSync(claimed);
+    } catch {
+      /* nothing to clean up */
+    }
+  }
+  return grabbed;
 }
 
 /** Read the anonymous id without creating one. Returns null if absent. */
