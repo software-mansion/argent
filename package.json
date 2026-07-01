@@ -22,7 +22,8 @@
     "lint:fix": "eslint . --fix",
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
     "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs",
-    "check:versions": "node scripts/check-workspace-versions.mjs"
+    "check:versions": "node scripts/check-workspace-versions.mjs",
+    "download:llama-server": "bash packages/nickel/scripts/download-llama-server.sh"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

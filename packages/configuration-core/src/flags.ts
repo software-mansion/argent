@@ -57,6 +57,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "artifacts-list-endpoint",
     description: "Expose GET /artifacts for remote artifact inventory consumers.",
   },
+  {
+    name: "nickel",
+    description:
+      "Nickel — the local-VLM minion tools (nickel-act / nickel-look / nickel-do). Off by default while in development; needs a local llama-server.",
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the

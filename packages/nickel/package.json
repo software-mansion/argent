@@ -1,0 +1,26 @@
+{
+  "private": true,
+  "name": "@argent/nickel",
+  "version": "0.13.0",
+  "description": "Nickel — local VLM minion tools for the argent tool-server registry",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "nickel": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "init": "node dist/cli.js init",
+    "doctor": "node dist/cli.js doctor",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@argent/registry": "file:../registry",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

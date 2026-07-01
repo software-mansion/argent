@@ -1,5 +1,6 @@
 import { Registry } from "@argent/registry";
 import { isFlagEnabled } from "@argent/configuration-core";
+import { registerNickel } from "@argent/nickel";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
@@ -185,6 +186,14 @@ export function createRegistry(): Registry {
   // the exposure boundary, not at registration.
   registry.registerTool(createProposeVariantTool(registry));
   registry.registerTool(awaitUserSelectionTool);
+
+  // Nickel — local-VLM minion (nickel-act / nickel-look / nickel-do). All three
+  // declare `featureFlag: "nickel"`, so like the argent-lens tools above they are
+  // registered unconditionally and gated at the exposure boundary — hidden from
+  // GET /tools and rejected on invocation while the flag is off, live on the next
+  // request after `argent enable nickel`, no restart. The blueprint is lazy; no
+  // llama-server is touched until a nickel tool actually runs.
+  registerNickel(registry);
 
   return registry;
 }
