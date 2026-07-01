@@ -40,12 +40,12 @@ export const ANDROID_NAMED_KEYCODES: Record<string, number> = {
 // android.view.KeyEvent keycodes for the button tool's Android hardware buttons
 // (must cover BUTTONS_BY_PLATFORM.android in ../tools/button/index.ts).
 export const ANDROID_BUTTON_KEYCODES: Record<string, number> = {
-  "home": 3, // KEYCODE_HOME
-  "back": 4, // KEYCODE_BACK
-  "power": 26, // KEYCODE_POWER
-  "volumeUp": 24, // KEYCODE_VOLUME_UP
-  "volumeDown": 25, // KEYCODE_VOLUME_DOWN
-  "appSwitch": 187, // KEYCODE_APP_SWITCH
+  home: 3, // KEYCODE_HOME
+  back: 4, // KEYCODE_BACK
+  power: 26, // KEYCODE_POWER
+  volumeUp: 24, // KEYCODE_VOLUME_UP
+  volumeDown: 25, // KEYCODE_VOLUME_DOWN
+  appSwitch: 187, // KEYCODE_APP_SWITCH
 };
 
 // `input text` receives the string as a single argv token (we `shellQuote` it, so
