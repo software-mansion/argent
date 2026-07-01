@@ -18,6 +18,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractToolsFromSource } from "./extract-tools.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const toolsRoot = join(repoRoot, "packages", "tool-server", "src", "tools");
@@ -86,4 +87,57 @@ test("every tool definition in the source is captured (no silent drops)", () => 
 
   // A healthy tree emits no warnings; a future drop must be loud, never silent.
   assert.ok(!/WARNING/.test(stderr), `extractor emitted warnings:\n${stderr}`);
+});
+
+// --- Boundary-parsing rules (pure, fixture-driven) -------------------------
+
+test("a description containing an id: token is still captured in full", () => {
+  // The closing-delimiter-anchored search must not be truncated by an `id:`
+  // that appears INSIDE the description text (e.g. a structured example). The
+  // old "stop at the next id:" bound dropped such a tool — the exact class of
+  // silent scan-bypass this script exists to prevent.
+  const src = `
+    export const menuTool = defineTool({
+      id: "menu-item-tool",
+      description: \`Opens a context menu at a point. Example payload the agent can send:
+        { id: "sub-thing", label: "Open" } — a structured example inside the text.
+        Use when you need to open a nested menu item on screen.\`,
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.ok("menu-item-tool" in byName, "tool with an id: inside its description was dropped");
+  assert.ok(
+    byName["menu-item-tool"].includes("nested menu item"),
+    "description was truncated at the inner id: instead of its closing backtick"
+  );
+  // The `id: "sub-thing"` inside the description text is not a real tool.
+  assert.ok(!("sub-thing" in byName), "an id: inside a description was mistaken for a tool");
+});
+
+test("a description-less tool does not borrow the next tool's description", () => {
+  // If another tool's `id:` sits between this id: and the matched description:,
+  // the description belongs to that later tool — don't inherit it.
+  const src = `
+    export const bare = defineTool({
+      id: "no-description-tool",
+      handler: async () => {},
+    });
+    export const next = defineTool({
+      id: "has-description-tool",
+      description: "This description belongs to has-description-tool only.",
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(
+    byName["has-description-tool"],
+    "This description belongs to has-description-tool only."
+  );
+  assert.ok(
+    !("no-description-tool" in byName),
+    "a description-less tool borrowed the following tool's description"
+  );
 });
