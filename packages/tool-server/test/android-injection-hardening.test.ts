@@ -1,10 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { launchAppTool } from "../src/tools/launch-app";
-import { restartAppTool } from "../src/tools/restart-app";
+import { createLaunchAppTool } from "../src/tools/launch-app";
+import { createRestartAppTool } from "../src/tools/restart-app";
 import { openUrlTool } from "../src/tools/open-url";
 import { reinstallAppTool } from "../src/tools/reinstall-app";
 import { createDescribeTool } from "../src/tools/describe";
 import { Registry } from "@argent/registry";
+
+// launch-app / restart-app resolve native-devtools lazily through the registry
+// (so a tvOS udid never spins up the iOS-only injection), so they're built via
+// factory now. These tests only exercise the zod schema, which is registry-
+// independent — a throwaway Registry is fine.
+const launchAppTool = createLaunchAppTool(new Registry());
+const restartAppTool = createRestartAppTool(new Registry());
 
 /**
  * Regressions for the command-injection review finding (#1) and the
