@@ -1,6 +1,8 @@
 import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import { nativeDevtoolsRef, NativeDevtoolsApi } from "../../../../blueprints/native-devtools";
+import { isPhysicalIos } from "../../../../utils/device-info";
+import { UnsupportedOperationError } from "../../../../utils/capability";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
@@ -56,6 +58,21 @@ export async function describeIos(
   params: DescribeIosParams,
   options: DescribeIosOptions = {}
 ): Promise<DescribeTreeData> {
+  // Physical iPhones are driven over CoreDevice; both describe backends are
+  // simulator-only (ax-service shells `simctl spawn`; native-devtools injects a
+  // dylib via `simctl spawn`). Their blueprint guards throw for kind === "device",
+  // but the fallback chain below catches those throws and would otherwise return
+  // an empty tree plus the "reboot the simulator" degraded hint — a misleading
+  // result for hardware that has no simulator to reboot. Reject explicitly with a
+  // clear, 400-mapped error instead.
+  if (isPhysicalIos(device)) {
+    throw new UnsupportedOperationError(
+      "describe",
+      device,
+      "physical iOS is driven over CoreDevice and has no on-device accessibility/describe path; use screenshot to inspect the screen"
+    );
+  }
+
   // tvOS short-circuit: the focus-engine accessibility tree is served by the
   // tv-control daemons, not the iOS ax-service. Without this, describe would
   // try to spawn ax-service inside the Apple TV sim, time out on the daemon

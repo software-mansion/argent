@@ -311,6 +311,24 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       return buildRemoteInstance(device);
     }
 
+    if (device.platform === "ios" && device.kind === "device") {
+      // Physical iPhones are driven over CoreDevice (see core-device blueprint),
+      // not the simulator-server. Only screenshot/gesture-tap/gesture-swipe/button
+      // route physical iOS to that backend; any other tool lands here, so fail
+      // with a clear message instead of spawning a simulator-server that can't
+      // attach to a hardware UDID.
+      throw new FailureError(
+        `simulator-server cannot drive the physical iOS device ${device.id}. ` +
+          `Physical iPhones support screenshot, gesture-tap, gesture-swipe, button, and launch-app only.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_SERVER_PHYSICAL_DEVICE_UNSUPPORTED,
+          failure_stage: "simulator_server_factory_platform",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
+      );
+    }
+
     if (device.platform === "ios") {
       // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
       // cannot drive the Apple TV focus engine. Its transport (`sendCommand`) is

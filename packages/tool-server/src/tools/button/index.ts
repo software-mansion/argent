@@ -1,9 +1,21 @@
 import { z } from "zod";
-import type { Platform, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { Platform, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import { coreDeviceRef, type CoreDeviceApi } from "../../blueprints/core-device";
+import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
+
+// Argent button name → pymobiledevice3 CoreDevice HID button name. CoreDevice
+// exposes the physical buttons only; appSwitch (a SpringBoard gesture) and the
+// iPhone 15 Pro action button have no HID equivalent, so they are omitted and
+// rejected with a clear error on physical iOS.
+const COREDEVICE_BUTTON: Partial<Record<Params["button"], string>> = {
+  home: "home",
+  power: "lock",
+  volumeUp: "volume-up",
+  volumeDown: "volume-down",
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -56,12 +68,22 @@ export const buttonTool: ToolDefinition<Params, Result> = {
 Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
+On a physical iPhone, button presses route over CoreDevice (home, power, volumeUp, volumeDown).
 Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    if (isPhysicalIos(device)) {
+      // A button with no CoreDevice HID equivalent (appSwitch/actionButton) is
+      // always rejected by execute() below, before it ever touches
+      // services.coreDevice — don't pay for resolving the CoreDevice service
+      // (tunnel setup, possibly a macOS admin prompt) just to reject anyway.
+      if (!COREDEVICE_BUTTON[params.button]) return {};
+      return { coreDevice: coreDeviceRef(device) };
+    }
+    return { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params) {
     const device = resolveDevice(params.udid);
     if (!BUTTONS_BY_PLATFORM[device.platform].has(params.button)) {
@@ -70,6 +92,19 @@ Fails if the simulator-server / emulator backend is not reachable for the given 
         device,
         `button '${params.button}' is not available on ${device.platform}`
       );
+    }
+    if (isPhysicalIos(device)) {
+      const name = COREDEVICE_BUTTON[params.button];
+      if (!name) {
+        throw new UnsupportedOperationError(
+          "button",
+          device,
+          `button '${params.button}' is not available on physical iOS (CoreDevice exposes home, power, volumeUp, volumeDown)`
+        );
+      }
+      const coreDevice = services.coreDevice as CoreDeviceApi;
+      await coreDevice.button(name);
+      return { pressed: params.button };
     }
     const api = services.simulatorServer as SimulatorServerApi;
     sendCommand(api, {

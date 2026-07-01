@@ -31,7 +31,8 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
-import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import { isPhysicalIosUdid, classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import { ensureCoreDeviceTunnel } from "../../blueprints/core-device";
 import {
   simctlBoot as simRemoteBoot,
   simctlBootstatus as simRemoteBootstatus,
@@ -464,6 +465,17 @@ async function bootIos(
       }
     );
   }
+
+  // A physical iPhone is already powered on — there is nothing to "boot". It is
+  // driven over CoreDevice (see core-device blueprint), not the simulator-server.
+  // Use this as the explicit "prepare" step: ensure the CoreDevice tunnel is up,
+  // auto-starting it via the macOS authorization prompt if needed (no manual
+  // sudo). Surfaces a clear error if the prompt is declined / unavailable.
+  if (isPhysicalIosUdid(udid)) {
+    await ensureCoreDeviceTunnel(udid);
+    return { platform: "ios", udid, booted: true };
+  }
+
   await ensureDep("xcrun");
 
   const simMatch = await listIosSimulators()

@@ -235,6 +235,20 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         }
       );
     }
+    if (device.kind === "device") {
+      // ax-service uses `xcrun simctl spawn`, which only works on simulators.
+      // Physical iPhones are driven over CoreDevice and have no accessibility/
+      // describe path yet.
+      throw new FailureError(
+        `${AX_SERVICE_NAMESPACE} is iOS-simulator-only. The physical device '${device.id}' is driven over CoreDevice; describe/accessibility is not supported on physical iOS yet.`,
+        {
+          error_code: FAILURE_CODES.AX_PHYSICAL_DEVICE_UNSUPPORTED,
+          failure_stage: "ax_service_factory_platform",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
+      );
+    }
     // Reject before spawning. An undefined `device.id` slips through when an
     // inner tool is invoked via a wrapper that doesn't re-validate the inner
     // schema. Without this guard `getSocketPath(undefined).slice` would crash

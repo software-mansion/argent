@@ -9,6 +9,9 @@ import * as fs from "node:fs";
 const DYLIB_DIR = process.env.ARGENT_NATIVE_DEVTOOLS_DIR ?? path.join(__dirname, "..", "dylibs");
 const BIN_DIR = process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "bin");
 const DYLIB_TCP_DIR = process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR ?? path.join(DYLIB_DIR, "tcp");
+// Committed static assets (e.g. the Argent icon shown in the device-auth prompt).
+const ASSETS_DIR =
+  process.env.ARGENT_NATIVE_DEVTOOLS_ASSETS_DIR ?? path.join(__dirname, "..", "assets");
 const DYLIB_TVOS_DIR = path.join(DYLIB_DIR, "tvos");
 
 // iOS Simulator only runs on macOS, so the dylibs that get injected into it
@@ -143,6 +146,27 @@ export function axServiceBinaryPath(): string {
 export function axServiceBinaryPathTcp(): string {
   requireDarwin("ax-service (tcp)");
   return requireBinIn(platformTcpBinDir(), "ax-service");
+}
+
+// argent-device-auth is the macOS host helper that pops the branded macOS
+// authorization modal (password / Touch ID) and runs a command as root —
+// Argent uses it to start the physical-iOS CoreDevice tunnel without a manual
+// `sudo`. Unlike the resolvers above it returns null (rather than throwing)
+// when absent, so callers can fall back to a less-branded escalation path.
+// Override the binary with ARGENT_DEVICE_AUTH_HELPER (absolute path).
+export function deviceAuthHelperPath(): string | null {
+  if (process.platform !== "darwin") return null;
+  const override = process.env.ARGENT_DEVICE_AUTH_HELPER;
+  if (override) return fs.existsSync(override) ? override : null;
+  const p = path.join(platformBinDir(), "argent-device-auth");
+  return fs.existsSync(p) ? p : null;
+}
+
+// Path to the Argent icon shown in the device-auth prompt, or null if missing.
+// Override with ARGENT_DEVICE_ICON (absolute path to a PNG/icns).
+export function argentIconPath(): string | null {
+  const p = process.env.ARGENT_DEVICE_ICON ?? path.join(ASSETS_DIR, "argent-icon.png");
+  return fs.existsSync(p) ? p : null;
 }
 
 // tvOS control binaries. tvos-ax-service is `simctl spawn`d into an

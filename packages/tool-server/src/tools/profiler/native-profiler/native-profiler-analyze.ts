@@ -18,8 +18,12 @@ const zodSchema = z.object({
     .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
 });
 
+// A session can never exist for physical iOS (native-profiler-start rejects it,
+// same apple.device:false reasoning) — reject here too for a clean, consistent
+// error rather than the confusing "no active session" a physical UDID would
+// otherwise always hit.
 const capability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true, device: false },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
