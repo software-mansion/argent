@@ -171,6 +171,37 @@ describe("GET /preview/lens-stream (SSE push)", () => {
     });
   });
 
+  it("replays the last submitted outcome to a late subscriber (reconnect-gap safety)", async () => {
+    const base = await startServer();
+    variantProposalStore.setCliSession(true);
+    variantProposalStore.proposeVariant({
+      element: "Foo",
+      variant: { name: "Bold", summary: "bold" },
+    });
+    // Submit BEFORE connecting — mimics a round the human completes while the
+    // CLI relay's SSE is briefly disconnected. On reconnect the client must
+    // still receive this outcome (the CLI re-reads /outcome only once, at
+    // startup), or the feedback is lost forever.
+    variantProposalStore.submitSelection({
+      selections: [],
+      annotations: [{ target: "Foo", match: { by: "text", value: "Foo" }, comment: "tighten" }],
+    });
+
+    const frames = await collectFrames(
+      base,
+      () => {
+        /* nothing — the submit already happened before we connected */
+      },
+      (f) => f.some((x) => x.event === "outcome")
+    );
+
+    const outcome = frames.find((f) => f.event === "outcome");
+    expect(outcome).toBeDefined();
+    const parsed = JSON.parse(outcome!.data);
+    expect(parsed.status).toBe("completed");
+    expect(parsed.annotations[0].comment).toBe("tighten");
+  });
+
   it("pushes session-end when the CLI session closes", async () => {
     const base = await startServer();
     variantProposalStore.setCliSession(true);

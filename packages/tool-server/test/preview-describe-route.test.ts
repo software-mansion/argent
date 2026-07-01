@@ -112,8 +112,11 @@ describe("GET /preview/describe/:udid (describe-based; post-#197 text-contract r
     // A chromium id must be rejected before dispatch — otherwise it falls into
     // the else-branch and shells `adb` against a non-existent serial, 500ing
     // with a misleading message. Mirrors the /simulator-server/:udid guard.
+    // (The guard rejects any non-ios/android platform; the message names the
+    // rejected platform, e.g. "chromium".)
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain("Chromium");
+    expect(res.body.error).toContain("chromium");
+    expect(res.body.error).toContain("not available");
     expect(mockedIos).not.toHaveBeenCalled();
     expect(mockedAndroid).not.toHaveBeenCalled();
   });

@@ -205,6 +205,32 @@ describe("startPtyProxy — inject", () => {
     proxy.write("\r");
     expect(pty.writes).toEqual(["\r"]);
   });
+
+  it("holds the inject until the user pauses typing, so Esc can't clobber a live draft", async () => {
+    vi.useFakeTimers();
+    try {
+      const { proxy, pty, stdin } = start();
+      stdin.emit(Buffer.from("dr")); // user is mid-keystroke (also echoed to the PTY)
+      proxy.inject("feedback");
+
+      // Within the quiet window of the last keystroke: the composer-clearing Esc
+      // and the feedback must NOT have been sent yet.
+      await vi.advanceTimersByTimeAsync(300);
+      expect(pty.writes).toEqual(["dr"]);
+
+      // Another keystroke resets the pause timer — still no inject.
+      stdin.emit(Buffer.from("aft"));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(pty.writes).toEqual(["dr", "aft"]);
+
+      // Once the user goes quiet past the threshold, the beats land in order,
+      // after the user's own keystrokes.
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(pty.writes).toEqual(["dr", "aft", "\x1b", "feedback", "\r"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("startPtyProxy — teardown", () => {

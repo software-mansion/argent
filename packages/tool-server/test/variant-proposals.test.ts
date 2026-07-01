@@ -456,6 +456,30 @@ describe("VariantProposalStore — CLI Lens session (`argent lens`)", () => {
     expect(r.round).toBe(1);
     expect(r.totalElements).toBe(2);
   });
+
+  it("beginning a CLI session clears a leftover submitted round from a prior flow", () => {
+    const s = new VariantProposalStore();
+    // Simulate a prior NON-CLI flow that left completed=true/consumed=false: a
+    // parked await timed out (waiter removed) and the user then submitted.
+    s.proposeVariant({ element: "Old", variant: variant("Bold") });
+    s.submitSelection({ selections: [] }); // completed, but nothing consumed it
+    expect(s.getLastOutcome()).not.toBeNull();
+
+    s.setCliSession(true); // begin → must reset the stale round
+
+    // The session's first propose opens a FRESH round with only its own element,
+    // not appended to the leftover "Old" round, and the stale outcome is gone.
+    const r = s.proposeVariant({ element: "New", variant: variant("Tall") });
+    expect(r.totalElements).toBe(1);
+    expect(s.snapshot().proposals.map((p) => p.element)).toEqual(["New"]);
+    expect(s.getLastOutcome()).toBeNull();
+  });
+
+  it("beginning a CLI session on a clean store does not bump the round past 1", () => {
+    const s = new VariantProposalStore();
+    s.setCliSession(true); // nothing to clear → no needless reset
+    expect(s.proposeVariant({ element: "Foo", variant: variant("Bold") }).round).toBe(1);
+  });
 });
 
 describe("VariantProposalStore — Lens-owned devices", () => {

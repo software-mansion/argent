@@ -51,7 +51,9 @@
       textarea,
       code,
       pre,
-      [contenteditable="true"] {
+      [contenteditable="true"],
+      /* read-only comment text the user may want to re-read or copy */
+      .ann-pop .txt {
         user-select: text;
         -webkit-user-select: text;
       }

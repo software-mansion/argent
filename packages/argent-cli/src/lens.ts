@@ -424,6 +424,14 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     process.exit(1);
   }
 
+  // Decide the agent FIRST, before touching the tool-server: resolved now for
+  // --agent / a single install, otherwise the window's picker chooses. Doing
+  // this before `createToolsClient` means a bad `--agent <id>` (or no installed
+  // agent) fails fast with a clear message and exit code, without spawning or
+  // contacting a tool-server. It only probes PATH — nothing is open yet.
+  const plan = planAgent(agentId);
+  const choices = "choose" in plan ? plan.choose : [];
+
   // Resolve (spawning if needed) the shared tool-server. `/preview/*` is
   // token-exempt, so the handle's token isn't needed for the calls below.
   const client = createToolsClient({ paths: options.paths });
@@ -436,11 +444,6 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
   }
 
   const previewUrl = `${baseUrl}/preview/`;
-
-  // Decide the agent: resolved now for --agent / a single install, otherwise the
-  // window's picker chooses. Fails cleanly here with nothing open yet.
-  const plan = planAgent(agentId);
-  const choices = "choose" in plan ? plan.choose : [];
 
   // Begin the CLI session — opens the preview window and, when the user must
   // choose, hands it the agent list to render the picker.
@@ -485,6 +488,16 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
   const seedFile = path.join(os.tmpdir(), `argent-lens-seed-${process.pid}-${Date.now()}.txt`);
   fs.writeFileSync(seedFile, buildSeedPrompt(), "utf8");
   const launchCmd = agent.launch(shellQuote(process.cwd()), shellQuote(seedFile));
+  // Remove the seed temp file. Called from the two spawn-failure paths below
+  // (which exit before `teardown` — the usual remover — is wired) so a failed
+  // launch doesn't leak the file into tmpdir. Best-effort and idempotent.
+  const removeSeedFile = (): void => {
+    try {
+      fs.rmSync(seedFile, { force: true });
+    } catch {
+      /* best-effort */
+    }
+  };
 
   // Spawn the agent. Preferred path: a PTY this process proxies, which takes
   // over THIS terminal in ANY app (Warp / VS Code / tmux / iTerm / Terminal) and
@@ -508,6 +521,7 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
       proxy = startPtyProxy({ pty: ptyMod, command: launchCmd, cwd: process.cwd() });
     } catch (err) {
       process.stderr.write(`lens: failed to start the agent PTY: ${errMsg(err)}\n`);
+      removeSeedFile();
       await endSession(baseUrl);
       process.exit(1);
     }
@@ -524,6 +538,7 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
       session = spawnTerminalSession(launchCmd, term);
     } catch (err) {
       process.stderr.write(`lens: failed to spawn the agent: ${errMsg(err)}\n`);
+      removeSeedFile();
       await endSession(baseUrl);
       process.exit(1);
     }
@@ -542,26 +557,26 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
   }
 
   // Teardown is idempotent and reachable from three places: the agent exiting,
-  // a fatal relay condition, or a signal. It ends the server-side session (which
-  // closes the window and shuts down any Lens-booted simulator) and exits.
+  // the relay ending for another reason (e.g. a `session-end` event while the
+  // agent is still alive), or a signal. `killAgent()` runs FIRST and
+  // synchronously: on the PTY path it restores the terminal (raw mode off,
+  // listeners removed — Node does NOT auto-revert setRawMode on exit) and kills
+  // the child, so the user's shell isn't left broken and the agent isn't
+  // orphaned. It's idempotent (dispose guards re-entry) and a no-op on the
+  // new-window path, so calling it here on every teardown is safe even when the
+  // agent already exited on its own. Then we end the server-side session (closes
+  // the window, shuts down any Lens-booted simulator) and exit.
   let tearingDown = false;
   const teardown = (code: number): void => {
     if (tearingDown) return;
     tearingDown = true;
+    killAgent();
     void endSession(baseUrl).finally(() => {
-      try {
-        fs.rmSync(seedFile, { force: true });
-      } catch {
-        /* best-effort */
-      }
+      removeSeedFile();
       process.exit(code);
     });
   };
-  // A signal should bring the agent down with us. `killAgent` synchronously
-  // restores the terminal (PTY path) before we exit; the new-window path is a
-  // no-op here and tears down directly.
   const onSignal = (): void => {
-    killAgent();
     teardown(0);
   };
   process.on("SIGINT", onSignal);
@@ -571,31 +586,51 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
   teardown(0);
 }
 
+// The window can stay open indefinitely while the human decides, so waiting for
+// the pick must survive a transient SSE drop (a brief tool-server restart, a
+// half-open socket) rather than giving up on the first one — mirroring
+// runRelaySession's reconnect. Bounded by CONSECUTIVE failed reconnects (reset
+// whenever a live stream delivers an event) so a permanently-gone server still
+// gives up instead of looping forever; ~this many × SSE_RECONNECT_MS of slack.
+const AGENT_CHOICE_MAX_RECONNECTS = 60;
+
 /**
  * Wait for the human to pick an agent in the window, delivered over the SSE
- * stream. Returns the picked id, or null if the stream ends / errors before a
- * pick (e.g. the window was closed, or the server went away).
+ * stream. Reconnects across transient stream drops while the window is open.
+ * Returns the picked id, or null when the session ends (`session-end`) or the
+ * stream stays unreachable past the reconnect budget (caller closes the
+ * session).
  */
 async function awaitAgentChoiceViaStream(
   baseUrl: string
 ): Promise<{ id: string; remember: boolean } | null> {
   const ac = new AbortController();
+  let reconnects = 0;
   try {
-    for await (const ev of lensEvents(baseUrl, ac.signal)) {
-      if (ev.event === "session-end") return null;
-      if (ev.event === "agent-choice") {
-        try {
-          const payload = JSON.parse(ev.data) as { id?: unknown; remember?: unknown };
-          if (payload && typeof payload.id === "string" && payload.id) {
-            return { id: payload.id, remember: Boolean(payload.remember) };
+    while (!ac.signal.aborted && reconnects <= AGENT_CHOICE_MAX_RECONNECTS) {
+      try {
+        for await (const ev of lensEvents(baseUrl, ac.signal)) {
+          reconnects = 0; // a live stream — refill the transient-failure budget
+          if (ev.event === "session-end") return null;
+          if (ev.event === "agent-choice") {
+            try {
+              const payload = JSON.parse(ev.data) as { id?: unknown; remember?: unknown };
+              if (payload && typeof payload.id === "string" && payload.id) {
+                return { id: payload.id, remember: Boolean(payload.remember) };
+              }
+            } catch {
+              /* malformed frame — keep waiting */
+            }
           }
-        } catch {
-          /* malformed frame — keep waiting */
         }
+        // Stream ended cleanly (server closed it / is restarting) — reconnect.
+      } catch {
+        // Transient stream/network error — reconnect after a short pause.
       }
+      reconnects++;
+      if (ac.signal.aborted || reconnects > AGENT_CHOICE_MAX_RECONNECTS) break;
+      await sleep(SSE_RECONNECT_MS);
     }
-  } catch {
-    /* stream error → give up (caller closes the session) */
   } finally {
     ac.abort();
   }

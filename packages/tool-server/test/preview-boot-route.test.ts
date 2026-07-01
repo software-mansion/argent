@@ -2,8 +2,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 import type { Registry } from "@argent/registry";
+
+// The lens-only routes (/boot etc.) are gated behind the argent-lens flag. Mock
+// it ON by default so this suite tests the route logic deterministically
+// regardless of the machine's real ~/.argent/flags.json; a dedicated test below
+// flips it OFF to assert the gate.
+vi.mock("@argent/configuration-core", () => ({ isFlagEnabled: vi.fn(() => true) }));
+
 import { createPreviewRouter } from "../src/preview";
 import { variantProposalStore } from "../src/utils/variant-proposals";
+import { isFlagEnabled } from "@argent/configuration-core";
+
+const mockFlag = vi.mocked(isFlagEnabled);
 
 const IOS_UDID = "00000000-0000-0000-0000-000000000000";
 const IOS_UDID_2 = "11111111-1111-1111-1111-111111111111";
@@ -30,6 +40,7 @@ function harness(devices: unknown[]) {
 beforeEach(() => {
   // The store is a process singleton; clear any ownership a prior test left.
   variantProposalStore.takeOwnedDevices();
+  mockFlag.mockReturnValue(true);
 });
 
 describe("POST /preview/boot", () => {
@@ -84,5 +95,18 @@ describe("POST /preview/boot", () => {
     const res = await request(app).post("/boot").send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("Missing");
+  });
+
+  it("404s (route hidden) and never spawns when the argent-lens flag is off", async () => {
+    mockFlag.mockReturnValue(false);
+    const { app, invokeTool } = harness([{ platform: "ios", udid: IOS_UDID, state: "Shutdown" }]);
+
+    const res = await request(app).post("/boot").send({ udid: IOS_UDID });
+
+    // Gated like a hidden tool: a user who never enabled Lens gets no new
+    // unauthenticated boot surface, and no list-devices/boot-device is spawned.
+    expect(res.status).toBe(404);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(variantProposalStore.isDeviceOwned(IOS_UDID)).toBe(false);
   });
 });

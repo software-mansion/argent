@@ -414,6 +414,17 @@ export class VariantProposalStore {
    */
   setCliSession(active: boolean, agents: Array<{ id: string; name: string }> = []): void {
     const transitioned = this.cliSession !== active;
+    // A CLI session must start from a clean round when there is leftover round
+    // state to clear. Without this, a completed round left over from a prior
+    // (possibly non-CLI) flow — e.g. an await_user_selection that timed out
+    // (waiter removed, `consumed` still false) and was then submitted, leaving
+    // completed=true/consumed=false — or an unsubmitted round with staged
+    // proposals would be APPENDED to by the session's first propose_variant
+    // (autoRollIfConsumed only resets on completed && consumed) instead of
+    // opening a fresh one. Reset only when such state exists so a clean start
+    // isn't needlessly bumped past round 1. (reset() does not clear cliSession /
+    // device / owned-devices, so it's safe to call here.)
+    if (transitioned && active && (this.completed || this.proposals.length > 0)) this.reset();
     this.cliSession = active;
     this.lensAgents = active ? agents.map((a) => ({ ...a })) : [];
     this.lensAgentChoice = null;
@@ -450,7 +461,13 @@ export class VariantProposalStore {
     if (id.trim()) this.ownedDevices.add(id.trim());
   }
 
-  /** Whether Lens booted this device itself (and is therefore responsible for it). */
+  /**
+   * Whether Lens booted this device itself (and is therefore responsible for
+   * it). Test-only accessor: production code manages ownership through
+   * `markDeviceOwned` / `releaseDevice` / `takeOwnedDevices` and never needs to
+   * read a single device's ownership. Kept as a non-mutating way for tests to
+   * assert ownership without draining it via `takeOwnedDevices`.
+   */
   isDeviceOwned(id: string): boolean {
     return this.ownedDevices.has(id.trim());
   }

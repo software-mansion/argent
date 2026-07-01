@@ -10,8 +10,16 @@ vi.mock("../src/utils/device-shutdown", () => ({
   shutdownDevice: (id: string) => shutdownDevice(id),
 }));
 
+// /shutdown is a lens-only route gated behind the argent-lens flag. Mock it ON
+// by default so the suite is deterministic regardless of the machine's real
+// flags.json; one test below flips it OFF to assert the gate.
+vi.mock("@argent/configuration-core", () => ({ isFlagEnabled: vi.fn(() => true) }));
+
 import { createPreviewRouter } from "../src/preview";
 import { variantProposalStore } from "../src/utils/variant-proposals";
+import { isFlagEnabled } from "@argent/configuration-core";
+
+const mockFlag = vi.mocked(isFlagEnabled);
 
 const IOS_UDID = "00000000-0000-0000-0000-000000000000";
 const IOS_UDID_2 = "11111111-1111-1111-1111-111111111111";
@@ -29,6 +37,7 @@ function harness(devices: unknown[]) {
 beforeEach(() => {
   variantProposalStore.takeOwnedDevices(); // clear singleton ownership
   shutdownDevice.mockReset();
+  mockFlag.mockReturnValue(true);
 });
 
 describe("POST /preview/shutdown/:udid", () => {
@@ -64,5 +73,18 @@ describe("POST /preview/shutdown/:udid", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("simctl: boom");
+  });
+
+  it("404s (route hidden) and never shuts down when the argent-lens flag is off", async () => {
+    mockFlag.mockReturnValue(false);
+    const { app } = harness([{ platform: "ios", udid: IOS_UDID, state: "Booted" }]);
+    variantProposalStore.markDeviceOwned(IOS_UDID);
+
+    const res = await request(app).post(`/shutdown/${IOS_UDID}`);
+
+    expect(res.status).toBe(404);
+    expect(shutdownDevice).not.toHaveBeenCalled();
+    // Ownership untouched — the gate rejected before any state change.
+    expect(variantProposalStore.isDeviceOwned(IOS_UDID)).toBe(true);
   });
 });

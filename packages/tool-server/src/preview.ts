@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
+import { isFlagEnabled } from "@argent/configuration-core";
 import type { Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
 import { resolveDevice } from "./utils/device-info";
@@ -55,6 +56,21 @@ function wsUrlFromHttp(httpUrl: string): string {
 
 export function createPreviewRouter(registry: Registry): Router {
   const router = express.Router();
+
+  // The lens-specific routes below (cli-session / cli-agent / boot / shutdown)
+  // are tokenless like the rest of /preview but STATE-CHANGING — they open the
+  // window and can spawn/kill simulators. They're only ever driven by an
+  // `argent lens` session, which is itself gated on the `argent-lens` flag. Gate
+  // them behind the same flag (re-read per request, like http.ts does for tools)
+  // so a user who never enabled Lens gains no new unauthenticated localhost
+  // surface: with the flag off they 404 as if absent. Read-only routes (variants
+  // / outcome / lens-stream / describe / simulators) stay ungated — they existed
+  // before this feature and only report state.
+  const requireLensFlag = (res: Response): boolean => {
+    if (isFlagEnabled("argent-lens")) return true;
+    res.status(404).end();
+    return false;
+  };
 
   // ── Known-device cache ────────────────────────────────────────────────
   // Both /describe/:udid and /simulator-server/:udid validate the :udid against
@@ -194,13 +210,14 @@ export function createPreviewRouter(registry: Registry): Router {
   router.get("/simulator-server/:udid", async (req: Request, res: Response) => {
     const udid = req.params.udid as string;
     const device = resolveDevice(udid);
-    if (device.platform === "chromium") {
+    if (device.platform !== "ios" && device.platform !== "android") {
       // The preview UI only knows how to render simulator-server's frame stream,
-      // and Chromium drives the renderer over CDP instead. Fail loudly here so a
-      // forged URL doesn't quietly spawn a simulator-server process for an
-      // Chromium device id.
+      // which exists only for iOS / Android. Chromium drives its renderer over
+      // CDP; Vega has no simulator-server. Fail loudly for any such platform so a
+      // forged URL doesn't quietly spawn a simulator-server process (Chromium),
+      // nor fall through to `simulatorServerRef` for an unsupported device (Vega).
       res.status(400).json({
-        error: `Preview is not available for Chromium devices (id "${udid}"). Use the MCP tools (screenshot, describe, gesture-*) directly.`,
+        error: `Preview is not available for ${device.platform} devices (id "${udid}"). Use the MCP tools (screenshot, describe, gesture-*) directly.`,
       });
       return;
     }
@@ -252,6 +269,7 @@ export function createPreviewRouter(registry: Registry): Router {
   // more than one agent is installed); the bridge polls `lensAgentChoice` to
   // learn which one the human clicked.
   router.post("/cli-session", (req: Request, res: Response) => {
+    if (!requireLensFlag(res)) return;
     const active = Boolean(req.body?.active);
     const agents = Array.isArray(req.body?.agents)
       ? (req.body.agents as unknown[])
@@ -267,6 +285,7 @@ export function createPreviewRouter(registry: Registry): Router {
   // bridge can spawn it. Tokenless and state-changing exactly like the rest of
   // /preview; the id is matched against the offered choices on the bridge side.
   router.post("/cli-agent", (req: Request, res: Response) => {
+    if (!requireLensFlag(res)) return;
     const id = typeof req.body?.id === "string" ? req.body.id.slice(0, 64) : "";
     const remember = Boolean(req.body?.remember);
     variantProposalStore.setLensAgentChoice(id, remember);
@@ -286,6 +305,7 @@ export function createPreviewRouter(registry: Registry): Router {
   // session ends. A device that was already running is left unowned — Lens must
   // never shut down a simulator the user started themselves.
   router.post("/boot", async (req: Request, res: Response) => {
+    if (!requireLensFlag(res)) return;
     const udid = typeof req.body?.udid === "string" ? req.body.udid : "";
     if (!udid) {
       res.status(400).json({ error: "Missing `udid`." });
@@ -304,10 +324,22 @@ export function createPreviewRouter(registry: Registry): Router {
       return;
     }
     try {
-      // One `list-devices` (boot is a rare, user-initiated action, never hot-
-      // polled) serves both the existence guard — this route is auth-exempt and
-      // boot-device spawns a simulator, so a forged id must not amplify into an
-      // unbounded spawn — and the already-running check below.
+      // Cheaply reject ids absent from the short-lived known-device cache before
+      // the fresh `list-devices` below. This route is tokenless and boot-device
+      // spawns a simulator, so a forged-id flood must not amplify 1 request → 1
+      // full `list-devices` (xcrun + adb + ps + Chromium probes) each — mirror
+      // the connect/describe/shutdown routes' cache guard. A stopped-but-real
+      // iOS sim is still in the cache (keyed by udid regardless of state), so a
+      // legitimate boot target is never rejected here.
+      if (!(await knownDeviceIds()).has(udid)) {
+        res
+          .status(400)
+          .json({ error: `Unknown device "${udid}". Use a udid/serial from /preview/simulators.` });
+        return;
+      }
+      // One fresh `list-devices` (boot is a rare, user-initiated action, never
+      // hot-polled) drives the already-running check below; it also re-warms the
+      // cache for the connect/describe poll that follows a successful boot.
       const data = await registry.invokeTool<{
         devices: Array<{ platform: string; udid?: string; serial?: string; state?: string }>;
       }>(listDevicesTool.id);
@@ -341,6 +373,7 @@ export function createPreviewRouter(registry: Registry): Router {
   // acts on a device regardless of whether Lens owns it: the user explicitly
   // asked to shut down a simulator they can see in the picker.
   router.post("/shutdown/:udid", async (req: Request, res: Response) => {
+    if (!requireLensFlag(res)) return;
     const udid = req.params.udid as string;
     try {
       const known = (await knownDeviceIds()).has(udid);
@@ -410,6 +443,16 @@ export function createPreviewRouter(registry: Registry): Router {
         remember: variantProposalStore.getLensAgentRemember(),
       });
     }
+
+    // Replay the last completed outcome on connect too. The CLI relay re-reads
+    // /outcome only ONCE at startup and otherwise relies on this stream, so if
+    // the connection drops (transient socket / brief server restart) and the
+    // human submits during the reconnect gap, that round's `outcome` event would
+    // fire with no listener attached and be lost forever. Replaying it here (the
+    // CLI dedups by `completedAt`, so a stale replay is a harmless no-op while a
+    // missed one silently drops the user's feedback) closes that gap.
+    const lastOutcome = variantProposalStore.getLastOutcome();
+    if (lastOutcome) send("outcome", lastOutcome);
 
     const onChanged = (): void => {
       const choice = variantProposalStore.getLensAgentChoice();
@@ -571,13 +614,15 @@ export function createPreviewRouter(registry: Registry): Router {
   router.get("/describe/:udid", async (req: Request, res: Response) => {
     const udid = req.params.udid as string;
     const device = resolveDevice(udid);
-    if (device.platform === "chromium") {
-      // No structured tree for Chromium here: this route only dispatches the
-      // iOS / Android describe adapters. Reject loudly instead of letting a
-      // chromium id fall through to describeAndroid (which would shell `adb`
-      // against a non-existent serial and 500 with a misleading message).
+    if (device.platform !== "ios" && device.platform !== "android") {
+      // This route only dispatches the iOS / Android describe adapters. Reject
+      // any other platform loudly instead of letting it fall through to the
+      // `else` (describeAndroid), which for a Chromium or Vega id would shell
+      // `adb -s <id>` against a non-existent serial and 500 with a misleading
+      // message. (The /simulators dropdown only ever emits ios/android ids, so
+      // this is defense against forged tokenless requests, not the UI.)
       res.status(400).json({
-        error: `describe is not available for Chromium devices (id "${udid}"). Use the MCP tools (screenshot, describe, gesture-*) directly.`,
+        error: `describe is not available for ${device.platform} devices (id "${udid}"). Use the MCP tools (screenshot, describe, gesture-*) directly.`,
       });
       return;
     }

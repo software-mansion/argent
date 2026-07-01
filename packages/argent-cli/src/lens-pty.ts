@@ -104,8 +104,10 @@ export interface PtyProxy {
   /**
    * Inject one line into the agent as if typed: Esc (interrupt any in-flight
    * turn / clear the composer), the flattened text, then a separate Enter to
-   * submit. Beats are spaced and serialized so concurrent rounds don't
-   * interleave. Returns false once the proxy is disposed.
+   * submit. First waits for a brief pause in the user's own typing so the
+   * leading Esc doesn't clobber an in-progress keystroke burst. Beats are spaced
+   * and serialized so concurrent rounds don't interleave. Returns false once the
+   * proxy is disposed.
    */
   inject(text: string): boolean;
   /** Write raw bytes straight to the agent (no Esc/Enter framing) — e.g. a lone
@@ -133,6 +135,18 @@ const ESC = "\x1b";
 const ENTER = "\r";
 const BEAT_AFTER_ESC_MS = 150;
 const BEAT_AFTER_TEXT_MS = 200;
+
+// Feedback is pushed (an SSE outcome can land at any instant), and the first
+// beat is an Esc that clears the composer. Firing that mid-keystroke would wipe
+// what the user is actively typing to the agent. So before injecting, wait for a
+// brief pause in the user's OWN input — long enough to tell "still typing" from
+// "stopped" — capped so feedback is never delayed indefinitely. This can't help
+// a draft the user typed and then left sitting (that's fundamentally
+// indistinguishable from an idle composer), but it stops the common case of
+// interrupting an in-progress keystroke burst.
+const QUIET_BEFORE_INJECT_MS = 600;
+const MAX_QUIET_WAIT_MS = 3_000;
+const QUIET_POLL_MS = 100;
 
 /**
  * The keystroke beats that queue one feedback line to the agent. Pure +
@@ -206,10 +220,16 @@ export function startPtyProxy(opts: StartPtyProxyOptions): PtyProxy {
 
   // Real stdin → PTY, byte-for-byte. Raw mode disables the host tty's line
   // discipline so keystrokes (incl. Ctrl-C as 0x03) pass straight to the agent.
+  // Each keystroke also stamps `lastUserInputAt` so `inject` can wait for a
+  // typing pause before it fires its composer-clearing Esc.
   const wasRaw = Boolean(stdin.isRaw);
   if (stdin.isTTY && stdin.setRawMode) stdin.setRawMode(true);
   stdin.resume();
-  const onStdin = (d: Buffer): void => term.write(d.toString("utf8"));
+  let lastUserInputAt = 0;
+  const onStdin = (d: Buffer): void => {
+    lastUserInputAt = Date.now();
+    term.write(d.toString("utf8"));
+  };
   stdin.on("data", onStdin);
 
   // Window resize → PTY, so the agent's TUI reflows correctly.
@@ -238,6 +258,21 @@ export function startPtyProxy(opts: StartPtyProxyOptions): PtyProxy {
     for (const cb of exitCbs) cb(exitCode ?? 0);
   });
 
+  // Hold off the inject until the user has paused typing (see the QUIET_*
+  // constants), so the leading Esc doesn't clobber an in-progress keystroke
+  // burst. No-op when the user hasn't typed at all (lastUserInputAt still 0).
+  const waitForTypingPause = async (): Promise<void> => {
+    const started = Date.now();
+    while (
+      !disposed &&
+      lastUserInputAt > 0 &&
+      Date.now() - lastUserInputAt < QUIET_BEFORE_INJECT_MS &&
+      Date.now() - started < MAX_QUIET_WAIT_MS
+    ) {
+      await sleep(QUIET_POLL_MS);
+    }
+  };
+
   // Serialize injects so two rapid rounds don't interleave their beats.
   let queue: Promise<void> = Promise.resolve();
 
@@ -248,6 +283,7 @@ export function startPtyProxy(opts: StartPtyProxyOptions): PtyProxy {
       const beats = ptyInjectBeats(text);
       queue = queue
         .then(async () => {
+          await waitForTypingPause();
           for (const beat of beats) {
             if (beat.delayBeforeMs) await sleep(beat.delayBeforeMs);
             if (disposed) return;
