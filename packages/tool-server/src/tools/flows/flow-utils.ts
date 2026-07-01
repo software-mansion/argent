@@ -7,6 +7,7 @@ import {
   selectorSchema,
   type Selector,
   type WaitCondition,
+  type TextMatchMode,
 } from "../../utils/ui-tree-match";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
@@ -188,8 +189,20 @@ export type FlowStep =
   | { kind: "run"; flow: string }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number }
   | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
-  | { kind: "await"; condition: WaitCondition; selector: FlowSelector; expectedText?: string }
-  | { kind: "assert"; condition: WaitCondition; selector: FlowSelector; expectedText?: string }
+  | {
+      kind: "await";
+      condition: WaitCondition;
+      selector: FlowSelector;
+      expectedText?: string;
+      textMatch?: TextMatchMode;
+    }
+  | {
+      kind: "assert";
+      condition: WaitCondition;
+      selector: FlowSelector;
+      expectedText?: string;
+      textMatch?: TextMatchMode;
+    }
   | { kind: "wait"; ms: number }
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "snapshot"; name: string; maxMismatch?: number };
@@ -232,12 +245,14 @@ type TapBody = YamlSelector | { x: number; y: number };
  * The body of an `await`/`assert` step. The condition is the key, not a separate
  * `condition:` field:
  *   - `{ visible: "Account" }`            ← exists/visible/hidden take a selector
- *   - `{ text: { in: "Taps:", equals: "Taps: 0" } }`  ← text locates then checks
+ *   - `{ text: { in: "Taps:", contains: "Taps: 0" } }`  ← substring check
+ *   - `{ text: { in: "Taps:", equals: "Taps: 0" } }`    ← exact-text check
  */
 type YamlWaitBody =
   | { exists: YamlSelector }
   | { visible: YamlSelector }
   | { hidden: YamlSelector }
+  | { text: { in: YamlSelector; contains: string } }
   | { text: { in: YamlSelector; equals: string } };
 
 type YamlScrollBody = { target: YamlSelector; direction: ScrollDirection; within?: YamlSelector };
@@ -281,7 +296,8 @@ function selectorToYaml(sel: FlowSelector): YamlSelector {
 function waitToYaml(
   condition: WaitCondition,
   selector: Selector,
-  expectedText: string | undefined
+  expectedText: string | undefined,
+  textMatch: TextMatchMode | undefined
 ): YamlWaitBody {
   const sel = selectorToYaml(selector);
   switch (condition) {
@@ -292,7 +308,9 @@ function waitToYaml(
     case "hidden":
       return { hidden: sel };
     case "text":
-      return { text: { in: sel, equals: expectedText ?? "" } };
+      return textMatch === "equals"
+        ? { text: { in: sel, equals: expectedText ?? "" } }
+        : { text: { in: sel, contains: expectedText ?? "" } };
   }
 }
 
@@ -316,9 +334,9 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { type: body };
     }
     case "await":
-      return { await: waitToYaml(step.condition, step.selector, step.expectedText) };
+      return { await: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch) };
     case "assert":
-      return { assert: waitToYaml(step.condition, step.selector, step.expectedText) };
+      return { assert: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch) };
     case "wait":
       return { wait: step.ms };
     case "scroll-to":
@@ -376,14 +394,21 @@ const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden"
 
 const SCROLL_DIRECTIONS: readonly ScrollDirection[] = ["up", "down", "left", "right"];
 
-type WaitFields = { condition: WaitCondition; selector: Selector; expectedText?: string };
+type WaitFields = {
+  condition: WaitCondition;
+  selector: Selector;
+  expectedText?: string;
+  textMatch?: TextMatchMode;
+};
 
 /**
  * Parse the body of an `await`/`assert` step into its condition + selector +
  * optional expected text. The condition is the key and its value is the
- * selector (`{ visible: "Home" }`, `{ text: { in, equals } }`). This is the only
- * accepted spelling; for advanced await control beyond this surface (timeout,
- * poll interval, bundleId) drop to an explicit `tool: await-ui-element` step.
+ * selector (`{ visible: "Home" }`, `{ text: { in, contains } }`). The `text`
+ * check takes exactly one of `contains` (substring) or `equals` (exact text).
+ * This is the only accepted spelling; for advanced await control beyond this
+ * surface (timeout, poll interval, bundleId) drop to an explicit
+ * `tool: await-ui-element` step.
  */
 function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   if (raw === null || typeof raw !== "object") {
@@ -401,21 +426,29 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   }
   const condition = present[0]!;
 
-  // `text` locates an element and checks its rendered content, so it carries
-  // both a locator (`in`) and the expected substring (`equals`).
+  // `text` locates an element (`in`) and checks its rendered content against
+  // exactly one of `contains` (substring) or `equals` (exact text).
   if (condition === "text") {
     const t = b.text;
     if (t === null || typeof t !== "object") {
-      badEntry({ [kind]: b }, `${kind} text needs { in: <selector>, equals: <string> }`);
+      badEntry({ [kind]: b }, `${kind} text needs { in: <selector>, contains|equals: <string> }`);
     }
     const tb = t as Record<string, unknown>;
-    if (typeof tb.equals !== "string" || tb.equals.length === 0) {
-      badEntry({ [kind]: b }, `${kind} text needs a non-empty \`equals\``);
+    const hasContains = "contains" in tb;
+    const hasEquals = "equals" in tb;
+    if (hasContains === hasEquals) {
+      badEntry({ [kind]: b }, `${kind} text needs exactly one of \`contains\` or \`equals\``);
+    }
+    const textMatch: TextMatchMode = hasEquals ? "equals" : "contains";
+    const expected = hasEquals ? tb.equals : tb.contains;
+    if (typeof expected !== "string" || expected.length === 0) {
+      badEntry({ [kind]: b }, `${kind} text needs a non-empty \`${textMatch}\``);
     }
     return {
       condition: "text",
       selector: parseSelector(tb.in, `${kind}.text.in`),
-      expectedText: tb.equals,
+      expectedText: expected,
+      textMatch,
     };
   }
 

@@ -60,8 +60,8 @@ const zodSchema = z
       .describe(
         "What to wait for. `exists`: selector is anywhere in the tree. " +
           "`visible`: selector is present with a non-zero on-screen frame. `hidden`: selector is absent " +
-          "or zero-area. `text`: the first match in reading order (topmost) contains expectedText — if a loose " +
-          "selector hits several elements, only that topmost one is checked, so narrow it to target the intended element."
+          "or zero-area. `text`: the first match in reading order (topmost) contains (or, with textMatch `equals`, exactly matches) " +
+          "expectedText — if a loose selector hits several elements, only that topmost one is checked, so narrow it to target the intended element."
       ),
     selector: selectorSchema.describe("Element to match (text / identifier / role)."),
     expectedText: z
@@ -69,7 +69,13 @@ const zodSchema = z
       .min(1)
       .optional()
       .describe(
-        "For condition `text`: case-insensitive substring the first matched element (topmost in reading order) must contain."
+        "For condition `text`: the string the first matched element (topmost in reading order) must contain (default) or equal — see `textMatch`. Case-insensitive."
+      ),
+    textMatch: z
+      .enum(["contains", "equals"])
+      .optional()
+      .describe(
+        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
       ),
     bundleId: z
       .string()
@@ -120,7 +126,7 @@ const capability: ToolCapability = {
 // for this tool and its tests.
 
 export function evaluateMatches(params: Params, matches: DescribeNode[]): boolean {
-  return evaluateCondition(params.condition, params.expectedText, matches);
+  return evaluateCondition(params.condition, params.expectedText, matches, params.textMatch);
 }
 
 // A degraded / blind read: the tree came back EMPTY and that emptiness is not
@@ -170,8 +176,9 @@ function timeoutNote(
   switch (params.condition) {
     case "text": {
       const first = firstInReadingOrder(matches);
+      const wanted = params.textMatch === "equals" ? "equal" : "contain";
       base = first
-        ? `element matched but its text was "${nodeText(first)}" (wanted to contain "${params.expectedText}")`
+        ? `element matched but its text was "${nodeText(first)}" (wanted to ${wanted} "${params.expectedText}")`
         : "no element matched the selector before timeout";
       break;
     }
@@ -262,8 +269,9 @@ Conditions:
   visible  — the selector matches an element with a non-zero on-screen frame.
   hidden   — the selector matches nothing, or only a zero-area element (e.g. a spinner that disappeared).
   text     — the FIRST match in reading order (topmost, then leftmost) contains expectedText (case-insensitive
-             substring). A loose selector can match several elements; only that topmost one is inspected, so if a
-             lower match is the one holding the text the wait still reports failure — narrow the selector to target it.
+             substring), or exactly matches it when textMatch is \`equals\`. A loose selector can match several
+             elements; only that topmost one is inspected, so if a lower match is the one holding the text the wait
+             still reports failure — narrow the selector to target it.
 
 The selector is { text?, identifier?, role? }; every provided field must match (case-insensitive substring).
 text matches the element's label or value. It polls the same accessibility / DOM tree as \`describe\`

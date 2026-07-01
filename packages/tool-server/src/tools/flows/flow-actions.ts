@@ -6,9 +6,10 @@ import {
   evaluateCondition,
   firstInReadingOrder,
   isVisible,
-  nodeText,
+  assertText,
   treeFingerprint,
   type WaitCondition,
+  type TextMatchMode,
 } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
@@ -442,6 +443,7 @@ export async function runAssert(
   condition: WaitCondition,
   selector: FlowSelector,
   expectedText: string | undefined,
+  textMatch: TextMatchMode | undefined,
   signal?: AbortSignal
 ): Promise<DirectiveOutcome> {
   const deadline = Date.now() + DEFAULT_ASSERT_TIMEOUT_MS;
@@ -455,7 +457,7 @@ export async function runAssert(
       const { tree } = await fetchFlowTree(registry, device);
       lastMatches = flowFindAll(tree, selector);
       fetchError = undefined;
-      if (evaluateCondition(condition, expectedText, lastMatches)) return { ok: true };
+      if (evaluateCondition(condition, expectedText, lastMatches, textMatch)) return { ok: true };
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
     }
@@ -465,13 +467,14 @@ export async function runAssert(
   }
 
   if (fetchError) return { ok: false, reason: `could not read the UI tree: ${fetchError}` };
-  return { ok: false, reason: assertReason(condition, selector, expectedText, lastMatches) };
+  return { ok: false, reason: assertReason(condition, selector, expectedText, textMatch, lastMatches) };
 }
 
 function assertReason(
   condition: WaitCondition,
   selector: FlowSelector,
   expectedText: string | undefined,
+  textMatch: TextMatchMode | undefined,
   matches: ReturnType<typeof findAll>
 ): string {
   const sel = describeSelector(selector);
@@ -486,8 +489,9 @@ function assertReason(
       return `an element matching ${sel} was still visible`;
     case "text": {
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+      const wanted = textMatch === "equals" ? "equal" : "contain";
       return first
-        ? `element matched ${sel} but its text was "${nodeText(first)}" (wanted to contain "${expectedText}")`
+        ? `element matched ${sel} but its text was "${assertText(first)}" (wanted to ${wanted} "${expectedText}")`
         : `no element matched selector ${sel}`;
     }
     default:

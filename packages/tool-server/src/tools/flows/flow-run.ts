@@ -498,6 +498,7 @@ async function execLeafStep(
         step.condition,
         step.selector,
         step.expectedText,
+        step.textMatch,
         signal
       );
       return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
@@ -526,6 +527,7 @@ async function execLeafStep(
         condition: step.condition,
         selector: step.selector,
         ...(step.expectedText !== undefined ? { expectedText: step.expectedText } : {}),
+        ...(step.textMatch !== undefined ? { textMatch: step.textMatch } : {}),
       });
       try {
         const result = await invokeSubTool(registry, ctx, AWAIT_UI_ELEMENT_TOOL_ID, args);

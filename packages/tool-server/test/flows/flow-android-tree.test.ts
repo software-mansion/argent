@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
-import { findAll, selectorToFrame, matchNode } from "../../src/utils/ui-tree-match";
+import { evaluateCondition, findAll, selectorToFrame, matchNode } from "../../src/utils/ui-tree-match";
 import type { DescribeNode } from "../../src/tools/describe/contract";
 
 const SCREEN_W = 1080;
@@ -85,5 +85,23 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
   it("returns an empty screen tree for a bogus screen size", () => {
     const tree = adaptFullAndroidHierarchyToDescribeResult(RN_XML, 0, 0);
     expect(tree.children).toHaveLength(0);
+  });
+
+  it("hoists a testID container's child text into subtreeText", () => {
+    // `submit-button` carries no text of its own — its label lives on the child
+    // TextView. The hoist lets a `text` assert against the container read it.
+    const tree = adaptFullAndroidHierarchyToDescribeResult(RN_XML, SCREEN_W, SCREEN_H);
+    const [submit] = findAll(tree, { identifier: "submit-button" });
+    expect(submit!.label).toBeUndefined();
+    expect(submit!.subtreeText).toBe("Submit");
+    expect(evaluateCondition("text", "Submit", findAll(tree, { identifier: "submit-button" }))).toBe(true);
+  });
+
+  it("never hoists a password field's text (placeholder only)", () => {
+    const tree = adaptFullAndroidHierarchyToDescribeResult(RN_XML, SCREEN_W, SCREEN_H);
+    const [pw] = findAll(tree, { identifier: "password" });
+    // subtreeText, if set at all, must not carry the secret.
+    expect(pw!.subtreeText ?? "").not.toContain("hunter2");
+    expect(JSON.stringify(tree)).not.toContain("hunter2");
   });
 });
