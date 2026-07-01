@@ -136,6 +136,71 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(0);
   });
 
+  it("keeps scrolling a target flush at the viewport edge until it clears the fold", async () => {
+    // Every adapter clips a partly-scrolled element's frame to the viewport, so a
+    // half-revealed row sits flush against the entry edge (bottom, here) — its
+    // frame is in-bounds and indistinguishable from fully-visible by area. The
+    // axis check treats "flush at the bottom" as clipped and keeps scrolling
+    // until the frame clears the edge, so a following tap doesn't hit a sliver.
+    const flush = screen([
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.9, width: 0.8, height: 0.1 } }), // y+h = 1.0
+    ]);
+    const cleared = screen([
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.1 } }),
+    ]);
+    let scrolled = false;
+    currentTree = () => (scrolled ? cleared : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+
+    await writeFlow("flush", {
+      launch: "com.acme.app",
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "flush", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    // One increment: the flush first read didn't satisfy the axis check.
+    expect(swipes).toHaveLength(1);
+  });
+
+  it("accepts a last item flush at the far edge once the scroll hits its end", async () => {
+    // The LAST item sits flush against the container's far edge at max scroll —
+    // the axis check can never clear its entry edge. Since the tree stops
+    // changing (no progress), it's genuinely fully revealed, so it's accepted
+    // wherever it landed rather than looping/failing forever.
+    currentTree = () =>
+      screen([n({ label: "Bottom row 8", frame: { x: 0.1, y: 0.9, width: 0.8, height: 0.1 } })]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("last-item", {
+      launch: "com.acme.app",
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Bottom row 8" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "last-item", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    // One increment attempted, then the no-progress check accepted it.
+    expect(swipes).toHaveLength(1);
+  });
+
   it("fails with a no-progress reason when scrolling reveals nothing new", async () => {
     // The tree never changes, so the second settled read equals the first.
     currentTree = () =>

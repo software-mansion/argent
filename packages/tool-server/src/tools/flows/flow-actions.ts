@@ -43,6 +43,49 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
+// Edge tolerance (normalized) for "is this frame flush against a clip edge".
+// A hair above the frame-fingerprint rounding (1e-3) so sub-pixel jitter never
+// reads as a clip, but small enough that a genuinely clipped edge lands on it.
+const EDGE_EPS = 0.005;
+
+/**
+ * Is `frame` fully within `clip` along the scroll axis, with its *entry* edge
+ * cleared of the clip boundary by a margin? Every describe adapter clips a
+ * partly-scrolled element's frame to the viewport (iOS/Chromium clamp their
+ * rects to [0,1]; Android uiautomator reports bounds already clipped to the
+ * scroll container), so such an element sits exactly flush against the edge it
+ * is being revealed from — a row entering from the bottom has `y+h == clip.bottom`.
+ * "Flush against the entry edge" is therefore the universal clipped signal.
+ * Requiring the entry edge strictly inside (by `EDGE_EPS`), with the opposite
+ * edge still within the clip, means the whole element has cleared the fold. The
+ * entry edge is set by the scroll direction: `down` reveals from the bottom,
+ * `up` from the top, etc.
+ */
+function axisFullyInside(
+  frame: DescribeFrame,
+  direction: ScrollDirection,
+  clip: DescribeFrame
+): boolean {
+  const top = clip.y;
+  const bottom = clip.y + clip.height;
+  const left = clip.x;
+  const right = clip.x + clip.width;
+  const fTop = frame.y;
+  const fBottom = frame.y + frame.height;
+  const fLeft = frame.x;
+  const fRight = frame.x + frame.width;
+  switch (direction) {
+    case "down": // entered from the bottom edge
+      return fBottom <= bottom - EDGE_EPS && fTop >= top - EDGE_EPS;
+    case "up": // entered from the top edge
+      return fTop >= top + EDGE_EPS && fBottom <= bottom + EDGE_EPS;
+    case "right": // entered from the right edge
+      return fRight <= right - EDGE_EPS && fLeft >= left - EDGE_EPS;
+    case "left": // entered from the left edge
+      return fLeft >= left + EDGE_EPS && fRight <= right + EDGE_EPS;
+  }
+}
+
 // `assert` is a correctness check, not an open-ended wait — but UI updates after
 // an action land asynchronously, so a strictly one-shot read races the
 // re-render (e.g. a counter that increments a frame after a tap). Like
@@ -214,18 +257,23 @@ async function scrollIncrement(
       toX: to.x,
       toY: to.y,
       settle: true,
+      durationMs: 600,
     })
   );
 }
 
 /**
- * Scroll until `target` resolves to a visible frame, returning that frame.
- * Each round settles the tree, checks for the target, then — if absent — does
- * one momentum-free increment. If a round's settled tree is identical to the
- * previous round's, the container has hit its end (or the anchor scrolls
- * nothing), so it stops rather than looping. Per-increment distance need not be
- * exact: the loop re-checks after every step, so overshoot just means another
- * round, and a target already on screen returns immediately (no scroll).
+ * Scroll until `target` is fully within the scroll viewport along the scroll
+ * axis, returning its frame. Each round settles the tree, checks the target,
+ * then — if it isn't fully in view — does one momentum-free increment. Stopping
+ * only once the target has cleared the entry edge (not on the first sliver) is
+ * what keeps a following `tap`/`snapshot` off a half-clipped element. If a
+ * round's settled tree is identical to the previous round's, the container has
+ * hit its end (or the anchor scrolls nothing): the target is then as visible as
+ * it will ever be, so it's accepted wherever it landed — the LAST item sits
+ * flush against the far edge and can never clear it, and a genuinely stuck
+ * partial can't be improved either. A target already fully on screen returns
+ * immediately (no scroll).
  */
 async function scrollToVisible(
   registry: Registry,
@@ -243,18 +291,21 @@ async function scrollToVisible(
     const tree = await settleTree(registry, device, signal);
     if (!tree) return { reason: "scroll cancelled" };
 
-    const frame = flowSelectorToFrame(tree, target);
-    if (frame) return { frame };
-
     // Anchor the gesture inside the container (so the right nested scroller
-    // moves), or over the whole screen when none is named.
+    // moves), or over the whole screen when none is named. Its frame is also the
+    // clip window the axis check measures the target against.
     const region = within ? flowSelectorToFrame(tree, within) : FULL_SCREEN;
     if (!region) {
       return { reason: `scroll container ${describeSelector(within!)} is not visible` };
     }
 
+    const frame = flowSelectorToFrame(tree, target);
+    if (frame && axisFullyInside(frame, direction, region)) return { frame };
+
     const fp = treeFingerprint(tree);
     if (prevFp !== undefined && fp === prevFp) {
+      // End of the scroll — accept the target wherever it landed (best effort).
+      if (frame) return { frame };
       return { reason: `reached the end of the scroll without finding ${describeSelector(target)}` };
     }
     prevFp = fp;

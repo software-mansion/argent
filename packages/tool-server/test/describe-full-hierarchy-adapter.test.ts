@@ -87,6 +87,27 @@ describe("describe full-hierarchy adapter", () => {
     expect(findAll(tree, { text: "square-#b58df1" })).toHaveLength(0);
   });
 
+  it("clips a partly off-screen element's frame to the viewport", () => {
+    const raw = payload();
+    // Push one square half below the fold: 100px tall at y=750 on an 800px
+    // screen ⇒ 50px (half) visible.
+    raw.windows[0]!.children[0]!.children[1] = {
+      className: "RCTView",
+      label: "square-#001A72",
+      windowFrame: { x: 132, y: 750, width: 100, height: 100 },
+      children: [],
+    } as never;
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    // The emitted frame is clipped to the viewport (100px→50px visible height),
+    // so it sits flush at the bottom edge — the signal scroll-to's axis check
+    // reads to know the element is only partly on screen.
+    const partial = findAll(tree, { text: "square-#001A72" })[0]!;
+    expect(partial.frame.y).toBeCloseTo(750 / 800, 5);
+    expect(partial.frame.height).toBeCloseTo(50 / 800, 5);
+    expect(partial.frame.y + partial.frame.height).toBeCloseTo(1, 5);
+  });
+
   it("returns an empty tree when no window frame is available", () => {
     const tree = adaptFullHierarchyToDescribeResult({ windows: [{ className: "UIWindow" }] });
     expect(tree.children).toHaveLength(0);
