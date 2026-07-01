@@ -73,8 +73,14 @@ export class ScreencastManager {
         }
         throw err;
       }
-      if (this.startInFlight === inFlight) this.startInFlight = null;
-      this.activeCount += 1;
+      if (this.startInFlight === inFlight) {
+        this.startInFlight = null;
+        this.activeCount += 1;
+      }
+      // else: a forceStop()/dispose superseded this start while it was in flight,
+      // so the screencast we started is already torn down — don't take a refcount
+      // for it (the returned session's stop() is then a harmless no-op). Mirrors
+      // the catch path's `startInFlight === inFlight` identity guard.
     } else {
       // A live session is already running: join it (first writer wins on opts).
       if (this.optsDiffer(opts, this.currentOpts)) this.warnOptsIgnored();
