@@ -184,6 +184,8 @@ export interface HttpAppOptions {
    * opted into network exposure (and is warned at startup).
    */
   bindHost?: string;
+  /** Max bytes accepted by `POST /upload` (tar-upload inputs). Defaults to 2 GiB. */
+  maxUploadBytes?: number;
   /** Optional telemetry hook for per-invocation platform/device metadata. */
   recordInvocation?: (toolInvocationId: string, meta: InvocationMeta) => () => void;
   /** Optional telemetry hook for HTTP failures that happen before registry invocation. */
@@ -289,6 +291,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Registry for tar-upload uploads: uploadId → { tarPath, expireAt }.
   // Entries are consumed by the first tool call that references them; the TTL
   // sweeper handles any orphans from aborted or failed calls.
+  const maxUploadBytes = options?.maxUploadBytes ?? MAX_UPLOAD_STREAM_BYTES;
   const uploads = new Map<string, UploadEntry & { expireAt: number }>();
   const uploadSweeper = setInterval(() => {
     const now = Date.now();
@@ -464,8 +467,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     let received = 0;
     req.on("data", (chunk: Buffer) => {
       received += chunk.length;
-      if (received > MAX_UPLOAD_STREAM_BYTES) {
-        abort(413, `Upload exceeds the ${bytesUtil(MAX_UPLOAD_STREAM_BYTES, { unitSeparator: " " })} limit.`);
+      if (received > maxUploadBytes) {
+        abort(413, `Upload exceeds the ${bytesUtil(maxUploadBytes, { unitSeparator: " " })} limit.`);
       }
     });
     req.pipe(ws);

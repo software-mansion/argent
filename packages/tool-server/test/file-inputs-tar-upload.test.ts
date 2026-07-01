@@ -67,6 +67,18 @@ describe("resolveFileInputs — tar-upload kind", () => {
     expect(fileInputs!.appPath).toMatchObject({ presentOnHost: true, viaUpload: false });
   });
 
+  it("resolves a file in place when it exists on this host", async () => {
+    const apk = await makeFakeApk();
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wire({ path: apk }) }
+    );
+
+    expect(args.appPath).toBe(apk);
+    expect(fileInputs!.appPath).toMatchObject({ presentOnHost: true, viaUpload: false });
+  });
+
   it("extracts the uploaded archive and returns the app dir path", async () => {
     const appDir = await makeFakeApp("MyApp.app");
     const tarPath = await tarApp(appDir);

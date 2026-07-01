@@ -197,6 +197,23 @@ describe("prepareFileInputs — tar-upload kind", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("propagates an upload failure", async () => {
+    const appDir = path.join(tmpDir, "MyApp.app");
+    await fs.mkdir(appDir);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 500, statusText: "Boom" }))
+    );
+
+    await expect(
+      prepareFileInputs(
+        specs,
+        { appPath: appDir },
+        { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
+      )
+    ).rejects.toThrow(/failed/i);
+  });
+
   it("skips upload and sends a path-only wrapper when the path is not local", async () => {
     // A path that exists only on the remote host (e.g. pre-uploaded to the VM).
     const remotePath = path.join(tmpDir, "not", "on", "this", "machine", "MyApp.app");
