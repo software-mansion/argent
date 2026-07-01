@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Platform, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { Platform, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
@@ -60,9 +60,16 @@ Returns { pressed: buttonName }.
 Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  // Android presses go over `adb shell input keyevent` (see execute), not the
+  // simulator-server's HID transport, so declaring the service for an Android
+  // target would needlessly resolve + spawn a sim-server the tool never uses (up
+  // to a 30s ready-wait) and could throw ServiceInitializationError before the
+  // adb path even runs. Declare it only for the iOS / ios-remote path that
+  // actually consumes it (mirrors the sibling `keyboard` tool's lazy services).
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    return device.platform === "android" ? {} : { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params) {
     const device = resolveDevice(params.udid);
     if (!BUTTONS_BY_PLATFORM[device.platform].has(params.button)) {

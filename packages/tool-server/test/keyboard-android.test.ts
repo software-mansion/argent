@@ -43,6 +43,15 @@ describe("android-input — keycode maps", () => {
     }
     expect(ANDROID_BUTTON_KEYCODES.back).toBe(4); // KEYCODE_BACK
   });
+
+  it("maps `delete` to backspace (KEYCODE_DEL), matching iOS and the HID vocabulary", () => {
+    // NAMED_KEYS (key-codes.ts) gives both `backspace` and `delete` HID usage 42
+    // (Keyboard DELETE/Backspace), and iOS types `delete` as a backspace — so a
+    // named key means the same thing on every platform. Android must therefore map
+    // `delete` to KEYCODE_DEL (67, backspace), NOT KEYCODE_FORWARD_DEL (112).
+    expect(ANDROID_NAMED_KEYCODES.delete).toBe(67);
+    expect(ANDROID_NAMED_KEYCODES.delete).toBe(ANDROID_NAMED_KEYCODES.backspace);
+  });
 });
 
 describe("android-input — injection", () => {
@@ -78,5 +87,82 @@ describe("android-input — injection", () => {
   it("rejects newlines rather than silently truncating", () => {
     expect(() => assertTypeableAndroidText("line1\nline2")).toThrow(/newline/);
     expect(() => assertTypeableAndroidText("ok")).not.toThrow();
+  });
+});
+
+describe("android-input — `%` types verbatim (no `%s`→space corruption)", () => {
+  // `adb input text`'s InputShellCommand.sendText rewrites `%s`→space and does NOT
+  // unescape `%%`, so a single `input text` corrupts `%`-bearing input. We split so
+  // every `%` ends a segment (one `input text` per segment) — a `%` is then never
+  // immediately followed by `s` on the device, and the segments re-join verbatim.
+  it("splits `100%safe` so `%` never precedes `s` at the device boundary", async () => {
+    adbShell.mockClear();
+    await injectAndroidText(SERIAL, "100%safe");
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+      "input text '100%'",
+      "input text 'safe'",
+    ]);
+  });
+
+  it("types the literal sequence `%s` instead of a space", async () => {
+    adbShell.mockClear();
+    await injectAndroidText(SERIAL, "%s");
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text '%'", "input text 's'"]);
+  });
+
+  it("does not collapse `%%`", async () => {
+    adbShell.mockClear();
+    await injectAndroidText(SERIAL, "%%");
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text '%'", "input text '%'"]);
+  });
+
+  it("keeps a trailing `%` in its own segment (`50% off`)", async () => {
+    adbShell.mockClear();
+    await injectAndroidText(SERIAL, "50% off");
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text '50%'", "input text ' off'"]);
+  });
+
+  it("uses a single `input text` for `%`-free text", async () => {
+    adbShell.mockClear();
+    await injectAndroidText(SERIAL, "hello world");
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text 'hello world'"]);
+  });
+});
+
+describe("android-input — shell-metachar safety (single quoted argv token)", () => {
+  // shellQuote wraps the text in single quotes so the device's /bin/sh treats it
+  // as one inert token — quotes / `&` / `$(...)` / backticks never execute.
+  it.each([
+    ["single quotes", "o'brien", "input text 'o'\\''brien'"],
+    ["ampersand", "a&b && c", "input text 'a&b && c'"],
+    ["command substitution", "$(id) `id`", "input text '$(id) `id`'"],
+    ["redirect / pipe / glob", "a | b > c *", "input text 'a | b > c *'"],
+  ])("quotes %s so the device shell can't interpret it", async (_label, text, expected) => {
+    adbShell.mockClear();
+    await injectAndroidText(SERIAL, text);
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual([expected]);
+  });
+});
+
+describe("android-input — rejects text `adb input text` can't type", () => {
+  it("rejects emoji with a clear error naming the character", async () => {
+    await expect(injectAndroidText(SERIAL, "hi 😀")).rejects.toThrow(/😀/);
+    await expect(injectAndroidText(SERIAL, "hi 😀")).rejects.toThrow(/printable ASCII/);
+  });
+
+  it("rejects accented / non-ASCII letters (silently dropped by input text)", async () => {
+    await expect(injectAndroidText(SERIAL, "café")).rejects.toThrow(/é/);
+  });
+
+  it("does not shell out at all when the text is rejected", async () => {
+    adbShell.mockClear();
+    await expect(injectAndroidText(SERIAL, "😀")).rejects.toThrow();
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("still accepts the full printable-ASCII range (letters, digits, punctuation)", () => {
+    expect(() =>
+      assertTypeableAndroidText("hello WORLD 123 !@#$%^&*()_+-=[]{};:'\",.<>/?`~|\\")
+    ).not.toThrow();
   });
 });

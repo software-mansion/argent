@@ -25,8 +25,13 @@ export const ANDROID_NAMED_KEYCODES: Record<string, number> = {
   "return": 66, // alias of enter
   "escape": 111, // KEYCODE_ESCAPE
   "esc": 111, // alias of escape
-  "backspace": 67, // KEYCODE_DEL
-  "delete": 112, // KEYCODE_FORWARD_DEL
+  "backspace": 67, // KEYCODE_DEL (backspace: deletes the char before the cursor)
+  // `delete` aliases backspace, not forward-delete: the shared HID vocabulary in
+  // key-codes.ts (NAMED_KEYS) maps both `backspace` and `delete` to usage 42
+  // (Keyboard DELETE/Backspace), so iOS types `delete` as a backspace. A named
+  // key must mean the same thing on every platform, so map it to KEYCODE_DEL (67)
+  // here too rather than KEYCODE_FORWARD_DEL (112).
+  "delete": 67, // KEYCODE_DEL (alias of backspace — see note above)
   "tab": 61, // KEYCODE_TAB
   "space": 62, // KEYCODE_SPACE
   "arrow-up": 19, // KEYCODE_DPAD_UP
@@ -49,16 +54,50 @@ export const ANDROID_BUTTON_KEYCODES: Record<string, number> = {
 };
 
 // `input text` receives the string as a single argv token (we `shellQuote` it, so
-// the device shell doesn't split on spaces) and types it verbatim, spaces
-// included. A newline can't be represented — it would terminate the `input`
-// command line and truncate the tail — so reject it loudly rather than silently
-// drop everything after it; callers wanting Enter should use `key: "enter"`.
+// the device shell doesn't split on spaces). It reliably types only printable
+// ASCII: spaces and punctuation work, but a newline can't be represented, emoji
+// crash `InputShellCommand.sendText` with a NullPointerException, and other
+// non-ASCII (accented letters, CJK) is silently dropped by the virtual
+// KeyCharacterMap. Reject anything outside printable ASCII up front, naming the
+// offending character, so the caller gets a clear error instead of a cryptic
+// crash or a silently-wrong field. (`%` is handled separately — see
+// `splitForVerbatimPercent` — because it is typeable but needs escaping.)
 export function assertTypeableAndroidText(text: string): void {
+  // Keep the newline case as its own message: it's the one non-typeable char
+  // with an obvious alternative, so point the caller at it.
   if (/[\n\r]/.test(text)) {
     throw new Error(
       'keyboard text must not contain a newline on Android; press it with key: "enter" instead'
     );
   }
+  for (const char of text) {
+    const cp = char.codePointAt(0)!;
+    if (cp < 0x20 || cp > 0x7e) {
+      const hex = cp.toString(16).toUpperCase().padStart(4, "0");
+      throw new Error(
+        `keyboard text can only contain printable ASCII on Android; character "${char}" ` +
+          `(U+${hex}) can't be typed via \`adb input text\` — emoji crash it and other ` +
+          `non-ASCII (accented, CJK) is silently dropped. Remove it.`
+      );
+    }
+  }
+}
+
+// `input text`'s `InputShellCommand.sendText` rewrites the two-char sequence `%s`
+// into a single space (and does NOT unescape `%%` back to `%`), so a naive single
+// `input text "100%safe"` silently types `100 afe`. Split the text so that every
+// `%` is the LAST character of its segment and issue one `input text` per segment:
+// within a segment a `%` is therefore never immediately followed by `s`, so
+// sendText can't fire that transform, and the segments concatenate on-device to
+// the exact input. A `%`-free string yields a single segment (one `input text`),
+// identical to before.
+//   "100%safe" → ["100%", "safe"] → "100%" + "safe" = "100%safe"
+//   "%s"       → ["%", "s"]        → "%" + "s"       = "%s"
+//   "%%"       → ["%", "%"]        → "%" + "%"       = "%%"
+function splitForVerbatimPercent(text: string): string[] {
+  // Each `[^%]*%` chunk ends at (and includes) a `%`; the trailing `[^%]+` catches
+  // the tail after the final `%`. Every `%` thus lands at a segment boundary.
+  return text.match(/[^%]*%|[^%]+/g) ?? [];
 }
 
 // `input` opens the app-process VM per call, so it is not instant; 15s comfortably
@@ -70,7 +109,13 @@ const ADB_INPUT_TIMEOUT_MS = 15_000;
 export async function injectAndroidText(serial: string, text: string): Promise<void> {
   assertTypeableAndroidText(text);
   if (text.length === 0) return;
-  await adbShell(serial, `input text ${shellQuote(text)}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
+  // One `input text` per segment so a `%` never precedes an `s` on the device (see
+  // `splitForVerbatimPercent`); `%`-free text is a single call, as before.
+  for (const segment of splitForVerbatimPercent(text)) {
+    await adbShell(serial, `input text ${shellQuote(segment)}`, {
+      timeoutMs: ADB_INPUT_TIMEOUT_MS,
+    });
+  }
 }
 
 /** Press a single android.view.KeyEvent keycode via `adb shell input keyevent`. */

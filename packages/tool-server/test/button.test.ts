@@ -59,3 +59,17 @@ describe("button tool — per-platform validation", () => {
     }
   });
 });
+
+describe("button tool — service declaration", () => {
+  it("does not declare the simulator-server service for an Android target", () => {
+    // Android presses go over adb; declaring sim-server would needlessly resolve +
+    // spawn it (up to a 30s ready-wait) and could throw before the adb path runs.
+    expect(buttonTool.services({ udid: androidUdid, button: "back" })).toEqual({});
+  });
+
+  it("still declares the simulator-server service eagerly for an iOS target", () => {
+    expect(buttonTool.services({ udid: iosUdid, button: "home" })).toHaveProperty(
+      "simulatorServer"
+    );
+  });
+});
