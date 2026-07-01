@@ -4,6 +4,7 @@ import { nativeDevtoolsRef, NativeDevtoolsApi } from "../../../../blueprints/nat
 import { isPhysicalIos } from "../../../../utils/device-info";
 import { UnsupportedOperationError } from "../../../../utils/capability";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
+import { isTvOsSimulator } from "../../../../utils/ios-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
 import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
@@ -11,6 +12,19 @@ import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 
 const DEGRADED_HINT =
   "This simulator was not booted through argent — system dialogs and native modals may not appear. You MUST call boot-device with force=true now to restart the simulator and apply full accessibility settings before continuing.";
+
+// tvOS classifies as platform "ios" by UDID shape. The `describe` tool routes
+// TV targets to the focus-driven `describeTv` before this iOS branch runs, so
+// the short-circuit below is only reached by internal callers that invoke
+// `describeIos` directly (preview / match-element-frame). The iOS ax-service
+// can't read the Apple TV focus engine — surface the right tool instead of
+// spawning a daemon that times out and degrades with the misleading
+// boot-device hint.
+const TVOS_HINT =
+  "This is an Apple TV (tvOS) simulator, which the iOS accessibility service does not support. " +
+  "Use the `describe` tool to read the focused and focusable elements, `tv-remote` " +
+  "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
+  "See the argent-tv-interact skill.";
 
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
@@ -24,6 +38,12 @@ export interface DescribeIosParams {
   bundleId?: string;
 }
 
+export interface DescribeIosOptions {
+  // Pre-resolved tvOS verdict, passed by poll/retry callers so the hot path
+  // skips re-shelling `xcrun` each iteration. Omitted callers probe once.
+  isTvOs?: boolean;
+}
+
 // describe on iOS resolves the ax-service via Registry; the blueprint factory
 // shells out to `xcrun simctl spawn` (spawnDaemon).
 // Without xcrun on PATH the spawn ENOENTs deep inside the factory and the
@@ -35,7 +55,8 @@ export const iosRequires: ToolDependency[] = ["xcrun"];
 export async function describeIos(
   registry: Registry,
   device: DeviceInfo,
-  params: DescribeIosParams
+  params: DescribeIosParams,
+  options: DescribeIosOptions = {}
 ): Promise<DescribeTreeData> {
   // Physical iPhones are driven over CoreDevice; both describe backends are
   // simulator-only (ax-service shells `simctl spawn`; native-devtools injects a
@@ -50,6 +71,15 @@ export async function describeIos(
       device,
       "physical iOS is driven over CoreDevice and has no on-device accessibility/describe path; use screenshot to inspect the screen"
     );
+  }
+
+  // tvOS short-circuit: the focus-engine accessibility tree is served by the
+  // tv-control daemons, not the iOS ax-service. Without this, describe would
+  // try to spawn ax-service inside the Apple TV sim, time out on the daemon
+  // connection, and degrade with the wrong (boot-device) hint.
+  const isTvOs = options.isTvOs ?? (await isTvOsSimulator(device.id));
+  if (isTvOs) {
+    return { tree: emptyTree(), source: "ax-service", hint: TVOS_HINT };
   }
 
   let tree: DescribeNode;

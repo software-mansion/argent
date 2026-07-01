@@ -702,6 +702,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.status(424).json({ error: depErr.message, missing: depErr.missing });
           return;
         }
+        // Unwrap the cause chain: these are thrown from inside execute() / a
+        // service factory and reach here wrapped in ToolExecutionError, so a
+        // top-level instanceof would miss them and fall through to a 500.
         const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
         if (unsupportedErr) {
           res.status(400).json({ error: unsupportedErr.message });

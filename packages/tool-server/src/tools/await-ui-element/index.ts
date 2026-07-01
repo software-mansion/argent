@@ -9,6 +9,7 @@ import type {
 } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
+import { isTvOsSimulator } from "../../utils/ios-devices";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { sleepOrAbort } from "../../utils/timing";
@@ -367,10 +368,11 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
   async function fetchTree(
     device: DeviceInfo,
     params: Params,
-    services: Record<string, unknown>
+    services: Record<string, unknown>,
+    isTvOs: boolean
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
-      return describeIos(registry, device, { bundleId: params.bundleId });
+      return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
     }
     if (device.platform === "android") {
       return describeAndroid(registry, device.id);
@@ -413,17 +415,24 @@ or before tapping an element that appears asynchronously.`,
     },
     async execute(services, params, ctx?: ToolContext) {
       const signal = ctx?.signal;
+
+      const device = resolveDevice(params.udid);
+      assertSupported(AWAIT_UI_ELEMENT_TOOL_ID, capability, device);
+      if (device.platform === "ios") await ensureDeps(iosRequires);
+      else if (device.platform === "android") await ensureDeps(androidRequires);
+
+      // Resolve once, outside the poll loop — re-probing `xcrun` per fetch would
+      // blow the per-fetch budget for a fake UDID that never caches.
+      const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
+
+      // Start the wait clock after setup so its fixed cost isn't charged against
+      // timeoutMs (the deadline should bound polling, not device resolution).
       const start = Date.now();
       const cancelled = (): WaitResult => ({
         success: false,
         elapsed: Date.now() - start,
         note: "wait was cancelled before the condition was met",
       });
-
-      const device = resolveDevice(params.udid);
-      assertSupported(AWAIT_UI_ELEMENT_TOOL_ID, capability, device);
-      if (device.platform === "ios") await ensureDeps(iosRequires);
-      else if (device.platform === "android") await ensureDeps(androidRequires);
 
       const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -445,7 +454,11 @@ or before tapping an element that appears asynchronously.`,
         // describe can't overshoot timeoutMs, and an abort mid-fetch is observed
         // promptly instead of after the fetch resolves.
         const remaining = Math.max(0, deadline - Date.now());
-        const settled = await settleWithin(fetchTree(device, params, services), remaining, signal);
+        const settled = await settleWithin(
+          fetchTree(device, params, services, isTvOs),
+          remaining,
+          signal
+        );
 
         if (settled.type === "aborted") return cancelled();
         if (settled.type === "timeout") {

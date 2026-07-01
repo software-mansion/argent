@@ -6,6 +6,7 @@ import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import type { OpenUrlResult, OpenUrlServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
+import { iosRemoteImpl } from "./platforms/ios-remote";
 import { chromiumImpl, type OpenUrlChromiumServices } from "./platforms/chromium";
 
 const zodSchema = z.object({
@@ -24,6 +25,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
 };
@@ -54,6 +56,7 @@ Returns { opened, url }. Fails if no app is registered to handle the URI (iOS/An
     capability,
     ios: iosImpl,
     android: androidImpl,
+    iosRemote: iosRemoteImpl,
     chromium: chromiumImpl,
   }),
 };

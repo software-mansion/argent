@@ -20,6 +20,7 @@ interface Result {
 // itself is iOS-only — no platforms/ split needed.
 const capability: ToolCapability = {
   apple: { simulator: true, device: false },
+  appleRemote: { simulator: true },
 };
 
 export const pasteTool: ToolDefinition<Params, Result> = {

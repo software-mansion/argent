@@ -22,6 +22,24 @@ const IOS_UDID_SHAPE =
  */
 const IOS_PHYSICAL_UDID_SHAPE = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$/;
 
+/**
+ * Prefix used on device ids that route through `sim-remote` to a remote iOS
+ * simulator. The raw UUID after the prefix is the same RFC-4122 shape as a
+ * local iOS UDID — the prefix is the only thing that disambiguates a remote
+ * sim from a local one.
+ */
+export const REMOTE_PREFIX = "remote:";
+
+/** Strip the `remote:` prefix from a device id, returning the bare UDID. */
+export function stripRemotePrefix(id: string): string {
+  return id.startsWith(REMOTE_PREFIX) ? id.slice(REMOTE_PREFIX.length) : id;
+}
+
+/** Wrap a bare UDID with the `remote:` prefix used by the ios-remote platform. */
+export function withRemotePrefix(udid: string): string {
+  return udid.startsWith(REMOTE_PREFIX) ? udid : `${REMOTE_PREFIX}${udid}`;
+}
+
 export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
 
 /** Whether a udid is a physical iOS device (vs a simulator UUID), by shape. */
@@ -44,6 +62,7 @@ export const VEGA_SERIAL_PREFIX = "amazon-";
 
 /** Returns the platform a `udid` belongs to based on its shape. */
 export function classifyDevice(udid: string): Platform {
+  if (udid.startsWith(REMOTE_PREFIX)) return "ios-remote";
   if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
   if (IOS_UDID_SHAPE.test(udid) || IOS_PHYSICAL_UDID_SHAPE.test(udid)) return "ios";
@@ -70,10 +89,10 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
 
 /**
  * Build a `DeviceInfo` from a raw udid, by shape. Kind defaults per platform:
- * 'simulator' for an iOS simulator ('device' for a physical iPhone/iPad by UDID
- * shape), 'vvd' for Vega, 'emulator'/'device' for Android by serial shape, 'app'
- * for Chromium — platform impls can enrich with name/state/sdkLevel via
- * simctl/adb if needed.
+ * 'simulator' for an iOS simulator or ios-remote ('device' for a physical
+ * iPhone/iPad by UDID shape), 'vvd' for Vega, 'emulator'/'device' for Android
+ * by serial shape, 'app' for Chromium — platform impls can enrich with
+ * name/state/sdkLevel via simctl/adb/sim-remote if needed.
  *
  * Vega is VVD-only in v1: the tool-server does not connect to or detect physical
  * Fire TV hardware, so every `amazon-` serial resolves to kind `vvd` by shape. A
@@ -89,13 +108,15 @@ export function resolveDevice(udid: string): DeviceInfo {
       ? isPhysicalIosUdid(udid)
         ? "device"
         : "simulator"
-      : platform === "vega"
-        ? "vvd"
-        : platform === "android"
-          ? isAndroidEmulatorSerial(udid)
-            ? "emulator"
-            : "device"
-          : "app";
+      : platform === "ios-remote"
+        ? "simulator"
+        : platform === "vega"
+          ? "vvd"
+          : platform === "android"
+            ? isAndroidEmulatorSerial(udid)
+              ? "emulator"
+              : "device"
+            : "app";
   return { id: udid, platform, kind };
 }
 

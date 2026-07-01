@@ -7,6 +7,7 @@ import {
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
+import { ensureDeps } from "../../utils/check-deps";
 import {
   parseNativeDescribeScreenResult,
   type NativeDescribeScreenResult,
@@ -41,7 +42,7 @@ type Result =
 export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
   id: "native-describe-screen",
   requires: ["xcrun"],
-  capability: { apple: { simulator: true, device: false } },
+  capability: { apple: { simulator: true, device: false }, appleRemote: { simulator: true } },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:
@@ -61,6 +62,9 @@ If status is restart_required: call restart-app then retry.`,
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
+    const device = resolveDevice(params.udid);
+    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
+
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
     const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);

@@ -7,8 +7,8 @@ import {
 } from "../src/utils/device-info";
 import { parsePhysicalIosDevices } from "../src/utils/ios-devices";
 import { toHid, tunneldStartCommand, appleScriptQuote } from "../src/blueprints/core-device";
-import { launchAppTool } from "../src/tools/launch-app";
-import { restartAppTool } from "../src/tools/restart-app";
+import { createLaunchAppTool } from "../src/tools/launch-app";
+import { createRestartAppTool } from "../src/tools/restart-app";
 import { devicesToPreviewEntries } from "../src/preview";
 import type { ListDevicesResult } from "../src/tools/devices/list-devices";
 
@@ -132,22 +132,25 @@ describe("privileged tunnel start command", () => {
   });
 });
 
-describe("lifecycle tools don't resolve native-devtools for physical iOS", () => {
+describe("lifecycle tools don't eagerly resolve native-devtools for local iOS", () => {
   // Regression guard: the registry resolves a tool's services() BEFORE execute(),
   // and the native-devtools service throws a simulator-only guard for physical
-  // devices. So resolving it for a physical iPhone would break launch-app (a
-  // supported tool) and mask restart-app's intended rejection message. Simulators
-  // must still get it.
+  // devices. So eagerly resolving it for a physical iPhone would break launch-app
+  // (a supported tool) and mask restart-app's intended rejection message. Local
+  // iOS (simulator and physical alike) resolves native-devtools lazily inside the
+  // handler instead — only ios-remote declares it eagerly via services().
+  const launchAppTool = createLaunchAppTool({} as never);
+  const restartAppTool = createRestartAppTool({} as never);
   const params = (udid: string) => ({ udid, bundleId: "com.apple.Preferences" });
 
-  it("launch-app: omit for physical device, keep for simulator", () => {
+  it("launch-app: omitted for both physical device and simulator", () => {
     expect(launchAppTool.services(params(PHYSICAL_UDID)).nativeDevtools).toBeUndefined();
-    expect(launchAppTool.services(params(SIM_UDID)).nativeDevtools).toBeDefined();
+    expect(launchAppTool.services(params(SIM_UDID)).nativeDevtools).toBeUndefined();
   });
 
-  it("restart-app: omit for physical device, keep for simulator", () => {
+  it("restart-app: omitted for both physical device and simulator", () => {
     expect(restartAppTool.services(params(PHYSICAL_UDID)).nativeDevtools).toBeUndefined();
-    expect(restartAppTool.services(params(SIM_UDID)).nativeDevtools).toBeDefined();
+    expect(restartAppTool.services(params(SIM_UDID)).nativeDevtools).toBeUndefined();
   });
 });
 

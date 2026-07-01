@@ -12,6 +12,7 @@ const DYLIB_TCP_DIR = process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR ?? path.join(DY
 // Committed static assets (e.g. the Argent icon shown in the device-auth prompt).
 const ASSETS_DIR =
   process.env.ARGENT_NATIVE_DEVTOOLS_ASSETS_DIR ?? path.join(__dirname, "..", "assets");
+const DYLIB_TVOS_DIR = path.join(DYLIB_DIR, "tvos");
 
 // iOS Simulator only runs on macOS, so the dylibs that get injected into it
 // and the ax-service that gets `simctl spawn`d into it are only ever usable
@@ -50,10 +51,38 @@ export const bootstrapDylibPathTcp = () => {
   requireDarwin("bootstrapDylibPathTcp");
   return requireDylibIn(DYLIB_TCP_DIR, "libArgentInjectionBootstrap.dylib");
 };
+
+export const bootstrapDylibPathTvos = () => {
+  requireDarwin("bootstrapDylibPathTvos");
+  return requireDylibIn(DYLIB_TVOS_DIR, "libArgentInjectionBootstrap.dylib");
+};
+export const nativeDevtoolsDylibPathTvos = () => {
+  requireDarwin("nativeDevtoolsDylibPathTvos");
+  return requireDylibIn(DYLIB_TVOS_DIR, "libNativeDevtoolsIos.dylib");
+};
 export const nativeDevtoolsDylibPathTcp = () => {
   requireDarwin("nativeDevtoolsDylibPathTcp");
   return requireDylibIn(DYLIB_TCP_DIR, "libNativeDevtoolsIos.dylib");
 };
+export const keyboardPatchDylibPathTcp = () => {
+  requireDarwin("keyboardPatchDylibPathTcp");
+  return requireDylibIn(DYLIB_TCP_DIR, "libKeyboardPatch.dylib");
+};
+
+/**
+ * The TCP-variant dylibs a remote orchestrator must hold for native devtools.
+ * The bootstrap is the only entry inserted into `DYLD_INSERT_LIBRARIES`; the
+ * others are co-located siblings the bootstrap resolves via `@loader_path`, so
+ * they are uploaded (to sit next to the bootstrap) but not inserted. This
+ * mirrors the set the orchestrator's old `NATIVE_DEVTOOLS_DYLIB_DIR` held.
+ */
+export function tcpInjectionDylibs(): { path: string; insert: boolean }[] {
+  return [
+    { path: bootstrapDylibPathTcp(), insert: true },
+    { path: nativeDevtoolsDylibPathTcp(), insert: false },
+    { path: keyboardPatchDylibPathTcp(), insert: false },
+  ];
+}
 
 // simulator-server is a host-side binary that talks to both iOS Simulators
 // (macOS) and Android emulators (any host with `adb`). Each platform's
@@ -138,4 +167,17 @@ export function deviceAuthHelperPath(): string | null {
 export function argentIconPath(): string | null {
   const p = process.env.ARGENT_DEVICE_ICON ?? path.join(ASSETS_DIR, "argent-icon.png");
   return fs.existsSync(p) ? p : null;
+}
+
+// tvOS control binaries. tvos-ax-service is `simctl spawn`d into an
+// appletvsimulator to read the focus-engine AX state; tvos-hid-daemon runs on
+// the host and injects Siri-remote HID via SimulatorKit. Both are darwin-only.
+export function tvosAxServiceBinaryPath(): string {
+  requireDarwin("tvos-ax-service");
+  return requireBinIn(platformBinDir(), "tvos-ax-service");
+}
+
+export function tvosHidDaemonBinaryPath(): string {
+  requireDarwin("tvos-hid-daemon");
+  return requireBinIn(platformBinDir(), "tvos-hid-daemon");
 }

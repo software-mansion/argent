@@ -34,17 +34,23 @@ import { createRunSequenceTool } from "../src/tools/run-sequence";
 import { describeIos } from "../src/tools/describe/platforms/ios";
 import { iosImpl as openUrlIos } from "../src/tools/open-url/platforms/ios";
 import { iosImpl as reinstallIos } from "../src/tools/reinstall-app/platforms/ios";
-import { iosImpl as restartIos } from "../src/tools/restart-app/platforms/ios";
-import { iosImpl as launchAppIos } from "../src/tools/launch-app/platforms/ios";
+import { makeIosImpl as makeRestartAppIosImpl } from "../src/tools/restart-app/platforms/ios";
+import { makeIosImpl as makeLaunchAppIosImpl } from "../src/tools/launch-app/platforms/ios";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 import { gestureTapTool } from "../src/tools/gesture-tap";
-import { keyboardTool } from "../src/tools/keyboard";
+import { createKeyboardTool } from "../src/tools/keyboard";
 import { gesturePinchTool } from "../src/tools/gesture-pinch";
 import { screenshotDiffTool } from "../src/tools/screenshot-diff";
 import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
 import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
 
 const mockFlag = vi.mocked(isFlagEnabled);
+
+// Physical-iOS branches of both handlers throw/reject before ever touching
+// `registry` (see the assertions below), so a stub registry is safe here.
+const restartIos = makeRestartAppIosImpl({} as never);
+const launchAppIos = makeLaunchAppIosImpl({} as never);
+const keyboardTool = createKeyboardTool({} as never);
 
 const PHYSICAL_UDID = "00008120-000E6D0C0ABBA01E";
 const SIM_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
@@ -256,6 +262,10 @@ describe("tools unsupported on physical iOS reject with UnsupportedOperationErro
 });
 
 describe("run-sequence does not eagerly hold simulator-server for physical iOS", () => {
+  // run-sequence never eagerly declares any service (each step resolves its own
+  // via invokeSubTool) — a physical iOS udid must not eagerly hold
+  // simulator-server, which would throw on a `kind === "device"` target before
+  // step 1 even runs. Simulators go through the same lazy path.
   const tool = createRunSequenceTool({} as never);
   const params = (udid: string) => ({ udid, steps: [{ tool: "gesture-tap", args: {} }] });
 
@@ -265,8 +275,10 @@ describe("run-sequence does not eagerly hold simulator-server for physical iOS",
     expect(Object.keys(services)).toHaveLength(0);
   });
 
-  it("still holds simulator-server for a simulator", () => {
-    expect(tool.services(params(SIM_UDID)).simulatorServer).toBeDefined();
+  it("holds no simulator-server service for a simulator either", () => {
+    const services = tool.services(params(SIM_UDID));
+    expect(services.simulatorServer).toBeUndefined();
+    expect(Object.keys(services)).toHaveLength(0);
   });
 });
 

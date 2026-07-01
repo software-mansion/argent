@@ -13,6 +13,12 @@ import {
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
+import { isTvOsSimulator } from "../utils/ios-devices";
+import { UnsupportedOperationError } from "../utils/capability";
+import { openMoqClient } from "../utils/moq-client";
+import { createMoqTransport } from "../utils/simulator-client";
+import { simctlPbcopy } from "../utils/sim-remote";
+import { encodeKey } from "../utils/datachannel-proto";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -51,6 +57,63 @@ export interface SimulatorServerApi {
   streamUrl: string;
   /** Send a key Down or Up event by USB HID keycode (stdin `key <direction> <keyCode>` command). */
   pressKey(direction: "Down" | "Up", keyCode: number): void;
+  /**
+   * Optional alternate transport. Set by the remote (MoQ) blueprint so that
+   * the shared `sendCommand` / `httpScreenshot` helpers in `simulator-client.ts`
+   * route through MoQ instead of WebSocket + HTTP. Undefined for local sims.
+   */
+  transport?: import("../utils/simulator-client").SimulatorServerTransport;
+}
+
+/**
+ * Build the SimulatorServerApi for an ios-remote device. The MoQ client
+ * connects to the remote simulator-server via WebTransport pinned to the
+ * fingerprint returned by `sim-remote moq-info`, and a MoQ-backed transport
+ * is attached so the shared `sendCommand` / `httpScreenshot` helpers route
+ * touch/screenshot/etc through MoQ instead of the local WS+HTTP path.
+ */
+async function buildRemoteInstance(
+  device: DeviceInfo
+): Promise<ServiceInstance<SimulatorServerApi>> {
+  const moq = await openMoqClient(device.id);
+  const events = new TypedEventEmitter<ServiceEvents>();
+
+  const transport = createMoqTransport(moq, {
+    pasteText: async (text: string) => {
+      await simctlPbcopy(device.id, text);
+      // USB HID keyboard usage ids: 0xE3 = Left GUI (Cmd), 0x19 = V.
+      // Trigger Cmd+V on the remote sim to fire the actual paste.
+      const CMD = 0xe3;
+      const V = 0x19;
+      await moq.sendControl(encodeKey({ action: "Down", code: CMD }));
+      await moq.sendControl(encodeKey({ action: "Down", code: V }));
+      await moq.sendControl(encodeKey({ action: "Up", code: V }));
+      await moq.sendControl(encodeKey({ action: "Up", code: CMD }));
+    },
+  });
+
+  // Local sims expose apiUrl/streamUrl as HTTP/WS endpoints; nothing remote
+  // analogue exists since input/screenshot/video are all in MoQ. Fill these
+  // with a tagged stub so the few places that read them log clearly instead
+  // of silently dialing a nonexistent local port.
+  const stubUrl = `moq+remote://${device.id}`;
+
+  const api: SimulatorServerApi = {
+    apiUrl: stubUrl,
+    streamUrl: stubUrl,
+    pressKey: (direction, keyCode) => {
+      void moq.sendControl(encodeKey({ action: direction, code: keyCode }));
+    },
+    transport,
+  };
+
+  return {
+    api,
+    dispose: async () => {
+      await moq.close();
+    },
+    events,
+  };
 }
 
 // iOS UDIDs and Android serials (e.g. "emulator-5554", "192.168.1.5:5555",
@@ -244,6 +307,10 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
+    if (device.platform === "ios-remote") {
+      return buildRemoteInstance(device);
+    }
+
     if (device.platform === "ios" && device.kind === "device") {
       // Physical iPhones are driven over CoreDevice (see core-device blueprint),
       // not the simulator-server. Only screenshot/gesture-tap/gesture-swipe/button
@@ -263,6 +330,22 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     }
 
     if (device.platform === "ios") {
+      // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
+      // cannot drive the Apple TV focus engine. Its transport (`sendCommand`) is
+      // fire-and-forget, so a tvOS touch/key would silently no-op while the tool
+      // still reported success. Reject here — the one chokepoint every gesture /
+      // keyboard / paste / rotate tool resolves through — and point at the tv-*
+      // tools instead. screenshot avoids this guard by branching to `xcrun`
+      // before it ever resolves this service.
+      if (await isTvOsSimulator(device.id)) {
+        throw new UnsupportedOperationError(
+          SIMULATOR_SERVER_NAMESPACE,
+          device,
+          "this is an Apple TV (tvOS) simulator — touch, paste and rotate " +
+            "input are not available. Use `describe` to read focus, `tv-remote` for remote " +
+            "presses, and `keyboard` to type (see the argent-tv-interact skill)"
+        );
+      }
       await ensureAutomationEnabled(device.id).catch(() => {});
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target

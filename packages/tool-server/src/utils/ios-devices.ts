@@ -13,6 +13,7 @@ export interface IosSimulator {
   name: string;
   state: string;
   runtime: string;
+  runtimeKind?: "mobile" | "tv";
 }
 
 export interface IosPhysicalDevice {
@@ -47,7 +48,7 @@ interface SimctlOutput {
 }
 
 /**
- * List all available iOS simulators via `xcrun simctl list devices --json`.
+ * List all available iOS and tvOS simulators via `xcrun simctl list devices --json`.
  * Returns an empty array when xcrun is missing or the call fails so the
  * rest of the tool surface stays usable on non-mac hosts.
  */
@@ -59,10 +60,18 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];
     for (const [runtimeId, devices] of Object.entries(data.devices)) {
-      if (!runtimeId.includes("iOS")) continue;
+      // Accept both iOS and tvOS runtimes
+      if (!runtimeId.includes("iOS") && !runtimeId.includes("tvOS")) continue;
       for (const d of devices) {
         if (!d.isAvailable) continue;
-        out.push({ udid: d.udid, name: d.name, state: d.state, runtime: runtimeId });
+        const runtimeKind = runtimeId.includes("tvOS") ? "tv" : "mobile";
+        out.push({
+          udid: d.udid,
+          name: d.name,
+          state: d.state,
+          runtime: runtimeId,
+          runtimeKind,
+        });
       }
     }
     return out;
@@ -126,4 +135,31 @@ export async function listIosDevices(): Promise<IosPhysicalDevice[]> {
   } finally {
     await rm(outPath, { force: true }).catch(() => {});
   }
+}
+
+// A simulator's runtime kind is fixed at creation (an iOS sim can't become a
+// tvOS one), so memoize per-UDID to keep the hot describe/screenshot path from
+// paying the ~100ms `simctl list` cost on every call. Only successful lookups
+// are cached; an unknown UDID re-probes (the sim may simply not be booted yet).
+const runtimeKindCache = new Map<string, "mobile" | "tv">();
+
+/**
+ * Resolve the runtime kind ("mobile" | "tv") of an iOS-shaped simulator UDID,
+ * or undefined when it isn't a known available simulator (or xcrun is missing).
+ *
+ * `resolveDevice` classifies by UDID shape alone and can't tell tvOS from iOS —
+ * both are 8-4-4-4-12 UUIDs tagged `platform: "ios"`. Code paths that must
+ * branch on tvOS (describe, screenshot) call this to get the real runtime.
+ */
+export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | "tv" | undefined> {
+  const cached = runtimeKindCache.get(udid);
+  if (cached) return cached;
+  const kind = (await listIosSimulators()).find((s) => s.udid === udid)?.runtimeKind;
+  if (kind) runtimeKindCache.set(udid, kind);
+  return kind;
+}
+
+/** True when the given iOS-shaped UDID is actually a tvOS (Apple TV) simulator. */
+export async function isTvOsSimulator(udid: string): Promise<boolean> {
+  return (await getSimulatorRuntimeKind(udid)) === "tv";
 }

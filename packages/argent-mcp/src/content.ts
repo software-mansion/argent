@@ -28,11 +28,22 @@ function imageBlock(data: Buffer, mimeType: string): ContentBlock {
 // Without this check, a 404 (file missing), an HTML error page, or any other
 // non-PNG response would be base64'd and labelled `image/png`, which the
 // model API rejects with "Image could not be processed" (issue #255).
+//
+// `file://` URLs are handled directly via the fs module — Node's built-in
+// `fetch` only supports `http(s)://`, and the ios-remote screenshot path
+// writes PNGs to a temp dir and returns a `file://` URL.
 async function fetchPngBytes(url: string): Promise<Buffer | null> {
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
+    let buf: Buffer;
+    if (url.startsWith("file://")) {
+      const { readFile } = await import("node:fs/promises");
+      const { fileURLToPath } = await import("node:url");
+      buf = await readFile(fileURLToPath(url));
+    } else {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      buf = Buffer.from(await res.arrayBuffer());
+    }
     if (buf.length < PNG_SIGNATURE.length) return null;
     if (!buf.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return null;
     return buf;
