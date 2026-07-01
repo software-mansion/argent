@@ -451,17 +451,24 @@ function computeNodeOutput(
   const interactive = isInteractive(attrs);
   let label = labelOf(attrs);
 
-  // Decorative ImageView (no clickable, no label) — drop, pass through any
-  // surviving descendants. Most decorative images have zero kept children
+  // A resource-id is still worth keeping even with no label — dropping it
+  // silently here is the same class of bug as the collapse cases below fixed
+  // (a decorative-looking wrapper can still be a real, agent-addressable
+  // target via its identifier alone). Only pass straight through when there's
+  // truly no identifying info at all.
+  const identifier = attrs["resource-id"];
+
+  // Decorative ImageView (no clickable, no label, no id) — drop, pass through
+  // any surviving descendants. Most decorative images have zero kept children
   // and the entire branch evaporates.
-  if (cls.endsWith(".ImageView") && !interactive && !label) {
+  if (cls.endsWith(".ImageView") && !interactive && !label && !identifier) {
     return keptChildren;
   }
 
   // Layout container with no own info — pass children through. With
   // --compressed dumps this is what flattens FrameLayout > LinearLayout >
   // ConstraintLayout chains down to their actual content.
-  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label) {
+  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label && !identifier) {
     return keptChildren;
   }
 

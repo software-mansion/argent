@@ -26,4 +26,23 @@ describe("describe android collapse preserves label/identifier", () => {
       .filter(Boolean);
     expect(labels).toContain("Profile photo");
   });
+  it("decorative ImageView collapse keeps its resource-id even with no label", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>\n<hierarchy>\n  <node class="android.widget.ImageView" bounds="[0,0][50,50]" resource-id="com.app:id/decorative_icon"/>\n</hierarchy>`;
+    const identifiers = flatten(parseUiAutomatorDump(xml, 100, 100))
+      .map((n) => n.identifier)
+      .filter(Boolean);
+    expect(identifiers).toContain("com.app:id/decorative_icon");
+  });
+  it("layout-container collapse keeps its resource-id even with no label", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>\n<hierarchy>\n  <node class="android.widget.FrameLayout" bounds="[0,0][100,100]" resource-id="com.app:id/header_container">\n    <node class="android.widget.TextView" bounds="[0,0][100,100]" text="Hello"/>\n  </node>\n</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 100, 100);
+    const identifiers = flatten(tree)
+      .map((n) => n.identifier)
+      .filter(Boolean);
+    const labels = flatten(tree)
+      .map((n) => n.label)
+      .filter(Boolean);
+    expect(identifiers).toContain("com.app:id/header_container");
+    expect(labels).toContain("Hello");
+  });
 });
