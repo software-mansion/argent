@@ -128,7 +128,9 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
         ? "connection_refused"
         : code === "ECONNRESET"
           ? "connection_reset"
-          : "other";
+          : code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT"
+            ? "timeout"
+            : "other";
     throw new FailureError(
       `Chromium CDP discovery: GET ${url} could not connect. ` +
         `Is the app running with --remote-debugging-port?`,

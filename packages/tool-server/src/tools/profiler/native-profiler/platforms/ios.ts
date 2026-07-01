@@ -493,7 +493,10 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
         error_code: FAILURE_CODES.NATIVE_PROFILER_NO_ACTIVE_SESSION,
         failure_stage: "native_profiler_stop_session_state",
         failure_area: "tool_server",
-        error_kind: "validation",
+        // Internal session-state, not caller input — matches the react twin
+        // REACT_PROFILER_NO_ACTIVE_SESSION (not_found) and the Android site so the
+        // "no active session" family carries one consistent kind.
+        error_kind: "not_found",
       }
     );
   }

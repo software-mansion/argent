@@ -257,17 +257,15 @@ function validateInputSources(params: Params): void {
 // simulatorServer is declared as an unconditional service dependency, so the
 // registry resolves it before execute() runs. Guard anyway: executeScreenshotDiffTool
 // is exported and a direct caller (e.g. a test) can pass a services map without it —
-// a classified failure beats a downstream TypeError on `.captureScreenshot`. Only
-// the live-capture branches call this, so non-capture diffs never require the service.
+// a clear error beats a downstream TypeError on `.captureScreenshot`. Only the
+// live-capture branches call this, so non-capture diffs never require the service.
+// Because the service is always resolved on the registry path, this can only trip
+// for a direct/test caller (never the telemetry path), so it stays a plain Error
+// without a code — a code here could never bucket a real failure.
 function requireSimulatorServer(services: Record<string, unknown>): SimulatorServerApi {
   const api = services.simulatorServer as SimulatorServerApi | undefined;
   if (!api) {
-    throw new FailureError("Live screenshot capture requires a simulatorServer service.", {
-      error_code: FAILURE_CODES.SCREENSHOT_DIFF_CAPTURE_UNAVAILABLE,
-      failure_stage: "screenshot_diff_live_capture",
-      failure_area: "tool_server",
-      error_kind: "dependency_missing",
-    });
+    throw new Error("Live screenshot capture requires a simulatorServer service.");
   }
   return api;
 }
