@@ -38,12 +38,16 @@ const cache = new Map<ToolDependency, CacheEntry>();
 // Short per-dep hints — the message is what the LLM sees on a missing-dep
 // error, so it should tell it how to unblock the user.
 const INSTALL_HINTS: Record<ToolDependency, string> = {
-  xcrun:
+  "xcrun":
     "Xcode command-line tools are not installed. Run `xcode-select --install` (or install Xcode from the App Store) and retry. Only required for iOS simulators.",
-  adb: "Android SDK Platform Tools not found. Install with `brew install --cask android-platform-tools` or via Android Studio → SDK Manager. If installed, ensure `adb` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/platform-tools/adb`). Only required for Android devices and emulators.",
-  emulator:
+  "adb":
+    "Android SDK Platform Tools not found. Install with `brew install --cask android-platform-tools` or via Android Studio → SDK Manager. If installed, ensure `adb` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/platform-tools/adb`). Only required for Android devices and emulators.",
+  "emulator":
     "Android Emulator not found. Install via Android Studio → SDK Manager → Emulator, or `sdkmanager 'emulator'`. If installed, ensure `emulator` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/emulator/emulator`). Only required to launch new Android emulators via `boot-device`.",
-  vega: "Vega SDK CLI not found. Install the Amazon Vega SDK and run `source ~/vega/env` so `vega` (or its `kepler` alias) is on PATH; the resolver also checks `~/vega/bin/vega`. Only required for Vega (Fire TV) devices.",
+  "sim-remote":
+    "`sim-remote` CLI not found on PATH. Install via the radon-cloud project (see its README) and run `sim-remote login` before invoking any ios-remote tool. Only required for remote iOS simulators.",
+  "vega":
+    "Vega SDK CLI not found. Install the Amazon Vega SDK and run `source ~/vega/env` so `vega` (or its `kepler` alias) is on PATH; the resolver also checks `~/vega/bin/vega`. Only required for Vega (Fire TV) devices.",
 };
 
 async function probe(dep: ToolDependency): Promise<boolean> {

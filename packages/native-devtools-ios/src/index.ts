@@ -61,6 +61,25 @@ export const nativeDevtoolsDylibPathTcp = () => {
   requireDarwin("nativeDevtoolsDylibPathTcp");
   return requireDylibIn(DYLIB_TCP_DIR, "libNativeDevtoolsIos.dylib");
 };
+export const keyboardPatchDylibPathTcp = () => {
+  requireDarwin("keyboardPatchDylibPathTcp");
+  return requireDylibIn(DYLIB_TCP_DIR, "libKeyboardPatch.dylib");
+};
+
+/**
+ * The TCP-variant dylibs a remote orchestrator must hold for native devtools.
+ * The bootstrap is the only entry inserted into `DYLD_INSERT_LIBRARIES`; the
+ * others are co-located siblings the bootstrap resolves via `@loader_path`, so
+ * they are uploaded (to sit next to the bootstrap) but not inserted. This
+ * mirrors the set the orchestrator's old `NATIVE_DEVTOOLS_DYLIB_DIR` held.
+ */
+export function tcpInjectionDylibs(): { path: string; insert: boolean }[] {
+  return [
+    { path: bootstrapDylibPathTcp(), insert: true },
+    { path: nativeDevtoolsDylibPathTcp(), insert: false },
+    { path: keyboardPatchDylibPathTcp(), insert: false },
+  ];
+}
 
 // simulator-server is a host-side binary that talks to both iOS Simulators
 // (macOS) and Android emulators (any host with `adb`). Each platform's

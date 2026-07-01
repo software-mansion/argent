@@ -55,6 +55,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
@@ -105,6 +106,15 @@ function makeDescribeExecute(
         (await isTvOsSimulator(device.id))
           ? describeTv(registry, device)
           : withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+    },
+    iosRemote: {
+      // describeIos already handles both ax-service (TCP) and native-devtools
+      // fallback — both blueprints route through sim-remote when the device is
+      // ios-remote. Only the preflight dep differs. Remote sims are iOS-only
+      // (never tvOS), so the isTvOs verdict is always false.
+      requires: ["sim-remote"],
+      handler: async (_services, params, device) =>
+        withDescription(await describeIos(registry, device, params, { isTvOs: false })),
     },
     android: {
       requires: androidRequires,

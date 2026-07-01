@@ -1,10 +1,12 @@
 import { z } from "zod";
 import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
+import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import type { LaunchAppResult, LaunchAppVegaServices } from "./types";
+import type { LaunchAppResult, LaunchAppVegaServices, LaunchAppIosServices } from "./types";
 import { makeIosImpl } from "./platforms/ios";
+import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
@@ -45,6 +47,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
@@ -75,11 +78,14 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       "open start app bundle id package simulator emulator chromium vega launch tvos apple tv fire tv",
     zodSchema,
     capability,
-    // Only Chromium declares an eager service (its CDP session). iOS resolves
-    // native-devtools lazily in its handler so a tvOS udid never spins up the
-    // iOS-only injection (see header comment); Android and Vega need no service.
+    // Chromium declares an eager CDP service; ios-remote declares an eager
+    // native-devtools service (its handler shares the local iOS launch path,
+    // which reads `services.nativeDevtools`). Local iOS resolves native-devtools
+    // lazily in its handler so a tvOS udid never spins up the iOS-only injection
+    // (see header comment); Android and Vega need no service.
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
+      if (device.platform === "ios-remote") return { nativeDevtools: nativeDevtoolsRef(device) };
       if (device.platform === "chromium") return { chromium: chromiumCdpRef(device) };
       return {};
     },
@@ -89,11 +95,13 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       Params,
       LaunchAppResult,
       LaunchAppChromiumServices,
-      LaunchAppVegaServices
+      LaunchAppVegaServices,
+      LaunchAppIosServices
     >({
       toolId: "launch-app",
       capability,
       ios: makeIosImpl(registry),
+      iosRemote: iosRemoteImpl,
       android: androidImpl,
       chromium: chromiumImpl,
       vega: vegaImpl,

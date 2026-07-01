@@ -518,12 +518,24 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // never opens. Keeping it external means the runtime `require("electron")` in
 // preview-window.ts resolves against the real node_modules/electron with an
 // intact __dirname. (The preview-window bundle below externalises it too.)
+//
+// `@fails-components/webtransport` and its http3-quiche transport ship native
+// addons (quiche, prebuilt .node binaries) that can't be inlined either. They
+// are declared in @swmansion/argent's dependencies so npm installs them
+// alongside the package; keep them external so the bundle resolves them from
+// node_modules/ at runtime.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
   format: "cjs",
   label: "tools server",
-  external: ["tree-sitter", "tree-sitter-typescript", "electron"],
+  external: [
+    "tree-sitter",
+    "tree-sitter-typescript",
+    "electron",
+    "@fails-components/webtransport",
+    "@fails-components/webtransport-transport-http3-quiche",
+  ],
 });
 
 // The remaining bundles are ESM so that:

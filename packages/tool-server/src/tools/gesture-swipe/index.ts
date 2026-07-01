@@ -31,6 +31,7 @@ interface Result {
 // one with a clear error rather than silently doing the wrong thing.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
