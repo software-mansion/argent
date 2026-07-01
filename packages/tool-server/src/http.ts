@@ -288,10 +288,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // request; the decoded per-file ceiling is enforced in file-inputs.ts.
   app.use(express.json({ limit: "48mb" }));
 
-  // Registry for tar-upload uploads: uploadId → { tarPath, expireAt }.
-  // Entries are consumed by the first tool call that references them; the TTL
-  // sweeper handles any orphans from aborted or failed calls.
   const maxUploadBytes = options?.maxUploadBytes ?? MAX_UPLOAD_STREAM_BYTES;
+
+  // Pending tar-upload archives, keyed by uploadId. Consumed by the first tool
+  // call that references them; the TTL sweeper clears orphans from aborted or
+  // failed calls.
   const uploads = new Map<string, UploadEntry & { expireAt: number }>();
   const uploadSweeper = setInterval(() => {
     const now = Date.now();

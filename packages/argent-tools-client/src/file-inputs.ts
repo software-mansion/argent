@@ -194,11 +194,10 @@ export async function prepareFileInputs(
       if (st) {
         let tarPath: string | null = null;
         try {
-          // Uploading a bundle can take a moment — say so on stderr (stdout is
-          // the MCP protocol channel) so it isn't a silent stall.
-          console.error(`Uploading ${path.basename(filePath)} to the remote tool-server…`);
+          // Progress on stderr (stdout is the MCP protocol channel) so a slow
+          // upload isn't a silent stall.
+          console.error(`Uploading ${path.basename(filePath)} to the remote tool-server...`);
           tarPath = await tarball(filePath);
-          // Upload failures propagate — the server can't extract what never arrived.
           wire.uploadId = await uploadTar(tarPath, opts.uploadEndpoint);
         } finally {
           if (tarPath) await rm(tarPath, { force: true }).catch(() => {});
