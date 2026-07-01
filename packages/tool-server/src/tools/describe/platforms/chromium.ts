@@ -16,14 +16,16 @@ import type { DescribeNode, DescribeTreeData } from "../contract";
  *    tree stays small.
  *  - Treat anchors, buttons, inputs, [role=button], [onclick], [tabindex]≥0
  *    as `clickable: true` so the agent knows which nodes to tap.
- *  - Prune a node only when it is truly invisible (display:none, visibility:hidden,
- *    opacity:0) or its border box is zero-area AND it clips overflow. A zero-area
- *    box with the default overflow:visible still paints its descendants — so we
- *    traverse it and promote them instead of cutting the subtree. This covers
- *    display:contents wrappers (React Native Web nests content under them), the
- *    zero-height anchor of an absolutely-positioned dropdown/popover/portal, and
- *    float/overflow wrappers that collapse to a zero-height box. A collapsed
- *    overflow:hidden container genuinely hides its content, so it stays pruned.
+ *  - Prune a node only when it is truly invisible (display:none, opacity:0) or its
+ *    border box is zero-area AND it clips overflow. A zero-area box with the default
+ *    overflow:visible still paints its descendants — so we traverse it and promote them
+ *    instead of cutting the subtree. This covers display:contents wrappers (React Native
+ *    Web nests content under them), the zero-height anchor of an absolutely-positioned
+ *    dropdown/popover/portal, and float/overflow wrappers that collapse to a zero-height
+ *    box. A collapsed overflow:hidden container genuinely hides its content, so it stays
+ *    pruned. visibility:hidden is NOT hard-pruned (it inherits, but a descendant can
+ *    override it back to visible): we descend and suppress only the hidden element's own
+ *    paint, so a visibility:visible descendant still surfaces.
  *  - Cap node count at 5000 — that, not depth, bounds the payload a runaway SPA
  *    would otherwise serialize past CDP's single Runtime.evaluate reply limit
  *    (~50MB). Cap depth at 60 purely to bound recursion: modern React DOMs
@@ -49,15 +51,26 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   // walk, the exact crash class this walker must avoid. A prototype accessor is never
   // shadowed by a form's named properties, so EVERY inherited member read on a possibly-
   // clobbered element (methods and getters alike) goes through these via .call(el).
-  const getChildNodes = Object.getOwnPropertyDescriptor(Node.prototype, "childNodes").get;
-  const getTextContent = Object.getOwnPropertyDescriptor(Node.prototype, "textContent").get;
-  const getTagName = Object.getOwnPropertyDescriptor(Element.prototype, "tagName").get;
-  const getChildrenEls = Object.getOwnPropertyDescriptor(Element.prototype, "children").get;
-  const getShadowRoot = Object.getOwnPropertyDescriptor(Element.prototype, "shadowRoot").get;
-  const getScrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight").get;
-  const getClientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight").get;
-  const getScrollWidth = Object.getOwnPropertyDescriptor(Element.prototype, "scrollWidth").get;
-  const getClientWidth = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth").get;
+  //
+  // protoGetter reads the accessor's getter defensively: if the descriptor is ever
+  // absent (a page can delete/redefine a DOM prototype member), it falls back to a
+  // direct property read so one missing accessor degrades a single node instead of a
+  // \`.get\` on \`undefined\` throwing at script top and aborting the entire describe.
+  function protoGetter(proto, prop) {
+    const d = Object.getOwnPropertyDescriptor(proto, prop);
+    return d && d.get ? d.get : function () { return this[prop]; };
+  }
+  const getChildNodes = protoGetter(Node.prototype, "childNodes");
+  const getNodeType = protoGetter(Node.prototype, "nodeType");
+  const getNodeValue = protoGetter(Node.prototype, "nodeValue");
+  const getTextContent = protoGetter(Node.prototype, "textContent");
+  const getTagName = protoGetter(Element.prototype, "tagName");
+  const getChildrenEls = protoGetter(Element.prototype, "children");
+  const getShadowRoot = protoGetter(Element.prototype, "shadowRoot");
+  const getScrollHeight = protoGetter(Element.prototype, "scrollHeight");
+  const getClientHeight = protoGetter(Element.prototype, "clientHeight");
+  const getScrollWidth = protoGetter(Element.prototype, "scrollWidth");
+  const getClientWidth = protoGetter(Element.prototype, "clientWidth");
   const getAttr = Element.prototype.getAttribute;
   const hasAttr = Element.prototype.hasAttribute;
   const getBCR = Element.prototype.getBoundingClientRect;
@@ -101,7 +114,12 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   function ownText(el) {
     let s = "";
     for (const child of getChildNodes.call(el)) {
-      if (child.nodeType === 3) s += child.nodeValue;
+      // nodeType/nodeValue via the prototype getters, keeping the "every inherited
+      // read goes through a captured getter" invariant whole: a child can be a
+      // clobbering <form> whose named control shadows these to a control element.
+      // (=== 3 already made a clobbered nodeType safe; this removes the lone
+      // directly-read member so no read's safety rests on the comparison semantics.)
+      if (getNodeType.call(child) === 3) s += getNodeValue.call(child);
     }
     return s.replace(/\\s+/g, " ").trim();
   }
@@ -165,11 +183,14 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     return normRect(getBCR.call(el));
   }
 
-  // Painted extent of an element's own inline content. A box-less element
-  // (display:contents, or a zero-width box whose text overflows) has a 0x0 border box
-  // yet its text still paints; a Range measures that. Crucially it returns 0x0 when an
-  // ancestor transform (e.g. scale(0)) collapses the paint, which is how we tell
-  // genuinely-invisible content apart from merely box-less content.
+  // Painted extent of an element's own inline TEXT. A box-less element (display:contents,
+  // or a zero-width box whose text overflows) has a 0x0 border box yet its text still
+  // paints; a Range measures that. It returns 0x0 when an ancestor transform (e.g.
+  // scale(0)) or display:none collapses the paint. It does NOT distinguish a
+  // visibility:hidden / opacity:0 *descendant* — those keep their layout box, so the
+  // Range is non-zero even though nothing paints — which is why walk() consults this only
+  // when the element has its own text, never to resurrect a wrapper whose element
+  // children were all pruned as invisible.
   function contentFrame(el) {
     try {
       const range = document.createRange();
@@ -196,15 +217,17 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   }
 
   function hidden(el, style) {
-    if (style.visibility === "hidden" || style.display === "none") {
-      return true;
-    }
+    if (style.display === "none") return true;
     // display:contents has no box, so box-only properties don't apply — it lays
     // its children out normally. Never prune it for opacity:0 (opacity affects a
     // box, of which there is none, so descendants still paint) or for its 0x0
     // rect; walk() descends and promotes the visible content.
     if (style.display === "contents") return false;
     if (style.opacity === "0") return true;
+    // visibility:hidden is deliberately NOT hard-pruned here: visibility inherits but a
+    // descendant can override it back to visible, so cutting the subtree would drop
+    // painted content. walk() descends and suppresses only this element's own paint
+    // (see \`invisibleSelf\`), pruning it only if no visible descendant survives.
     const r = getBCR.call(el);
     if (r.width > 0 && r.height > 0) return false;
     // Zero-area box: prune it only when it clips its overflow (a collapsed
@@ -282,30 +305,50 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
       }
     }
 
-    const text = ownText(el);
-    const name = accessibleName(el);
-    const clickable = isInteractive(el);
+    // A visibility:hidden element paints nothing itself, but a descendant can override
+    // visibility back to visible, so walk() descended instead of pruning (see hidden()).
+    // Suppress this element's own paint — its text / name / interactivity are invisible —
+    // and treat it as box-less so it contributes no box of its own: it survives only
+    // through, and is framed by, whatever visible descendants it has.
+    const invisibleSelf = style.visibility === "hidden";
+    const text = invisibleSelf ? "" : ownText(el);
+    const name = invisibleSelf ? null : accessibleName(el);
+    const clickable = invisibleSelf ? false : isInteractive(el);
     const role = nodeRole(el);
-    const bl = boxless(el, style);
+    // getAttribute, not el.id: like .title, a named form control can clobber the .id
+    // property to a DOM node, which would then break JSON.stringify of the tree.
+    // Computed here (before promotion) because an id / data-testid is agent-visible
+    // targeting info: a wrapper that carries one is not a pure layer, so neither
+    // promotion path below may drop it.
+    const id =
+      getAttr.call(el, "id") ||
+      getAttr.call(el, "data-testid") ||
+      getAttr.call(el, "data-test-id");
+    const bl = invisibleSelf || boxless(el, style);
 
     // A box-less element has no rect of its own. Its visible extent is whatever its
-    // children span; with no surviving child, fall back to the painted extent of its
-    // own inline content. If that is still zero-area it paints nothing — e.g. a
-    // transform: scale(0) subtree, whose descendants all collapse — so it is invisible
-    // and dropped. A box-less wrapper with one child and nothing of its own is just a
-    // layer, so promote the child. (Clickable / named box-less nodes fall through and
-    // are emitted with this child- or content-spanning frame.)
+    // children span; with no surviving child, fall back to the painted extent of its own
+    // inline TEXT — but only when it has its own text. A Range over a wrapper whose
+    // element children were all pruned as invisible still measures their
+    // visibility:hidden / opacity:0 layout boxes (non-zero though nothing paints), which
+    // would resurrect an empty wrapper with a real frame; own text is the only inline
+    // content not already represented by childResults. If the frame is still zero-area it
+    // paints nothing — e.g. a transform: scale(0) subtree, whose descendants all collapse
+    // — so it is invisible and dropped. A box-less wrapper with one child and nothing of
+    // its own (no clickable / name / text / identifier) is just a layer, so promote the
+    // child. (Clickable / named / identified box-less nodes fall through and are emitted
+    // with this child- or content-spanning frame.)
     let selfFrame;
     if (bl) {
       selfFrame = unionFrame(childResults);
-      if (selfFrame.width <= 0 && selfFrame.height <= 0) {
+      if (text && selfFrame.width <= 0 && selfFrame.height <= 0) {
         const cf = contentFrame(el);
         if (cf) selfFrame = cf;
       }
       if (childResults.length === 0 && selfFrame.width <= 0 && selfFrame.height <= 0) {
         return null;
       }
-      if (!clickable && !name && !text && childResults.length === 1) {
+      if (!clickable && !name && !text && !id && childResults.length === 1) {
         return childResults[0];
       }
     } else {
@@ -313,13 +356,14 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     }
 
     // Prune structural wrappers with no info that just add a layer.
-    // Keep them if they're roots/clickable/named/have text.
+    // Keep them if they're roots/clickable/named/identified/have text.
     if (
       depth > 0 &&
       childResults.length === 1 &&
       !clickable &&
       !name &&
       !text &&
+      !id &&
       role === "div"
     ) {
       return childResults[0];
@@ -331,12 +375,6 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     };
     if (name) node.label = name;
     if (text && text !== name) node.value = text.slice(0, 200);
-    // getAttribute, not el.id: like .title, a named form control can clobber the .id
-    // property to a DOM node, which would then break JSON.stringify of the tree.
-    const id =
-      getAttr.call(el, "id") ||
-      getAttr.call(el, "data-testid") ||
-      getAttr.call(el, "data-test-id");
     if (id) node.identifier = id;
     if (clickable) node.clickable = true;
     if (isDisabled(el)) node.disabled = true;
@@ -389,13 +427,17 @@ export async function describeChromium(api: ChromiumCdpApi): Promise<DescribeTre
   if (!parsed.tree) {
     throw new Error("Chromium describe: empty tree");
   }
+  const data: DescribeTreeData = { tree: parsed.tree, source: "cdp-dom" };
   if (parsed.truncated) {
     // Surface a server-side warning so a partial tree is visible to ops.
-    // A flag in DescribeTreeData would be cleaner but the contract is shared
-    // with iOS/Android and we don't want to widen it just for Chromium.
     process.stderr.write(
       `[chromium-describe] tree truncated at MAX_NODES — page exceeds the walker's budget; consider scoping the inspection.\n`
     );
+    // And tell the agent via the existing `hint` channel (iOS/Vega already use it) so a
+    // partial tree isn't silently consumed as if it were the whole page — no need to
+    // widen the shared contract just for Chromium.
+    data.hint =
+      "describe hit the node budget (MAX_NODES) and returned a PARTIAL tree — some on-screen content is missing. Scope the inspection to a smaller region (scroll to or focus the relevant view) and describe again.";
   }
-  return { tree: parsed.tree, source: "cdp-dom" };
+  return data;
 }
