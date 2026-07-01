@@ -71,4 +71,22 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
       expect(tagged.components.get(n)!.isAnimated).toBe(false);
     }
   });
+  it("DOES still tag real animation components with a digit/underscore/acronym boundary", () => {
+    // A leading-boundary requirement (preceded by lowercase/digit) would reject
+    // these — acronym-prefixed wrapper names and digit/underscore suffixes are
+    // common in real component trees and must still be recognized as animated.
+    const names = [
+      "Animated2",
+      "Animated_View",
+      "Motion360Player",
+      "HTTPTransitionHandler",
+      "SVGAnimatedPath",
+      "URLAnimation",
+      "IOSMotionView",
+    ];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated).toBe(true);
+    }
+  });
 });
