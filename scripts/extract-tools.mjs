@@ -38,6 +38,60 @@ function walk(dir) {
 }
 
 /**
+ * From the source that immediately follows a tool's `id: "..."`, return the text
+ * of that tool's own `description:` value (starting at its opening delimiter), or
+ * null when the `id:` has no sibling `description:`.
+ *
+ * Scans forward tracking object-literal brace depth, ignoring braces and the
+ * `description:` token whenever they occur inside a string / template literal:
+ *   - the first `description:` seen at depth 0 (a sibling of the `id:`) is the
+ *     tool's own description; a balanced nested object between the two (e.g.
+ *     `capability: { apple: { simulator: true } }`, which 12 real tools already
+ *     have) does not hide it, and
+ *   - if a `}` drops the depth below 0 first, the `id:`'s enclosing object closed
+ *     before any sibling `description:` - the `id:` is a key nested inside another
+ *     object (e.g. `defaultPayload: { id: "example" }`), not a tool definition.
+ *
+ * This is what stops a nested `id:` key from either being emitted as a spurious
+ * tool or silently dropping the real tool from the downstream `spidershield`
+ * security scan.
+ *
+ * @param {string} afterId  source text starting just after the `id: "..."` match
+ * @returns {string | null}
+ */
+function findOwnDescriptionValue(afterId) {
+  let depth = 0;
+  let quote = null; // active string/template delimiter, or null when in code
+  for (let i = 0; i < afterId.length; i++) {
+    const ch = afterId[i];
+    if (quote !== null) {
+      if (ch === "\\") {
+        i++; // skip the escaped character
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+    } else if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      if (--depth < 0) return null; // id's own object closed - not a tool
+    } else if (
+      depth === 0 &&
+      ch === "d" &&
+      // word boundary before the token so `...Xdescription:` doesn't match
+      !/[A-Za-z0-9_$]/.test(afterId[i - 1] ?? "")
+    ) {
+      const kw = afterId.slice(i).match(/^description:\s*/);
+      if (kw) return afterId.slice(i + kw[0].length);
+    }
+  }
+  return null;
+}
+
+/**
  * Extract `{ name, description }` for every string-literal `id:` tool definition
  * in a single source string. Kept as a pure function (I/O separated) so the
  * parsing rules can be unit-tested against crafted fixtures.
@@ -55,28 +109,19 @@ export function extractToolsFromSource(src, filePath = "<source>") {
   while ((idMatch = idPattern.exec(src)) !== null) {
     const id = idMatch[1];
 
-    // Find the tool's own `description:` by POSITION — the nearest `description:`
-    // after this `id:`, parsed with its actual closing delimiter. Position (not
-    // delimiter-form priority) matters when tools in one file use different
-    // description forms: a form-priority scan (template, then double, then single)
-    // could grab a LATER tool's template literal ahead of THIS tool's nearer
-    // double-quoted one, then reject it as belonging to a later id and drop this
-    // tool. Matching to the closing delimiter also means an `id:`/`description:`
-    // token appearing INSIDE the description text (e.g. a structured example
-    // `{ id: "menu-item" }`) can't truncate the capture — a fixed window or a
-    // "stop at the next `id:`" bound would silently drop the tool from the
-    // downstream `spidershield` security scan.
-    const afterId = src.slice(idMatch.index + idMatch[0].length);
-    const descKeyword = afterId.match(/\bdescription:\s*/);
+    // Resolve this tool's own `description:` at the SAME object level as its
+    // `id:` (see findOwnDescriptionValue). Matching by brace scope - rather than
+    // grabbing the nearest `description:` by raw position - means:
+    //   - an `id:`/`description:` token inside a nested value or inside the
+    //     description text (e.g. a `{ id: "menu-item" }` example) can neither
+    //     borrow a description nor drop the real tool, and
+    //   - the value is parsed to its actual closing delimiter, so long multi-line
+    //     template literals are captured in full.
+    // A null result means this `id:` is a nested object key, not a tool.
+    const value = findOwnDescriptionValue(src.slice(idMatch.index + idMatch[0].length));
 
     let description = null;
-    if (
-      descKeyword &&
-      // No other tool `id:` between this `id:` and its `description:` ⇒ the
-      // description is this tool's own, not a later tool's borrowed one.
-      !/\bid:\s*["'][^"']+["']/.test(afterId.slice(0, descKeyword.index))
-    ) {
-      const value = afterId.slice(descKeyword.index + descKeyword[0].length);
+    if (value !== null) {
       const delim = value[0];
       // Template literal allows escaped backticks (\`) so inline code like
       // `adb pull` doesn't truncate; the quoted forms allow the standard escapes.
@@ -104,15 +149,18 @@ export function extractToolsFromSource(src, filePath = "<source>") {
         name: id,
         description,
       });
-    } else {
-      // A tool definition has an `id` but no parseable `description`. Don't drop
-      // it silently (that bug hid run-sequence from the scanner) — warn on
-      // stderr so the failure is visible, while keeping stdout valid JSON for
-      // the downstream `spidershield scan --tools-json` consumer.
+    } else if (value !== null) {
+      // A real tool: its `description:` was found at the right scope but the
+      // value couldn't be parsed. Don't drop it silently (that class of bug hid
+      // run-sequence from the scanner) - warn on stderr so the failure is
+      // visible, while keeping stdout valid JSON for the downstream
+      // `spidershield scan --tools-json` consumer.
       console.error(
         `extract-tools: WARNING: tool "${id}" in ${filePath} has an id but no parseable description; skipping.`
       );
     }
+    // value === null: this `id:` is a nested object key, not a tool - skip it
+    // silently rather than warning about a non-tool.
   }
 
   return tools;

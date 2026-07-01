@@ -184,3 +184,43 @@ test("standard escapes render as their actual characters, not literal backslash 
   const description = tools.find((t) => t.name === "with-escapes").description;
   assert.equal(description, "Line one.\nLine two.\tTabbed. Say `hi` and $done.");
 });
+
+test("an id: key inside a nested object value is not mistaken for a tool", () => {
+  // A structured value between a tool's id: and its description: (a
+  // defaultPayload, example, etc.) can itself contain an `id:` key. That nested
+  // id: must neither (a) be emitted as a spurious tool nor (b) drop the real
+  // tool from the security scan. Matching the description by brace scope rather
+  // than raw position is what prevents both.
+  const src = `
+    export const createThing = defineTool({
+      id: "create-thing",
+      defaultPayload: { id: "example-id", name: "x" },
+      description: "Creates a thing.",
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(byName["create-thing"], "Creates a thing.", "real tool dropped by a nested id: key");
+  assert.ok(!("example-id" in byName), "a nested object's id: key was emitted as a spurious tool");
+  assert.equal(tools.length, 1, "exactly the real tool should be emitted");
+});
+
+test("a balanced nested object (with a deep inner id:) between id: and description: keeps the tool", () => {
+  // Mirrors the real `capability: { apple: { ... } }` shape 12 tools already
+  // use, but with an inner id: key added at depth 2 - the deepest footgun form.
+  // The tool must be captured in full and the inner id: must not leak out.
+  const src = `
+    export const t = defineTool({
+      id: "native-thing",
+      capability: { apple: { simulator: true, device: true }, meta: { id: "cap-1" } },
+      description: \`Does a native thing.\`,
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(byName["native-thing"], "Does a native thing.");
+  assert.ok(!("cap-1" in byName), "a deeply nested id: key was emitted as a spurious tool");
+  assert.equal(tools.length, 1);
+});
