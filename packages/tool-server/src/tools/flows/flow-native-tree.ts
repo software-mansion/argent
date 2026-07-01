@@ -2,6 +2,7 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
 import { fetchTree } from "../../utils/ui-tree-match";
+import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import {
   type DescribeFrame,
   type DescribeNode,
@@ -235,10 +236,16 @@ async function queryFullHierarchyTree(
 }
 
 /**
- * Fetch the tree a flow resolves selectors against. On iOS this is the native
- * UIView hierarchy (full testID coverage, no `accessible`-container collapse);
- * when native-devtools isn't available it degrades to the shared `fetchTree`
- * (the AX tree). Other platforms use `fetchTree` directly — unchanged.
+ * Fetch the tree a flow resolves selectors against.
+ *
+ * On iOS this is the native UIView hierarchy (full testID coverage, no
+ * `accessible`-container collapse). On Android it is the full accessibility
+ * hierarchy including not-important views (full `resource-id`/testID coverage,
+ * no interactables trim) — the Android counterpart to the same idea, since the
+ * raw View tree is only reachable in-process there and the a11y tree is the
+ * only cross-process source. Both degrade to the shared `fetchTree` (the
+ * trimmed AX/uiautomator tree) when their helper is unavailable. Other
+ * platforms use `fetchTree` directly — unchanged.
  */
 export async function fetchFlowTree(
   registry: Registry,
@@ -247,6 +254,9 @@ export async function fetchFlowTree(
   if (device.platform === "ios") {
     const native = await queryFullHierarchyTree(registry, device);
     if (native) return native;
+  } else if (device.platform === "android") {
+    const full = await queryAndroidFullHierarchy(registry, device);
+    if (full) return full;
   }
   return fetchTree(registry, device);
 }
