@@ -236,7 +236,7 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
 function getAppBundlePath(udid: string, bundleId: string): string {
   let appPath: string;
   try {
-    appPath = execSync(`xcrun simctl get_app_container ${udid} ${bundleId} app`, {
+    appPath = execFileSync("xcrun", ["simctl", "get_app_container", udid, bundleId, "app"], {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
     }).trim();
@@ -490,7 +490,7 @@ export async function startNativeProfilerIos(
     // Terminate any running instance so xctrace owns a clean cold launch with the
     // env var set from process start (best-effort; not-running is fine).
     try {
-      execSync(`xcrun simctl terminate ${params.device_id} ${info.CFBundleIdentifier}`, {
+      execFileSync("xcrun", ["simctl", "terminate", params.device_id, info.CFBundleIdentifier], {
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
         stdio: "ignore",
       });
