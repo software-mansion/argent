@@ -92,6 +92,12 @@ const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
 const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
+// tvOS control binaries. Both are macOS-only: tvos-ax-service runs inside an
+// appletvsimulator, tvos-hid-daemon runs on the host. Unix-socket only.
+const TVOS_AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tvos-ax-service");
+const TVOS_HID_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tvos-hid-daemon");
+const TVOS_AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/tvos-ax-service");
+const TVOS_HID_BIN_DEST = path.resolve(BIN_DIR, "darwin/tvos-hid-daemon");
 // Host platform keys (see hostPlatformKey() in @argent/native-devtools-ios):
 // darwin is a universal binary; Linux ships one single-arch ELF per key.
 const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux", "linux-arm64"];
@@ -189,6 +195,28 @@ const ASSETS = [
     required: false,
     copiedLabel: "ax-service (tcp) binary",
     missLabel: "ax-service (tcp) binary",
+  },
+  // tvOS AX reader — spawned inside an appletvsimulator via simctl to read
+  // the focus-engine accessibility tree. macOS-only, unix-socket transport.
+  {
+    kind: "file",
+    src: TVOS_AX_BIN_SRC,
+    dest: TVOS_AX_BIN_DEST,
+    mode: 0o755,
+    required: false,
+    copiedLabel: "tvos-ax-service binary",
+    missLabel: "tvos-ax-service binary",
+  },
+  // tvOS HID daemon — runs on the macOS host, injects Siri-remote HID events
+  // into the simulator via SimulatorKit. macOS-only, unix-socket transport.
+  {
+    kind: "file",
+    src: TVOS_HID_BIN_SRC,
+    dest: TVOS_HID_BIN_DEST,
+    mode: 0o755,
+    required: false,
+    copiedLabel: "tvos-hid-daemon binary",
+    missLabel: "tvos-hid-daemon binary",
   },
   // Android host-side Perfetto trace processor: the third-party WASM engine
   // (trace_processor.wasm + emscripten glue + the EngineBase decoder + LICENSE).

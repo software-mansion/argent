@@ -1,13 +1,22 @@
 import { z } from "zod";
-import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
+import type {
+  InvokeToolOptions,
+  Registry,
+  ServiceRef,
+  ToolCapability,
+  ToolDefinition,
+} from "@argent/registry";
 import type { DescribeResult, DescribeTreeData } from "./contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { describeAndroid, androidRequires } from "./platforms/android";
 import { iosRequires, describeIos } from "./platforms/ios";
 import { describeChromium } from "./platforms/chromium";
+import { describeTv } from "./platforms/tv";
 import { describeVega, vegaRequires } from "./platforms/vega";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
+import { isTvOsSimulator } from "../../utils/ios-devices";
+import { isAndroidTv } from "../../utils/adb";
 import { formatDescribeTree } from "./format-tree";
 
 // In-between layer between the per-platform adapters (which still own all
@@ -57,11 +66,66 @@ interface ChromiumServices {
 
 // `describe` doesn't fit dispatchByPlatform's standard service-typed
 // signature because the iOS handler resolves AX / native-devtools through
-// `registry` (closed over below) rather than via the registry's services()
+// `registry` (closed over here) rather than via the registry's services()
 // declaration. We still feed `iosRequires` / `androidRequires` to the
 // dispatcher so the per-branch host-binary preflight fires uniformly. The
 // Chromium branch *does* go through services() since the CDP session lives in
 // the registry as a normal service blueprint.
+//
+// TV targets are handled *inside* the platform branches rather than as a
+// fourth branch: TV is not a `platform` (a tvOS sim classifies as "ios" and an
+// Android TV emulator as "android" by id shape), it's a `runtimeKind` that
+// spans both. So each platform branch runtime-probes its own TV kind and
+// delegates to the shared focus-driven `describeTv` (in platforms/tv.ts) —
+// returning the focused / focusable view instead of the iOS ax-service or
+// Android uiautomator tree, which a focus-driven UI either can't serve or
+// shouldn't be tapped from. One `describe` thus covers phones, tablets, and
+// TVs through the normal dispatch.
+function makeDescribeExecute(
+  registry: Registry
+): (
+  services: Record<string, unknown>,
+  params: Params,
+  options?: InvokeToolOptions
+) => Promise<DescribeResult> {
+  return dispatchByPlatform<
+    Record<string, unknown>,
+    Record<string, unknown>,
+    Params,
+    DescribeResult,
+    ChromiumServices,
+    Record<string, unknown>
+  >({
+    toolId: "describe",
+    capability,
+    ios: {
+      requires: iosRequires,
+      handler: async (_services, params, device) =>
+        // Probe tvOS once here, then pass the verdict into describeIos.
+        (await isTvOsSimulator(device.id))
+          ? describeTv(registry, device)
+          : withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+    },
+    android: {
+      requires: androidRequires,
+      handler: async (_services, params, device) =>
+        // Resolve the form factor once and route on it: a TV goes to the
+        // focus-driven describe, a phone to the uiautomator tree — and pass the
+        // known `isTv: false` through so describeAndroid doesn't re-probe.
+        (await isAndroidTv(device.id))
+          ? describeTv(registry, device)
+          : withDescription(await describeAndroid(registry, params.udid, params.bundleId, false)),
+    },
+    chromium: {
+      handler: async (services) => withDescription(await describeChromium(services.chromium)),
+    },
+    vega: {
+      requires: vegaRequires,
+      handler: async (_services, params) => withDescription(await describeVega(params.udid)),
+    },
+  });
+}
+
 export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
   return {
     id: "describe",
@@ -89,10 +153,15 @@ can be applied to a line in isolation.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
 use native-describe-screen with an explicit bundleId instead (iOS only).
-For React Native apps, debugger-component-tree returns React component names with tap coordinates.`,
+For React Native apps, debugger-component-tree returns React component names with tap coordinates.
+
+On a TV target (Apple TV / Android TV — a \`list-devices\` entry with runtimeKind 'tv') this returns
+the focus-driven view instead: the currently FOCUSED element and the list of FOCUSABLE elements,
+since a TV UI has no tap coordinates. Move the highlight with \`tv-remote\` (up/down/left/right/select/
+back/menu/home), then call describe again to confirm where focus landed.`,
     alwaysLoad: true,
     searchHint:
-      "accessibility element tree ui hierarchy tap coordinates ios android chromium vega fire tv dom focus",
+      "accessibility element tree ui hierarchy tap coordinates ios android chromium vega dom tv tvos apple tv android tv fire tv focus focusable remote dpad",
     zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {
@@ -102,33 +171,6 @@ For React Native apps, debugger-component-tree returns React component names wit
       }
       return {};
     },
-    execute: dispatchByPlatform<
-      Record<string, unknown>,
-      Record<string, unknown>,
-      Params,
-      DescribeResult,
-      ChromiumServices,
-      Record<string, unknown>
-    >({
-      toolId: "describe",
-      capability,
-      ios: {
-        requires: iosRequires,
-        handler: async (_services, params, device) =>
-          withDescription(await describeIos(registry, device, params)),
-      },
-      android: {
-        requires: androidRequires,
-        handler: async (_services, params) =>
-          withDescription(await describeAndroid(registry, params.udid, params.bundleId)),
-      },
-      chromium: {
-        handler: async (services) => withDescription(await describeChromium(services.chromium)),
-      },
-      vega: {
-        requires: vegaRequires,
-        handler: async (_services, params) => withDescription(await describeVega(params.udid)),
-      },
-    }),
+    execute: makeDescribeExecute(registry),
   };
 }

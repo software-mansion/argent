@@ -1,22 +1,25 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import * as os from "node:os";
+import * as path from "node:path";
 import { z } from "zod";
-import type {
-  InvokeToolOptions,
-  ServiceRef,
-  ToolCapability,
-  ToolDefinition,
-} from "@argent/registry";
+import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { httpScreenshot } from "../../utils/simulator-client";
+import { getScreenshotScale, httpScreenshot } from "../../utils/simulator-client";
+import { isTvOsSimulator } from "../../utils/ios-devices";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
+
+const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Apple TV UDID, Vega serial, or Chromium id)."
+    ),
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
@@ -66,100 +69,113 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-interface SimulatorServerServices {
-  simulatorServer: SimulatorServerApi;
+/**
+ * tvOS screenshot path. The simulator-server backend does not support tvOS, so
+ * capture via `xcrun simctl io <udid> screenshot` instead and (optionally)
+ * downscale with `sips` to match the iOS/Android scale behaviour.
+ */
+async function tvScreenshot(
+  udid: string,
+  scale: number,
+  signal: AbortSignal | undefined
+): Promise<string> {
+  const file = path.join(
+    os.tmpdir(),
+    `argent-tv-screenshot-${udid.slice(0, 8)}-${process.hrtime.bigint()}.png`
+  );
+  await execFileAsync("xcrun", ["simctl", "io", udid, "screenshot", file], { signal });
+  // Downscale in place unless full-res was requested, mirroring the iOS/Android
+  // default. `sips -Z` caps the longest *actual* side, and capture size isn't
+  // fixed (4K sim is 3840 wide, non-4K is 1920), so scale against the real
+  // dimensions — a hardcoded 3840 would double the scale on a 1920 capture.
+  if (scale < 1.0) {
+    await execFileAsync("sips", ["-Z", String(await tvTargetLongSide(file, scale)), file], {
+      signal,
+    }).catch(() => {
+      // Best-effort downscale: if sips is unavailable or fails, fall back to
+      // the full-resolution capture rather than failing the screenshot.
+    });
+  }
+  return file;
 }
 
-interface ChromiumServices {
-  chromium: ChromiumCdpApi;
+// The `sips -Z` target: capture's longest actual side × scale, falling back to
+// the 4K long side if the dimension probe fails.
+export async function tvTargetLongSide(file: string, scale: number): Promise<number> {
+  let longSide = 3840;
+  try {
+    const { stdout } = await execFileAsync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", file]);
+    const width = Number(/pixelWidth:\s*(\d+)/.exec(stdout)?.[1]);
+    const height = Number(/pixelHeight:\s*(\d+)/.exec(stdout)?.[1]);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      longSide = Math.max(width, height);
+    }
+  } catch {
+    /* probe failed — keep the 4K fallback */
+  }
+  return Math.round(longSide * scale);
 }
 
-async function runChromium(
-  api: ChromiumCdpApi,
-  params: Params,
-  ctx?: InvokeToolOptions
-): Promise<Result> {
-  const { path } = await api.captureScreenshot({
-    rotation: params.rotation,
-    scale: params.scale,
-    downscaler: params.downscaler,
-  });
-  const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
-  return { image };
-}
-
-// Shared iOS / Android path: both capture over the bundled simulator-server's
-// HTTP screenshot endpoint. The blueprint factory backing
-// `services.simulatorServer` already preflights the platform binary, so these
-// branches declare no `requires`.
-async function runSimulatorServer(
-  api: SimulatorServerApi,
-  params: Params,
-  ctx?: InvokeToolOptions
-): Promise<Result> {
-  const signal = ctx?.signal ?? AbortSignal.timeout(16_000);
-  const { path } = await httpScreenshot(api, params.rotation, signal, params.scale);
-  const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
-  return { image };
-}
-
-// Vega captures host-side via the Android emulator console (`adb emu`) and needs
-// no simulator-server. The `adb` dependency is declared on the vega dispatch
-// branch's `requires` and preflighted by dispatchByPlatform before this runs.
-async function runVega(params: Params, ctx?: InvokeToolOptions): Promise<Result> {
-  const path = await captureVegaScreenshotPng({ scale: params.scale });
-  const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
-  return { image };
-}
-
-export const screenshotTool: ToolDefinition<Params, Result> = {
-  id: "screenshot",
-  description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Chromium app, or Vega Virtual Device). Returns { url, path }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
+export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {
+  return {
+    id: "screenshot",
+    description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
-  alwaysLoad: true,
-  searchHint: "device simulator emulator chromium vega fire tv screen image capture baseline",
-  zodSchema,
-  outputHint: "image",
-  capability,
-  // Vega captures host-side via the Android emulator console (`adb emu`) and
-  // needs no simulator-server; resolving the (iOS/Android-only) blueprint for a
-  // Vega device would throw.
-  services: (params): Record<string, ServiceRef> => {
-    const device = resolveDevice(params.udid);
-    if (device.platform === "chromium") {
-      return { chromium: chromiumCdpRef(device) };
-    }
-    if (device.platform === "vega") {
-      return {};
-    }
-    return { simulatorServer: simulatorServerRef(device) };
-  },
-  execute: dispatchByPlatform<
-    SimulatorServerServices,
-    SimulatorServerServices,
-    Params,
-    Result,
-    ChromiumServices,
-    Record<string, unknown>
-  >({
-    toolId: "screenshot",
+    alwaysLoad: true,
+    searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
+    zodSchema,
+    outputHint: "image",
     capability,
-    ios: {
-      handler: (services, params, _device, options) =>
-        runSimulatorServer(services.simulatorServer, params, options),
+    // No eager service: a tvOS udid classifies as iOS by shape, and declaring
+    // simulator-server here would spawn it for the tvOS device (which it cannot
+    // drive) and hang on the ready timeout. Resolve the backend lazily instead.
+    services: () => ({}),
+    async execute(_services, params, ctx) {
+      const signal = ctx?.signal ?? AbortSignal.timeout(16_000);
+      const scale = params.scale ?? getScreenshotScale();
+      const device = resolveDevice(params.udid);
+
+      // Chromium captures via CDP (Page.captureScreenshot) — no simulator-server.
+      if (device.platform === "chromium") {
+        const ref = chromiumCdpRef(device);
+        const chromium = (await registry.resolveService(ref.urn, ref.options)) as ChromiumCdpApi;
+        const { path: capturedPath } = await chromium.captureScreenshot({
+          rotation: params.rotation,
+          scale: params.scale,
+          downscaler: params.downscaler,
+        });
+        const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
+        return { image };
+      }
+
+      // Distinguish tvOS from iOS by simulator runtime — shape alone can't.
+      // tvOS has no simulator-server backend, so capture via xcrun instead.
+      if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
+        const pngPath = await tvScreenshot(params.udid, scale, signal);
+        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        return { image };
+      }
+
+      // Vega captures host-side via the Android emulator console (`adb emu`) and
+      // needs no simulator-server (resolving the iOS/Android-only blueprint for a
+      // Vega device would throw), so capture directly here.
+      if (device.platform === "vega") {
+        const pngPath = await captureVegaScreenshotPng({ scale: params.scale });
+        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        return { image };
+      }
+
+      const ref = simulatorServerRef(device);
+      const api = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
+      const { path: capturedPath } = await httpScreenshot(
+        api,
+        params.rotation,
+        signal,
+        params.scale
+      );
+      const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
+      return { image };
     },
-    android: {
-      handler: (services, params, _device, options) =>
-        runSimulatorServer(services.simulatorServer, params, options),
-    },
-    chromium: {
-      handler: (services, params, _device, options) =>
-        runChromium(services.chromium, params, options),
-    },
-    vega: {
-      requires: ["adb"],
-      handler: (_services, params, _device, options) => runVega(params, options),
-    },
-  }),
-};
+  };
+}

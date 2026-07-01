@@ -29,6 +29,7 @@ type AndroidDevice = {
   model: string | null;
   avdName: string | null;
   sdkLevel: number | null;
+  runtimeKind?: "mobile" | "tv";
 };
 
 type ListDevicesResult = {
@@ -150,6 +151,7 @@ export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesR
 Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
 Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
 Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb) — physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
+TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android TV / leanback devices on Android) — these are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses (up/down/left/right/select/back/menu/home), and \`keyboard\` to type, rather than the coordinate/gesture tools.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with electronAppPath to launch one.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select, Android platform-tools, or the Vega SDK is not installed.`,
   alwaysLoad: true,
@@ -169,9 +171,14 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     const [ios, android, avds, chromium, vega] = await Promise.all([
       withDeadline(listIosSimulators(), [], "ios"),
       withDeadline(
-        // Pass the tight `adb devices` bound (NOT boot-device's 30s default) so the
-        // Android branch self-bounds under BRANCH_DEADLINE_MS — see ADB_DEVICES_TIMEOUT_MS.
-        listAndroidDevices({ devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS }).catch(() => []),
+        // Opt into runtimeKind enrichment (list-devices surfaces TV vs mobile to
+        // the agent, so the extra feature probe per device is warranted here — the
+        // boot-loop poller deliberately omits it), and pass the tight `adb devices`
+        // bound (NOT boot-device's 30s default) so the Android branch self-bounds
+        // under BRANCH_DEADLINE_MS — see ADB_DEVICES_TIMEOUT_MS.
+        listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS }).catch(
+          () => []
+        ),
         [],
         "android"
       ),
@@ -198,6 +205,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       model: d.model,
       avdName: d.avdName,
       sdkLevel: d.sdkLevel,
+      runtimeKind: d.runtimeKind,
     }));
     // Drop a running VVD's adb shadow row so it appears only once (as vega).
     const vvdShadowSerials = await resolveVvdShadowAdbSerials(androidTagged, vega);

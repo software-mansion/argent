@@ -1,15 +1,8 @@
 import { z } from "zod";
-import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
-import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
+import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { resolveDevice } from "../../utils/device-info";
-import type {
-  RestartAppAndroidServices,
-  RestartAppIosServices,
-  RestartAppResult,
-  RestartAppVegaServices,
-} from "./types";
-import { iosImpl } from "./platforms/ios";
+import type { RestartAppResult, RestartAppVegaServices } from "./types";
+import { makeIosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
 
@@ -48,33 +41,44 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-export const restartAppTool: ToolDefinition<Params, RestartAppResult> = {
-  id: "restart-app",
-  description: `Terminate then relaunch an app by bundle id / package name.
-Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection on iOS before the relaunch.
+// `restart-app` resolves native-devtools through `registry` inside the iOS
+// handler (closed over below) rather than via the registry's `services()`
+// declaration — the same pattern as `describe` / `screenshot`. A tvOS sim
+// classifies as platform "ios" by UDID shape; native-devtools is iOS *and*
+// tvOS capable, so the handler resolves it for both. Its ensureEnv picks the
+// platform-matched DYLD_INSERT_LIBRARIES slice (the TVOSSIMULATOR bootstrap
+// for Apple TV sims), so injection is prepared correctly on tvOS too — not
+// skipped. Lazy resolution keeps this aligned with the other iOS tools that
+// branch on the resolved device inside their handler.
+export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
+  return {
+    id: "restart-app",
+    description: `Terminate then relaunch an app by bundle id / package name.
+Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection before the relaunch (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
 Returns { restarted, bundleId }. Fails if the app is not installed.`,
-  alwaysLoad: true,
-  searchHint: "terminate relaunch restart reset app bundle id package simulator emulator",
-  zodSchema,
-  capability,
-  // Only iOS needs the native-devtools service for relaunch injection.
-  services: (params): Record<string, ServiceRef> => {
-    const device = resolveDevice(params.udid);
-    return device.platform === "ios" ? { nativeDevtools: nativeDevtoolsRef(device) } : {};
-  },
-  execute: dispatchByPlatform<
-    RestartAppIosServices,
-    RestartAppAndroidServices,
-    Params,
-    RestartAppResult,
-    // No chromium branch — falls back to the ChromiumServices default.
-    Record<string, unknown>,
-    RestartAppVegaServices
-  >({
-    toolId: "restart-app",
+    alwaysLoad: true,
+    searchHint:
+      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv",
+    zodSchema,
     capability,
-    ios: iosImpl,
-    android: androidImpl,
-    vega: vegaImpl,
-  }),
-};
+    // No eager service: the iOS handler resolves native-devtools lazily so a
+    // tvOS udid never spins up the iOS-only injection (see header comment);
+    // Android and Vega need no service.
+    services: () => ({}),
+    execute: dispatchByPlatform<
+      Record<string, unknown>,
+      Record<string, unknown>,
+      Params,
+      RestartAppResult,
+      // No chromium branch — falls back to the ChromiumServices default.
+      Record<string, unknown>,
+      RestartAppVegaServices
+    >({
+      toolId: "restart-app",
+      capability,
+      ios: makeIosImpl(registry),
+      android: androidImpl,
+      vega: vegaImpl,
+    }),
+  };
+}

@@ -162,12 +162,18 @@ describe("list-devices", () => {
       udid: string;
       name: string;
       state: string;
+      runtimeKind?: "mobile" | "tv";
     }>;
-    // Unavailable simulators are filtered out; tvOS is filtered out (non-iOS runtime).
-    expect(ios.map((d) => d.name).sort()).toEqual(["iPad Pro", "iPhone 16"]);
+    // Unavailable simulators are filtered out. tvOS simulators are now included
+    // (tagged runtimeKind "tv") so Apple TV targets are discoverable; iOS
+    // simulators are tagged "mobile".
+    expect(ios.map((d) => d.name).sort()).toEqual(["Apple TV", "iPad Pro", "iPhone 16"]);
     // Booted iOS devices come before shut-down ones.
     expect(ios[0]!.state).toBe("Booted");
     expect(ios[0]!.name).toBe("iPhone 16");
+    // The tvOS simulator carries the "tv" runtime kind; iOS ones are "mobile".
+    expect(ios.find((d) => d.name === "Apple TV")?.runtimeKind).toBe("tv");
+    expect(ios.find((d) => d.name === "iPhone 16")?.runtimeKind).toBe("mobile");
 
     const android = result.devices.filter((d) => d.platform === "android") as Array<{
       platform: "android";

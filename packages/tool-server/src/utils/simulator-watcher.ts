@@ -30,6 +30,9 @@ async function initUdid(
   udid: string,
   trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
+  // A tvOS sim classifies as platform "ios" by UDID shape. native-devtools is
+  // iOS *and* tvOS capable — its ensureEnv injects the platform-matched dylib
+  // slice (TVOSSIMULATOR bootstrap for Apple TV) — so it is resolved for both.
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   try {
     const service = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);

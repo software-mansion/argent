@@ -13,6 +13,18 @@ export enum ServiceState {
   ERROR = "ERROR",
 }
 
+/**
+ * True when a service node is (or is becoming) a live, disposable process —
+ * i.e. there is something real to tear down. ERROR and TERMINATING nodes hold
+ * no running instance: a start that threw (e.g. SimulatorServer rejecting a
+ * tvOS UDID) leaves an ERROR node behind, and reporting that as "stopped" is
+ * misleading. The stop tools use this so `stopped: true` means a server was
+ * actually running.
+ */
+export function isLiveServiceState(state: ServiceState): boolean {
+  return state === ServiceState.RUNNING || state === ServiceState.STARTING;
+}
+
 export type ServiceEvents = {
   terminated: (error?: Error) => void;
 };
