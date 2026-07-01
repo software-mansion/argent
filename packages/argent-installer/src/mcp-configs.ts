@@ -99,47 +99,56 @@ function removeDirIfEmpty(dirPath: string): void {
   }
 }
 
-function pruneEmptyConfig(value: unknown): unknown | undefined {
-  if (Array.isArray(value)) {
-    return value.length > 0 ? value : undefined;
-  }
-
-  if (value && typeof value === "object") {
-    const cleaned: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      const next = pruneEmptyConfig(entry);
-      if (next !== undefined) cleaned[key] = next;
-    }
-    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
-  }
-
-  return value;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function writeJsonOrRemove(filePath: string, data: Record<string, unknown>): void {
-  const cleaned = pruneEmptyConfig(data);
-  if (!isRecord(cleaned)) {
-    fs.rmSync(filePath, { force: true });
-    removeDirIfEmpty(path.dirname(filePath));
-    return;
+// After a remover deletes the argent entry, collapse the now-empty container it
+// lived in (e.g. an emptied `mcpServers`) so a config that held only argent
+// reduces to {} and writeJsonOrRemove can delete the file. Only this one key is
+// touched — foreign sibling keys and empty values elsewhere in the tree are
+// preserved byte-for-byte (the contract is "only touch argent").
+function deleteIfEmpty(parent: Record<string, unknown>, key: string): void {
+  const value = parent[key];
+  if (
+    (Array.isArray(value) && value.length === 0) ||
+    (isRecord(value) && Object.keys(value).length === 0)
+  ) {
+    delete parent[key];
   }
-
-  writeJson(filePath, cleaned);
 }
 
-function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): void {
-  const cleaned = pruneEmptyConfig(data);
-  if (!isRecord(cleaned)) {
+// Writes `data` unchanged, except: when it has no own keys the file (and an
+// empty parent directory) is removed instead. This deliberately does NOT
+// recursively prune empty objects/arrays — the previous deep-prune silently
+// stripped foreign servers' `args: []` / `env: {}` and deleted any user key
+// holding an empty object/array, violating the "only touch argent" contract.
+// Removers collapse their own emptied argent container via deleteIfEmpty before
+// calling here, so "config held only argent" still results in file deletion.
+function writeJsonOrRemove(filePath: string, data: Record<string, unknown>): void {
+  if (Object.keys(data).length === 0) {
     fs.rmSync(filePath, { force: true });
     removeDirIfEmpty(path.dirname(filePath));
     return;
   }
 
-  writeToml(filePath, cleaned);
+  writeJson(filePath, data);
+}
+
+// Writes `data` unchanged, except: when it has no own keys the file (and an
+// empty parent directory) is removed instead. Mirrors writeJsonOrRemove (see
+// its comment above) — this deliberately does NOT recursively prune empty
+// tables/arrays, so a foreign TOML server's `args = []` and any sibling empty
+// value survive. Callers collapse their own emptied argent container via
+// deleteIfEmpty before calling here.
+function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): void {
+  if (Object.keys(data).length === 0) {
+    fs.rmSync(filePath, { force: true });
+    removeDirIfEmpty(path.dirname(filePath));
+    return;
+  }
+
+  writeToml(filePath, data);
 }
 
 // ── Cursor adapter ────────────────────────────────────────────────────────────
@@ -163,31 +172,32 @@ const cursorAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".cursor", "mcp.json");
   },
 
+  // Cursor is a VS Code fork: .cursor/mcp.json is JSONC (line/block comments,
+  // trailing commas). Routing write/remove/hasArgentEntry through readJsonc /
+  // editJsoncFile applies path-targeted text edits that preserve comments and
+  // foreign servers. The old readJson → writeJson path ran commented files
+  // through readJson's `catch { return {} }`, then persisted only the argent
+  // entry — destroying every pre-existing server and comment. Matches VS Code.
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
-    };
-    config.mcpServers = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   hasArgentEntry(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
@@ -213,6 +223,7 @@ const cursorAdapter: McpConfigAdapter = {
     if (idx === -1) return;
     list.splice(idx, 1);
     config.mcpAllowlist = list;
+    deleteIfEmpty(config, "mcpAllowlist");
     writeJsonOrRemove(permPath, config);
   },
 };
@@ -243,32 +254,30 @@ const claudeAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".claude.json");
   },
 
+  // JSONC is a superset of JSON, so routing through readJsonc / editJsoncFile is
+  // safe for this strict-JSON config and keeps every MCP-entry write on the one
+  // comment- and foreign-server-preserving path (see the Cursor adapter).
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       type: "stdio",
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
-    };
-    config.mcpServers = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   hasArgentEntry(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
@@ -304,32 +313,34 @@ const vscodeAdapter: McpConfigAdapter = {
     return null;
   },
 
+  // .vscode/mcp.json is JSONC — VS Code allows line/block comments and trailing
+  // commas. The previous JSON.parse → mutate → JSON.stringify path ran through
+  // readJson, whose `catch { return {} }` turned any commented file into {} and
+  // then persisted only { servers: { argent } }, destroying every pre-existing
+  // user server (and their comments). All four entry points now go through
+  // readJsonc / editJsoncFile — path-targeted text edits that preserve comments
+  // and foreign servers — matching the Zed and opencode adapters.
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.servers ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["servers", MCP_SERVER_KEY], {
       type: "stdio",
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
-    };
-    config.servers = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["servers", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   hasArgentEntry(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.servers as Record<string, unknown> | undefined;
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
@@ -355,54 +366,53 @@ const windsurfAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
   },
 
+  // JSONC-safe MCP-entry writes (see the Cursor adapter): editJsoncFile
+  // preserves comments and pre-existing foreign servers on this JSON config.
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
-    };
-    config.mcpServers = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   hasArgentEntry(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
+  // JSONC-safe allowlist edits (see the Cursor adapter): the argent entry lives
+  // in this same mcp_config.json, and `init` runs write() (comment-preserving)
+  // before addAllowlist(). The old readJson path choked on any user comment and
+  // silently skipped the toggle; editJsoncFile targets just the argent entry's
+  // alwaysAllow key so comments and foreign servers survive.
   addAllowlist(): void {
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
-    const entry = servers[MCP_SERVER_KEY];
-    if (!entry) return;
-    entry.alwaysAllow = ["*"];
-    writeJson(configPath, config);
+    const config = readJsonc(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return;
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], ["*"]);
   },
 
   removeAllowlist(): void {
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     if (!fs.existsSync(configPath)) return;
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
-    const entry = servers[MCP_SERVER_KEY];
+    const config = readJsonc(configPath);
+    const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
+    const entry = servers?.[MCP_SERVER_KEY];
     if (!entry?.alwaysAllow) return;
-    delete entry.alwaysAllow;
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], undefined);
   },
 };
 
@@ -508,35 +518,37 @@ const geminiAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".gemini", "settings.json");
   },
 
+  // JSONC-safe MCP-entry writes (see the Cursor adapter): editJsoncFile
+  // preserves comments and pre-existing foreign servers on this JSON config.
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
-    };
-    config.mcpServers = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   hasArgentEntry(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
+  // JSONC-safe allowlist edits (see the Cursor adapter): the argent entry lives
+  // in this same settings.json, and `init` runs write() (comment-preserving)
+  // before addAllowlist(). The old readJson path choked on any user comment and
+  // silently skipped the toggle; editJsoncFile targets just the argent entry's
+  // trust key so comments and foreign servers survive.
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
 
@@ -544,12 +556,10 @@ const geminiAdapter: McpConfigAdapter = {
       return;
     }
 
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
-    const entry = servers[MCP_SERVER_KEY];
-    if (!entry) return;
-    entry.trust = true;
-    writeJson(configPath, config);
+    const config = readJsonc(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return;
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "trust"], true);
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
@@ -559,12 +569,11 @@ const geminiAdapter: McpConfigAdapter = {
       return;
     }
 
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
     const entry = servers?.[MCP_SERVER_KEY];
     if (!entry?.trust) return;
-    delete entry.trust;
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "trust"], undefined);
   },
 };
 
@@ -611,6 +620,7 @@ const codexAdapter: McpConfigAdapter = {
     const servers = config.mcp_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
+    deleteIfEmpty(config, "mcp_servers");
     writeTomlOrRemove(configPath, config);
     return true;
   },
@@ -860,55 +870,60 @@ const kiroAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".kiro", "settings", "mcp.json");
   },
 
+  // Kiro is a VS Code fork: .kiro/settings/mcp.json is JSONC. As with Cursor,
+  // route write/remove/hasArgentEntry through readJsonc / editJsoncFile so
+  // comments and foreign servers survive instead of being flattened away by the
+  // old readJson → writeJson path.
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
-    };
-    config.mcpServers = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   hasArgentEntry(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
+  // JSONC-safe allowlist edits (see the Cursor adapter): .kiro/settings/mcp.json
+  // is JSONC, the argent entry lives in it, and `init` runs write() (comment-
+  // preserving) before addAllowlist(). The old readJson path choked on any user
+  // comment and silently skipped the toggle; editJsoncFile targets just the
+  // argent entry's autoApprove key so comments and foreign servers survive.
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath) return;
-    const config = readJson(configPath);
-    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
-    const entry = servers[MCP_SERVER_KEY];
-    if (!entry) return;
-    entry.autoApprove = [...KIRO_AUTO_APPROVE_ALL];
-    writeJson(configPath, config);
+    const config = readJsonc(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return;
+    editJsoncFile(
+      configPath,
+      ["mcpServers", MCP_SERVER_KEY, "autoApprove"],
+      [...KIRO_AUTO_APPROVE_ALL]
+    );
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath || !fs.existsSync(configPath)) return;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
     const entry = servers?.[MCP_SERVER_KEY];
     if (!entry?.autoApprove) return;
-    delete entry.autoApprove;
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "autoApprove"], undefined);
   },
 };
 
@@ -1005,11 +1020,14 @@ export function removeClaudePermission(root: string, scope: "local" | "global"):
 
   if (!fs.existsSync(settingsPath)) return;
   const config = readJson(settingsPath);
-  const allow = (config?.permissions as Record<string, unknown>)?.allow as string[];
-  if (!Array.isArray(allow)) return;
+  const permissions = config?.permissions as Record<string, unknown> | undefined;
+  const allow = permissions?.allow as string[] | undefined;
+  if (!permissions || !Array.isArray(allow)) return;
   const idx = allow.indexOf(PERMISSION_RULE);
   if (idx === -1) return;
   allow.splice(idx, 1);
+  deleteIfEmpty(permissions, "allow");
+  deleteIfEmpty(config, "permissions");
   writeJsonOrRemove(settingsPath, config);
 }
 
