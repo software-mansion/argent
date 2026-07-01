@@ -16,7 +16,9 @@ import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
 import {
   selectIosCaptureStrategy,
+  resolveIosCaptureStrategy,
   type IosCaptureStrategy,
+  type CaptureStrategyReason,
 } from "../../../../utils/ios-profiler/capture-strategy";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
@@ -370,6 +372,47 @@ export function handleXctraceExit(
   api.lastExitInfo = { code, signal };
 }
 
+/**
+ * malloc_stack_logging must cold-launch the app under `xctrace --device --launch`.
+ * When the resolved capture strategy is NOT `device`, the cold launch can't run, so
+ * we refuse — but attribute the refusal to the ACTUAL cause so the message and the
+ * telemetry `error_code` don't blame a degraded Xcode that may not be present:
+ *   - `env-override`   → the operator forced `ARGENT_IOS_CAPTURE=all-processes`;
+ *   - `degraded-xcode` → the active Xcode has the `--device` recording-start deadlock.
+ */
+function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureError {
+  if (reason.kind === "env-override") {
+    return new FailureError(
+      `malloc_stack_logging must cold-launch the app under \`xctrace --device\`, but ` +
+        `ARGENT_IOS_CAPTURE="${reason.strategyName}" forces the "${reason.strategyName}" capture ` +
+        `strategy, which attaches host-wide and cannot \`--launch\` a cold start. Unset ` +
+        `ARGENT_IOS_CAPTURE (or set it to "device") to use malloc_stack_logging, or re-run without ` +
+        `malloc_stack_logging (leaks are still detected, just unattributed).`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_STRATEGY_OVERRIDE,
+        failure_stage: "native_profiler_start_malloc_capability",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  const versionNote =
+    reason.kind === "degraded-xcode" ? `Xcode ${reason.major}.${reason.minor}` : "the active Xcode";
+  return new FailureError(
+    `malloc_stack_logging needs to cold-launch the app under \`xctrace --device\`, but ` +
+      `${versionNote} has the --device recording-start deadlock (26.4–27.0), so it would ` +
+      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging ` +
+      `(leaks are still detected, just unattributed), profile on a non-degraded Xcode, or set ` +
+      `ARGENT_IOS_CAPTURE=device to force the device path if you know it works on your host.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_DEGRADED_XCODE,
+      failure_stage: "native_profiler_start_malloc_capability",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
 export interface IosStartParams {
   device_id: string;
   app_process?: string;
@@ -432,27 +475,18 @@ export async function startNativeProfilerIos(
     // would terminate the running app and then capture an empty trace — the opposite
     // of the feature's purpose, surfaced only as a downstream "Analysis failed". Refuse
     // up front, BEFORE touching the running app, unless the operator forces the device
-    // path via ARGENT_IOS_CAPTURE=device. selectIosCaptureStrategy() encodes exactly
-    // this decision (env override → degraded-version detection → device default).
-    if (selectIosCaptureStrategy().name !== "device") {
-      throw new FailureError(
-        `malloc_stack_logging needs to cold-launch the app under \`xctrace --device\`, but the ` +
-          `active Xcode has the --device recording-start deadlock (26.4–27.0), so it would ` +
-          `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging ` +
-          `(leaks are still detected, just unattributed), profile on a non-degraded Xcode, or set ` +
-          `ARGENT_IOS_CAPTURE=device to force the device path if you know it works on your host.`,
-        {
-          error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_DEGRADED_XCODE,
-          failure_stage: "native_profiler_start_malloc_capability",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
-      );
+    // path via ARGENT_IOS_CAPTURE=device. Use the SIDE-EFFECT-FREE resolver so this
+    // guard doesn't emit selectIosCaptureStrategy()'s "using the all-processes
+    // fallback" stderr line immediately before throwing (that fallback never runs
+    // here); the reason it returns also lets the refusal name its actual cause
+    // (forced override vs. degraded Xcode) rather than always blaming the Xcode.
+    const captureDecision = resolveIosCaptureStrategy();
+    if (captureDecision.strategy.name !== "device") {
+      throw mallocNonDeviceStrategyError(captureDecision.reason);
     }
     const info = resolveAppForLaunch(params.device_id, params.app_process);
     appProcess = info.CFBundleExecutable;
     launchBundlePath = getAppBundlePath(params.device_id, info.CFBundleIdentifier);
-    mallocRelaunchBundleId = info.CFBundleIdentifier;
     // Terminate any running instance so xctrace owns a clean cold launch with the
     // env var set from process start (best-effort; not-running is fine).
     try {
@@ -460,8 +494,13 @@ export async function startNativeProfilerIos(
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
         stdio: "ignore",
       });
+      // The terminate SUCCEEDED, so the app was actually running and we own killing
+      // it. Only now mark it for best-effort relaunch on a later start failure — if
+      // the app was NOT running (terminate throws below), relaunching would foreground
+      // an app the user never had open, the opposite of "restore what we killed".
+      mallocRelaunchBundleId = info.CFBundleIdentifier;
     } catch {
-      // app was not running — nothing to terminate
+      // app was not running — nothing to terminate, and nothing to restore
     }
   } else {
     detected = params.app_process
