@@ -27,6 +27,13 @@ const posthogMock = vi.hoisted(() => ({
   flushImpl: () => Promise.resolve(),
 }));
 
+// Telemetry resolves the host fingerprint internally for every entry point.
+// Stub it to a fixed 64-hex value so track() derives a deterministic v5 id
+// without spawning the real simulator-server binary.
+vi.mock("../src/fingerprint.js", () => ({
+  resolveHostFingerprint: () => "f".repeat(64),
+}));
+
 vi.mock("posthog-node", () => {
   return {
     PostHog: vi.fn().mockImplementation(function (_key: string, opts: unknown) {
@@ -116,6 +123,27 @@ describe("telemetry public surface", () => {
     expect(client.flush).not.toHaveBeenCalled();
     expect(client.shutdown).not.toHaveBeenCalled();
     expect(client.opts).toEqual(expect.objectContaining({ flushAt: 20, flushInterval: 10_000 }));
+  });
+
+  it("derives a stable v5 distinctId from the host fingerprint", () => {
+    // The fingerprint module is stubbed (top of file) to a fixed 64-hex value,
+    // so the id is fingerprint-derived (v5) rather than a random v4.
+    track("toolserver:start", {});
+
+    const client = posthogMock.instances[0]!;
+    expect(client.capture).toHaveBeenCalledTimes(1);
+    const { distinctId } = client.capture.mock.calls[0]![0] as { distinctId: string };
+    // Version nibble (15th hex char) is 5 → fingerprint-derived, not random v4.
+    expect(distinctId[14]).toBe("5");
+    // Persisted to disk as the migrated id.
+    expect(status().anonIdPrefix).toBe(distinctId.slice(0, 8));
+    // Migration is local-only: no alias/$identify event is ever emitted.
+    expect(client.capture).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "$identify" })
+    );
+    expect(client.capture).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "$create_alias" })
+    );
   });
 
   it("captures events in CI and annotates payloads with is_ci", () => {

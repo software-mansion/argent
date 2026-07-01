@@ -11,6 +11,7 @@ import {
 import { sanitize } from "./sanitize.js";
 import { getBaseProps, type Runtime } from "./base-props.js";
 import { readOrCreateAnonId, peekAnonId } from "./identity.js";
+import { resolveHostFingerprint } from "./fingerprint.js";
 import { isEnabled, writeConsentFlag, getConsentState } from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import { forget as forgetImpl, type ForgetOptions, type ForgetResult } from "./erasure.js";
@@ -81,10 +82,14 @@ function buildPayload(
   distinctId: string;
   properties: Record<string, unknown>;
 } | null {
-  // Lazy id creation: only on the first event we send.
+  // Lazy id creation: only on the first event we send. resolveHostFingerprint
+  // is the single shared resolution point for every entry point (installer,
+  // CLI, tool-server, MCP), so the distinct_id is a stable per-machine id
+  // everywhere — not only when the tool-server runs. Spawned at most once per
+  // process; memoized in identity.ts.
   let distinctId: string;
   try {
-    distinctId = readOrCreateAnonId();
+    distinctId = readOrCreateAnonId(resolveHostFingerprint);
   } catch (err) {
     emitDebugError("buildPayload: identity creation failed", err);
     return null;
