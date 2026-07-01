@@ -1657,6 +1657,31 @@ describe("installer preserves foreign MCP config", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  // Same Defect B, but for the { mcpServers } adapters: Cursor and Kiro are
+  // comment-tolerant VS Code forks, and Claude / Windsurf / Gemini configs are
+  // strict JSON that JSONC is a superset of. All five now write through
+  // editJsoncFile, so a hand-authored comment and a pre-existing foreign server
+  // survive an argent `write` — the old readJson → writeJson path reduced the
+  // commented file to {} and rewrote it with only the argent entry.
+  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+    it(`${name} write preserves a comment and a foreign server in a JSONC file`, () => {
+      const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+      const configPath = path.join(dir, "mcp.json");
+      fs.writeFileSync(
+        configPath,
+        `{\n  // my own MCP server, do not touch\n  "mcpServers": { "myserver": { "command": "my-bin", "args": ["x"] } }\n}`
+      );
+      adapter.write(configPath, getMcpEntry());
+      const raw = fs.readFileSync(configPath, "utf8");
+      expect(raw).toContain("// my own MCP server, do not touch");
+      const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
+      expect(after.mcpServers).toHaveProperty("argent");
+      expect(after.mcpServers).toHaveProperty("myserver");
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  }
+
   it("Codex remove keeps an unrelated server's empty args and a sibling empty table (TOML)", () => {
     // Same "only touch argent" contract as the JSON adapters above, but for the
     // TOML-backed Codex config: writeTomlOrRemove used to deep-prune the whole
