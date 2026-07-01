@@ -224,3 +224,74 @@ test("a balanced nested object (with a deep inner id:) between id: and descripti
   assert.ok(!("cap-1" in byName), "a deeply nested id: key was emitted as a spurious tool");
   assert.equal(tools.length, 1);
 });
+
+test("a line comment with an apostrophe between id: and description: keeps the tool", () => {
+  // A `//` comment is not code: an apostrophe inside it (e.g. `don't`) must not
+  // open a fake string that swallows the source up to the next quote, which
+  // would hide the real description: and silently drop the tool from the scan.
+  const src = `
+    export const t = defineTool({
+      id: "line-commented-tool",
+      // don't forget to update this description when behaviour changes
+      description: "The real, comment-preceded description.",
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(
+    byName["line-commented-tool"],
+    "The real, comment-preceded description.",
+    "a line comment (with an apostrophe) between id: and description: dropped the tool"
+  );
+  assert.equal(tools.length, 1);
+});
+
+test("a block comment between id: and description: keeps the tool", () => {
+  // A `/* ... */` block comment must be skipped whole: stray braces, an
+  // apostrophe, and even a fake `description:` token inside it must not shift
+  // the brace depth or be matched as the tool's real description.
+  const src = `
+    export const t = defineTool({
+      id: "block-commented-tool",
+      /* don't { do } this: description: "fake" - braces + apostrophe in a comment */
+      description: "The real block-comment-preceded description.",
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(
+    byName["block-commented-tool"],
+    "The real block-comment-preceded description.",
+    "a block comment between id: and description: dropped the tool or matched the fake description"
+  );
+  assert.equal(tools.length, 1);
+});
+
+test("a top-level tool with no description is dropped loudly (stderr warning)", () => {
+  // `description?` is optional in ToolDefinition, so a real top-level tool can
+  // legally omit it. It can't be extracted, but it must not vanish from the
+  // security scan silently - it has to warn on stderr so the drop is diagnosed
+  // rather than only surfacing as a cryptic count mismatch in CI.
+  const src = `
+    export const bare = defineTool({
+      id: "no-description-real-tool",
+      handler: async () => {},
+    });
+  `;
+  const warnings = [];
+  const originalError = console.error;
+  console.error = (...args) => warnings.push(args.join(" "));
+  let tools;
+  try {
+    tools = extractToolsFromSource(src, "fixture.ts");
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(tools.length, 0, "a description-less tool must not be emitted");
+  assert.ok(
+    warnings.some((w) => /WARNING/.test(w) && w.includes("no-description-real-tool")),
+    `expected a stderr WARNING naming the dropped id; got: ${JSON.stringify(warnings)}`
+  );
+});

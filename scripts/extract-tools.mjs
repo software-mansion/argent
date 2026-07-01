@@ -72,6 +72,21 @@ function findOwnDescriptionValue(afterId) {
       }
       continue;
     }
+    // Skip comments so an apostrophe (e.g. `// don't`), a brace, or a stray
+    // `description:` token inside a comment between the `id:` and the real
+    // `description:` can't open a fake string / shift the depth / match early.
+    if (ch === "/" && afterId[i + 1] === "/") {
+      const nl = afterId.indexOf("\n", i + 2);
+      if (nl === -1) return null; // line comment runs to EOF; no description follows
+      i = nl; // loop's i++ steps past the newline
+      continue;
+    }
+    if (ch === "/" && afterId[i + 1] === "*") {
+      const end = afterId.indexOf("*/", i + 2);
+      if (end === -1) return null; // unterminated block comment; nothing parseable after
+      i = end + 1; // land on the '/'; loop's i++ steps past it
+      continue;
+    }
     if (ch === '"' || ch === "'" || ch === "`") {
       quote = ch;
     } else if (ch === "{") {
@@ -158,9 +173,19 @@ export function extractToolsFromSource(src, filePath = "<source>") {
       console.error(
         `extract-tools: WARNING: tool "${id}" in ${filePath} has an id but no parseable description; skipping.`
       );
+    } else {
+      // value === null: no sibling `description:` was found before this id's
+      // enclosing object closed. Usually the `id:` is a nested object key (e.g.
+      // `defaultPayload: { id: "example" }`), correctly not a tool. But a real
+      // top-level tool with a missing/empty `description` (type-legal:
+      // `description?` is optional in ToolDefinition) also lands here and would
+      // be silently omitted from the downstream security scan. The two aren't
+      // locally distinguishable, so warn on stderr (stdout stays valid JSON) to
+      // make a real drop loud instead of only a cryptic count mismatch in CI.
+      console.error(
+        `extract-tools: WARNING: id "${id}" in ${filePath} has no sibling description at its object scope; skipping (nested object key, or a tool missing its description).`
+      );
     }
-    // value === null: this `id:` is a nested object key, not a tool - skip it
-    // silently rather than warning about a non-tool.
   }
 
   return tools;
