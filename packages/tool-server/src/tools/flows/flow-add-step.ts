@@ -6,8 +6,6 @@ import {
   getActiveFlow,
   getRecordingSession,
   appendStepToActiveFlow,
-  serializeFlow,
-  clientFileDirective,
   parseFlow,
   isE2eFlow,
   assertSafeFlowName,
@@ -57,25 +55,6 @@ async function captureTapSelector(
   } catch (err) {
     return { warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates` };
   }
-}
-
-// The standalone runner launches an e2e flow's app from scratch before step 1
-// (`restart-app`, or `launch-app` on Chromium — see flow-run.ts). So a leading
-// app-launch step in the recorded steps just relaunches what the runner already
-// launched — useless. These are dropped from the recording (still run live).
-const LAUNCH_COMMANDS = new Set(["restart-app", "launch-app"]);
-
-/**
- * True when `command` is an app-launch that would be a redundant *leading* step
- * of an e2e flow: the flow declares a `launch` block, and nothing but echoes or
- * other launch steps has been recorded yet (so this launch sits at the front).
- */
-function isRedundantLeadingLaunch(command: string, session: RecordingSession | null): boolean {
-  if (!session || session.flow.launch === undefined) return false;
-  if (!LAUNCH_COMMANDS.has(command)) return false;
-  return session.flow.steps.every(
-    (s) => s.kind === "echo" || (s.kind === "tool" && LAUNCH_COMMANDS.has(s.name))
-  );
 }
 
 // Replaying a fragment to set up state during recording is done by running it
@@ -165,28 +144,9 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
 
       const toolResult = await invokeSubTool(registry, ctx, params.command, args);
 
-      // A leading app-launch is run live (to set up the device for the rest of
-      // the recording) but NOT recorded: the runner relaunches the e2e flow's
-      // app from scratch at replay, so the step would only double-launch.
-      const session = getRecordingSession();
-      if (isRedundantLeadingLaunch(params.command, session) && session) {
-        const flowFile = serializeFlow(session.flow);
-        const savedTo: FlowSavedTo =
-          session.persist === "client"
-            ? clientFileDirective(session.filePath, flowFile)
-            : session.filePath;
-        return {
-          message:
-            `Ran ${params.command} live but did not record it — the runner launches this e2e ` +
-            `flow's app from scratch at replay, so a leading ${params.command} step is redundant.`,
-          toolResult,
-          flowFile,
-          savedTo,
-        };
-      }
-
       // Running a fragment via flow-execute mid-recording is recorded as a
       // `run:` composition directive rather than a raw, non-portable tool call.
+      const session = getRecordingSession();
       const runTarget =
         params.command === RUN_TARGET_COMMAND && params.delayMs === undefined
           ? await captureRunTarget(session, args)
