@@ -9,9 +9,11 @@ import {
   axServiceBinaryPathTcp,
   bootstrapDylibPath,
   bootstrapDylibPathTcp,
+  bootstrapDylibPathTvos,
   tcpInjectionDylibs,
 } from "@argent/native-devtools-ios";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
+import { isTvOsSimulator } from "./ios-devices";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
   proxyStart as simRemoteProxyStart,
@@ -128,8 +130,16 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
 }
 
 async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint): Promise<void> {
-  const bootstrapPath =
-    endpoint.transport === "tcp" ? bootstrapDylibPathTcp() : bootstrapDylibPath();
+  // Pick the dylib slice that matches the simulator's target platform. tvOS
+  // simulators require a TVOSSIMULATOR-platform dylib — injecting the default
+  // IOSSIMULATOR slice causes dyld to silently skip the library and native
+  // injection never connects. (Remote sims are iOS-only, so this probe is
+  // local-path only.)
+  const bootstrapPath = (await isTvOsSimulator(udid))
+    ? bootstrapDylibPathTvos()
+    : endpoint.transport === "tcp"
+      ? bootstrapDylibPathTcp()
+      : bootstrapDylibPath();
 
   // Read from launchctl inside the simulator (via simctl spawn) instead of
   // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
