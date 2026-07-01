@@ -1,7 +1,13 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { DeviceInfo, FileInputSpec, Registry, ToolContext, ToolDefinition } from "@argent/registry";
+import type {
+  DeviceInfo,
+  FileInputSpec,
+  Registry,
+  ToolContext,
+  ToolDefinition,
+} from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   appIdForPlatform,
@@ -27,7 +33,9 @@ const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
   project_root: z
     .string()
-    .describe("Absolute path to the project root directory that contains `.argent/flows/<name>.yaml`."),
+    .describe(
+      "Absolute path to the project root directory that contains `.argent/flows/<name>.yaml`."
+    ),
   flow_file: z
     .string()
     .optional()
@@ -37,7 +45,9 @@ const zodSchema = z.object({
   device: z
     .string()
     .optional()
-    .describe("Device id to run against (iOS UDID, Android/Vega serial, Chromium id). Auto-detected when omitted."),
+    .describe(
+      "Device id to run against (iOS UDID, Android/Vega serial, Chromium id). Auto-detected when omitted."
+    ),
   platform: z
     .enum(["ios", "android", "chromium", "vega"])
     .optional()
@@ -45,7 +55,9 @@ const zodSchema = z.object({
   updateBaselines: z
     .boolean()
     .optional()
-    .describe("Write/refresh screenshot baselines for `expect` steps instead of diffing against them."),
+    .describe(
+      "Write/refresh screenshot baselines for `expect` steps instead of diffing against them."
+    ),
   prerequisiteAcknowledged: z
     .boolean()
     .optional()
@@ -387,7 +399,13 @@ async function execSteps(
     }
     if (state.signal?.aborted) {
       state.stopped = true;
-      state.reports.push({ index, kind: step.kind, status: "skip", reason: "run aborted", flow: sourceFlow });
+      state.reports.push({
+        index,
+        kind: step.kind,
+        status: "skip",
+        reason: "run aborted",
+        flow: sourceFlow,
+      });
       continue;
     }
 
@@ -423,7 +441,13 @@ async function execRunStep(
     return;
   }
   if (runStack.length >= MAX_RUN_DEPTH) {
-    state.reports.push({ index, kind: "run", status: "error", flow: target, reason: "max run depth exceeded" });
+    state.reports.push({
+      index,
+      kind: "run",
+      status: "error",
+      flow: target,
+      reason: "max run depth exceeded",
+    });
     state.stopped = true;
     return;
   }
@@ -533,7 +557,12 @@ async function execLeafStep(
         const result = await invokeSubTool(registry, ctx, AWAIT_UI_ELEMENT_TOOL_ID, args);
         if (isUnmetUiWaitResult(AWAIT_UI_ELEMENT_TOOL_ID, result)) {
           const note = (result as { note?: string }).note;
-          return { ...base, status: "fail", tool: AWAIT_UI_ELEMENT_TOOL_ID, reason: note ?? "condition not met" };
+          return {
+            ...base,
+            status: "fail",
+            tool: AWAIT_UI_ELEMENT_TOOL_ID,
+            reason: note ?? "condition not met",
+          };
         }
         return { ...base, status: "pass", tool: AWAIT_UI_ELEMENT_TOOL_ID, result };
       } catch (err) {
@@ -572,7 +601,12 @@ async function execLeafStep(
         const result = await invokeSubTool(registry, ctx, step.name, args);
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
-          return { ...base, status: "fail", tool: step.name, reason: `await-ui-element condition not met${note ? `: ${note}` : ""}` };
+          return {
+            ...base,
+            status: "fail",
+            tool: step.name,
+            reason: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+          };
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {

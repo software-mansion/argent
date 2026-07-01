@@ -234,10 +234,14 @@ async function queryFullHierarchyTree(
 
     if (await nativeApi.requiresAppRestart(target.bundleId)) return null;
 
-    const rawResult = (await nativeApi.queryViewHierarchy(target.bundleId, "ViewHierarchy.getFullHierarchy", {
-      fields: FULL_HIERARCHY_FIELDS,
-      maxDepth: 40,
-    })) as { windows?: unknown[]; error?: string };
+    const rawResult = (await nativeApi.queryViewHierarchy(
+      target.bundleId,
+      "ViewHierarchy.getFullHierarchy",
+      {
+        fields: FULL_HIERARCHY_FIELDS,
+        maxDepth: 40,
+      }
+    )) as { windows?: unknown[]; error?: string };
 
     if (rawResult.error) return null;
 

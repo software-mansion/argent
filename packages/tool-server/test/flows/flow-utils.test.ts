@@ -220,7 +220,7 @@ describe("parseFlow", () => {
 
   it("rejects text sugar with both contains and equals", () => {
     expect(() =>
-      parseFlow('steps:\n  - assert: { text: { in: counter, contains: a, equals: b } }\n')
+      parseFlow("steps:\n  - assert: { text: { in: counter, contains: a, equals: b } }\n")
     ).toThrow(/exactly one of `contains` or `equals`/);
   });
 
@@ -251,9 +251,9 @@ describe("parseFlow", () => {
   });
 
   it("rejects text sugar with an empty contains", () => {
-    expect(() => parseFlow('steps:\n  - assert: { text: { in: counter, contains: "" } }\n')).toThrow(
-      /non-empty `contains`/
-    );
+    expect(() =>
+      parseFlow('steps:\n  - assert: { text: { in: counter, contains: "" } }\n')
+    ).toThrow(/non-empty `contains`/);
   });
 
   it("serializes await/assert with the condition-as-key sugar (no condition: field)", () => {

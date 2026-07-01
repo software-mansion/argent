@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
-import { evaluateCondition, findAll, selectorToFrame, matchNode } from "../../src/utils/ui-tree-match";
+import {
+  evaluateCondition,
+  findAll,
+  selectorToFrame,
+  matchNode,
+} from "../../src/utils/ui-tree-match";
 import type { DescribeNode } from "../../src/tools/describe/contract";
 
 const SCREEN_W = 1080;
@@ -94,7 +99,9 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     const [submit] = findAll(tree, { identifier: "submit-button" });
     expect(submit!.label).toBeUndefined();
     expect(submit!.subtreeText).toBe("Submit");
-    expect(evaluateCondition("text", "Submit", findAll(tree, { identifier: "submit-button" }))).toBe(true);
+    expect(
+      evaluateCondition("text", "Submit", findAll(tree, { identifier: "submit-button" }))
+    ).toBe(true);
   });
 
   it("never hoists a password field's text (placeholder only)", () => {

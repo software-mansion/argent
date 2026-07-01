@@ -221,10 +221,7 @@ export function isE2eFlow(flow: FlowFile): boolean {
 }
 
 /** Resolve the launch app id for a platform, or null when none is declared for it. */
-export function appIdForPlatform(
-  launch: Launch | undefined,
-  platform: string
-): string | null {
+export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
   if (launch === undefined) return null;
   if (typeof launch === "string") return launch;
   const v = (launch as Record<string, string | undefined>)[platform];
@@ -321,7 +318,9 @@ function toYamlStep(step: FlowStep): YamlStep {
     case "run":
       return { run: step.flow };
     case "tap": {
-      const body: TapBody = step.selector ? selectorToYaml(step.selector) : { x: step.x!, y: step.y! };
+      const body: TapBody = step.selector
+        ? selectorToYaml(step.selector)
+        : { x: step.x!, y: step.y! };
       return { tap: body };
     }
     case "type": {
@@ -334,9 +333,13 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { type: body };
     }
     case "await":
-      return { await: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch) };
+      return {
+        await: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch),
+      };
     case "assert":
-      return { assert: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch) };
+      return {
+        assert: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch),
+      };
     case "wait":
       return { wait: step.ms };
     case "scroll-to":

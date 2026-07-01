@@ -85,8 +85,9 @@ describe("flow-execute honors the registry feature-flag gate", () => {
     );
 
     expect(result).toHaveProperty("steps");
-    const steps = (result as { steps: Array<{ kind: string; status: string; tool?: string; reason?: string }> })
-      .steps;
+    const steps = (
+      result as { steps: Array<{ kind: string; status: string; tool?: string; reason?: string }> }
+    ).steps;
     expect(steps).toHaveLength(1);
     expect(steps[0]).toMatchObject({ kind: "tool", status: "error", tool: "propose_variant" });
     // "not found" surfaces because the disabled flag-gated tool is treated as
@@ -106,8 +107,9 @@ describe("flow-execute honors the registry feature-flag gate", () => {
       { name: "gated-on", project_root: tmpDir, device: "00000000-0000-0000-0000-0000000000ab" }
     );
 
-    const steps = (result as { steps: Array<{ kind: string; status: string; tool?: string; result?: unknown }> })
-      .steps;
+    const steps = (
+      result as { steps: Array<{ kind: string; status: string; tool?: string; result?: unknown }> }
+    ).steps;
     expect(steps).toHaveLength(1);
     expect(steps[0]).toMatchObject({
       kind: "tool",

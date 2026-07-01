@@ -11,10 +11,12 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // the target is visible (simulating a scroll bringing it on-screen).
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/describe/platforms/ios", () => ({
-  describeIos: vi.fn(async (): Promise<DescribeTreeData> => ({
-    tree: currentTree(),
-    source: "ax-service",
-  })),
+  describeIos: vi.fn(
+    async (): Promise<DescribeTreeData> => ({
+      tree: currentTree(),
+      source: "ax-service",
+    })
+  ),
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
@@ -82,7 +84,9 @@ afterEach(async () => {
 
 describe("scroll-to directive", () => {
   it("scrolls momentum-free until the target is visible, then passes", async () => {
-    const offscreen = screen([n({ label: "Top", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]);
+    const offscreen = screen([
+      n({ label: "Top", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } }),
+    ]);
     const withTarget = screen([
       n({ label: "Order #1234", frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.1 } }),
     ]);

@@ -49,16 +49,24 @@ describe("flow composition (run:)", () => {
   it("expands a referenced fragment's steps inline", async () => {
     await writeFlow("login", {
       executionPrerequisite: "On login screen",
-      steps: [{ kind: "echo", message: "logging in" }, { kind: "tool", name: "tap", args: { x: 0.5 } }],
+      steps: [
+        { kind: "echo", message: "logging in" },
+        { kind: "tool", name: "tap", args: { x: 0.5 } },
+      ],
     });
     await writeFlow("main", {
       launch: "com.acme.app",
       executionPrerequisite: "",
-      steps: [{ kind: "run", flow: "login" }, { kind: "echo", message: "done" }],
+      steps: [
+        { kind: "run", flow: "login" },
+        { kind: "echo", message: "done" },
+      ],
     });
 
     const runFlow = createRunFlowTool(mockRegistry());
-    const result = asRun(await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE }));
+    const result = asRun(
+      await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE })
+    );
 
     // run marker, login's echo + tap, then main's echo.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
@@ -81,7 +89,9 @@ describe("flow composition (run:)", () => {
       steps: [{ kind: "run", flow: "other-e2e" }],
     });
     const runFlow = createRunFlowTool(mockRegistry());
-    const result = asRun(await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE }));
+    const result = asRun(
+      await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE })
+    );
     expect(result.steps[0]).toMatchObject({ kind: "run", status: "error" });
     expect(result.steps[0].reason).toMatch(/e2e flow/i);
     expect(result.ok).toBe(false);
@@ -96,7 +106,9 @@ describe("flow composition (run:)", () => {
       steps: [{ kind: "run", flow: "a" }],
     });
     const runFlow = createRunFlowTool(mockRegistry());
-    const result = asRun(await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE }));
+    const result = asRun(
+      await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE })
+    );
     const errored = result.steps.find((s) => s.status === "error");
     expect(errored?.reason).toMatch(/cyclic/i);
   });
@@ -112,7 +124,9 @@ describe("flow composition (run:)", () => {
     // service fails fast; a resolvable-but-never-connected one hits the same
     // guard after the connect timeout.)
     const registry = {
-      invokeTool: vi.fn(async (id: string) => (id === "list-devices" ? { devices: [] } : { ok: true })),
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
       getTool: vi.fn(() => undefined),
       resolveService: vi.fn(async () => {
         throw new Error("native-devtools unavailable");
@@ -120,7 +134,10 @@ describe("flow composition (run:)", () => {
     } as unknown as Registry;
 
     await expect(
-      createRunFlowTool(registry).execute({}, { name: "main", project_root: tmpDir, device: DEVICE })
+      createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
     ).rejects.toThrow(/could not connect to native devtools/i);
   });
 });
@@ -156,9 +173,9 @@ describe("flow validation", () => {
   });
 
   it("rejects a path-unsafe snapshot name (no traversal into baseline path)", () => {
-    expect(() =>
-      parseFlow("steps:\n  - snapshot:\n      name: ../../etc/evil\n")
-    ).toThrow(/snapshot name/i);
+    expect(() => parseFlow("steps:\n  - snapshot:\n      name: ../../etc/evil\n")).toThrow(
+      /snapshot name/i
+    );
   });
 
   it("round-trips the new step kinds through YAML", () => {
@@ -170,7 +187,11 @@ describe("flow validation", () => {
         { kind: "tap" as const, selector: { text: "Login", loose: true } },
         { kind: "tap" as const, x: 0.5, y: 0.57 },
         { kind: "type" as const, into: { identifier: "email" }, text: "a@b.com" },
-        { kind: "assert" as const, condition: "visible" as const, selector: { text: "Welcome", loose: true } },
+        {
+          kind: "assert" as const,
+          condition: "visible" as const,
+          selector: { text: "Welcome", loose: true },
+        },
         { kind: "snapshot" as const, name: "home", maxMismatch: 0.5 },
         { kind: "run" as const, flow: "login" },
       ],

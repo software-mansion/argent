@@ -33,7 +33,9 @@ export const selectorSchema = z
       .string()
       .min(1)
       .optional()
-      .describe("Case-insensitive substring of the element's role (e.g. AXButton, button, TextView)."),
+      .describe(
+        "Case-insensitive substring of the element's role (e.g. AXButton, button, TextView)."
+      ),
   })
   .refine((s) => Boolean(s.text || s.identifier || s.role), {
     message: "selector needs at least one of text, identifier, or role",
@@ -195,9 +197,7 @@ export function treeFingerprint(root: DescribeNode): string {
 // ── Reverse lookup & selector → frame ──────────────────────────────────────
 
 function frameContains(frame: DescribeFrame, x: number, y: number): boolean {
-  return (
-    x >= frame.x && x <= frame.x + frame.width && y >= frame.y && y <= frame.y + frame.height
-  );
+  return x >= frame.x && x <= frame.x + frame.width && y >= frame.y && y <= frame.y + frame.height;
 }
 
 function frameArea(frame: DescribeFrame): number {
