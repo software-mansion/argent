@@ -52,8 +52,15 @@ export class ScreencastManager {
       // strands this caller on a frame-less stream when the owner's start
       // rejects (activeCount never drains to 0, so no later start re-issues).
       await this.startInFlight;
-      if (this.optsDiffer(opts, this.currentOpts)) this.warnOptsIgnored();
-      this.activeCount += 1;
+      // If forceStop()/dispose superseded the start while we awaited, the owner
+      // took no refcount and the screencast is torn down — don't take a phantom
+      // one either. The owner's success continuation runs before ours (microtask
+      // FIFO on the shared promise), so activeCount already reflects whether the
+      // start was superseded (0) or is live (>0). Mirrors the owner-path guard.
+      if (this.activeCount > 0) {
+        if (this.optsDiffer(opts, this.currentOpts)) this.warnOptsIgnored();
+        this.activeCount += 1;
+      }
     } else if (this.activeCount === 0) {
       // First subscriber, nothing in flight: issue Page.startScreencast and
       // publish the promise so concurrent joiners await it. On failure nothing

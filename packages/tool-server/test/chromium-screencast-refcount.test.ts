@@ -96,4 +96,41 @@ describe("ScreencastManager recovers after a failed start", () => {
     await mgr.start();
     expect(send.mock.calls.filter((c) => c[0] === "Page.startScreencast").length).toBe(1);
   });
+
+  it("takes no phantom refcount when forceStop races a successful start with a joiner", async () => {
+    // Same race, but a JOINER is present when forceStop tears the screencast
+    // down and the owner's start then succeeds — the joiner must not take a
+    // phantom refcount either.
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    let startCalls = 0;
+    const send = vi.fn(async (method: string) => {
+      if (method === "Page.startScreencast") {
+        startCalls += 1;
+        if (startCalls === 1) await startGate;
+      }
+      return {};
+    });
+    const cdp = { events: new TypedEventEmitter(), send } as never;
+    const mgr = new ScreencastManager(
+      cdp,
+      new TypedEventEmitter() as never,
+      { recordFrame: () => {} } as never
+    );
+
+    const owner = mgr.start(); // owner: startScreencast gated (in flight)
+    const joiner = mgr.start(); // joiner: joins the in-flight start
+    await Promise.resolve();
+    await mgr.forceStop(); // dispose-style teardown mid-start
+    releaseStart(); // the gated start now resolves
+    await owner;
+    await joiner;
+
+    // Neither owner nor joiner took a refcount ⇒ a fresh start re-issues.
+    send.mockClear();
+    await mgr.start();
+    expect(send.mock.calls.filter((c) => c[0] === "Page.startScreencast").length).toBe(1);
+  });
 });
