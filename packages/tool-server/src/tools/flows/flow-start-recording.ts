@@ -9,6 +9,8 @@ import {
   startRecordingSession,
   clientFileDirective,
   serializeFlow,
+  validateFlow,
+  type FlowFile,
   type FlowSavedTo,
 } from "./flow-utils";
 
@@ -19,10 +21,23 @@ const zodSchema = z.object({
     .describe(
       "Absolute path to the project root directory (the directory that contains or should contain `.argent/flows/`). The flow file is created at `<project_root>/.argent/flows/<name>.yaml`."
     ),
+  launch: z
+    .string()
+    .optional()
+    .describe(
+      "App to launch for this end-to-end flow (iOS bundle id / Android package). Recorded so the standalone runner can start the app from scratch. Omit only when recording a fragment."
+    ),
+  fragment: z
+    .boolean()
+    .optional()
+    .describe(
+      "Record a reusable fragment instead of an e2e flow: no launch block, may declare executionPrerequisite, and can be run from other flows."
+    ),
   executionPrerequisite: z
     .string()
+    .optional()
     .describe(
-      'Describes the required app/device state before running this flow (e.g. "App on home screen after a fresh reload", "Settings app open on General page")'
+      'Fragments only: the app/device state assumed on entry (e.g. "Settings app open on General page"). Ignored for e2e flows.'
     ),
 });
 
@@ -62,7 +77,16 @@ to remove or reorder steps.`,
     const previousFlow = getActiveFlowOrNull();
 
     const filePath = getFlowPath(params.name);
-    const flow = { executionPrerequisite: params.executionPrerequisite, steps: [] };
+    // Default is an e2e flow (captures launch, no prerequisite). It's a fragment
+    // when explicitly opted in, or inferred when a prerequisite is given without
+    // an app to launch (a documented entry contract implies a reusable fragment).
+    const asFragment =
+      params.fragment === true ||
+      (params.launch === undefined && Boolean(params.executionPrerequisite));
+    const flow: FlowFile = asFragment
+      ? { executionPrerequisite: params.executionPrerequisite ?? "", steps: [] }
+      : { launch: params.launch, executionPrerequisite: "", steps: [] };
+    validateFlow(flow);
     const flowFile = serializeFlow(flow);
 
     // No probe (older client, direct invocation) means the caller shares this

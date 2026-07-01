@@ -17,6 +17,14 @@ import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
+import {
+  selectorSchema,
+  nodeText,
+  findAll,
+  isVisible,
+  firstInReadingOrder,
+  evaluateCondition,
+} from "../../utils/ui-tree-match";
 
 // Tool id. Exported so run-sequence can both allow this tool and recognise its
 // result shape (it returns { success: false } instead of throwing on an unmet
@@ -42,37 +50,6 @@ export function isUnmetUiWaitResult(tool: string, result: unknown): boolean {
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 400;
 
-// A selector locates a node in the accessibility / DOM tree returned by
-// `describe`. Every provided field must match (logical AND); matching is a
-// case-insensitive substring test so the agent doesn't need the exact label.
-const selectorSchema = z
-  .object({
-    text: z
-      .string()
-      .min(1)
-      .optional()
-      .describe("Case-insensitive substring of the element's visible label or value."),
-    identifier: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Case-insensitive substring of the element's identifier (accessibilityIdentifier / resource-id / testid)."
-      ),
-    role: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Case-insensitive substring of the element's role (e.g. AXButton, button, TextView)."
-      ),
-  })
-  .refine((s) => Boolean(s.text || s.identifier || s.role), {
-    message: "selector needs at least one of text, identifier, or role",
-  });
-
-type Selector = z.infer<typeof selectorSchema>;
-
 const zodSchema = z
   .object({
     udid: z
@@ -84,8 +61,8 @@ const zodSchema = z
       .describe(
         "What to wait for. `exists`: selector is anywhere in the tree. " +
           "`visible`: selector is present with a non-zero on-screen frame. `hidden`: selector is absent " +
-          "or zero-area. `text`: the first match in reading order (topmost) contains expectedText — if a loose " +
-          "selector hits several elements, only that topmost one is checked, so narrow it to target the intended element."
+          "or zero-area. `text`: the first match in reading order (topmost) contains (or, with textMatch `equals`, exactly matches) " +
+          "expectedText — if a loose selector hits several elements, only that topmost one is checked, so narrow it to target the intended element."
       ),
     selector: selectorSchema.describe("Element to match (text / identifier / role)."),
     expectedText: z
@@ -93,7 +70,13 @@ const zodSchema = z
       .min(1)
       .optional()
       .describe(
-        "For condition `text`: case-insensitive substring the first matched element (topmost in reading order) must contain."
+        "For condition `text`: the string the first matched element (topmost in reading order) must contain (default) or equal — see `textMatch`. Case-insensitive."
+      ),
+    textMatch: z
+      .enum(["contains", "equals"])
+      .optional()
+      .describe(
+        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
       ),
     bundleId: z
       .string()
@@ -138,115 +121,13 @@ const capability: ToolCapability = {
 };
 
 // ── Tree matching ────────────────────────────────────────────────────────
+// The matching engine (matchNode, findAll, isVisible, firstInReadingOrder, …)
+// lives in utils/ui-tree-match so the flow directives and recorder reuse the
+// exact selector semantics. `evaluateMatches` is kept as a params-shaped wrapper
+// for this tool and its tests.
 
-function nodeText(node: DescribeNode): string {
-  return [node.label, node.value].filter(Boolean).join(" ");
-}
-
-function includesCI(haystack: string | undefined, needle: string): boolean {
-  return Boolean(haystack) && haystack!.toLowerCase().includes(needle.toLowerCase());
-}
-
-function matchNode(node: DescribeNode, selector: Selector): boolean {
-  if (selector.text !== undefined) {
-    if (!includesCI(node.label, selector.text) && !includesCI(node.value, selector.text)) {
-      return false;
-    }
-  }
-  if (selector.identifier !== undefined && !includesCI(node.identifier, selector.identifier)) {
-    return false;
-  }
-  if (selector.role !== undefined && !includesCI(node.role, selector.role)) {
-    return false;
-  }
-  return true;
-}
-
-function collectMatches(node: DescribeNode, selector: Selector, acc: DescribeNode[]): void {
-  if (matchNode(node, selector)) acc.push(node);
-  for (const child of node.children) collectMatches(child, selector, acc);
-}
-
-// Every node matching the selector in the subtree, EXCLUDING `root` itself.
-//
-// `root` is the top-level container describe puts at the head of the tree. On
-// iOS / Android it's a synthetic full-screen node (iOS `AXGroup`, Android
-// `hierarchy`/`Screen`; frame `0,0,1,1`); on Chromium it's the REAL `<html>`
-// element (`describeChromium` walks `document.documentElement`), framed from
-// `getBoundingClientRect` rather than a synthetic `0,0,1,1`. Whatever its frame,
-// `describe` renders this node only as a non-selectable `ROOT` header line, never
-// as a matchable element, and its frame always passes `isVisible`. Matching it
-// would let a role selector that is a substring of the root role (e.g.
-// `role:"AXGroup"`, also iOS's default role for untyped elements) satisfy
-// `visible`/`exists` on any screen — including an empty AX tree — and make
-// `hidden` impossible. So we skip it, walking `root.children` only — the one rule
-// we share with format-tree. (Chromium side effect: the `<html>` element's own
-// id / aria-label / author role sit on this excluded root, so a selector
-// targeting those attributes matches nothing there.)
-//
-// Past that root exclusion we do NOT mirror describe's rendered body: describe
-// drops structural / unlabeled nodes through a content-and-role filter before
-// printing, but `findAll` tests every remaining node. So a role- or
-// identifier-only selector can match a container (e.g. an unlabeled `AXGroup`)
-// that never appears in describe's output — keep that in mind when a
-// `visible`/`exists` selector is broad. A substring selector can also match
-// several real nodes, so conditions are evaluated across the whole set (see
-// evaluateMatches). Exported for unit tests.
-export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
-  const acc: DescribeNode[] = [];
-  for (const child of root.children) collectMatches(child, selector, acc);
-  return acc;
-}
-
-// describe prunes off-screen / zero-size nodes on Chromium and the compressed
-// Android dump, and iOS AX only returns on-screen leaves — so a non-zero frame
-// area is a cheap, reliable proxy for "visible".
-function isVisible(node: DescribeNode): boolean {
-  return node.frame.width > 0 && node.frame.height > 0;
-}
-
-// The describe tool renders iOS leaves sorted into reading order (top-to-bottom,
-// then left-to-right) via format-tree's renderFlat, so the element the agent
-// "sees first" is the one with the smallest (y, then x). The `text` verdict and
-// the timeout note key off a single element, so pick that same one — otherwise
-// they'd refer to whichever node DFS happened to reach first, which on iOS can
-// differ from what the agent read at the top of describe. Returns undefined for
-// an empty set.
-function firstInReadingOrder(matches: DescribeNode[]): DescribeNode | undefined {
-  let best: DescribeNode | undefined;
-  for (const n of matches) {
-    if (
-      best === undefined ||
-      n.frame.y < best.frame.y ||
-      (n.frame.y === best.frame.y && n.frame.x < best.frame.x)
-    ) {
-      best = n;
-    }
-  }
-  return best;
-}
-
-// Evaluate the condition over ALL elements matching the selector, not just the
-// first in tree order. `visible` holds if ANY match is on-screen; `hidden` only
-// if NONE is — so a zero-area match that sorts before a visible one can't flip
-// the verdict the wrong way. `text` deliberately inspects the first match in
-// reading order: it asserts a specific element's content, and aggregating would
-// hide which element the selector actually landed on.
 export function evaluateMatches(params: Params, matches: DescribeNode[]): boolean {
-  switch (params.condition) {
-    case "exists":
-      return matches.length > 0;
-    case "visible":
-      return matches.some(isVisible);
-    case "hidden":
-      return !matches.some(isVisible);
-    case "text": {
-      const first = firstInReadingOrder(matches);
-      return first !== undefined && includesCI(nodeText(first), params.expectedText!);
-    }
-    default:
-      return false;
-  }
+  return evaluateCondition(params.condition, params.expectedText, matches, params.textMatch);
 }
 
 // A degraded / blind read: the tree came back EMPTY and that emptiness is not
@@ -296,8 +177,9 @@ function timeoutNote(
   switch (params.condition) {
     case "text": {
       const first = firstInReadingOrder(matches);
+      const wanted = params.textMatch === "equals" ? "equal" : "contain";
       base = first
-        ? `element matched but its text was "${nodeText(first)}" (wanted to contain "${params.expectedText}")`
+        ? `element matched but its text was "${nodeText(first)}" (wanted to ${wanted} "${params.expectedText}")`
         : "no element matched the selector before timeout";
       break;
     }
@@ -389,8 +271,9 @@ Conditions:
   visible  — the selector matches an element with a non-zero on-screen frame.
   hidden   — the selector matches nothing, or only a zero-area element (e.g. a spinner that disappeared).
   text     — the FIRST match in reading order (topmost, then leftmost) contains expectedText (case-insensitive
-             substring). A loose selector can match several elements; only that topmost one is inspected, so if a
-             lower match is the one holding the text the wait still reports failure — narrow the selector to target it.
+             substring), or exactly matches it when textMatch is \`equals\`. A loose selector can match several
+             elements; only that topmost one is inspected, so if a lower match is the one holding the text the wait
+             still reports failure — narrow the selector to target it.
 
 The selector is { text?, identifier?, role? }; every provided field must match (case-insensitive substring).
 text matches the element's label or value. It polls the same accessibility / DOM tree as \`describe\`

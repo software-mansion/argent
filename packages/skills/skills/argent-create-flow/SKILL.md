@@ -5,7 +5,46 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 ## 1. Overview
 
-A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/flows/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
+A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` directory. Each recorded step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`, or — for an e2e flow — headlessly with `argent flow run <name>`.
+
+Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
+
+**Two flow types** (inferred from the `launch` block):
+
+- **e2e** — declares a `launch` block; the runner launches that app from scratch before step 1. No `executionPrerequisite`. The only type `argent flow run` accepts. May `run:` fragments.
+- **fragment** — no `launch` block; may declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time. Record one by passing `fragment: true` to `flow-start-recording`.
+
+### Step directives
+
+Beyond raw `tool:` steps and `echo:`, flows support declarative directives interpreted by the runner (they are **not** agent-callable tools):
+
+| Directive   | YAML                                                      | Meaning                                                                 |
+| ----------- | --------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `tap`       | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }`            | tap an element by selector (auto-waits), or a raw normalized point      |
+| `type`      | `- type: { into: email, text: "a@b.com" }`                | focus a field, type, then press Enter to submit + dismiss the keyboard  |
+| `scroll-to` | `- scroll-to: { target: "Order #1234", direction: down }` | momentum-free scroll until the target is visible                        |
+| `await`     | `- await: { visible: Home }`                              | wait for a UI condition (sugar over `await-ui-element`)                 |
+| `wait`      | `- wait: 500`                                             | pause for a fixed number of milliseconds (last resort — prefer `await`) |
+| `assert`    | `- assert: { visible: Welcome }`                          | check a condition, hard-fail if it never holds                          |
+| `snapshot`  | `- snapshot: { name: home, maxMismatch: 0.5 }`            | diff a screenshot against a stored baseline                             |
+| `run`       | `- run: login`                                            | execute a fragment's steps inline                                       |
+
+A **selector** is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. A bare string is a _loose_ selector: it resolves **identifier-first, then falls back to text** (label/value), so `tap: Login` matches a `testID="Login"` or, failing that, visible text "Login" — no need to know which. (Loose fallback applies to `tap`, `type.into`, `assert`, `scroll-to`; `await` delegates to the wait tool and stays text-only.) Use the map form to be strict: `{ identifier: submit-btn }` (identifier only) or `{ text: Login }` (text only, no fallback).
+
+For `await`/`assert` the **condition is the key**, and its value is the selector:
+
+- `{ visible: Home }`, `{ exists: { identifier: row } }`, `{ hidden: spinner }`
+- `{ text: { in: <selector>, equals: "Taps: 0" } }` — `text` locates an element (`in`) and checks its rendered content (`equals`). Reach for it only when the locator is an identifier/role; to assert a string is simply on screen, prefer `{ visible: "Taps: 0" }`.
+
+This condition-as-key form is the only spelling. For advanced `await` control beyond it (custom timeout, poll interval, bundleId), drop to an explicit `- tool: await-ui-element` step. **Every directive hard-stops the flow on failure**; later steps are reported `skip`. `flow-execute` returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
+
+`type` presses Enter after typing to commit the value and dismiss the keyboard, so it can't cover later targets. For a chained form whose fields feed one explicit submit — e.g. email then password then a `tap: "Log in"` — set `submit: false` on the intermediate fields so a premature Enter doesn't fire the form early: `type: { into: password, text: "hunter2", submit: false }`.
+
+`scroll-to` needs a `direction` (`up` | `down` | `left` | `right`) and optionally a `within: <selector>` that anchors the scroll inside a specific container — required to drive a **nested** scroller (e.g. a horizontal carousel inside a vertical list), since the device can't be asked which container to scroll. It scrolls in bounded momentum-free increments, re-checks after each, and stops if a scroll reveals nothing new (end of the container). `tap`/`type` also auto-scroll a target into view (vertical) before resolving, so an explicit `scroll-to` is only needed for a horizontal scroll, a nested container, or to make the intent visible in the flow.
+
+### Standalone runner
+
+`argent flow run <name> [--device <id>] [--platform ios|android|chromium] [--update-baselines] [--json]` runs an e2e flow with no LLM in the loop and exits non-zero on any failure — suitable for CI. `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`; the status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs.
 
 ## 2. Tools
 
@@ -22,10 +61,17 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 
 ### Recording
 
-1. **Start**: Call `flow-start-recording` with a descriptive name, the absolute `project_root`, and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload"). `project_root` is stored for the session — you do **not** need to pass it again to subsequent tools.
+1. **Get to the entry state first, then start.** For an **e2e** flow the runner launches/restarts the app from scratch (the `launch` block) before step 1, so a recorded leading `restart-app`/`launch-app` would only double-launch it. **Launch or restart the app _before_ calling `flow-start-recording`** — not as the first recorded step — so the recording begins already at the flow's entry state. Then call `flow-start-recording` with a descriptive name, the absolute `project_root`, and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload"). `project_root` is stored for the session — you do **not** need to pass it again to subsequent tools.
 2. **Build step-by-step**: For each action, call `flow-add-step` with the tool name and args. The tool runs immediately — check the result before moving on.
 3. **Add labels**: Use `flow-add-echo` between steps to describe what each section does.
-4. **Finish**: Call `flow-finish-recording` to stop recording. It returns the file path where the flow was saved and a summary of all steps. You can edit the `.yaml` file directly afterwards to remove, reorder, or tweak steps.
+4. **Finish**: Call `flow-finish-recording` to stop recording. It returns the file path where the flow was saved and a summary of all steps.
+5. **Polish**: **Read the saved `.yaml` file** and convert the raw `tool:` steps that have a cleaner directive form (the recorder leaves these as tools):
+   - `tool: keyboard` typing into a field → `type: { into: "<field>", text: "…" }`, folding in the `tap` that focused the field.
+   - `tool: await-ui-element` gating a transition → `await: { visible: "…" }` / `{ hidden: … }` / `{ text: { in: …, equals: … } }`. Keep the raw `tool: await-ui-element` step only when it sets a custom `timeoutMs`/`pollIntervalMs`/`bundleId` the sugar can't express.
+
+   - A scroll-to-reach-an-element — a `tool: gesture-swipe` used to bring a specific element on screen before interacting with it (a `tap`, `type`, `assert`, …) → `scroll-to: { target: "<that element>", direction: … }`, dropping the swipe. This is far more robust than a fixed-distance swipe: it scrolls momentum-free and stops exactly when the target appears, so it survives layout and content changes. (`tap`/`type` also auto-scroll vertically, so even leaving the raw swipe + tap often works — but `scroll-to` is deterministic and self-documenting.) Keep a `gesture-swipe` as a raw `tool:` step when it isn't scrolling toward a specific element — especially a velocity-dependent gesture like swipe-to-dismiss, edge-swipe-back, or swipe-to-reveal a row action, which a momentum-free `scroll-to` would not reproduce.
+
+Every other recorded tool (`gesture-swipe`, `gesture-scroll`, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, a `flow-execute` of a sibling fragment is captured as a `run: <name>` composition directive, device ids are stripped, and text-only selectors are emitted as bare strings. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
 
 Every tool during recording returns the current flow file contents so you can track what has been recorded.
 
@@ -35,9 +81,11 @@ Call `flow-execute` with the flow name. If the flow has an execution prerequisit
 
 1. The tool returns a **notice** with the prerequisite text instead of running. It asks you to verify the prerequisite is met and call `flow-execute` again with `prerequisiteAcknowledged: true`.
 2. You can also call `flow-read-prerequisite` beforehand to inspect the prerequisite without triggering a run.
-3. Once you pass `prerequisiteAcknowledged: true`, the flow runs all steps in order and returns every tool call result (including screenshots) merged into a single response.
+3. Once you pass `prerequisiteAcknowledged: true`, the flow runs all steps in order and returns a structured report `{ ok, passed, failed, skipped, errored, steps }`.
 
 If the flow has no prerequisite, it runs immediately without needing acknowledgment.
+
+**What each step reports.** Raw `tool:` and `await:` steps include the underlying tool's full `result` (screenshots and other outputs render as usual). The directive steps are summarized: `tap`/`type`/`assert` report only `status` + `reason`, and `snapshot` adds `artifacts` (diff image paths). So converting a `tool: gesture-tap` into a `tap:` directive during cleanup drops only that tap's (uninteresting) raw result — output-bearing tools like `screenshot` have no directive form and stay `tool:` steps, so their results keep flowing through.
 
 ## 4. flow-add-step Usage
 

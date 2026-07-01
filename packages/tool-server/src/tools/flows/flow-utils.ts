@@ -3,6 +3,12 @@ import * as fs from "node:fs/promises";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import { CLIENT_FILE_MARKER, type ClientFileDirective } from "@argent/registry";
+import {
+  selectorSchema,
+  type Selector,
+  type WaitCondition,
+  type TextMatchMode,
+} from "../../utils/ui-tree-match";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
@@ -154,56 +160,424 @@ export function clearActiveFlow(): void {
 
 // ── Types ────────────────────────────────────────────────────────────
 
+/**
+ * The app the standalone runner launches before an e2e flow. A bare string
+ * applies to every platform; the map form targets a specific bundle id /
+ * package per platform. Presence of a `launch` value is what makes a flow an
+ * e2e flow (vs a reusable fragment).
+ */
+export type Launch = string | { ios?: string; android?: string; chromium?: string };
+
+/** Axis + sense a `scroll-to` step scrolls in to reveal its target. */
+export type ScrollDirection = "up" | "down" | "left" | "right";
+
+/**
+ * A selector as a flow step carries it. Extends the shared {@link Selector} with
+ * an internal `loose` flag, set when the selector came from bare-string sugar
+ * (`tap: foo`). A loose selector resolves identifier-first, then falls back to
+ * text (label/value), so a hand-written `foo` matches `testID="foo"` as well as
+ * visible text. The flag is honored only by the flow runner (`flow-actions.ts`)
+ * and is never serialized as a field (it is implied by the bare-string spelling)
+ * nor forwarded into a tool's input — explicit `{ text }` / `{ identifier }`
+ * selectors stay strict everywhere.
+ */
+export type FlowSelector = Selector & { loose?: boolean };
+
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
-  | { kind: "echo"; message: string };
+  | { kind: "echo"; message: string }
+  | { kind: "run"; flow: string }
+  | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number }
+  | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
+  | {
+      kind: "await";
+      condition: WaitCondition;
+      selector: FlowSelector;
+      expectedText?: string;
+      textMatch?: TextMatchMode;
+    }
+  | {
+      kind: "assert";
+      condition: WaitCondition;
+      selector: FlowSelector;
+      expectedText?: string;
+      textMatch?: TextMatchMode;
+    }
+  | { kind: "wait"; ms: number }
+  | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
+  | { kind: "snapshot"; name: string; maxMismatch?: number };
 
 export type FlowFile = {
+  /** Present ⇒ e2e flow (launchable, standalone-runnable). Absent ⇒ fragment. */
+  launch?: Launch;
+  /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
   steps: FlowStep[];
 };
 
+/** A flow is end-to-end iff it declares an app to launch. */
+export function isE2eFlow(flow: FlowFile): boolean {
+  return flow.launch !== undefined;
+}
+
+/** Resolve the launch app id for a platform, or null when none is declared for it. */
+export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
+  if (launch === undefined) return null;
+  if (typeof launch === "string") return launch;
+  const v = (launch as Record<string, string | undefined>)[platform];
+  return v ?? null;
+}
+
+/**
+ * A selector in YAML is sugared: a bare string is shorthand for `{ text: <string> }`
+ * (the common case), and the full `{ text?, identifier?, role? }` map is still
+ * accepted for identifier/role locators.
+ */
+type YamlSelector = string | Selector;
+
+/** A tap targets an element (selector, possibly a bare string) or a raw point. */
+type TapBody = YamlSelector | { x: number; y: number };
+
+/**
+ * The body of an `await`/`assert` step. The condition is the key, not a separate
+ * `condition:` field:
+ *   - `{ visible: "Account" }`            ← exists/visible/hidden take a selector
+ *   - `{ text: { in: "Taps:", contains: "Taps: 0" } }`  ← substring check
+ *   - `{ text: { in: "Taps:", equals: "Taps: 0" } }`    ← exact-text check
+ */
+type YamlWaitBody =
+  | { exists: YamlSelector }
+  | { visible: YamlSelector }
+  | { hidden: YamlSelector }
+  | { text: { in: YamlSelector; contains: string } }
+  | { text: { in: YamlSelector; equals: string } };
+
+type YamlScrollBody = { target: YamlSelector; direction: ScrollDirection; within?: YamlSelector };
+
 type YamlStep =
   | { echo: string }
-  | { tool: string; args?: Record<string, unknown>; delayMs?: number };
+  | { run: string }
+  | { tool: string; args?: Record<string, unknown>; delayMs?: number }
+  | { tap: TapBody }
+  | { type: { into: YamlSelector; text: string; submit?: boolean } }
+  | { await: YamlWaitBody }
+  | { assert: YamlWaitBody }
+  | { wait: number }
+  | { "scroll-to": YamlScrollBody }
+  | { snapshot: { name: string; maxMismatch?: number } };
 
 type YamlFlowFile = {
-  executionPrerequisite: string;
+  launch?: Launch;
+  executionPrerequisite?: string;
   steps: YamlStep[];
 };
 
 // ── Conversions ──────────────────────────────────────────────────────
 
-function toYamlStep(step: FlowStep): YamlStep {
-  if (step.kind === "echo") {
-    return { echo: step.message };
+/**
+ * Sugar a selector for YAML output: a text-only selector collapses to a bare
+ * string (`{ text: "Login" }` → `"Login"`); an identifier/role selector keeps
+ * the map form. The internal `loose` flag is never emitted — a bare string is
+ * loose by definition, so the spelling carries it. `parseSelector` is the
+ * inverse (a bare string parses back to a loose text selector).
+ */
+function selectorToYaml(sel: FlowSelector): YamlSelector {
+  if (sel.text !== undefined && sel.identifier === undefined && sel.role === undefined) {
+    return sel.text;
   }
-  const yaml: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
-    tool: step.name,
-  };
-  if (Object.keys(step.args).length > 0) yaml.args = step.args;
-  if (step.delayMs !== undefined) yaml.delayMs = step.delayMs;
-  return yaml;
+  const { loose: _loose, ...rest } = sel;
+  return { ...rest };
+}
+
+/** Sugar an await/assert step into the condition-as-key YAML body. */
+function waitToYaml(
+  condition: WaitCondition,
+  selector: Selector,
+  expectedText: string | undefined,
+  textMatch: TextMatchMode | undefined
+): YamlWaitBody {
+  const sel = selectorToYaml(selector);
+  switch (condition) {
+    case "exists":
+      return { exists: sel };
+    case "visible":
+      return { visible: sel };
+    case "hidden":
+      return { hidden: sel };
+    case "text":
+      return textMatch === "equals"
+        ? { text: { in: sel, equals: expectedText ?? "" } }
+        : { text: { in: sel, contains: expectedText ?? "" } };
+  }
+}
+
+function toYamlStep(step: FlowStep): YamlStep {
+  switch (step.kind) {
+    case "echo":
+      return { echo: step.message };
+    case "run":
+      return { run: step.flow };
+    case "tap": {
+      const body: TapBody = step.selector
+        ? selectorToYaml(step.selector)
+        : { x: step.x!, y: step.y! };
+      return { tap: body };
+    }
+    case "type": {
+      const body: { into: YamlSelector; text: string; submit?: boolean } = {
+        into: selectorToYaml(step.into),
+        text: step.text,
+      };
+      // `submit` defaults to true; only serialize the explicit opt-out.
+      if (step.submit === false) body.submit = false;
+      return { type: body };
+    }
+    case "await":
+      return {
+        await: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch),
+      };
+    case "assert":
+      return {
+        assert: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch),
+      };
+    case "wait":
+      return { wait: step.ms };
+    case "scroll-to":
+      return {
+        "scroll-to": {
+          target: selectorToYaml(step.target),
+          direction: step.direction,
+          ...(step.within ? { within: selectorToYaml(step.within) } : {}),
+        },
+      };
+    case "snapshot":
+      return {
+        snapshot: {
+          name: step.name,
+          ...(step.maxMismatch !== undefined ? { maxMismatch: step.maxMismatch } : {}),
+        },
+      };
+    case "tool":
+    default: {
+      const y: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
+        tool: step.name,
+      };
+      if (Object.keys(step.args).length > 0) y.args = step.args;
+      if (step.delayMs !== undefined) y.delayMs = step.delayMs;
+      return y;
+    }
+  }
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw new FailureError(`Unrecognized flow entry (${detail}): ${JSON.stringify(raw)}`, {
+    error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+    failure_stage: "flow_file_parse_step",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+function parseSelector(raw: unknown, where: string): FlowSelector {
+  // Bare-string sugar: a string is shorthand for a text selector, marked
+  // `loose` so the flow runner tries the identifier locator first and falls
+  // back to text — a hand-written `foo` then matches `testID="foo"` too. An
+  // explicit `{ text }` / `{ identifier }` map is strict (no `loose`).
+  if (typeof raw === "string") {
+    const r = selectorSchema.safeParse({ text: raw });
+    if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
+    return { ...r.data, loose: true };
+  }
+  const r = selectorSchema.safeParse(raw);
+  if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
+  return r.data;
+}
+
+const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden", "text"];
+
+const SCROLL_DIRECTIONS: readonly ScrollDirection[] = ["up", "down", "left", "right"];
+
+type WaitFields = {
+  condition: WaitCondition;
+  selector: Selector;
+  expectedText?: string;
+  textMatch?: TextMatchMode;
+};
+
+/**
+ * Parse the body of an `await`/`assert` step into its condition + selector +
+ * optional expected text. The condition is the key and its value is the
+ * selector (`{ visible: "Home" }`, `{ text: { in, contains } }`). The `text`
+ * check takes exactly one of `contains` (substring) or `equals` (exact text).
+ * This is the only accepted spelling; for advanced await control beyond this
+ * surface (timeout, poll interval, bundleId) drop to an explicit
+ * `tool: await-ui-element` step.
+ */
+function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
+  if (raw === null || typeof raw !== "object") {
+    badEntry({ [kind]: raw }, `${kind} needs a condition (${WAIT_CONDITIONS.join(", ")})`);
+  }
+  const b = raw as Record<string, unknown>;
+
+  // The condition is the key; its value is the selector.
+  const present = WAIT_CONDITIONS.filter((c) => c in b);
+  if (present.length !== 1) {
+    badEntry(
+      { [kind]: b },
+      `${kind} needs exactly one condition key (${WAIT_CONDITIONS.join(", ")})`
+    );
+  }
+  const condition = present[0]!;
+
+  // `text` locates an element (`in`) and checks its rendered content against
+  // exactly one of `contains` (substring) or `equals` (exact text).
+  if (condition === "text") {
+    const t = b.text;
+    if (t === null || typeof t !== "object") {
+      badEntry({ [kind]: b }, `${kind} text needs { in: <selector>, contains|equals: <string> }`);
+    }
+    const tb = t as Record<string, unknown>;
+    const hasContains = "contains" in tb;
+    const hasEquals = "equals" in tb;
+    if (hasContains === hasEquals) {
+      badEntry({ [kind]: b }, `${kind} text needs exactly one of \`contains\` or \`equals\``);
+    }
+    const textMatch: TextMatchMode = hasEquals ? "equals" : "contains";
+    const expected = hasEquals ? tb.equals : tb.contains;
+    if (typeof expected !== "string" || expected.length === 0) {
+      badEntry({ [kind]: b }, `${kind} text needs a non-empty \`${textMatch}\``);
+    }
+    return {
+      condition: "text",
+      selector: parseSelector(tb.in, `${kind}.text.in`),
+      expectedText: expected,
+      textMatch,
+    };
+  }
+
+  return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`) };
 }
 
 function fromYamlStep(raw: YamlStep): FlowStep {
-  if ("echo" in raw) {
-    return { kind: "echo", message: raw.echo };
+  if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
+  if ("run" in raw) return { kind: "run", flow: String(raw.run) };
+
+  if ("tap" in raw) {
+    const body = (raw as { tap: unknown }).tap;
+    const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    // A tap targets either an element (selector) or a raw point (x/y).
+    if (typeof obj.x === "number" && typeof obj.y === "number") {
+      return { kind: "tap", x: obj.x, y: obj.y };
+    }
+    return { kind: "tap", selector: parseSelector(body, "tap") };
   }
-  const step: FlowStep = { kind: "tool", name: raw.tool, args: raw.args ?? {} };
-  if (raw.delayMs !== undefined) step.delayMs = raw.delayMs;
-  return step;
+
+  if ("type" in raw) {
+    const body = (raw as { type: { into?: unknown; text?: unknown; submit?: unknown } }).type;
+    if (!body || typeof body !== "object") badEntry(raw, "type needs { into, text }");
+    if (typeof body.text !== "string" || body.text.length === 0) {
+      badEntry(raw, "type needs a non-empty text");
+    }
+    if (body.submit !== undefined && typeof body.submit !== "boolean") {
+      badEntry(raw, "type.submit must be a boolean");
+    }
+    const step: Extract<FlowStep, { kind: "type" }> = {
+      kind: "type",
+      into: parseSelector(body.into, "type.into"),
+      text: body.text,
+    };
+    if (body.submit === false) step.submit = false;
+    return step;
+  }
+
+  if ("await" in raw) {
+    return { kind: "await", ...parseWaitFields((raw as { await: unknown }).await, "await") };
+  }
+
+  if ("assert" in raw) {
+    return { kind: "assert", ...parseWaitFields((raw as { assert: unknown }).assert, "assert") };
+  }
+
+  if ("wait" in raw) {
+    const ms = Number((raw as { wait: unknown }).wait);
+    if (!Number.isFinite(ms) || ms < 0) {
+      badEntry(raw, "wait needs a non-negative number of milliseconds (e.g. `wait: 500`)");
+    }
+    return { kind: "wait", ms };
+  }
+
+  if ("scroll-to" in raw) {
+    const body = (raw as { "scroll-to": unknown })["scroll-to"];
+    if (body === null || typeof body !== "object") {
+      badEntry(raw, "scroll-to needs { target, direction }");
+    }
+    const b = body as Record<string, unknown>;
+    if (
+      typeof b.direction !== "string" ||
+      !SCROLL_DIRECTIONS.includes(b.direction as ScrollDirection)
+    ) {
+      badEntry(raw, `scroll-to needs a direction (${SCROLL_DIRECTIONS.join(", ")})`);
+    }
+    const step: FlowStep = {
+      kind: "scroll-to",
+      target: parseSelector(b.target, "scroll-to.target"),
+      direction: b.direction as ScrollDirection,
+    };
+    if (b.within !== undefined) step.within = parseSelector(b.within, "scroll-to.within");
+    return step;
+  }
+
+  if ("snapshot" in raw) {
+    const b = (raw as { snapshot: { name?: unknown; maxMismatch?: number } }).snapshot;
+    if (!b || typeof b !== "object" || typeof b.name !== "string" || !b.name) {
+      badEntry(raw, "snapshot needs a { name }");
+    }
+    // The name becomes a baseline filename, so it must be path-safe (no
+    // separators or "..") — same constraint as a flow name.
+    if (!FLOW_NAME_PATTERN.test(b.name)) {
+      badEntry(
+        raw,
+        `snapshot name "${b.name}" must match ${FLOW_NAME_PATTERN} (letters, digits, underscore, hyphen)`
+      );
+    }
+    const step: FlowStep = { kind: "snapshot", name: b.name };
+    if (b.maxMismatch !== undefined) step.maxMismatch = Number(b.maxMismatch);
+    return step;
+  }
+
+  if ("tool" in raw) {
+    const r = raw as { tool: string; args?: Record<string, unknown>; delayMs?: number };
+    const step: FlowStep = { kind: "tool", name: r.tool, args: r.args ?? {} };
+    if (r.delayMs !== undefined) step.delayMs = r.delayMs;
+    return step;
+  }
+
+  return badEntry(raw, "unrecognized step kind");
 }
 
 // ── Serialisation ────────────────────────────────────────────────────
 
-/** Serialize a full flow file to YAML. */
+/** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
 export function serializeFlow(flow: FlowFile): string {
-  const doc: YamlFlowFile = {
-    executionPrerequisite: flow.executionPrerequisite,
-    steps: flow.steps.map(toYamlStep),
-  };
+  const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
+  if (flow.launch !== undefined) doc.launch = flow.launch;
+  if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   return yamlStringify(doc);
+}
+
+/** Validate cross-field invariants that are checkable without other files. */
+export function validateFlow(flow: FlowFile): void {
+  if (isE2eFlow(flow) && flow.executionPrerequisite) {
+    throw new FailureError(
+      "An e2e flow (one with a launch block) must not declare executionPrerequisite — it launches its own app and controls its start state. Remove launch to make it a fragment, or drop executionPrerequisite.",
+      {
+        error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
+        failure_stage: "flow_file_validate",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
 }
 
 /** Parse a YAML flow file into a FlowFile. */
@@ -230,22 +604,17 @@ export function parseFlow(content: string): FlowFile {
   }
 
   const steps = parsed.steps.map((raw) => {
-    if (raw !== null && typeof raw === "object") {
-      if ("echo" in raw) return fromYamlStep(raw);
-      if ("tool" in raw) return fromYamlStep(raw);
-    }
-    throw new FailureError(`Unrecognized flow entry: ${JSON.stringify(raw)}`, {
-      error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
-      failure_stage: "flow_file_parse_step",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    });
+    if (raw !== null && typeof raw === "object") return fromYamlStep(raw as YamlStep);
+    return badEntry(raw, "step must be an object");
   });
 
-  return {
+  const flow: FlowFile = {
+    launch: parsed.launch,
     executionPrerequisite: parsed.executionPrerequisite ?? "",
     steps,
   };
+  validateFlow(flow);
+  return flow;
 }
 
 // ── File helpers ─────────────────────────────────────────────────────
