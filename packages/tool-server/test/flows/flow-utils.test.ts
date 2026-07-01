@@ -149,6 +149,24 @@ describe("parseFlow", () => {
     ]);
   });
 
+  it("defaults type.submit to on (no submit key in the parsed model)", () => {
+    const flow = parseFlow('steps:\n  - type: { into: email, text: "a@b.com" }\n');
+    expect(flow.steps[0]).not.toHaveProperty("submit");
+  });
+
+  it("parses and round-trips an explicit type.submit: false opt-out", () => {
+    const flow = parseFlow('steps:\n  - type: { into: email, text: "a@b.com", submit: false }\n');
+    expect(flow.steps).toEqual([
+      { kind: "type", into: { text: "email", loose: true }, text: "a@b.com", submit: false },
+    ]);
+    expect(serializeFlow(flow)).toContain("submit: false");
+    expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
+  });
+
+  it("rejects a non-boolean type.submit", () => {
+    expect(() => parseFlow('steps:\n  - type: { into: email, text: "x", submit: 3 }\n')).toThrow();
+  });
+
   it("keeps an explicit { text } map strict (no loose fallback)", () => {
     const flow = parseFlow("steps:\n  - tap: { text: Settings }\n");
     expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);

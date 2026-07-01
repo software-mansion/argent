@@ -438,7 +438,7 @@ async function execLeafStep(
     }
 
     case "type": {
-      const r = await runType(registry, ctx, device, step.into, step.text, signal);
+      const r = await runType(registry, ctx, device, step.into, step.text, step.submit, signal);
       return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
     }
 

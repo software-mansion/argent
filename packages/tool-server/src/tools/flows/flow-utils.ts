@@ -187,7 +187,7 @@ export type FlowStep =
   | { kind: "echo"; message: string }
   | { kind: "run"; flow: string }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number }
-  | { kind: "type"; into: FlowSelector; text: string }
+  | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
   | { kind: "await"; condition: WaitCondition; selector: FlowSelector; expectedText?: string }
   | { kind: "assert"; condition: WaitCondition; selector: FlowSelector; expectedText?: string }
   | { kind: "wait"; ms: number }
@@ -247,7 +247,7 @@ type YamlStep =
   | { run: string }
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
-  | { type: { into: YamlSelector; text: string } }
+  | { type: { into: YamlSelector; text: string; submit?: boolean } }
   | { await: YamlWaitBody }
   | { assert: YamlWaitBody }
   | { wait: number }
@@ -306,8 +306,15 @@ function toYamlStep(step: FlowStep): YamlStep {
       const body: TapBody = step.selector ? selectorToYaml(step.selector) : { x: step.x!, y: step.y! };
       return { tap: body };
     }
-    case "type":
-      return { type: { into: selectorToYaml(step.into), text: step.text } };
+    case "type": {
+      const body: { into: YamlSelector; text: string; submit?: boolean } = {
+        into: selectorToYaml(step.into),
+        text: step.text,
+      };
+      // `submit` defaults to true; only serialize the explicit opt-out.
+      if (step.submit === false) body.submit = false;
+      return { type: body };
+    }
     case "await":
       return { await: waitToYaml(step.condition, step.selector, step.expectedText) };
     case "assert":
@@ -430,12 +437,21 @@ function fromYamlStep(raw: YamlStep): FlowStep {
   }
 
   if ("type" in raw) {
-    const body = (raw as { type: { into?: unknown; text?: unknown } }).type;
+    const body = (raw as { type: { into?: unknown; text?: unknown; submit?: unknown } }).type;
     if (!body || typeof body !== "object") badEntry(raw, "type needs { into, text }");
     if (typeof body.text !== "string" || body.text.length === 0) {
       badEntry(raw, "type needs a non-empty text");
     }
-    return { kind: "type", into: parseSelector(body.into, "type.into"), text: body.text };
+    if (body.submit !== undefined && typeof body.submit !== "boolean") {
+      badEntry(raw, "type.submit must be a boolean");
+    }
+    const step: Extract<FlowStep, { kind: "type" }> = {
+      kind: "type",
+      into: parseSelector(body.into, "type.into"),
+      text: body.text,
+    };
+    if (body.submit === false) step.submit = false;
+    return step;
   }
 
   if ("await" in raw) {
