@@ -211,6 +211,7 @@ export type FlowStep =
   | { kind: "type"; into: FlowSelector; text: string }
   | { kind: "await"; condition: WaitCondition; selector: FlowSelector; expectedText?: string }
   | { kind: "assert"; condition: WaitCondition; selector: FlowSelector; expectedText?: string }
+  | { kind: "wait"; ms: number }
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "snapshot"; name: string; maxMismatch?: number };
 
@@ -270,6 +271,7 @@ type YamlStep =
   | { type: { into: YamlSelector; text: string } }
   | { await: YamlWaitBody }
   | { assert: YamlWaitBody }
+  | { wait: number }
   | { "scroll-to": YamlScrollBody }
   | { snapshot: { name: string; maxMismatch?: number } };
 
@@ -331,6 +333,8 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { await: waitToYaml(step.condition, step.selector, step.expectedText) };
     case "assert":
       return { assert: waitToYaml(step.condition, step.selector, step.expectedText) };
+    case "wait":
+      return { wait: step.ms };
     case "scroll-to":
       return {
         "scroll-to": {
@@ -461,6 +465,14 @@ function fromYamlStep(raw: YamlStep): FlowStep {
 
   if ("assert" in raw) {
     return { kind: "assert", ...parseWaitFields((raw as { assert: unknown }).assert, "assert") };
+  }
+
+  if ("wait" in raw) {
+    const ms = Number((raw as { wait: unknown }).wait);
+    if (!Number.isFinite(ms) || ms < 0) {
+      badEntry(raw, "wait needs a non-negative number of milliseconds (e.g. `wait: 500`)");
+    }
+    return { kind: "wait", ms };
   }
 
   if ("scroll-to" in raw) {

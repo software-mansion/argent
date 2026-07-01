@@ -172,8 +172,8 @@ export function createRunFlowTool(
     description: `Run a saved flow from the .argent/flows/ directory.
 Steps run in order: \`tool\` calls dispatch through the registry; \`tap\`/\`type\` resolve a selector to
 an element and act on it; \`scroll-to\` scrolls (momentum-free) until a target is visible; \`await\` waits for
-a UI condition; \`assert\` checks one now; \`snapshot\` diffs a screenshot against a stored baseline; \`echo\`
-annotates; \`run\` executes a referenced fragment inline.
+a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
+diffs a screenshot against a stored baseline; \`echo\` annotates; \`run\` executes a referenced fragment inline.
 Device id is injected by the runner (flows store none) — pass \`device\` or \`platform\` to pick one, else
 the single booted device is used. Every step hard-stops the flow on failure; later steps are reported as
 skipped. Returns a structured report ({ ok, passed, failed, skipped, errored, steps }).
@@ -463,6 +463,13 @@ async function execLeafStep(
         signal
       );
       return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
+    }
+
+    case "wait": {
+      if (!(await sleepOrAbort(step.ms, signal))) {
+        return { ...base, status: "skip", reason: "run aborted during wait" };
+      }
+      return { ...base, status: "pass" };
     }
 
     case "await": {

@@ -69,6 +69,8 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
               : `${step.condition} ${JSON.stringify(step.selector)}`;
           return `${n}. ${step.kind}: ${tail}`;
         }
+        case "wait":
+          return `${n}. wait: ${step.ms}ms`;
         case "scroll-to":
           return `${n}. scroll-to: ${JSON.stringify(step.target)} (${step.direction})`;
         case "snapshot":

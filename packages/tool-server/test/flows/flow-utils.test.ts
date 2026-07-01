@@ -230,6 +230,7 @@ describe("parseFlow", () => {
         { kind: "tap", selector: { text: "Login", loose: true } },
         { kind: "type", into: { text: "email", loose: true }, text: "a@b.com" },
         { kind: "await", condition: "hidden", selector: { identifier: "spinner" } },
+        { kind: "wait", ms: 500 },
         { kind: "assert", condition: "text", selector: { text: "Taps:", loose: true }, expectedText: "Taps: 0" },
         { kind: "scroll-to", target: { text: "Order #1234", loose: true }, direction: "down" },
         {
@@ -250,6 +251,16 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([
       { kind: "scroll-to", target: { text: "Account", loose: true }, direction: "down" },
     ]);
+  });
+
+  it("parses a bare-number wait as milliseconds", () => {
+    const flow = parseFlow("steps:\n  - wait: 750\n");
+    expect(flow.steps).toEqual([{ kind: "wait", ms: 750 }]);
+  });
+
+  it("rejects a wait that is not a non-negative number", () => {
+    expect(() => parseFlow("steps:\n  - wait: soon\n")).toThrow("wait needs a non-negative number");
+    expect(() => parseFlow("steps:\n  - wait: -5\n")).toThrow("wait needs a non-negative number");
   });
 
   it("rejects a scroll-to without a valid direction", () => {

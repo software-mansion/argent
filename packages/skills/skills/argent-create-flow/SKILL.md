@@ -24,6 +24,7 @@ Beyond raw `tool:` steps and `echo:`, flows support declarative directives inter
 | `type` | `- type: { into: email, text: "a@b.com" }` | focus a field and type |
 | `scroll-to` | `- scroll-to: { target: "Order #1234", direction: down }` | momentum-free scroll until the target is visible |
 | `await` | `- await: { visible: Home }` | wait for a UI condition (sugar over `await-ui-element`) |
+| `wait` | `- wait: 500` | pause for a fixed number of milliseconds (last resort — prefer `await`) |
 | `assert` | `- assert: { visible: Welcome }` | check a condition, hard-fail if it never holds |
 | `snapshot` | `- snapshot: { name: home, maxMismatch: 0.5 }` | diff a screenshot against a stored baseline |
 | `run` | `- run: login` | execute a fragment's steps inline |
