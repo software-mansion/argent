@@ -6,11 +6,11 @@ import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// How long to hold the finger stationary (as a train of still Move samples) at
-// the end of a `settle` swipe before lifting. Comfortably longer than iOS's
-// ~100ms velocity-averaging window so the tracked velocity decays to ~0 and the
-// scroll view skips its fling; short enough not to register as a long-press.
-const SETTLE_DWELL_MS = 220;
+// Ease-out exponent for a `settle` swipe. The finger follows 1-(1-t)^n rather
+// than a straight line, so it decelerates into the end point and lifts at ~0
+// velocity — the scroll view then skips its fling. Cubic gives a fast glide that
+// flattens over the final frames; a higher exponent would linger longer at rest.
+const SETTLE_EASE_EXPONENT = 3;
 
 const zodSchema = z.object({
   udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -26,7 +26,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Momentum-free swipe: dwell briefly at the end point before lifting so the OS reads ~0 release velocity and applies no fling. The content lands exactly where the finger stops, making the scroll distance deterministic. Use for scroll-to-element loops; default false (a natural flinging swipe)."
+      "Momentum-free swipe: decelerate into the end point (ease-out) so the OS reads ~0 release velocity and applies no fling. The content lands where the finger stops, making the scroll distance deterministic. Use for scroll-to-element loops; default false (a natural flinging swipe)."
     ),
 });
 
@@ -69,12 +69,18 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      const x = params.fromX + (params.toX - params.fromX) * t;
-      const y = params.fromY + (params.toY - params.fromY) * t;
-      // When settling, the final keyframe stays a Move (the start of a stationary
-      // hold at the end point) instead of the lift — the hold below decays the
-      // tracked velocity to ~0 before we lift, so no fling.
-      const type = i === 0 ? "Down" : i === steps && !settle ? "Up" : "Move";
+      // A plain swipe advances linearly; a `settle` swipe eases-out so the finger
+      // decelerates into the end point and lifts at ~0 velocity (no fling). The
+      // shrinking end-of-curve steps stay distinct, non-coalescible moves whose
+      // dx/dt genuinely decays — unlike a train of identical "hold" samples,
+      // which UIKit coalesces away, leaving the fast pre-hold velocity to fling.
+      // Ease-out also keeps every sample between the start and end point, so it
+      // never runs off-screen the way a beyond-the-end hold would for a swipe
+      // that already finishes at an edge.
+      const progress = settle ? 1 - Math.pow(1 - t, SETTLE_EASE_EXPONENT) : t;
+      const x = params.fromX + (params.toX - params.fromX) * progress;
+      const y = params.fromY + (params.toY - params.fromY) * progress;
+      const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       sendCommand(api, {
         cmd: "touch",
         type,
@@ -84,35 +90,6 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
         second_y: null,
       });
       if (i < steps) await sleep(16);
-    }
-
-    if (settle) {
-      // Hold the finger stationary by emitting a *train* of zero-displacement
-      // Move samples, not a single silent pause. iOS computes the lift velocity
-      // from a weighted average of the most recent touch samples; one still
-      // sample (or a gap with no events at all) leaves the fast pre-hold moves in
-      // that average and the scroll view still flings. Feeding ~SETTLE_DWELL_MS
-      // worth of still samples at ~60fps decays the average to ~0.
-      const holdSamples = Math.max(4, Math.round(SETTLE_DWELL_MS / 16));
-      for (let i = 0; i < holdSamples; i++) {
-        await sleep(16);
-        sendCommand(api, {
-          cmd: "touch",
-          type: "Move",
-          x: params.toX,
-          y: params.toY,
-          second_x: null,
-          second_y: null,
-        });
-      }
-      sendCommand(api, {
-        cmd: "touch",
-        type: "Up",
-        x: params.toX,
-        y: params.toY,
-        second_x: null,
-        second_y: null,
-      });
     }
 
     return { swiped: true, timestampMs };

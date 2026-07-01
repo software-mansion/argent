@@ -47,14 +47,22 @@ describe("gesture-swipe", () => {
     expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBeLessThanOrEqual(1);
   });
 
-  it("holds with a train of stationary Move samples before lifting when settling", async () => {
+  it("decelerates into the end point (ease-out) before lifting when settling", async () => {
     await gestureSwipeTool.execute(services, { ...base, durationMs: 160, settle: true });
 
     // Exactly one lift, at the end point.
     expect(sent.filter((e) => e.type === "Up")).toHaveLength(1);
     expect(sent.at(-1)).toMatchObject({ type: "Up", x: 0.5, y: 0.2 });
-    // A real hold: several zero-displacement Move samples at the end point feed
-    // the velocity tracker before the lift, so iOS reads ~0 velocity (no fling).
-    expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBeGreaterThanOrEqual(4);
+    // The momentum-free landing comes from a decelerating trajectory, not a
+    // stationary hold (which UIKit coalesces away, so the fling survives).
+    expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBeLessThanOrEqual(1);
+
+    // Ease-out: consecutive-sample travel shrinks toward the lift, so the release
+    // velocity decays to ~0. The last step is a small fraction of the first.
+    const ys = sent.map((e) => e.y);
+    const gaps = ys.slice(1).map((y, i) => Math.abs(y - ys[i]));
+    expect(gaps.at(-1)!).toBeLessThan(gaps[0]);
+    // Monotonic and in-bounds: every sample sits between the start and end point.
+    expect(ys.every((y) => y >= 0.2 - 1e-9 && y <= 0.7 + 1e-9)).toBe(true);
   });
 });
