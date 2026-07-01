@@ -65,4 +65,32 @@ describe("android profiler pipeline handles bigint native-ns columns", () => {
     expect(result.uiHangs).toHaveLength(1);
     expect(result.cpuHotspots.length).toBeGreaterThan(0);
   });
+
+  it("does not throw classifying severity for a bigint dur_ns hang with a combined reason", async () => {
+    // classifyAndroidHangSeverity's own `row.dur_ns / 1_000_000` division is
+    // only reached when `reason` isn't the exact "App Deadline Missed" string
+    // (that branch short-circuits earlier) and `kind` isn't "anr" — a combined
+    // reason like Perfetto's comma-joined form exercises it.
+    queryResponses.push(
+      { name: "trace-bounds.sql", rows: [{ start_ts: TRACE_START_NS }] },
+      { name: "cpu-hotspots.sql", rows: [] },
+      {
+        name: "ui-hangs.sql",
+        rows: [
+          {
+            kind: "jank",
+            ts_ns: TRACE_START_NS + 1_000_000_000n,
+            dur_ns: TRACE_START_NS, // bigint — same magnitude source as ts_ns
+            process_name: "com.example.app",
+            reason: "Prediction Error, App Deadline Missed",
+            error_id: null,
+          },
+        ],
+      },
+      { name: "memory-rss.sql", rows: [] }
+    );
+    const result = await runAndroidProfilerPipeline("/fake.pftrace", "com.example.app");
+    expect(result.uiHangs).toHaveLength(1);
+    expect(result.uiHangs[0]!.severity).toBe("RED");
+  });
 });

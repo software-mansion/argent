@@ -640,7 +640,9 @@ function classifyAndroidHangSeverity(row: AndroidJankRow): "RED" | "YELLOW" {
   // enough to be user-perceptible (duration check below). Exact === is
   // deliberate — it isolates the standalone case from the combined ones.
   if (row.reason === "App Deadline Missed") return "RED";
-  const durationMs = row.dur_ns / 1_000_000;
+  // Same bigint risk as the other dur_ns/ts_ns usages in this file (see
+  // readCell) — coerce before dividing.
+  const durationMs = Number(row.dur_ns) / 1_000_000;
   if (durationMs > 500) return "RED";
   return "YELLOW";
 }
