@@ -7,8 +7,16 @@ vi.mock("../src/utils/simulator-client", async (importOriginal) => ({
   sendCommand: vi.fn(),
 }));
 
+// Android presses go over `adb shell input keyevent`; neutralise the real adb
+// call so the test asserts wiring (which keycode) without a device attached.
+vi.mock("../src/utils/android-input", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/android-input")>()),
+  injectAndroidKeycode: vi.fn(),
+}));
+
 import { buttonTool } from "../src/tools/button";
 import { UnsupportedOperationError } from "../src/utils/capability";
+import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../src/utils/android-input";
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const androidUdid = "emulator-5554";
@@ -27,10 +35,13 @@ describe("button tool — per-platform validation", () => {
     ).rejects.toBeInstanceOf(UnsupportedOperationError);
   });
 
-  it("accepts `back` on Android (it is a real hardware key there)", async () => {
+  it("accepts `back` on Android and injects KEYCODE_BACK over adb", async () => {
+    vi.mocked(injectAndroidKeycode).mockClear();
     await expect(
       buttonTool.execute(services, { udid: androidUdid, button: "back" })
     ).resolves.toEqual({ pressed: "back" });
+    // Routed to adb (not the HID sim-server path) so a stripped AVD can't drop it.
+    expect(injectAndroidKeycode).toHaveBeenCalledWith(androidUdid, ANDROID_BUTTON_KEYCODES.back);
   });
 
   it("accepts every iOS-valid button", async () => {
@@ -46,5 +57,19 @@ describe("button tool — per-platform validation", () => {
         pressed: button,
       });
     }
+  });
+});
+
+describe("button tool — service declaration", () => {
+  it("does not declare the simulator-server service for an Android target", () => {
+    // Android presses go over adb; declaring sim-server would needlessly resolve +
+    // spawn it (up to a 30s ready-wait) and could throw before the adb path runs.
+    expect(buttonTool.services({ udid: androidUdid, button: "back" })).toEqual({});
+  });
+
+  it("still declares the simulator-server service eagerly for an iOS target", () => {
+    expect(buttonTool.services({ udid: iosUdid, button: "home" })).toHaveProperty(
+      "simulatorServer"
+    );
   });
 });
