@@ -138,6 +138,21 @@ describe("button — CoreDevice HID mapping on physical iOS", () => {
     await expect(press("appSwitch")).rejects.toBeInstanceOf(UnsupportedOperationError);
     await expect(press("actionButton")).rejects.toBeInstanceOf(UnsupportedOperationError);
   });
+
+  it("does not resolve the CoreDevice service for a button with no HID equivalent", () => {
+    // services() runs before execute() (the registry resolves services first),
+    // so eagerly resolving coreDevice here would pay for tunnel setup —
+    // possibly a macOS admin prompt — just to reject the button afterward.
+    for (const button of ["appSwitch", "actionButton"]) {
+      const services = buttonTool.services!({ udid: PHYSICAL_UDID, button } as never);
+      expect(services.coreDevice).toBeUndefined();
+    }
+  });
+
+  it("still resolves the CoreDevice service for a supported button", () => {
+    const services = buttonTool.services!({ udid: PHYSICAL_UDID, button: "home" } as never);
+    expect(services.coreDevice).toBeDefined();
+  });
 });
 
 describe("privileged tunnel start is gated behind the feature flag", () => {

@@ -72,6 +72,11 @@ Fails if the simulator-server / emulator backend is not reachable for the given 
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
     if (isPhysicalIos(device)) {
+      // A button with no CoreDevice HID equivalent (appSwitch/actionButton) is
+      // always rejected by execute() below, before it ever touches
+      // services.coreDevice — don't pay for resolving the CoreDevice service
+      // (tunnel setup, possibly a macOS admin prompt) just to reject anyway.
+      if (!COREDEVICE_BUTTON[params.button]) return {};
       return { coreDevice: coreDeviceRef(device) };
     }
     return { simulatorServer: simulatorServerRef(device) };
