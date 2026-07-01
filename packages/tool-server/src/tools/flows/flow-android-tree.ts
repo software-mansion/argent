@@ -18,7 +18,7 @@ import {
 } from "../describe/contract";
 
 /**
- * Flow-owned Android tree fetch — the counterpart to `flow-native-tree.ts` on
+ * Flow-owned Android tree fetch — the counterpart to `flow-ios-tree.ts` on
  * iOS.
  *
  * The agent-facing `describe` walks the accessibility tree (`uiautomator` /
@@ -37,7 +37,7 @@ import {
  * `FLAG_INCLUDE_NOT_IMPORTANT_VIEWS | FLAG_REPORT_VIEW_IDS` — see the helper's
  * `configureServiceInfo`), then flattens it keeping **every** view with a
  * `resource-id` (RN `testID`) or a label, with no interactables trim — exactly
- * the shape `flow-native-tree.ts` produces on iOS. Falls back to the shared
+ * the shape `flow-ios-tree.ts` produces on iOS. Falls back to the shared
  * `fetchTree` (the trimmed AX tree) when the helper is unavailable.
  */
 

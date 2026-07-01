@@ -2,7 +2,7 @@ import type { DescribeNode } from "../describe/contract";
 
 /**
  * Shared flatten + text-hoisting skeleton for the flow tree adapters
- * (`flow-native-tree` on iOS, `flow-android-tree` on Android). Both walk a raw
+ * (`flow-ios-tree` on iOS, `flow-android-tree` on Android). Both walk a raw
  * platform tree and emit the flat-leaves-under-one-root shape the describe layer
  * expects, hoisting a container's descendant text onto its leaf so an
  * `assert`/`text` check can read what the container visibly shows. The two
