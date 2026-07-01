@@ -116,6 +116,15 @@ export interface AdbRunResult {
 // process blocked on a hung daemon can ignore — leaving the parent waiting
 // past the deadline. SIGKILL guarantees the child is reaped at the timeout
 // boundary so callers' overall budgets actually hold.
+//
+// Unlike `runVega` (which spawns `detached` and reaps the whole process group on
+// timeout), execFile's single-child SIGKILL is sufficient here: an `adb <command>`
+// invocation is a *single-process client* that talks to the persistent, shared
+// `adb server` daemon over a socket — it forks no `python3 → node → vda` worker
+// tree to orphan, so killing the direct child reaps it completely. A group kill
+// would also be wrong: the daemon is deliberately long-lived and shared across all
+// adb calls, so it must survive a single command's timeout. (A wedged *device* is
+// instead bounded by per-call timeouts + the list-devices branch deadline.)
 const ADB_KILL_SIGNAL = "SIGKILL" as const;
 
 function describeAdbFailure(args: string[], err: unknown): Error {
@@ -276,14 +285,37 @@ export function consolePortFromAdbSerial(serial: string): number | null {
   return null;
 }
 
+// Tight bound for the `adb devices` shell-out on the `alwaysLoad` `list-devices`
+// hot path. Callers opt in by passing this as `devicesTimeoutMs`; omitting it keeps
+// runAdb's 30s default. list-devices needs the bound because a slow/cold/wedged `adb
+// server` (the exact condition this fix targets) would otherwise stall the Android
+// branch for up to 30s + the ~5s enrichment — well past list-devices'
+// BRANCH_DEADLINE_MS (25s), at which point the backstop substitutes `[]` and drops
+// EVERY Android device from the result. `adb devices` only queries the local daemon
+// (autostarting it on a cold call, ~1-2s); 6s is a generous multiple of that, and
+// keeps the Android branch's worst case (6s here + ~5s enrichment = ~11s) comfortably
+// under the deadline so a completing branch is never truncated. A genuine daemon hang
+// past 6s fails fast to `[]` via listAndroidDevices' `.catch`, the same degraded result
+// the deadline would give — just sooner and with adb's own error logged.
+//
+// Deliberately NOT applied globally: boot-device's before/after device snapshots call
+// listAndroidDevices() WITHOUT this bound, keeping the 30s default. A snapshot that
+// timed out to `[]` there could misidentify an already-connected emulator as "newly
+// booted" (the very race boot-device's `adb start-server` + snapshot guards against),
+// and boot-device is not latency-sensitive the way the alwaysLoad list-devices is.
+export const ADB_DEVICES_TIMEOUT_MS = 6_000;
+
 /**
  * Light-weight listing for callers that only need which serials exist.
  * Skips the per-device getprop round-trips so the call is one `adb devices`
  * shell-out, not 1 + 3N. Used by `listAndroidDevices` as the first hop before
- * it enriches each entry.
+ * it enriches each entry. `devicesTimeoutMs` bounds the `adb devices` call;
+ * omit it to inherit runAdb's 30s default (see ADB_DEVICES_TIMEOUT_MS).
  */
-async function listAndroidSerials(): Promise<Array<{ serial: string; state: string }>> {
-  const { stdout } = await runAdb(["devices"]);
+async function listAndroidSerials(
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<Array<{ serial: string; state: string }>> {
+  const { stdout } = await runAdb(["devices"], { timeoutMs: options.devicesTimeoutMs });
   return parseAdbDevices(stdout);
 }
 
@@ -292,32 +324,53 @@ async function listAndroidSerials(): Promise<Array<{ serial: string; state: stri
 // the hot path of the boot loop — a single mid-attach device can stall the
 // stage budget for 30 s × 3 getprops = the entire adb-register window. 5 s
 // is plenty for a getprop on any responsive device.
-const ENRICH_TIMEOUT_MS = 5_000;
+//
+// Exported so list-devices' BRANCH_DEADLINE_MS accounting can include it: the
+// Android branch's worst case is one bounded `adb devices` call
+// (ADB_DEVICES_TIMEOUT_MS) plus this enrichment (all devices and all per-device
+// getprops run concurrently, so the enrichment caps at one ENRICH_TIMEOUT_MS, not
+// a multiple), and that sum has to stay under the branch deadline.
+export const ENRICH_TIMEOUT_MS = 5_000;
 
 /**
  * Resolve the AVD name of a running emulator. The property moved from
  * `ro.kernel.qemu.avd_name` to `ro.boot.qemu.avd_name` in emulator release 30
- * (Android 11+); we probe the newer one first and fall back to the legacy
- * name so both old and new images work.
+ * (Android 11+); we still prefer the newer name and fall back to the legacy one
+ * so both old and new images work.
+ *
+ * The two getprops run concurrently rather than back-to-back: a wedged emulator
+ * (e.g. an unresponsive VVD that also shows on adb) otherwise costs the full
+ * `2 × ENRICH_TIMEOUT_MS` here, doubling the Android branch of the `alwaysLoad`
+ * `list-devices` tool. `.catch(() => "")` handles a rejected probe; the timeout
+ * handles a slow one.
  */
 async function readAvdName(serial: string): Promise<string | null> {
-  const modern = await adbShell(serial, "getprop ro.boot.qemu.avd_name", {
-    timeoutMs: ENRICH_TIMEOUT_MS,
-  }).catch(() => "");
-  if (modern.trim()) return modern.trim();
-  const legacy = await adbShell(serial, "getprop ro.kernel.qemu.avd_name", {
-    timeoutMs: ENRICH_TIMEOUT_MS,
-  }).catch(() => "");
-  return legacy.trim() || null;
+  const [modern, legacy] = await Promise.all([
+    adbShell(serial, "getprop ro.boot.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
+      () => ""
+    ),
+    adbShell(serial, "getprop ro.kernel.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
+      () => ""
+    ),
+  ]);
+  return modern.trim() || legacy.trim() || null;
 }
 
 /**
  * List all Android devices + emulators known to adb, enriched with model,
  * AVD name, and SDK level via `getprop`. Use `listAndroidSerials` when you
  * only need the state-scoped serial list — it avoids the extra round-trips.
+ *
+ * `devicesTimeoutMs` bounds the initial `adb devices` call; omit it to inherit
+ * runAdb's 30s default. The alwaysLoad `list-devices` tool passes
+ * ADB_DEVICES_TIMEOUT_MS (6s) so its Android branch self-bounds under the fan-out
+ * deadline; boot-device omits it so its before/after snapshots aren't truncated to
+ * `[]` under a slow-but-alive daemon (see ADB_DEVICES_TIMEOUT_MS).
  */
-export async function listAndroidDevices(): Promise<AndroidDevice[]> {
-  const basic = await listAndroidSerials();
+export async function listAndroidDevices(
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<AndroidDevice[]> {
+  const basic = await listAndroidSerials(options);
 
   const enriched = await Promise.all(
     basic.map(async (d): Promise<AndroidDevice> => {
