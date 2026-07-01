@@ -193,6 +193,18 @@ export class VariantProposalStore {
   private waitersList: Waiter[] = [];
   /** Frozen result of the current round once the user submits. */
   private lastOutcome: Extract<AwaitOutcome, { status: "completed" }> | null = null;
+  /**
+   * Completed outcomes that finished with no `await_user_selection` parked to
+   * receive them directly (submitSelection's "no waiter" branch), queued in
+   * completion order. `autoRollIfCompleted` rolls into a fresh round on the
+   * very next `propose_variant` regardless of whether the outcome was ever
+   * retrieved — so this queue, unlike `lastOutcome`/`completed`/`consumed`
+   * (which describe only the CURRENT round), survives `reset()` and is
+   * drained first by `awaitSelection`, oldest first. Without it, a human's
+   * already-submitted selection is destroyed the moment the next
+   * `propose_variant` call rolls the round out from under it.
+   */
+  private pendingOutcomes: Array<Extract<AwaitOutcome, { status: "completed" }>> = [];
 
   /** Begin a fresh round, discarding the previous one's proposals/selections. */
   reset(): void {
@@ -265,12 +277,16 @@ export class VariantProposalStore {
 
   private autoRollIfCompleted(): void {
     // A completed round is closed — the next proposal starts a clean round
-    // automatically. This rolls whether or not the outcome was already consumed:
-    // a round can be `completed && !consumed` when the user submits with no await
-    // parked (the fast path in awaitSelection consumes it later). Staging a new
-    // element onto such a round would append it after the frozen `lastOutcome`,
-    // so the next await would return the pre-submit outcome and silently drop the
-    // new element. Rolling here guarantees a post-completed proposal is presented.
+    // automatically. This rolls whether or not the outcome was already
+    // consumed: a round can be `completed && !consumed` when the user submits
+    // with no await parked. Staging a new element onto such a round would
+    // append it after the frozen `lastOutcome`, so the next await would return
+    // the pre-submit outcome and silently drop the new element. `reset()`
+    // itself doesn't lose the unconsumed outcome — `submitSelection` already
+    // queued it in `pendingOutcomes`, which `reset()` deliberately leaves
+    // untouched — so rolling here is safe: it guarantees a post-completed
+    // proposal is presented AND the earlier outcome is still delivered on the
+    // next await.
     if (this.completed) this.reset();
   }
 
@@ -397,10 +413,17 @@ export class VariantProposalStore {
     const round = this.round;
     const toSettle = this.waitersList.filter((w) => !w.settled && w.round === round);
     this.waitersList = this.waitersList.filter((w) => w.round !== round || w.settled);
-    if (toSettle.length > 0) this.consumed = true;
-    for (const w of toSettle) {
-      w.settled = true;
-      w.settle(this.lastOutcome);
+    if (toSettle.length > 0) {
+      this.consumed = true;
+      for (const w of toSettle) {
+        w.settled = true;
+        w.settle(this.lastOutcome);
+      }
+    } else {
+      // No waiter was parked to receive this outcome directly. Queue it so a
+      // later await_user_selection still gets it, even across an intervening
+      // propose_variant that rolls the round (see `pendingOutcomes`' doc).
+      this.pendingOutcomes.push(this.lastOutcome);
     }
     this.events.emit("changed");
     this.events.emit("selectionSubmitted");
@@ -467,6 +490,20 @@ export class VariantProposalStore {
    * round is superseded), so concurrent / re-entrant awaits never strand.
    */
   awaitSelection(opts: { signal?: AbortSignal; timeoutMs: number }): Promise<AwaitOutcome> {
+    // Deliver the OLDEST undelivered outcome first, even if propose_variant
+    // has since rolled the store into a fresh round for new elements — this
+    // outcome is real, already-decided-by-the-human data and must never be
+    // silently lost to a later roll. See `pendingOutcomes`' doc comment.
+    if (this.pendingOutcomes.length > 0) {
+      const outcome = this.pendingOutcomes.shift()!;
+      // If no roll has happened since (the outcome belongs to the still-current
+      // round), mark it consumed too — otherwise a second bare await, with
+      // nothing left to settle it, would park until timeout and misreport
+      // "not completed yet" for a round that's already done.
+      if (outcome.round === this.round) this.consumed = true;
+      return Promise.resolve(outcome);
+    }
+
     // A completed round whose result the agent already consumed is closed.
     // Don't re-park (that would block forever); tell the agent to propose anew.
     if (this.completed && this.consumed) {
@@ -476,13 +513,6 @@ export class VariantProposalStore {
           "The previous selection round was already returned. Call propose_variant to stage " +
           "new variants before awaiting again.",
       });
-    }
-
-    // Submitted but no waiter was parked to receive it → hand back the frozen
-    // outcome and close the round.
-    if (this.completed && !this.consumed) {
-      this.consumed = true;
-      return Promise.resolve(this.lastOutcome ?? this.buildOutcome());
     }
 
     if (this.proposals.length === 0) {
