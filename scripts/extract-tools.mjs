@@ -18,6 +18,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dir = dirname(__filename);
 const toolsRoot = join(__dir, "..", "packages", "tool-server", "src", "tools");
 
+// Standard JS string/template-literal escapes this extractor unescapes when
+// rendering a captured description. Anything not listed here (e.g. \x41,
+// é) is left as-is rather than guessed at.
+const UNESCAPE_MAP = { n: "\n", r: "\r", t: "\t", "0": "\0" };
+
 function walk(dir) {
   const entries = [];
   for (const name of readdirSync(dir)) {
@@ -84,9 +89,13 @@ export function extractToolsFromSource(src, filePath = "<source>") {
               ? value.match(/^'((?:[^'\\]|\\.)*)'/)
               : null;
       if (valueMatch) {
-        // Unescape template-literal escapes (\` \$ \\) so the description reads
-        // as the rendered string, not the source form.
-        description = valueMatch[1].replace(/\\([`$\\])/g, "$1").trim();
+        // Unescape the standard JS escapes so the description reads as the
+        // rendered string, not the source form — e.g. a template literal's
+        // literal "\n" must become an actual newline, not survive as a stray
+        // backslash-n in the extracted (and downstream security-scanned) text.
+        description = valueMatch[1]
+          .replace(/\\([`$\\'"nrt0])/g, (_m, ch) => UNESCAPE_MAP[ch] ?? ch)
+          .trim();
       }
     }
 

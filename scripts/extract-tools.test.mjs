@@ -167,3 +167,20 @@ test("tools with mixed description forms in one file are both captured", () => {
     "Second tool, a template-literal description with some length."
   );
 });
+
+test("standard escapes render as their actual characters, not literal backslash sequences", () => {
+  // A template-literal description with a literal "\n" must become a real
+  // newline in the extracted text — not survive as a stray backslash-n. Real,
+  // currently-shipping example: flow-add-step.ts's description uses \n between
+  // sentences.
+  const src = `
+    export const withEscapes = defineTool({
+      id: "with-escapes",
+      description: \`Line one.\\nLine two.\\tTabbed. Say \\\`hi\\\` and \\$done.\`,
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const description = tools.find((t) => t.name === "with-escapes").description;
+  assert.equal(description, "Line one.\nLine two.\tTabbed. Say `hi` and $done.");
+});
