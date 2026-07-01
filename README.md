@@ -42,8 +42,9 @@ up in `list-devices` with `kind: "device"`.
 
 **Requirements**
 
-- **iOS 27 or later** — Apple gates host-driven input ("remote control") to iOS 27+; on
-  earlier versions the device reports `CoreDeviceError 9021` and only screenshots work.
+- **iOS 27 or later for tap/swipe** — Apple gates host-driven touch input to iOS 27+; on
+  earlier versions those commands report `CoreDeviceError 9021`. Screenshot and hardware
+  buttons work on earlier iOS versions too.
 - macOS with Xcode, and `pymobiledevice3` installed (e.g. `pipx install pymobiledevice3`).
 - The iPhone connected, unlocked, trusted, with **Developer Mode** on.
 
@@ -71,7 +72,9 @@ and leave it running: `sudo pymobiledevice3 remote tunneld`.
 - Not supported on physical iOS yet: `describe` / accessibility inspection (use `screenshot`
   instead), keyboard/typing, pinch & rotate (multi-touch), `open-url`, `reinstall-app`,
   `restart-app`, and the native inspection / profiling tools (`native-*`, `native-profiler-*`,
-  `screenshot-diff`) — all return a clear "not supported" error.
+  `screenshot-diff`) — all return a clear "not supported" error. `launch-app` (via `devicectl`)
+  works independently of the CoreDevice tunnel — it can succeed even before the tunnel setup
+  above has run.
 - Overrides: `ARGENT_PYMOBILEDEVICE3` (path to the binary), `ARGENT_PMD3_TUNNELD_PORT`
   (defaults to `49151`).
 
