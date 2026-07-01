@@ -111,4 +111,64 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
       expect(tagged.components.get(n)!.isAnimated).toBe(false);
     }
   });
+
+  // Full match/no-match matrix. The paren/dot/HOC-wrapped and dotted forms are
+  // the real regression this fix targets: they are the display names React DevTools
+  // actually produces for animated subtrees (and the exact prefixes the codebase
+  // hard-codes in skip-rules.ts / component-tree.ts), yet the over-tightened
+  // pre-fix regex failed to match them, leaking them back into findings.
+  const MUST_MATCH = [
+    "Animated",
+    "AnimatedView",
+    "Animated(View)",
+    "Animated.View",
+    "AnimatedComponent(View)",
+    "Memo(AnimatedComponent(View))",
+    "ForwardRef(AnimatedComponent(View))",
+    "Forget(AnimatedComponent(View))",
+    "Animated(ScrollView)",
+    "MotionView",
+    "FadeTransition",
+    "SlideTransition",
+    "FadeInAnimation",
+    "Animation",
+    "Transition",
+    "Animated2",
+    "Animated_View",
+  ];
+  const MUST_NOT_MATCH = [
+    "PromotionCard",
+    "Promotion",
+    "EmotionThemeCard",
+    "Emotion",
+    "CommotionList",
+    "Locomotion",
+    "LocomotionView",
+    "SVGAnimatedPath",
+    "RNAnimatedView",
+  ];
+
+  it("tags every animation name in the match matrix (incl. paren/dot/HOC-wrapped)", () => {
+    const tagged = tag(enrich(MUST_MATCH));
+    for (const n of MUST_MATCH) {
+      expect(tagged.components.get(n)!.isAnimated, n).toBe(true);
+    }
+  });
+
+  it("does NOT tag any name in the no-match matrix (incl. acronym-glued Animated)", () => {
+    const tagged = tag(enrich(MUST_NOT_MATCH));
+    for (const n of MUST_NOT_MATCH) {
+      expect(tagged.components.get(n)!.isAnimated, n).toBe(false);
+    }
+  });
+
+  it("excludes wrapped animation names from rank() findings while keeping real slow components", () => {
+    const wrappers = ["Animated(View)", "Animated.View", "Memo(AnimatedComponent(View))"];
+    const tagged = tag(enrich([...wrappers, "PromotionCard"]));
+    const ranked = rank(tagged).map((f) => f.component);
+    for (const n of wrappers) {
+      expect(ranked, n).not.toContain(n);
+    }
+    expect(ranked).toContain("PromotionCard");
+  });
 });
