@@ -274,6 +274,29 @@ describe("diffPngFiles", () => {
       expect.objectContaining({ textChangeMinConfidence: 0.7, ignoreTopPixels: 2 })
     );
   });
+
+  it("hands OCR the decoded->normalized region scale for each image (diffPngFiles wiring)", async () => {
+    // Same 2:1 aspect, different resolution: normalizeToCommonSize downscales the
+    // larger baseline (480x240) to the current's size (240x120). diffPngFiles must
+    // compute each image's decoded->normalized scale and pass it to the OCR pass,
+    // so text bounds land in the shared pixel-diff coordinate space. Without this
+    // wiring (the pre-fix screenshot-diff.ts) OCR is called with no region scales
+    // and the half-image spurious "moved" change returns.
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 480, 240, { r: 0, g: 0, b: 0 });
+    await writePng(currentPath, 240, 120, { r: 0, g: 0, b: 0 });
+
+    await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+    expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baselineRegionScale: { x: 0.5, y: 0.5 },
+        currentRegionScale: { x: 1, y: 1 },
+      })
+    );
+  });
 });
 
 async function makeTempDir(): Promise<string> {
