@@ -196,11 +196,15 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   }
 
   function hidden(el, style) {
-    if (style.visibility === "hidden" || style.display === "none" || style.opacity === "0") {
+    if (style.visibility === "hidden" || style.display === "none") {
       return true;
     }
-    // display:contents has no box but lays its children out normally — never prune it.
+    // display:contents has no box, so box-only properties don't apply — it lays
+    // its children out normally. Never prune it for opacity:0 (opacity affects a
+    // box, of which there is none, so descendants still paint) or for its 0x0
+    // rect; walk() descends and promotes the visible content.
     if (style.display === "contents") return false;
+    if (style.opacity === "0") return true;
     const r = getBCR.call(el);
     if (r.width > 0 && r.height > 0) return false;
     // Zero-area box: prune it only when it clips its overflow (a collapsed

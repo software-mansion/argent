@@ -246,6 +246,28 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(valuesOf(tree)).toContain("CONTENTS");
   });
 
+  it("surfaces content under a display:contents wrapper even at opacity:0 (opacity affects no box)", () => {
+    const { tree } = run([
+      el({
+        style: { display: "contents", opacity: "0" },
+        rect: ZERO,
+        children: [el({ text: "CONTENTS0", rect: BOX })],
+      }),
+    ]);
+    expect(valuesOf(tree)).toContain("CONTENTS0");
+  });
+
+  it("still prunes a normal (boxed) opacity:0 subtree", () => {
+    const { tree } = run([
+      el({
+        style: { opacity: "0" },
+        rect: { x: 0, y: 0, w: 200, h: 200 },
+        children: [el({ text: "INVISIBLE", rect: BOX })],
+      }),
+    ]);
+    expect(valuesOf(tree)).not.toContain("INVISIBLE");
+  });
+
   it("surfaces an absolutely-positioned child of a zero-height overflow:visible wrapper", () => {
     const { tree } = run([
       el({
