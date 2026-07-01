@@ -451,17 +451,24 @@ function computeNodeOutput(
   const interactive = isInteractive(attrs);
   let label = labelOf(attrs);
 
-  // Decorative ImageView (no clickable, no label) — drop, pass through any
-  // surviving descendants. Most decorative images have zero kept children
+  // A resource-id is still worth keeping even with no label — dropping it
+  // silently here is the same class of bug as the collapse cases below fixed
+  // (a decorative-looking wrapper can still be a real, agent-addressable
+  // target via its identifier alone). Only pass straight through when there's
+  // truly no identifying info at all.
+  const identifier = attrs["resource-id"];
+
+  // Decorative ImageView (no clickable, no label, no id) — drop, pass through
+  // any surviving descendants. Most decorative images have zero kept children
   // and the entire branch evaporates.
-  if (cls.endsWith(".ImageView") && !interactive && !label) {
+  if (cls.endsWith(".ImageView") && !interactive && !label && !identifier) {
     return keptChildren;
   }
 
   // Layout container with no own info — pass children through. With
   // --compressed dumps this is what flattens FrameLayout > LinearLayout >
   // ConstraintLayout chains down to their actual content.
-  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label) {
+  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label && !identifier) {
     return keptChildren;
   }
 
@@ -486,6 +493,14 @@ function computeNodeOutput(
   if (interactive && bounds && keptChildren.length === 1) {
     const c = keptChildren[0]!;
     if (c.clickable && c.pixelBounds && rectsEqual(c.pixelBounds, bounds)) {
+      // The inner node is usually the more specific one, so prefer its own
+      // label/identifier. But the accessibility label can live ONLY on the
+      // outer wrapper (an RN `Pressable accessibilityLabel` wrapping a bare
+      // clickable native view) — fall back to the wrapper's values so the
+      // collapsed tap target isn't left anonymous instead of dropping them.
+      if (!c.label && label) c.label = label;
+      const rid = attrs["resource-id"];
+      if (!c.identifier && rid) c.identifier = rid;
       return [c];
     }
   }
@@ -568,12 +583,17 @@ function finalizeUiNode(
       height: sh > 0 ? clipped.h / sh : 0,
     };
   } else {
-    // No bounds: drop empty wrappers, pass through single-child wrappers, and
-    // synthesise a union frame for 2+ children. Replacing the whole subtree
-    // with `null` silently dropped every child on Compose hierarchies that
-    // emit bounds-less group containers — preserved here for that case.
+    // No bounds: drop empty wrappers, pass through single-child scaffold
+    // wrappers, and synthesise a union frame for 2+ children. Replacing the
+    // whole subtree with `null` silently dropped every child on Compose
+    // hierarchies that emit bounds-less group containers — preserved here for
+    // that case. A single-child wrapper that carries its OWN label/identifier
+    // (e.g. a bounds-less Compose group container with a content-desc) must NOT
+    // be flattened into its child: doing so discards that accessibility label.
+    // Keep it as a node whose frame is the union of its (here, sole) child so
+    // neither the wrapper's nor the child's label is dropped.
     if (children.length === 0) return null;
-    if (children.length === 1) return children[0]!;
+    if (children.length === 1 && !n.label && !n.identifier) return children[0]!;
     const x1 = Math.min(...children.map((c) => c.frame.x));
     const y1 = Math.min(...children.map((c) => c.frame.y));
     const x2 = Math.max(...children.map((c) => c.frame.x + c.frame.width));
