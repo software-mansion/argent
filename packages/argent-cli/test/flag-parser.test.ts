@@ -43,15 +43,15 @@ describe("flag-parser array + -json interleave never throws a raw error", () => 
     // --tags-json first, then a plain --tags: the plain flag used to hit the
     // "first occurrence" branch and silently overwrite the JSON-parsed value
     // with no error at all.
-    expect(() =>
-      parseFlags(["--tags-json", '["a","b"]', "--tags", "c"], arrSchema)
-    ).toThrow(FlagParseException);
+    expect(() => parseFlags(["--tags-json", '["a","b"]', "--tags", "c"], arrSchema)).toThrow(
+      FlagParseException
+    );
   });
 
   it("rejects --tags-json arriving after a plain --tags, instead of silently overwriting it", () => {
-    expect(() =>
-      parseFlags(["--tags", "a", "--tags-json", '["b","c"]'], arrSchema)
-    ).toThrow(FlagParseException);
+    expect(() => parseFlags(["--tags", "a", "--tags-json", '["b","c"]'], arrSchema)).toThrow(
+      FlagParseException
+    );
   });
 
   it("still allows repeated plain --tags with no -json involved", () => {
