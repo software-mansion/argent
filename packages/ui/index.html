@@ -126,6 +126,87 @@
         vertical-align: middle;
         background: var(--color-error);
       }
+      /* Persistent "which device am I looking at" pill, shown while a stream is
+         live. Clicking it drops a menu to switch devices. A green live-dot
+         mirrors the device-list rows; a caret hints at the dropdown. */
+      .device-switch {
+        position: relative;
+        -webkit-app-region: no-drag;
+      }
+      .device-pill {
+        display: inline-flex;
+        align-items: center;
+        max-width: var(--picker-max-width);
+        overflow: hidden;
+        font: inherit;
+        color: var(--color-fg);
+        cursor: pointer;
+        transition: border-color var(--dur-hover) ease;
+      }
+      .device-pill:hover {
+        border-color: var(--color-accent);
+      }
+      .device-pill::before {
+        content: "";
+        flex: none;
+        width: var(--dot-size);
+        height: var(--dot-size);
+        border-radius: var(--radius-round);
+        margin-right: var(--gap-inline);
+        background: var(--color-ok);
+        box-shadow: var(--dot-glow);
+      }
+      .device-pill > .nm {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .device-pill::after {
+        content: "▾";
+        flex: none;
+        margin-left: var(--gap-inline);
+        color: var(--color-muted);
+        font-size: var(--fs-label);
+        line-height: 1;
+      }
+      /* Dropdown of selectable devices, anchored under the pill. */
+      .dev-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        min-width: 220px;
+        max-width: 320px;
+        max-height: 60vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
+        padding: var(--pad-footbar);
+        z-index: var(--z-pop);
+        -webkit-app-region: no-drag;
+      }
+      .dev-menu[hidden] {
+        display: none;
+      }
+      .dev-menu-label {
+        font-size: var(--fs-label);
+        color: var(--color-muted);
+        padding: 0 var(--gap-inline);
+      }
+      .dev-menu-note {
+        font-size: var(--fs-note);
+        color: var(--color-muted);
+        padding: var(--pad-code);
+        text-align: center;
+      }
+      .dev-item.current {
+        border-color: var(--color-accent);
+      }
       .viewport {
         flex: 1;
         display: flex;
@@ -283,11 +364,13 @@
         color: var(--color-muted);
         font-size: var(--fs-label);
       }
-      .dev-picker .refresh-row {
+      .dev-picker .refresh-row,
+      .dev-menu .refresh-row {
         display: flex;
         justify-content: center;
       }
-      .dev-picker .refresh-row button {
+      .dev-picker .refresh-row button,
+      .dev-menu .refresh-row button {
         background: var(--color-bg);
         color: var(--color-muted);
         border: var(--border-hairline) solid var(--color-border);
@@ -296,7 +379,8 @@
         font-size: var(--fs-note);
         cursor: pointer;
       }
-      .dev-picker .refresh-row button:hover {
+      .dev-picker .refresh-row button:hover,
+      .dev-menu .refresh-row button:hover {
         color: var(--color-fg);
         border-color: var(--color-accent);
       }
@@ -1352,6 +1436,16 @@
         <div class="comment-pop" id="comment-pop" hidden></div>
         <div class="ann-pop" id="ann-pop" hidden></div>
         <div class="float-status" id="float-status">
+          <div class="device-switch" id="device-switch" hidden>
+            <button
+              id="device-name"
+              class="status device-pill"
+              type="button"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+              title="Switch device"></button>
+            <div id="device-menu" class="dev-menu" role="listbox" hidden></div>
+          </div>
           <span id="status" class="status" hidden></span>
           <span id="hidden-badge" class="hidden-badge" hidden></span>
         </div>
@@ -1636,7 +1730,128 @@
 
       // ── DOM ─────────────────────────────────────────────────────────────
       const status = document.getElementById("status");
+      const deviceNameEl = document.getElementById("device-name");
+      const deviceSwitchEl = document.getElementById("device-switch");
+      const deviceMenuEl = document.getElementById("device-menu");
       const viewport = document.getElementById("viewport");
+      // udid → human device name, learned from /preview/simulators. Backs the
+      // persistent device-name pill shown while a stream is live.
+      const deviceNameByUdid = new Map();
+      /** Show/refresh (or hide, with a falsy udid) the live device-name pill. */
+      function setDeviceIndicator(udid) {
+        if (!deviceSwitchEl) return;
+        if (!udid) {
+          deviceSwitchEl.hidden = true;
+          closeDeviceMenu();
+          return;
+        }
+        const name = deviceNameByUdid.get(udid) || `Device ${udid.slice(0, 8)}`;
+        deviceNameEl.textContent = "";
+        const nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = name;
+        deviceNameEl.appendChild(nm);
+        deviceSwitchEl.hidden = false;
+      }
+      /** Learn the device's name if we don't already know it (the ?udid boot path
+       * never passes through the picker, so the map can be empty). Best-effort;
+       * the pill keeps its short-udid fallback if this fails. */
+      async function ensureDeviceName(udid) {
+        if (!udid || deviceNameByUdid.has(udid)) return;
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/simulators`);
+          if (!res.ok) return;
+          const { simulators } = await res.json();
+          for (const s of simulators || []) deviceNameByUdid.set(s.udid, s.name);
+          if (currentUdid === udid) setDeviceIndicator(udid);
+        } catch {
+          /* best-effort — keep the fallback label */
+        }
+      }
+
+      // ── Device switcher dropdown (click the pill to change device) ────────
+      let deviceMenuOpen = false;
+      function closeDeviceMenu() {
+        deviceMenuOpen = false;
+        if (deviceNameEl) deviceNameEl.setAttribute("aria-expanded", "false");
+        if (deviceMenuEl) deviceMenuEl.hidden = true;
+      }
+      function openDeviceMenu() {
+        if (!deviceMenuEl) return;
+        deviceMenuOpen = true;
+        deviceNameEl.setAttribute("aria-expanded", "true");
+        deviceMenuEl.hidden = false;
+        deviceMenuEl.innerHTML = '<div class="dev-menu-note">Loading devices…</div>';
+        fetch(`${TOOL_SERVER}/preview/simulators`)
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+          .then(({ simulators }) => {
+            const all = simulators || [];
+            for (const s of all) deviceNameByUdid.set(s.udid, s.name);
+            if (deviceMenuOpen) buildDeviceMenu(all);
+          })
+          .catch((err) => {
+            if (deviceMenuOpen)
+              deviceMenuEl.innerHTML = `<div class="dev-menu-note">Failed: ${escapeHtml(String(err.message || err))}</div>`;
+          });
+      }
+      function toggleDeviceMenu() {
+        if (deviceMenuOpen) closeDeviceMenu();
+        else openDeviceMenu();
+      }
+      /** Fill the dropdown with selectable devices, grouped like the full picker
+       * (booted → switch, stopped iOS → boot, everything else → disabled). */
+      function buildDeviceMenu(all) {
+        if (!deviceMenuEl) return;
+        deviceMenuEl.innerHTML = "";
+        const { booted, bootableIos, unbootable } = categorizeDevices(all);
+        if (!booted.length && !bootableIos.length && !unbootable.length) {
+          deviceMenuEl.innerHTML = '<div class="dev-menu-note">No devices found.</div>';
+          return;
+        }
+        const addSection = (items, kind, label) => {
+          if (!items.length) return;
+          if (label) {
+            const h = document.createElement("div");
+            h.className = "dev-menu-label";
+            h.textContent = label;
+            deviceMenuEl.appendChild(h);
+          }
+          const list = document.createElement("div");
+          list.className = "dev-list";
+          for (const s of items) list.appendChild(makeDeviceItem(s, kind, closeDeviceMenu));
+          deviceMenuEl.appendChild(list);
+        };
+        addSection(booted, "connect", null);
+        addSection(bootableIos, "boot", booted.length ? "Boot a simulator" : null);
+        addSection(unbootable, "disabled", "Not running");
+
+        const row = document.createElement("div");
+        row.className = "refresh-row";
+        const rb = document.createElement("button");
+        rb.type = "button";
+        rb.textContent = "⟳ Refresh";
+        rb.addEventListener("click", (e) => {
+          e.stopPropagation();
+          rb.blur();
+          openDeviceMenu();
+        });
+        row.appendChild(rb);
+        deviceMenuEl.appendChild(row);
+      }
+      if (deviceNameEl) {
+        deviceNameEl.addEventListener("click", (e) => {
+          e.stopPropagation();
+          toggleDeviceMenu();
+        });
+      }
+      // Dismiss on outside-click or Escape.
+      document.addEventListener("click", (e) => {
+        if (deviceMenuOpen && deviceSwitchEl && !deviceSwitchEl.contains(e.target))
+          closeDeviceMenu();
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && deviceMenuOpen) closeDeviceMenu();
+      });
       // Device the window was opened for (?udid=…), set by the tool-server from
       // the agent's propose_variant. When present we connect straight to it and
       // never show a simulator chooser.
@@ -1792,9 +2007,67 @@
       // booted simulators (or none) and nothing is connected yet. Replaces the
       // old static "Connecting…" placeholder, which looked stuck because the
       // only way to pick was a small toolbar dropdown that was easy to miss.
-      function renderDevicePicker(sims) {
+      // Split a simulators list into the three actionable buckets shared by the
+      // full picker and the switcher dropdown. Stopped iOS sims boot by udid;
+      // anything else non-booted can't be started from the preview.
+      function categorizeDevices(sims) {
         const booted = sims.filter((s) => s.state === "Booted");
         const others = sims.filter((s) => s.state !== "Booted");
+        return {
+          booted,
+          bootableIos: others.filter((s) => s.platform === "ios"),
+          unbootable: others.filter((s) => s.platform !== "ios"),
+        };
+      }
+
+      // Build one .dev-item row. kind: "connect" (booted → switch/connect),
+      // "boot" (stopped iOS → boot then connect), "disabled" (not actionable).
+      // onAct, if given, runs on a successful click (e.g. to close the dropdown).
+      function makeDeviceItem(s, kind, onAct) {
+        const disabled = kind === "disabled";
+        const isCurrent = kind === "connect" && s.udid === currentUdid;
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "dev-item" + (isCurrent ? " current" : "");
+        b.disabled = disabled;
+        if (disabled) b.title = "Not booted — start the emulator first";
+        else if (kind === "boot") b.title = "Boot this simulator";
+        else if (isCurrent) b.title = "Current device";
+        else b.title = "Switch to this device";
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        const nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = s.name;
+        const rt = document.createElement("span");
+        rt.className = "rt";
+        rt.textContent = isCurrent
+          ? "Current"
+          : kind === "connect"
+            ? s.runtime || ""
+            : kind === "boot"
+              ? "Boot"
+              : s.state || "";
+        b.append(dot, nm, rt);
+        if (kind === "connect") {
+          b.addEventListener("click", () => {
+            b.blur();
+            if (onAct) onAct();
+            if (s.udid === currentUdid) return; // already streaming this one
+            connect(s.udid).catch((err) => setStatus(String(err.message || err), "error"));
+          });
+        } else if (kind === "boot") {
+          b.addEventListener("click", () => {
+            b.blur();
+            if (onAct) onAct();
+            bootDevice(s.udid, b).catch((err) => setStatus(String(err.message || err), "error"));
+          });
+        }
+        return b;
+      }
+
+      function renderDevicePicker(sims) {
+        const { booted, bootableIos, unbootable } = categorizeDevices(sims);
 
         const wrap = document.createElement("div");
         wrap.className = "dev-picker";
@@ -1810,52 +2083,13 @@
           : "Boot a simulator, then refresh.";
         wrap.appendChild(sub);
 
-        // kind: "connect" (booted → connect), "boot" (stopped iOS sim → boot
-        // headless then connect), or "disabled" (can't act from the preview,
-        // e.g. a stopped Android AVD that adb doesn't even list).
         const addList = (items, kind) => {
           if (!items.length) return;
           const list = document.createElement("div");
           list.className = "dev-list";
-          for (const s of items) {
-            const disabled = kind === "disabled";
-            const b = document.createElement("button");
-            b.type = "button";
-            b.className = "dev-item";
-            b.disabled = disabled;
-            if (disabled) b.title = "Not booted — start the emulator first";
-            else if (kind === "boot") b.title = "Boot this simulator";
-            const dot = document.createElement("span");
-            dot.className = "dot";
-            const nm = document.createElement("span");
-            nm.className = "nm";
-            nm.textContent = s.name;
-            const rt = document.createElement("span");
-            rt.className = "rt";
-            rt.textContent =
-              kind === "connect" ? s.runtime || "" : kind === "boot" ? "Boot" : s.state || "";
-            b.append(dot, nm, rt);
-            if (kind === "connect") {
-              b.addEventListener("click", () => {
-                b.blur();
-                connect(s.udid).catch((err) => setStatus(String(err.message || err), "error"));
-              });
-            } else if (kind === "boot") {
-              b.addEventListener("click", () => {
-                b.blur();
-                bootDevice(s.udid, b).catch((err) =>
-                  setStatus(String(err.message || err), "error")
-                );
-              });
-            }
-            list.appendChild(b);
-          }
+          for (const s of items) list.appendChild(makeDeviceItem(s, kind));
           wrap.appendChild(list);
         };
-        // Stopped iOS simulators boot by udid; anything else non-booted can't be
-        // started from here.
-        const bootableIos = others.filter((s) => s.platform === "ios");
-        const unbootable = others.filter((s) => s.platform !== "ios");
         addList(booted, "connect");
         addList(bootableIos, "boot");
         addList(unbootable, "disabled");
@@ -1883,6 +2117,7 @@
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const { simulators } = await res.json();
           const all = simulators || [];
+          for (const s of all) deviceNameByUdid.set(s.udid, s.name);
           const booted = all.filter((s) => s.state === "Booted");
 
           // Exactly one usable simulator → connect to it directly.
@@ -1928,8 +2163,10 @@
           ws = null;
         }
         wsOpen = false;
-        // No live stream → no current device. Prevents the describe loop from
-        // firing one stale GET /preview/describe/<oldUdid> after teardown.
+        // No live stream → hide the device-name pill and drop the current device.
+        // The latter prevents the describe loop from firing one stale GET
+        // /preview/describe/<oldUdid> after teardown.
+        setDeviceIndicator(null);
         currentUdid = null;
         describeWarmupPending = false;
         // Explicitly clear the img src — otherwise the browser keeps the MJPEG
@@ -2056,6 +2293,11 @@
         stage.appendChild(img);
         viewport.innerHTML = "";
         viewport.appendChild(stage);
+
+        // Surface which device is on screen, resolving its name if this was a
+        // direct ?udid connect that skipped the picker.
+        setDeviceIndicator(udid);
+        void ensureDeviceName(udid);
 
         attachInputHandlers(img);
 
