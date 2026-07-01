@@ -85,6 +85,12 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe("Shut down and re-boot the device even if already running."),
+  headless: z
+    .boolean()
+    .optional()
+    .describe(
+      "iOS only: boot the simulator core WITHOUT opening the Simulator.app GUI window. The device still streams via simulator-server; used by Argent Lens. Ignored on Android/Vega/Electron, which have no equivalent GUI step."
+    ),
   electronAppPath: z
     .string()
     .optional()
@@ -441,7 +447,8 @@ async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
 async function bootIos(
   udid: string,
   registry: Registry,
-  force?: boolean
+  force?: boolean,
+  headless?: boolean
 ): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
   // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
   // gets "iOS requires macOS" rather than a misleading "install xcode-select".
@@ -561,7 +568,13 @@ async function bootIos(
     "CurrentDeviceUDID",
     udid,
   ]);
-  await execFileAsync("open", ["-a", "Simulator.app"]);
+  // `simctl boot` above already booted the device CORE (headless). Opening
+  // Simulator.app only attaches the GUI window — surfaces that stream the
+  // device through simulator-server (e.g. Argent Lens) don't need it, so
+  // `headless` skips it to avoid popping a window the user didn't ask for.
+  if (!headless) {
+    await execFileAsync("open", ["-a", "Simulator.app"]);
+  }
   return { platform: "ios", udid, booted: true };
 }
 
@@ -1371,7 +1384,7 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         if (classifyDevice(params.udid!) === "ios-remote") {
           return bootIosRemote(params.udid!, registry, params.force);
         }
-        return bootIos(params.udid!, registry, params.force);
+        return bootIos(params.udid!, registry, params.force, params.headless);
       }
       if (hasAvd) {
         return bootAndroid({

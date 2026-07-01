@@ -146,8 +146,10 @@ async function createWindow(): Promise<void> {
     titleBarStyle: "hidden",
     // Inset the traffic lights to share the same 14px padding the in-window
     // corner panels use (theme toggle, status pill), so the native buttons and
-    // the handcrafted chrome read as one consistent margin.
-    trafficLightPosition: { x: 14, y: 18 },
+    // the handcrafted chrome read as one consistent margin. Keep x and y equal —
+    // an asymmetric inset (e.g. 14/18) reads as visibly off against the square
+    // corner panels.
+    trafficLightPosition: { x: 14, y: 14 },
     show: false,
     // Transparent + no native shadow: the OS window is just a passthrough
     // for the renderer. The visible "card" is whatever <html> + <body>

@@ -5,7 +5,7 @@
 // cleared on uninstall (see resetFirstRunNotice), so a later reinstall shows it
 // again rather than staying silently suppressed.
 
-import { readConfigObject, updateConfig } from "./config-file.js";
+import { readConfigObject, updateConfig } from "@argent/configuration-core";
 import { isEnabled } from "./consent.js";
 
 /** The command users run to opt out — callers may highlight it on their surface. */

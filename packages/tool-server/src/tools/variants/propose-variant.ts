@@ -107,8 +107,10 @@ native window that opens automatically) as a floating card beside the streamed s
 line connecting it to the matched on-screen element; you don't open or display anything yourself. Pass
 variant.previewImage (e.g. a screenshot path) to show how each variant looks.
 
-When you have proposed every variant for every element, call \`await_user_selection\` once — that is
-the single blocking call that waits for the human's picks.
+When you have proposed every variant for every element, you are done staging — the human reviews them
+in the Argent Lens window and sends back their picks and comments. If an \`await_user_selection\` tool
+is available, call it once to block until they submit; otherwise just end your turn and their feedback
+arrives as a follow-up message (this is the case in an \`argent lens\` CLI session).
 
 Returns { round, elementId, variantId, element, variantCount, totalElements } — confirmation only;
 it does not wait for the user.`,
@@ -134,14 +136,21 @@ it does not wait for the user.`,
         ...params,
         variant: { ...params.variant, frame },
       });
+      // In an `argent lens` CLI session there is no await_user_selection to call
+      // (it's hidden) — the user's feedback is relayed back as a message, so the
+      // agent should simply end its turn once every element is covered. Outside a
+      // CLI session, point it at the blocking await as before.
+      const finish = variantProposalStore.isCliSession()
+        ? "end your turn — the user's feedback will arrive as a message"
+        : "call await_user_selection once";
       return {
         ...res,
         hint:
           res.variantCount === 1
             ? `Staged the first variant for "${res.element}". Propose more variants (for this or ` +
-              `other elements), then call await_user_selection once when done.`
-            : `"${res.element}" now has ${res.variantCount} variants. Keep proposing or call ` +
-              `await_user_selection when every element is covered.`,
+              `other elements), then ${finish} when done.`
+            : `"${res.element}" now has ${res.variantCount} variants. Keep proposing, then ` +
+              `${finish} when every element is covered.`,
       };
     },
   };

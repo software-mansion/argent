@@ -11,5 +11,11 @@
     "declaration": true,
     "sourceMap": true
   },
+  "references": [
+    { "path": "../configuration-core" },
+    { "path": "../registry" },
+    { "path": "../telemetry" },
+    { "path": "../argent-tools-client" }
+  ],
   "include": ["src/**/*"]
 }
