@@ -39,6 +39,22 @@
         font-family: var(--font-sans);
         font-size: var(--fs-body);
       }
+      /* This is an app chrome, not a document: dragging across labels/buttons
+         shouldn't leave a stuck text highlight. Kill selection globally, then
+         re-enable it where copying is the point — form fields and code/comment
+         text the user may want to lift out. */
+      body {
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      input,
+      textarea,
+      code,
+      pre,
+      [contenteditable="true"] {
+        user-select: text;
+        -webkit-user-select: text;
+      }
       #root {
         display: flex;
         flex-direction: column;
@@ -141,7 +157,10 @@
         -webkit-user-select: none;
         touch-action: none;
         pointer-events: auto;
-        cursor: crosshair;
+        /* Normal arrow over a usable device (matches Radon IDE, which only shows
+           crosshair while inspecting). Comment/inspect mode swaps in the
+           speech-bubble cursor below; multi-touch shows the .touch-dot rings. */
+        cursor: default;
       }
       /* Multi-touch indicators overlay on the image, positioned via CSS vars. */
       .touch-dot {
@@ -182,6 +201,13 @@
         width: 100%;
         max-width: var(--picker-max-width);
         padding: var(--pad-picker);
+        /* The viewport centers this picker with no overflow of its own, so a
+           device list taller than the window used to spill off the top with no
+           way to reach it. Cap the picker to the viewport and let it scroll
+           internally — it still centers when it fits. */
+        max-height: 100%;
+        overflow-y: auto;
+        overscroll-behavior: contain;
       }
       .dev-picker h2 {
         margin: 0;
