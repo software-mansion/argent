@@ -39,6 +39,10 @@ export function makeComponentTreeScript(opts: {
   function __argent_fail(msg) {
     __argent_callback(JSON.stringify({ requestId: REQUEST_ID, result: JSON.stringify({ error: msg }) }));
   }
+  // Route any UNEXPECTED throw (outside the named guards below) through the same
+  // binding, so a crash still settles immediately instead of hanging to the 15s
+  // binding timeout. Mirrors inspect-at-point.ts's top-level try/catch.
+  try {
   var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) { __argent_fail('No DevTools hook'); return; }
   // Collect fiber roots across ALL renderers. A single React renderer id is not
@@ -436,5 +440,8 @@ export function makeComponentTreeScript(opts: {
     result.skippedCounts = skippedCounts;
   }
   __argent_callback(JSON.stringify({ requestId: REQUEST_ID, result: JSON.stringify(result) }));
+  } catch (e) {
+    __argent_fail('Component-tree script crashed: ' + (e && e.message ? e.message : String(e)));
+  }
 })()`;
 }

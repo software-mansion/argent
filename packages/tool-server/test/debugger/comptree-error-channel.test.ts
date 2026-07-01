@@ -70,4 +70,24 @@ describe("component-tree delivers errors via the binding channel", () => {
     };
     expect(inner.error).toBe("No fiber roots");
   });
+
+  it("routes an UNEXPECTED throw (outside the named guards) through the binding", async () => {
+    // getFiberRoots throws on the legacy-roots path, which runs outside any inner
+    // try/catch. Without the top-level try/catch the async IIFE would reject and
+    // __argent_callback would never fire — the tool would hang to the 15s binding
+    // timeout instead of surfacing the crash.
+    const hook = {
+      getFiberRoots: () => {
+        throw new Error("boom");
+      },
+    };
+    const payloads = run({ hook });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(payloads.length).toBeGreaterThan(0);
+    const inner = JSON.parse((JSON.parse(payloads[0]!) as { result: string }).result) as {
+      error?: string;
+    };
+    expect(inner.error).toContain("Component-tree script crashed");
+    expect(inner.error).toContain("boom");
+  });
 });
