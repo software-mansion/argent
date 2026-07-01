@@ -19,6 +19,7 @@ import { isUnmetUiWaitResult, AWAIT_UI_ELEMENT_TOOL_ID } from "../await-ui-eleme
 import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-device";
 import { runTap, runType, runAssert, runScrollTo } from "./flow-actions";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import { runSnapshot, DEFAULT_MAX_MISMATCH } from "./flow-visual";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -150,6 +151,32 @@ async function waitForNativeDevtools(
   }
 }
 
+/**
+ * Probe whether the android-devtools helper — the full-hierarchy source flows
+ * resolve testIDs against (`flow-android-tree.ts`) — is usable.
+ *
+ * Unlike iOS's native-devtools (a connection the injected dylib opens
+ * asynchronously *after* launch, which `waitForNativeDevtools` must poll for),
+ * the Android helper is a separate `am instrument` process the registry spawns
+ * synchronously on first `resolveService`. There is no post-launch race to wait
+ * out: one resolution either brings the helper up (install + spawn + ping
+ * handshake in the factory) or it can't run on this device. So this is a
+ * one-shot probe, not a poll. Returns true when the helper is ready. On failure
+ * the caller hard-fails rather than let `fetchFlowTree` silently degrade to the
+ * trimmed accessibility tree — where a testID on a not-important RN container is
+ * absent, producing the same confusing "not visible" failures the iOS gate
+ * guards against.
+ */
+async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Promise<boolean> {
+  try {
+    const ref = androidDevtoolsRef(device);
+    const api = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
+    return api.isReady();
+  } catch {
+    return false; // helper can't be installed / spawned on this device
+  }
+}
+
 interface ExecState {
   registry: Registry;
   ctx?: ToolContext;
@@ -260,6 +287,28 @@ returns a notice with the prerequisite instead of running.`,
                 failure_stage: "flow_native_devtools_connect",
                 failure_area: "tool_server",
                 error_kind: "timeout",
+              }
+            );
+          }
+        }
+        // Android resolves testID selectors against the full accessibility
+        // hierarchy served by the android-devtools helper. If the helper can't
+        // run, selectors silently fall back to the trimmed AX tree (which drops
+        // testID-bearing not-important containers), so probe for it up front and
+        // fail explicitly rather than degrade — the iOS gate's rationale, minus
+        // the poll (the helper spawns synchronously, so there's no race).
+        if (device.platform === "android" && !signal?.aborted) {
+          const ready = await androidDevtoolsReady(registry, device);
+          if (!ready && !signal?.aborted) {
+            if (statusBarPinned) await restoreStatusBar(device);
+            throw new FailureError(
+              `Flow "${params.name}" could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
+                `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`,
+              {
+                error_code: FAILURE_CODES.FLOW_NATIVE_DEVTOOLS_UNAVAILABLE,
+                failure_stage: "flow_native_devtools_connect",
+                failure_area: "tool_server",
+                error_kind: "dependency_missing",
               }
             );
           }
