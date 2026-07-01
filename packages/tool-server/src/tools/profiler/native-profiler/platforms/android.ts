@@ -115,43 +115,39 @@ export async function stopNativeProfilerAndroid(
         error_code: FAILURE_CODES.NATIVE_PROFILER_NO_ACTIVE_SESSION,
         failure_stage: "android_native_profiler_stop",
         failure_area: "tool_server",
-        error_kind: "validation",
+        // Internal session-state, not caller input — matches the react twin
+        // REACT_PROFILER_NO_ACTIVE_SESSION (not_found) so the "no active session"
+        // family carries one consistent kind across React/native/iOS/Android.
+        error_kind: "not_found",
       }
     );
   }
 
   if (!api.traceFile || !api.androidOnDeviceTracePath || !api.capturePid) {
     if (recoveringPartialTrace) {
-      throw new FailureError(
+      // Unreachable on Android: `recordingExitedUnexpectedly` is only ever set on
+      // the iOS path, and the Android recording-cap timeout sets `recordingTimedOut`
+      // while leaving the trace handles (traceFile / androidOnDeviceTracePath /
+      // capturePid) intact — so `recoveringPartialTrace` is never true here with the
+      // handles missing. Kept as a defensive guard, but a mid-recording perfetto
+      // crash on Android is not detected/flagged yet, so it stays unclassified
+      // rather than getting a telemetry code that can never fire on this platform.
+      throw new Error(
         "Native profiling recording exited unexpectedly and no trace file is available. " +
-          "Call native-profiler-start again.",
-        {
-          error_code: FAILURE_CODES.NATIVE_PROFILER_RECORDING_CRASHED,
-          failure_stage: "android_native_profiler_stop_no_trace",
-          failure_area: "tool_server",
-          error_kind: "crash",
-        }
+          "Call native-profiler-start again."
       );
     }
-    // Reachable only when the session is active (the guard above already
-    // handled the inactive case) yet its trace handles are missing — an
-    // internal bookkeeping inconsistency, not a "you never started" error, so
-    // it gets a distinct code rather than reusing NO_ACTIVE_SESSION.
-    throw new FailureError(
+    // Unreachable in practice: the trace handles (traceFile / androidOnDeviceTracePath
+    // / capturePid) are all set synchronously BEFORE `profilingActive` is flipped true,
+    // and are nulled only AFTER it is flipped false (the recording-cap timeout likewise
+    // leaves them intact) — so `profilingActive === true` always implies every handle is
+    // present, making "active session yet handles missing" impossible. Kept as a
+    // defensive "this should never happen" invariant — a programmer/state error, not a
+    // user-reachable failure mode — so it stays a plain Error without a telemetry code
+    // (a code here could never bucket a real failure on the toolFailed path).
+    throw new Error(
       "Native profiling session is active but its trace handles are missing — the recording state is inconsistent. " +
-        "Call native-profiler-start again.",
-      {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_STATE_INVALID,
-        failure_stage: "android_native_profiler_stop_inconsistent_state",
-        failure_area: "tool_server",
-        // An internal invariant on live session state failed (session active,
-        // yet its trace handles are absent) — no caller input or sequencing
-        // could produce this, so it is not `validation`. `validation` stays
-        // reserved for checks against caller input or a serialized schema we
-        // own (cf. PROFILER_NATIVE_METADATA_INVALID); a "this should never
-        // happen" in-memory inconsistency is `unknown`.
-        error_kind: "unknown",
-      }
+        "Call native-profiler-start again."
     );
   }
 

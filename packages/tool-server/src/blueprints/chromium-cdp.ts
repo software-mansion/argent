@@ -156,26 +156,23 @@ export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> 
     const deviceFromOpts = opts?.device;
     const payloadStr = typeof payload === "string" ? payload : (payload as DeviceInfo)?.id;
     if (deviceFromOpts && payloadStr && deviceFromOpts.id !== payloadStr) {
-      throw new FailureError(
-        `${CHROMIUM_CDP_NAMESPACE}.factory: options.device.id "${deviceFromOpts.id}" disagrees with URN payload "${payloadStr}".`,
-        {
-          error_code: FAILURE_CODES.CHROMIUM_FACTORY_OPTIONS_INVALID,
-          failure_stage: "chromium_factory_device_mismatch",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
+      // Internal wiring invariant, not a telemetry-bearing failure: on every
+      // registry path chromiumCdpRef(device) sets options.device and the URN
+      // payload from the same device.id (so the ids agree), and the transitive-dep
+      // path passes no options at all (so deviceFromOpts is undefined). A mismatch
+      // can therefore only come from a hand-crafted direct factory() call — a
+      // programmer error — so it stays a plain Error without a code.
+      throw new Error(
+        `${CHROMIUM_CDP_NAMESPACE}.factory: options.device.id "${deviceFromOpts.id}" disagrees with URN payload "${payloadStr}".`
       );
     }
     const device = deviceFromOpts ?? (payloadStr ? resolveDevice(payloadStr) : null);
     if (!device) {
-      throw new FailureError(
-        `${CHROMIUM_CDP_NAMESPACE}.factory could not determine the device — pass it via chromiumCdpRef(device).options or via the URN payload.`,
-        {
-          error_code: FAILURE_CODES.CHROMIUM_FACTORY_OPTIONS_INVALID,
-          failure_stage: "chromium_factory_device_undetermined",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
+      // Also dead on any registry path (resolveDevice never returns null and the
+      // URN payload is always present); reachable only by a direct factory() call
+      // with neither options.device nor a payload. Plain Error, no code.
+      throw new Error(
+        `${CHROMIUM_CDP_NAMESPACE}.factory could not determine the device — pass it via chromiumCdpRef(device).options or via the URN payload.`
       );
     }
     const port = parseChromiumCdpPort(device.id);
