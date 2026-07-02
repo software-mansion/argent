@@ -36,6 +36,25 @@ describe("flag-parser number coercion rejects empty/whitespace", () => {
   it("still rejects a non-numeric string", () => {
     expect(() => parseFlags(["--x", "abc"], numSchema)).toThrow(FlagParseException);
   });
+
+  it("still ACCEPTS zero and negatives (guards against over-rejecting falsy numbers)", () => {
+    // The whole fix exists because Number("") === 0 slipped through, so the
+    // tempting-but-wrong guard is `if (!Number(raw))` / `Number(raw) === 0`,
+    // which would ALSO reject the legitimate value 0. Pin that 0 and negatives
+    // (and exponent form) still parse — the guard must key off emptiness, not
+    // falsiness.
+    expect(parseFlags(["--x=0"], numSchema).args.x).toBe(0);
+    expect(parseFlags(["--x=-5"], numSchema).args.x).toBe(-5);
+    expect(parseFlags(["--x=1e3"], numSchema).args.x).toBe(1000);
+    expect(parseFlags(["--n=0"], numSchema).args.n).toBe(0);
+    expect(parseFlags(["--n=-3"], numSchema).args.n).toBe(-3);
+  });
+
+  it("rejects a non-integer / whitespace-only integer, still accepts a valid one", () => {
+    expect(() => parseFlags(["--n=1.5"], numSchema)).toThrow(FlagParseException);
+    expect(() => parseFlags(["--n", "   "], numSchema)).toThrow(FlagParseException);
+    expect(parseFlags(["--n", " 7 "], numSchema).args.n).toBe(7);
+  });
 });
 
 describe("flag-parser array + -json interleave never throws a raw error", () => {
