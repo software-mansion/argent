@@ -4,9 +4,9 @@ import * as path from "node:path";
 import { argentHomeDir, configFilePath } from "./paths.js";
 
 // Shared read/write for ~/.argent/config.json. The config holds several
-// independent keys (telemetry consent, first-run notices, ...), so every writer
-// must merge rather than overwrite, and publish atomically so an interrupted
-// write can never truncate keys it does not own.
+// independent keys (telemetry consent, first-run notices, Lens preferences,
+// ...), so every writer must merge rather than overwrite, and publish
+// atomically so an interrupted write can never truncate keys it does not own.
 
 /** Parse the config document, returning an empty object when missing/malformed. */
 export function readConfigObject(): Record<string, unknown> {
@@ -24,7 +24,7 @@ export function readConfigObject(): Record<string, unknown> {
 
 // A read → mutate → publish cycle completes in well under a second; a lock held
 // longer than this is treated as orphaned by a crashed/`kill -9`'d writer and
-// stolen, so a dead process can't wedge consent writes forever.
+// stolen, so a dead process can't wedge config writes forever.
 const LOCK_STALE_MS = 10_000;
 // Total time to wait for the lock before giving up and proceeding unlocked.
 // Degrading to the old (lock-free) behavior is strictly no worse than before
@@ -137,4 +137,48 @@ export function updateConfig(mutate: (config: Record<string, unknown>) => void):
   } finally {
     if (lock) releaseConfigLock(lock);
   }
+}
+
+// ── Argent Lens preferences ──────────────────────────────────────────────
+// Stored under the `lens` key of the shared config document, e.g.
+// `{ "lens": { "agent": "claude" } }`. `argent lens` reads `agent` to skip the
+// window's agent picker on subsequent runs, and writes it when the human ticks
+// "Remember this choice".
+
+/** Shape of the `lens` config section. Only the keys we read are typed. */
+interface LensConfig {
+  /** The coding-agent id last remembered for `argent lens` (e.g. "claude"). */
+  agent?: string;
+}
+
+function readLensConfig(): LensConfig {
+  const lens = readConfigObject().lens;
+  return lens && typeof lens === "object" ? (lens as LensConfig) : {};
+}
+
+/** The remembered `argent lens` agent id, or null when none is stored. */
+export function getRememberedAgent(): string | null {
+  const agent = readLensConfig().agent;
+  return typeof agent === "string" && agent.trim() ? agent : null;
+}
+
+/** Persist the chosen `argent lens` agent id so later runs skip the picker. */
+export function setRememberedAgent(agentId: string): void {
+  updateConfig((config) => {
+    const lens =
+      config.lens && typeof config.lens === "object"
+        ? (config.lens as Record<string, unknown>)
+        : {};
+    lens.agent = agentId;
+    config.lens = lens;
+  });
+}
+
+/** Forget the remembered `argent lens` agent (so the picker shows again). */
+export function clearRememberedAgent(): void {
+  updateConfig((config) => {
+    if (config.lens && typeof config.lens === "object") {
+      delete (config.lens as Record<string, unknown>).agent;
+    }
+  });
 }

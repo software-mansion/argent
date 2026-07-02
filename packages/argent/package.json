@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "MCP server for iOS Simulator and Android Emulator control",
   "license": "Apache-2.0",
   "repository": {
@@ -41,12 +41,15 @@
     "scripts/postinstall.cjs"
   ],
   "dependencies": {
+    "@fails-components/webtransport": "^1.6.3",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
     "@modelcontextprotocol/sdk": "^1.20.0",
     "tree-sitter": "^0.21.1",
     "tree-sitter-typescript": "^0.23.2"
   },
   "optionalDependencies": {
-    "electron": "^42.4.1"
+    "electron": "^42.5.0",
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",
@@ -54,14 +57,14 @@
     "@argent/mcp": "file:../argent-mcp",
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
-    "@clack/prompts": "^1.5.1",
-    "@types/node": "^25.9.3",
+    "@clack/prompts": "^1.6.0",
+    "@types/node": "^26.0.1",
     "@types/semver": "^7.7.1",
     "esbuild": "^0.28.1",
     "picocolors": "^1.1.1",
-    "posthog-node": "5.35.0",
-    "semver": "^7.8.4",
-    "smol-toml": "^1.6.1",
+    "posthog-node": "5.38.6",
+    "semver": "^7.8.5",
+    "smol-toml": "^1.7.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",
     "yaml": "^2.8.3"

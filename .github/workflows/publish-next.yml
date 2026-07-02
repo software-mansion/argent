@@ -1,12 +1,28 @@
 name: Publish prerelease to npm (next)
 
 on:
+  # Every push to main ships a canary prerelease under the `next` dist-tag, so
+  # `next` always tracks the tip of main. The version is derived + stamped at
+  # publish time (see "Compute and stamp canary version" below).
+  push:
+    branches:
+      - main
+  # Manual prerelease of a specific ref, publishing that ref's package.json
+  # version verbatim.
   workflow_dispatch:
     inputs:
       ref:
         description: "Branch, tag, or SHA to publish (e.g. v0.6.0-next.0)"
         required: true
         type: string
+
+concurrency:
+  # Serialize canary publishes: the per-base counter is derived from the
+  # registry (next index after the highest published `<base>-next.<k>`), so two
+  # overlapping runs could otherwise read the same index and collide on npm.
+  # Manual dispatches get their own lane. Never cancel an in-flight publish.
+  group: publish-next-${{ github.event_name }}
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -15,9 +31,10 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}
+          # push → the pushed commit; dispatch → the requested ref.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
       - uses: actions/setup-node@v6
         with:
@@ -25,7 +42,11 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
 
+      # Dispatch publishes the ref's package.json version verbatim, so it must
+      # already be a prerelease. The push path derives + stamps its own version
+      # below, so this guard doesn't apply there.
       - name: Verify package version is a prerelease
+        if: github.event_name == 'workflow_dispatch'
         run: |
           VERSION=$(node -p "require('./packages/argent/package.json').version")
           echo "Resolved version: $VERSION"
@@ -38,8 +59,13 @@ jobs:
       - name: Resolve native binaries tag
         id: binaries_tag
         run: |
-          REF="${{ inputs.ref }}"
-          echo "tag=argent-${REF//\//-}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Canary builds source the floating main build of the signed binaries.
+            echo "tag=argent-main" >> "$GITHUB_OUTPUT"
+          else
+            REF="${{ inputs.ref }}"
+            echo "tag=argent-${REF//\//-}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Download signed simulator-server binary
         run: bash scripts/download-simulator-server.sh
@@ -91,6 +117,13 @@ jobs:
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      # tvOS (Apple TV) binaries — fail the publish if any is missing rather
+      # than silently shipping a package where tv-* tools crash at runtime.
+      - run: test -x packages/argent/bin/darwin/tvos-ax-service
+      - run: test -x packages/argent/bin/darwin/tvos-hid-daemon
+      - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
       - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
       - run: test -d packages/argent/assets/queries
       - run: test -f packages/argent/assets/manifest.json
@@ -100,23 +133,71 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
+
+      # Canary version: <patch-bump of highest published>-next.<counter>, where
+      # the counter resets to 0 per base and increments per publish (derived
+      # from the registry). Stamped into package.json so the published build
+      # reports it. Done after `npm ci` (the checked-out lockfile still matches
+      # the original version at install time) and after the build (the CLI reads
+      # its version from package.json at runtime — nothing bakes it in), but
+      # before pack/publish.
+      - name: Compute and stamp canary version
+        if: github.event_name == 'push'
+        id: canary
+        run: |
+          VERSION="$(node scripts/next-canary-version.mjs --write)"
+          echo "Canary version: ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # The shipped CLI reads its version from package.json at runtime, so this
+      # is exactly what `argent --version` prints after install. Fail loudly if
+      # they ever diverge.
+      - name: Verify argent --version reports the canary version
+        if: github.event_name == 'push'
+        run: |
+          REPORTED="$(node packages/argent/dist/cli.js --version)"
+          EXPECTED="${{ steps.canary.outputs.version }}"
+          echo "argent --version → ${REPORTED} (expected ${EXPECTED})"
+          [ "${REPORTED}" = "${EXPECTED}" ] || { echo "::error::argent --version (${REPORTED}) != published version (${EXPECTED})"; exit 1; }
+
       - run: npm pack --dry-run -w @swmansion/argent
 
-      - run: npm publish -w @swmansion/argent --tag next
+      # Dispatch publishes the ref's verbatim version.
+      - name: Publish prerelease
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish -w @swmansion/argent --tag next
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # Re-point `next` at the highest published version. `npm publish --tag next`
-      # already tags this prerelease, but this also self-heals `next` if it was
-      # left stale on an older version. Idempotent.
-      #
-      # continue-on-error: the prerelease publish above already succeeded and is
-      # irreversible. The sync script never moves `next` backward, so even if it
-      # briefly reads a stale packument it leaves the just-tagged prerelease in
-      # place; a transient failure here self-heals next publish and must not fail
-      # an otherwise-successful release.
-      - name: Sync 'next' dist-tag to highest published version
-        continue-on-error: true
-        run: node scripts/sync-next-dist-tag.mjs
+      # Canary publish. Serialization makes concurrent index collisions
+      # impossible, but npm's read-after-write lag could still hand a back-to-back
+      # run a stale version list, so retry a version-exists collision by
+      # recomputing + restamping. Any other publish failure is real and fails fast.
+      - name: Publish canary
+        if: github.event_name == 'push'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for attempt in 1 2 3; do
+            VERSION="$(node -p "require('./packages/argent/package.json').version")"
+            echo "Publishing ${VERSION} (attempt ${attempt})"
+            if npm publish -w @swmansion/argent --tag next; then
+              echo "Published ${VERSION}"
+              exit 0
+            fi
+            if npm view "@swmansion/argent@${VERSION}" version >/dev/null 2>&1; then
+              echo "::warning::${VERSION} already on npm (lost a race / stale read) — recomputing"
+              node scripts/next-canary-version.mjs --write
+              sleep 10
+            else
+              echo "::error::npm publish failed for ${VERSION} (not a version collision)"
+              exit 1
+            fi
+          done
+          echo "::error::canary publish still colliding after 3 attempts"
+          exit 1
+
+      # `npm publish --tag next` already tags this prerelease. Re-pointing `next`
+      # at the highest published version (and self-healing it if it was left
+      # stale) is handled by the "Sync 'next' dist-tag" workflow, which runs
+      # automatically once this workflow succeeds.

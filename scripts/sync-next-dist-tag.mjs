@@ -32,7 +32,7 @@ const TAG = "next";
 // lightweight CI job without `npm ci`. Verified against the `semver` library in
 // scripts/sync-next-dist-tag.test.mjs.
 
-function parseSemver(version) {
+export function parseSemver(version) {
   const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
     String(version).trim()
   );
