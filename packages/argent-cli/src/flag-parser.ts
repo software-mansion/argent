@@ -204,15 +204,20 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       }
       const { value, nextIndex } =
         inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, flag);
-      const coerced = coerceScalar(value, itemType, flag);
       if (jsonFields.has(flag)) {
         // --${flag}-json already set this field (in either order relative to
         // this occurrence); mixing the two forms is ambiguous and one would
-        // silently clobber or corrupt the other's value.
+        // silently clobber or corrupt the other's value. Checked BEFORE
+        // coerceScalar so a mixed --field/--field-json with an also-invalid
+        // plain value surfaces this (more actionable) mixing error rather than
+        // a scalar-coercion error — matching the --field-json branch above,
+        // which checks mixing before parsing the JSON.
         throw new FlagParseException(
           `--${flag} and --${flag}-json cannot be mixed for the same field; pass it entirely as --${flag}-json '<json>' or --args '<json>'`
         );
-      } else if (!seenArrayFields.has(flag)) {
+      }
+      const coerced = coerceScalar(value, itemType, flag);
+      if (!seenArrayFields.has(flag)) {
         args[flag] = [coerced];
         seenArrayFields.add(flag);
       } else {
