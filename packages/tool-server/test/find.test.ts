@@ -12,13 +12,20 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
 // read-only on TV (and to fail closed on an indeterminate probe). Stub it to a
 // plain "mobile" verdict so the Android acting tests don't shell adb; the
 // Android-TV / indeterminate tests override it per-case.
+//
+// ALSO stub isAndroidTv: the Android *describe* path (`describeAndroid`) calls it
+// directly to attach a TV hint, and its real implementation shells `adb`. Leaving
+// it unmocked passes only where adb happens to be on PATH (a dev laptop) and
+// fails on an adb-less CI runner (the tree never parses → found:false). Mocking
+// both keeps every Android path adb-free regardless of the host.
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   getAndroidRuntimeKind: vi.fn(async () => "mobile"),
+  isAndroidTv: vi.fn(async () => false),
 }));
 
 import { isTvOsSimulator } from "../src/utils/ios-devices";
-import { getAndroidRuntimeKind } from "../src/utils/adb";
+import { getAndroidRuntimeKind, isAndroidTv } from "../src/utils/adb";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
@@ -186,6 +193,10 @@ describe("find tool", () => {
     vi.mocked(isTvOsSimulator).mockResolvedValue(false);
     vi.mocked(getAndroidRuntimeKind).mockReset();
     vi.mocked(getAndroidRuntimeKind).mockResolvedValue("mobile");
+    // isAndroidTv is used by the describe-android hint path (not find's guard);
+    // keep it false so the Android tree fetch never shells adb on any host.
+    vi.mocked(isAndroidTv).mockReset();
+    vi.mocked(isAndroidTv).mockResolvedValue(false);
   });
 
   const iosTool = (ax: AXServiceApi) => {

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import vm from "node:vm";
 
 import { describeChromium } from "../src/tools/describe/platforms/chromium";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
@@ -17,7 +18,7 @@ import type { DescribeNode } from "../src/tools/describe/contract";
 // hands to Runtime.evaluate — against a minimal, faithful DOM stand-in, so the
 // premise is verified against the actual walker. No jsdom/happy-dom dependency:
 // the script's only free identifiers are `window`, `document`, and the HTML*/
-// Element constructors, which we inject via `new Function`.
+// Element constructors, which we inject via a `vm` sandbox (see `runPageScript`).
 
 type Attrs = Record<string, string>;
 
@@ -89,8 +90,28 @@ class FakeInput extends FakeEl {}
 class FakeTextArea extends FakeEl {}
 class FakeImage extends FakeEl {}
 
+// Evaluate describeChromium's real page-eval `expression` against the fake DOM.
+// A browser runs it against `window`, whose global object is COMPLETE — every DOM
+// identifier resolves (to a value or `undefined`), never to a ReferenceError. A
+// bare `new Function` instead resolves free identifiers against Node's sparse
+// global scope, so a reference to any DOM global the script doesn't strictly need
+// (or that a transform introduces) throws "X is not defined" in some environments
+// but not others. Emulate the browser's complete global with a `vm` sandbox: the
+// injected fakes cover the identifiers the script actually uses (`window`,
+// `document`, the HTML*/Element constructors), and the permissive `has` trap makes
+// every OTHER reference resolve to `undefined` rather than throw — built-ins
+// (`JSON`, `Math`, …) still fall through to the real globalThis.
+function runPageScript(expression: string, globals: Record<string, unknown>): string {
+  const sandbox = new Proxy(globals, {
+    has: () => true,
+    get: (target, key) => (key in target ? (target as never)[key] : (globalThis as never)[key]),
+  });
+  vm.createContext(sandbox);
+  return vm.runInContext(`(${expression})`, sandbox) as string;
+}
+
 // Run describeChromium end-to-end: its Runtime.evaluate `expression` (the real
-// DESCRIBE_DOM_SCRIPT) is executed via `new Function` against the fake DOM.
+// DESCRIBE_DOM_SCRIPT) is executed against the fake DOM via `runPageScript`.
 async function walkDom(root: FakeEl): Promise<DescribeNode> {
   const win = {
     innerWidth: 1024,
@@ -110,21 +131,14 @@ async function walkDom(root: FakeEl): Promise<DescribeNode> {
     cdp: {
       send: async (method: string, params?: { expression?: string }) => {
         if (method !== "Runtime.evaluate" || !params?.expression) return {};
-        // Intentional: this test harness evaluates describeChromium's own page-eval
-        // expression against injected fake DOM globals — the whole point is to run
-        // that script string in-process. The input is our own constant, not
-        // attacker-controlled, so the implied-eval rule doesn't apply here.
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval
-        const run = new Function(
-          "window",
-          "document",
-          "HTMLInputElement",
-          "HTMLTextAreaElement",
-          "HTMLImageElement",
-          "Element",
-          `return (${params.expression});`
-        );
-        const value = run(win, doc, FakeInput, FakeTextArea, FakeImage, FakeEl) as string;
+        const value = runPageScript(params.expression, {
+          window: win,
+          document: doc,
+          HTMLInputElement: FakeInput,
+          HTMLTextAreaElement: FakeTextArea,
+          HTMLImageElement: FakeImage,
+          Element: FakeEl,
+        });
         return { result: { value } };
       },
     },
