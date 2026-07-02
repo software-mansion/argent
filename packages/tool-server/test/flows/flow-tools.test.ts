@@ -321,6 +321,71 @@ describe("flow-add-step", () => {
     );
   });
 
+  it("records a restart-app as a portable launch step (device id dropped)", async () => {
+    const registry = createMockRegistry({
+      "restart-app": { result: { restarted: true, bundleId: "com.acme.app" } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "launch-rewrite", project_root: tmpDir });
+    const result = await tool.execute(
+      {},
+      { command: "restart-app", args: '{"udid":"ABC","bundleId":"com.acme.app"}' }
+    );
+
+    // Ran live with the full args…
+    expect(registry.invokeTool).toHaveBeenCalledWith("restart-app", {
+      udid: "ABC",
+      bundleId: "com.acme.app",
+    });
+    // …but recorded the launch directive, making this an e2e flow.
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "launch", app: "com.acme.app" }]);
+  });
+
+  it("keeps a restart-app with extra args (e.g. activity) as a raw tool step", async () => {
+    const registry = createMockRegistry({
+      "restart-app": { result: { restarted: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "launch-activity", project_root: tmpDir });
+    const result = await tool.execute(
+      {},
+      {
+        command: "restart-app",
+        args: '{"udid":"ABC","bundleId":"com.acme.app","activity":".Main"}',
+      }
+    );
+
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      {
+        kind: "tool",
+        name: "restart-app",
+        args: { bundleId: "com.acme.app", activity: ".Main" },
+      },
+    ]);
+  });
+
+  it("rejects a leading launch recorded into a prerequisite-bearing recording", async () => {
+    const registry = createMockRegistry({
+      "restart-app": { result: { restarted: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    // A prerequisite documents a fragment; a leading launch would make it e2e —
+    // contradictory, so the append must fail and record nothing.
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "contradiction", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await expect(
+      tool.execute({}, { command: "restart-app", args: '{"bundleId":"com.acme.app"}' })
+    ).rejects.toThrow(/must not declare executionPrerequisite/i);
+
+    const flow = parseFlow(await readFlowFile("contradiction"));
+    expect(flow.steps).toEqual([]);
+  });
+
   async function writeSiblingFlow(name: string, yaml: string): Promise<void> {
     await fs.writeFile(path.join(tmpDir, ".argent", "flows", `${name}.yaml`), yaml, "utf8");
   }
@@ -331,10 +396,7 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "compose-test", project_root: tmpDir, launch: "com.acme.app" }
-    );
+    await flowStartRecordingTool.execute({}, { name: "compose-test", project_root: tmpDir });
     await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
 
     const result = await tool.execute(
@@ -362,11 +424,8 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "compose-e2e", project_root: tmpDir, launch: "com.acme.app" }
-    );
-    await writeSiblingFlow("other-e2e", "launch: com.acme.app\nsteps:\n  - echo: hi\n");
+    await flowStartRecordingTool.execute({}, { name: "compose-e2e", project_root: tmpDir });
+    await writeSiblingFlow("other-e2e", "steps:\n  - launch: com.acme.app\n  - echo: hi\n");
 
     const result = await tool.execute(
       {},
@@ -395,10 +454,7 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "compose-missing", project_root: tmpDir, launch: "com.acme.app" }
-    );
+    await flowStartRecordingTool.execute({}, { name: "compose-missing", project_root: tmpDir });
 
     const result = await tool.execute(
       {},

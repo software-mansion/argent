@@ -55,6 +55,8 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
       switch (step.kind) {
         case "echo":
           return `${n}. echo: ${step.message}`;
+        case "launch":
+          return `${n}. launch: ${typeof step.app === "string" ? step.app : JSON.stringify(step.app)}`;
         case "run":
           return `${n}. run: ${step.flow}`;
         case "tap":

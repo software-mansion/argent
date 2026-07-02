@@ -21,23 +21,13 @@ const zodSchema = z.object({
     .describe(
       "Absolute path to the project root directory (the directory that contains or should contain `.argent/flows/`). The flow file is created at `<project_root>/.argent/flows/<name>.yaml`."
     ),
-  launch: z
-    .string()
-    .optional()
-    .describe(
-      "App to launch for this end-to-end flow (iOS bundle id / Android package). Recorded so the standalone runner can start the app from scratch. Omit only when recording a fragment."
-    ),
-  fragment: z
-    .boolean()
-    .optional()
-    .describe(
-      "Record a reusable fragment instead of an e2e flow: no launch block, may declare executionPrerequisite, and can be run from other flows."
-    ),
   executionPrerequisite: z
     .string()
     .optional()
     .describe(
-      'Fragments only: the app/device state assumed on entry (e.g. "Settings app open on General page"). Ignored for e2e flows.'
+      'Fragments only: the app/device state assumed on entry (e.g. "Settings app open on General page"). ' +
+        "For a self-contained e2e flow, omit this and record a `restart-app` as the first step instead — " +
+        "it is captured as the flow's `launch` step."
     ),
 });
 
@@ -64,8 +54,11 @@ Returns { message, flowFile, savedTo } and optionally { previousFlow } if a prio
 Fails if the .argent/flows/ directory cannot be created or the flow file cannot be written.
 
 After starting, use flow-add-step to append tool calls — each step is executed
-LIVE so you can verify it works before it gets recorded. Use flow-add-echo
-to add labels. Call flow-finish-recording when done.
+LIVE so you can verify it works before it gets recorded. For a self-contained
+e2e flow, record a restart-app of the app under test as the FIRST step (captured
+as the flow's \`launch\` step); for a reusable fragment, skip that and pass
+executionPrerequisite instead. Use flow-add-echo to add labels. Call
+flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, you can edit the .yaml file directly
 to remove or reorder steps.`,
@@ -77,15 +70,13 @@ to remove or reorder steps.`,
     const previousFlow = getActiveFlowOrNull();
 
     const filePath = getFlowPath(params.name);
-    // Default is an e2e flow (captures launch, no prerequisite). It's a fragment
-    // when explicitly opted in, or inferred when a prerequisite is given without
-    // an app to launch (a documented entry contract implies a reusable fragment).
-    const asFragment =
-      params.fragment === true ||
-      (params.launch === undefined && Boolean(params.executionPrerequisite));
-    const flow: FlowFile = asFragment
-      ? { executionPrerequisite: params.executionPrerequisite ?? "", steps: [] }
-      : { launch: params.launch, executionPrerequisite: "", steps: [] };
+    // A recording's type emerges from its steps: recording a `restart-app`
+    // first makes it an e2e flow (captured as a leading `launch` step by
+    // flow-add-step); declaring an executionPrerequisite documents a fragment.
+    const flow: FlowFile = {
+      executionPrerequisite: params.executionPrerequisite ?? "",
+      steps: [],
+    };
     validateFlow(flow);
     const flowFile = serializeFlow(flow);
 

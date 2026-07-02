@@ -91,7 +91,6 @@ describe("loose (bare-string) selector resolution", () => {
       screen([n({ identifier: "tap-box", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]);
 
     await writeFlow("idtap", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       // `tap: tap-box` ⇒ loose; identifier-first finds the testID node.
       steps: [{ kind: "tap", selector: { text: "tap-box", loose: true } }],
@@ -108,7 +107,6 @@ describe("loose (bare-string) selector resolution", () => {
       screen([n({ label: "Login", frame: { x: 0.2, y: 0.6, width: 0.6, height: 0.1 } })]);
 
     await writeFlow("texttap", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "tap", selector: { text: "Login", loose: true } }],
     });
@@ -128,7 +126,6 @@ describe("loose (bare-string) selector resolution", () => {
       ]);
 
     await writeFlow("prefer", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "tap", selector: { text: "save", loose: true } }],
     });
@@ -152,7 +149,7 @@ describe("loose (bare-string) selector resolution", () => {
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(
       path.join(dir, "strict.yaml"),
-      "launch: com.acme.app\nsteps:\n  - tap: { text: tap-box }\n",
+      "steps:\n  - tap: { text: tap-box }\n",
       "utf8"
     );
 
@@ -167,7 +164,6 @@ describe("loose (bare-string) selector resolution", () => {
       screen([n({ identifier: "tap-box", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]);
 
     await writeFlow("idawait", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       // `await: { visible: tap-box }` ⇒ loose; identifier-first finds the testID.
       steps: [{ kind: "await", condition: "visible", selector: { text: "tap-box", loose: true } }],
@@ -189,7 +185,6 @@ describe("loose (bare-string) selector resolution", () => {
       ]);
 
     await writeFlow("idassert", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [
         {

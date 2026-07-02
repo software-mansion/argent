@@ -9,10 +9,11 @@ A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` di
 
 Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
 
-**Two flow types** (inferred from the `launch` block):
+**Two flow types** 
+- **e2e** — begins with a `launch:` step, which starts that app from scratch (terminate + relaunch), so the flow controls its own start state. No `executionPrerequisite`. May `run:` fragments; cannot itself be a `run:` target. Record one by adding a `restart-app` of the app under test as the **first** step — it is captured as the `launch` step.
+- **fragment** — doesn't begin with a launch; runs against the device's current state. May declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time.
 
-- **e2e** — declares a `launch` block; the runner launches that app from scratch before step 1. No `executionPrerequisite`. The only type `argent flow run` accepts. May `run:` fragments.
-- **fragment** — no `launch` block; may declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time. Record one by passing `fragment: true` to `flow-start-recording`.
+Both run via `argent flow run <name>` — a fragment simply runs against whatever is on screen (its prerequisite is printed as a reminder). Only e2e flows are meaningful CI/suite entries, since only they give a deterministic verdict from a clean start.
 
 ### Step directives
 
@@ -20,6 +21,7 @@ Beyond raw `tool:` steps and `echo:`, flows support declarative directives inter
 
 | Directive   | YAML                                                                                                     | Meaning                                                                 |
 | ----------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `launch`    | `- launch: com.acme.app` or `- launch: { ios: …, android: … }`                                           | start the app from scratch (terminate + relaunch) and wait until ready  |
 | `tap`       | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }`                                                           | tap an element by selector (auto-waits), or a raw normalized point      |
 | `type`      | `- type: { into: email, text: "a@b.com" }`                                                               | focus a field, type, then press Enter to submit + dismiss the keyboard  |
 | `scroll-to` | `- scroll-to: "Order #1234"` (scrolls down) or `- scroll-to: { target: …, direction: right, within: … }` | momentum-free scroll until the target is visible                        |
@@ -47,24 +49,24 @@ This condition-as-key form is the only spelling. For advanced `await` control be
 
 ### Standalone runner
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium] [--update-baselines] [--json]` runs an e2e flow with no LLM in the loop and exits non-zero on any failure — suitable for CI. `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`; the status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs.
+`argent flow run <name> [--device <id>] [--platform ios|android|chromium] [--update-baselines] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`; the status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs.
 
 ## 2. Tools
 
-| Tool                     | Purpose                                                                                                                      |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `flow-start-recording`   | Start recording — takes a name, plus `launch` (e2e) or `fragment: true` + optional `executionPrerequisite`; creates the file |
-| `flow-add-step`          | Execute a tool call live and record it if it succeeds                                                                        |
-| `flow-add-echo`          | Add a label/comment that prints during replay                                                                                |
-| `flow-finish-recording`  | Stop recording and get a summary                                                                                             |
-| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it                                                                      |
-| `flow-execute`           | Replay a saved flow by name                                                                                                  |
+| Tool                     | Purpose                                                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `flow-start-recording`   | Start recording — takes a name and (fragments only) an optional `executionPrerequisite`; creates the file |
+| `flow-add-step`          | Execute a tool call live and record it if it succeeds                                                     |
+| `flow-add-echo`          | Add a label/comment that prints during replay                                                             |
+| `flow-finish-recording`  | Stop recording and get a summary                                                                          |
+| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it                                                   |
+| `flow-execute`           | Replay a saved flow by name                                                                               |
 
 ## 3. Workflow
 
 ### Recording
 
-1. **Get to the entry state first, then start.** For an **e2e** flow the runner launches/restarts the app from scratch (the `launch` block) before step 1, so a recorded leading `restart-app`/`launch-app` would only double-launch it. **Launch or restart the app _before_ calling `flow-start-recording`** — not as the first recorded step — so the recording begins already at the flow's entry state. Then call `flow-start-recording` with a descriptive name, the absolute `project_root`, and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload"). `project_root` is stored for the session — you do **not** need to pass it again to subsequent tools.
+1. **Start, then launch as the first step (e2e) or set the stage yourself (fragment).** Call `flow-start-recording` with a descriptive name and the absolute `project_root` (stored for the session — you do **not** need to pass it again). For an **e2e** flow, record a `restart-app` of the app under test as the **first** step — it runs live (resetting the device for the rest of the recording) and is captured as the flow's `launch` step. For a **fragment**, bring the device to the entry state _before_ recording and pass an `executionPrerequisite` describing it (e.g. "App on the login screen") to `flow-start-recording` instead.
 2. **Build step-by-step**: For each action, call `flow-add-step` with the tool name and args. The tool runs immediately — check the result before moving on.
 3. **Add labels**: Use `flow-add-echo` between steps to describe what each section does.
 4. **Finish**: Call `flow-finish-recording` to stop recording. It returns the file path where the flow was saved and a summary of all steps.
@@ -74,7 +76,7 @@ This condition-as-key form is the only spelling. For advanced `await` control be
 
    - A scroll-to-reach-an-element — a `tool: gesture-swipe` used to bring a specific element on screen before interacting with it (a `tap`, `type`, `assert`, …) → `scroll-to: { target: "<that element>", direction: … }`, dropping the swipe. This is far more robust than a fixed-distance swipe: it scrolls momentum-free and stops exactly when the target appears, so it survives layout and content changes. (`tap`/`type` also auto-scroll vertically, so even leaving the raw swipe + tap often works — but `scroll-to` is deterministic and self-documenting.) Keep a `gesture-swipe` as a raw `tool:` step when it isn't scrolling toward a specific element — especially a velocity-dependent gesture like swipe-to-dismiss, edge-swipe-back, or swipe-to-reveal a row action, which a momentum-free `scroll-to` would not reproduce.
 
-Every other recorded tool (`gesture-swipe`, `gesture-scroll`, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, a `flow-execute` of a sibling fragment is captured as a `run: <name>` composition directive, device ids are stripped, and text-only selectors are emitted as bare strings. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
+Every other recorded tool (`gesture-swipe`, `gesture-scroll`, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, a `restart-app` is captured as a `launch:` step, a `flow-execute` of a sibling fragment is captured as a `run: <name>` composition directive, device ids are stripped, and text-only selectors are emitted as bare strings. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
 
 Every tool during recording returns the current flow file contents so you can track what has been recorded.
 
@@ -131,9 +133,9 @@ For tools with no arguments, omit `args` entirely.
 ## 6. Example Session
 
 ```
-flow-start-recording  { name: "open-settings", project_root: "/Users/dev/MyApp", executionPrerequisite: "Simulator booted with app installed" }
-flow-add-echo  { message: "Launch Settings app" }
-flow-add-step  { command: "launch-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.apple.Preferences\"}" }
+flow-start-recording  { name: "open-settings", project_root: "/Users/dev/MyApp" }
+flow-add-echo  { message: "Start Settings from scratch" }
+flow-add-step  { command: "restart-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.apple.Preferences\"}" }   # ⇒ recorded as `- launch: com.apple.Preferences` — this is now an e2e flow
 flow-add-echo  { message: "Tap General" }
 flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.35}" }
 flow-add-echo  { message: "Tap About" }

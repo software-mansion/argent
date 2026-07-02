@@ -8,7 +8,6 @@ import type {
   ToolContext,
   ToolDefinition,
 } from "@argent/registry";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   appIdForPlatform,
   assertSafeFlowName,
@@ -18,6 +17,7 @@ import {
   setActiveProjectRoot,
   type FlowFile,
   type FlowStep,
+  type Launch,
 } from "./flow-utils";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
@@ -186,85 +186,69 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
 }
 
 /**
- * Gate an e2e run on the platform's full-hierarchy tree source being ready. If
+ * Gate a launch on the platform's full-hierarchy tree source being ready. If
  * it never comes up, selectors would silently fall back to the trimmed AX tree
  * — where a testID container the flow addresses is absent, producing confusing
- * "not visible" failures — so the run fails outright rather than degrade.
- * Returns null when ready (or the platform needs no gate / the run was
- * aborted), else the failure to report.
+ * "not visible" failures — so the launch step fails outright rather than
+ * degrade. Returns null when ready (or the platform needs no gate / the run
+ * was aborted), else the reason to report.
  */
 async function treeSourceGate(
   registry: Registry,
   device: DeviceInfo,
   bundleId: string,
   signal?: AbortSignal
-): Promise<{ message: string; errorKind: "timeout" | "dependency_missing" } | null> {
+): Promise<string | null> {
   if (device.platform === "ios" && !signal?.aborted) {
     const connected = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (!connected && !signal?.aborted) {
-      return {
-        message:
-          `could not connect to native devtools for ${bundleId}. Re-run to relaunch the app and retry. ` +
-          `If it keeps failing, a stale or duplicate argent server may be holding the devtools connection — restart the argent server and try again.`,
-        errorKind: "timeout",
-      };
+      return (
+        `could not connect to native devtools for ${bundleId}. Re-run to relaunch the app and retry. ` +
+        `If it keeps failing, a stale or duplicate argent server may be holding the devtools connection — restart the argent server and try again.`
+      );
     }
   }
   if (device.platform === "android" && !signal?.aborted) {
     const ready = await androidDevtoolsReady(registry, device);
     if (!ready && !signal?.aborted) {
-      return {
-        message:
-          `could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
-          `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`,
-        errorKind: "dependency_missing",
-      };
+      return (
+        `could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
+        `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`
+      );
     }
   }
   return null;
 }
 
 /**
- * Start an e2e flow's app from a clean state (its contract): terminate and
- * relaunch via `restart-app` so a copy left running by a prior run can't leak
- * state into this one (Chromium has no app lifecycle to restart — the renderer
- * is always live — so fall back to `launch-app` there). Then pin the status bar
- * right after the relaunch, let the app settle, and wait for the platform's
- * full-hierarchy tree source (see {@link treeSourceGate}). Returns whether the
- * status bar was pinned (and so must be restored); on a gate failure the bar is
- * restored here before throwing.
+ * Execute a `launch` step: start the app from a clean state — terminate and
+ * relaunch via `restart-app`, so a copy left running by a prior run can't leak
+ * state in (Chromium has no app lifecycle to restart — the renderer is always
+ * live — so fall back to `launch-app` there). Then let the app settle and wait
+ * for the platform's full-hierarchy tree source (see {@link treeSourceGate}),
+ * so a slow cold start doesn't eat into the next step's auto-wait budget or
+ * degrade it to the wrong tree. Failures are reported as step outcomes, not
+ * thrown, so the run still returns a structured report.
  */
-async function launchE2eApp(env: ActionEnv, flow: FlowFile, flowName: string): Promise<boolean> {
+async function runLaunch(env: ActionEnv, app: Launch): Promise<{ ok: boolean; reason?: string }> {
   const { registry, device, signal } = env;
-  const bundleId = appIdForPlatform(flow.launch, device.platform);
+  const bundleId = appIdForPlatform(app, device.platform);
   if (!bundleId) {
-    throw new FailureError(
-      `Flow "${flowName}" declares no app id for platform "${device.platform}". Add a launch entry for it.`,
-      {
-        error_code: FAILURE_CODES.FLOW_APP_ID_MISSING,
-        failure_stage: "flow_app_launch",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
+    return {
+      ok: false,
+      reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
+    };
   }
   const launchTool = device.platform === "chromium" ? "launch-app" : "restart-app";
-  await invokeOnDevice(env, launchTool, { bundleId });
-  const pinned = await pinStatusBar(device);
-  // Let the app finish coming up before step 1 reads/acts on the UI, so a
-  // slow cold start doesn't eat into the first step's auto-wait budget.
+  try {
+    await invokeOnDevice(env, launchTool, { bundleId });
+  } catch (err) {
+    return { ok: false, reason: `${launchTool} failed: ${errMsg(err)}` };
+  }
   await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
   const gate = await treeSourceGate(registry, device, bundleId, signal);
-  if (gate) {
-    if (pinned) await restoreStatusBar(device);
-    throw new FailureError(`Flow "${flowName}" ${gate.message}`, {
-      error_code: FAILURE_CODES.FLOW_NATIVE_DEVTOOLS_UNAVAILABLE,
-      failure_stage: "flow_native_devtools_connect",
-      failure_area: "tool_server",
-      error_kind: gate.errorKind,
-    });
-  }
-  return pinned;
+  if (gate) return { ok: false, reason: gate };
+  return { ok: true };
 }
 
 interface ExecState extends ActionEnv {
@@ -283,13 +267,15 @@ export function createRunFlowTool(
   return {
     id: "flow-execute",
     description: `Run a saved flow from the .argent/flows/ directory.
-Steps run in order: \`tool\` calls dispatch through the registry; \`tap\`/\`type\` resolve a selector to
-an element and act on it; \`scroll-to\` scrolls (momentum-free) until a target is visible; \`await\` waits for
-a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
+Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
+ready; \`tool\` calls dispatch through the registry; \`tap\`/\`type\` resolve a selector to an element and
+act on it; \`scroll-to\` scrolls (momentum-free) until a target is visible; \`await\` waits for a UI
+condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot against a stored baseline; \`echo\` annotates; \`run\` executes a referenced fragment inline.
-Device id is injected by the runner (flows store none) — pass \`device\` or \`platform\` to pick one, else
-the single booted device is used. Every step hard-stops the flow on failure; later steps are reported as
-skipped. Returns a structured report ({ ok, passed, failed, skipped, errored, steps }).
+A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
+device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
+\`platform\` to pick one, else the single booted device is used. Every step hard-stops the flow on failure;
+later steps are reported as skipped. Returns a structured report ({ ok, passed, failed, skipped, errored, steps }).
 
 If a fragment has an execution prerequisite and prerequisiteAcknowledged is not set to true, the tool
 returns a notice with the prerequisite instead of running.`,
@@ -303,7 +289,8 @@ returns a notice with the prerequisite instead of running.`,
       const flowsDir = path.dirname(filePath);
       const flow = parseFlow(await fs.readFile(filePath, "utf8"));
 
-      // LLM-path prerequisite handshake (fragments only; e2e flows have none).
+      // LLM-path prerequisite handshake (fragments only; a flow with a leading
+      // launch step cannot declare one — validated at parse).
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
         return {
           flow: params.name,
@@ -321,14 +308,12 @@ returns a notice with the prerequisite instead of running.`,
       const env: ActionEnv = { registry, ctx, device, signal };
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
-      // never drives a snapshot diff and every screenshot is consistent. An e2e
-      // flow pins right after its app relaunch (see launchE2eApp) so the
-      // override propagates during the post-launch waits; a directly-run
-      // fragment (no relaunch) pins before its first step. No-op (returns
-      // false) on chromium/vega; restored on teardown.
-      const statusBarPinned = isE2eFlow(flow)
-        ? await launchE2eApp(env, flow, params.name)
-        : await pinStatusBar(device);
+      // never drives a snapshot diff and every screenshot is consistent. Pinned
+      // before step 1 — it's a device-level override independent of the app, so
+      // an e2e flow's leading launch step (relaunch + settle) doubles as
+      // propagation headroom before anything is captured. No-op (returns false)
+      // on chromium/vega; restored on teardown.
+      const statusBarPinned = await pinStatusBar(device);
 
       const state: ExecState = {
         ...env,
@@ -448,7 +433,7 @@ async function execRunStep(
 
   if (isE2eFlow(fragment)) {
     return fail(
-      `"${target}" is an e2e flow (declares launch); only fragments can be run from another flow`
+      `"${target}" is an e2e flow (starts with a launch step); only fragments can be run from another flow`
     );
   }
 
@@ -469,6 +454,11 @@ async function execLeafStep(
   switch (step.kind) {
     case "echo":
       return { ...base, status: "pass", message: step.message };
+
+    case "launch": {
+      const r = await runLaunch(state, step.app);
+      return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
+    }
 
     case "tap":
     case "type":

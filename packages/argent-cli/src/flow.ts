@@ -22,6 +22,7 @@ interface StepReport {
 interface FlowReport {
   flow: string;
   device: string;
+  executionPrerequisite?: string;
   ok: boolean;
   passed: number;
   failed: number;
@@ -40,11 +41,13 @@ const STATUS_GLYPH: Record<StepReport["status"], string> = {
 function printHelp(): void {
   console.log(`Usage: argent flow <subcommand> [options]
 
-Run a saved e2e flow without an LLM in the loop. Flows live in
-\`.argent/flows/<name>.yaml\` under the current working directory.
+Run a saved flow without an LLM in the loop. Flows live in
+\`.argent/flows/<name>.yaml\` under the current working directory. A flow that
+begins with a \`launch\` step runs its app from scratch; any other flow (a
+fragment) runs against the device's current state — handy while authoring one.
 
 Subcommands:
-  run <name>        Run an e2e flow and report pass/fail (exit code reflects result)
+  run <name>        Run a flow and report pass/fail (exit code reflects result)
   list              List flows in .argent/flows
 
 Options (run):
@@ -82,6 +85,11 @@ function parseRunArgs(argv: string[]): {
 function renderReport(report: FlowReport): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}" on ${report.device}`);
+  // A fragment runs against the device's current state — remind the operator
+  // what it assumes was already set up.
+  if (report.executionPrerequisite) {
+    lines.push(`  assumes: ${report.executionPrerequisite}`);
+  }
   // Number only real steps so echo narration doesn't leave gaps in the sequence.
   let n = 0;
   for (const s of report.steps) {
@@ -160,11 +168,8 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     process.exit(1);
   }
 
-  // A fragment (no launch block) returns a prerequisite notice instead of a report.
   if (!report || !("steps" in report)) {
-    console.error(
-      `"${args.name}" is not a runnable e2e flow (it has no launch block). Only e2e flows can be run standalone.`
-    );
+    console.error(`"${args.name}" did not produce a run report.`);
     process.exit(2);
   }
 

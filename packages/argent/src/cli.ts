@@ -76,7 +76,7 @@ Commands:
   remove      Alias for uninstall
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
-  flow        Run a saved e2e flow (use \`argent flow --help\` for options)
+  flow        Run a saved flow (use \`argent flow --help\` for options)
   server      Manage the shared tool-server (start / status / stop / logs)
   lens        Open Argent Lens bound to a fresh coding-agent session (macOS)
   link        Route client requests to a remote tool-server

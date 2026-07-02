@@ -100,7 +100,6 @@ describe("scroll-to directive", () => {
     });
 
     await writeFlow("scroller", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
     });
@@ -126,7 +125,6 @@ describe("scroll-to directive", () => {
     const registry = mockRegistry(swipes);
 
     await writeFlow("present", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "scroll-to", target: { text: "Account" }, direction: "down" }],
     });
@@ -161,7 +159,6 @@ describe("scroll-to directive", () => {
     });
 
     await writeFlow("flush", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
     });
@@ -189,7 +186,6 @@ describe("scroll-to directive", () => {
     const registry = mockRegistry(swipes);
 
     await writeFlow("last-item", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "scroll-to", target: { text: "Bottom row 8" }, direction: "down" }],
     });
@@ -214,7 +210,6 @@ describe("scroll-to directive", () => {
     const registry = mockRegistry(swipes);
 
     await writeFlow("stuck", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "scroll-to", target: { text: "Never There" }, direction: "down" }],
     });

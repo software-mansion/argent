@@ -182,10 +182,10 @@ export function clearActiveFlow(): void {
 // ── Types ────────────────────────────────────────────────────────────
 
 /**
- * The app the standalone runner launches before an e2e flow. A bare string
- * applies to every platform; the map form targets a specific bundle id /
- * package per platform. Presence of a `launch` value is what makes a flow an
- * e2e flow (vs a reusable fragment).
+ * The app a `launch` step starts from scratch. A bare string applies to every
+ * platform; the map form targets a specific bundle id / package per platform.
+ * A flow that BEGINS with a `launch` step is an e2e flow (standalone-runnable,
+ * controls its own start state); one that doesn't is a fragment.
  */
 export type Launch = string | { ios?: string; android?: string; chromium?: string };
 
@@ -207,6 +207,7 @@ export type FlowSelector = Selector & { loose?: boolean };
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
   | { kind: "echo"; message: string }
+  | { kind: "launch"; app: Launch }
   | { kind: "run"; flow: string }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number }
   | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
@@ -229,16 +230,21 @@ export type FlowStep =
   | { kind: "snapshot"; name: string; maxMismatch?: number };
 
 export type FlowFile = {
-  /** Present ⇒ e2e flow (launchable, standalone-runnable). Absent ⇒ fragment. */
-  launch?: Launch;
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
   steps: FlowStep[];
 };
 
-/** A flow is end-to-end iff it declares an app to launch. */
+/**
+ * A flow is end-to-end iff it BEGINS by launching an app — its first step
+ * (ignoring `echo` narration) is a `launch`. Such a flow controls its own
+ * start state, so it is the natural standalone/suite entry point, must not
+ * declare an `executionPrerequisite`, and cannot be composed via `run:`.
+ * Everything else is a fragment.
+ */
 export function isE2eFlow(flow: FlowFile): boolean {
-  return flow.launch !== undefined;
+  const first = flow.steps.find((s) => s.kind !== "echo");
+  return first?.kind === "launch";
 }
 
 /** Resolve the launch app id for a platform, or null when none is declared for it. */
@@ -280,6 +286,7 @@ type YamlScrollBody =
 
 type YamlStep =
   | { echo: string }
+  | { launch: Launch }
   | { run: string }
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
@@ -291,7 +298,6 @@ type YamlStep =
   | { snapshot: string | { name: string; maxMismatch?: number } };
 
 type YamlFlowFile = {
-  launch?: Launch;
   executionPrerequisite?: string;
   steps: YamlStep[];
 };
@@ -339,6 +345,8 @@ function toYamlStep(step: FlowStep): YamlStep {
   switch (step.kind) {
     case "echo":
       return { echo: step.message };
+    case "launch":
+      return { launch: step.app };
     case "run":
       return { run: step.flow };
     case "tap": {
@@ -486,8 +494,33 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`) };
 }
 
+const LAUNCH_PLATFORMS = ["ios", "android", "chromium"] as const;
+
+/** Parse a `launch` step body: a bare app id, or a per-platform map. */
+function parseLaunch(raw: unknown): Launch {
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (raw !== null && typeof raw === "object") {
+    const b = raw as Record<string, unknown>;
+    const keys = Object.keys(b);
+    const valid =
+      keys.length > 0 &&
+      keys.every(
+        (k) =>
+          (LAUNCH_PLATFORMS as readonly string[]).includes(k) &&
+          typeof b[k] === "string" &&
+          (b[k] as string).length > 0
+      );
+    if (valid) return b as Launch;
+  }
+  return badEntry(
+    { launch: raw },
+    `launch needs an app id (bare string) or a per-platform map ({ ${LAUNCH_PLATFORMS.join(" | ")}: <app id> })`
+  );
+}
+
 function fromYamlStep(raw: YamlStep): FlowStep {
   if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
+  if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
   if ("run" in raw) return { kind: "run", flow: String(raw.run) };
 
   if ("tap" in raw) {
@@ -611,7 +644,6 @@ function fromYamlStep(raw: YamlStep): FlowStep {
 /** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
-  if (flow.launch !== undefined) doc.launch = flow.launch;
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   return yamlStringify(doc);
 }
@@ -620,7 +652,7 @@ export function serializeFlow(flow: FlowFile): string {
 export function validateFlow(flow: FlowFile): void {
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
-      "An e2e flow (one with a launch block) must not declare executionPrerequisite — it launches its own app and controls its start state. Remove launch to make it a fragment, or drop executionPrerequisite.",
+      "A flow that starts with a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch to make it a fragment, or drop executionPrerequisite.",
       {
         error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
         failure_stage: "flow_file_validate",
@@ -660,7 +692,6 @@ export function parseFlow(content: string): FlowFile {
   });
 
   const flow: FlowFile = {
-    launch: parsed.launch,
     executionPrerequisite: parsed.executionPrerequisite ?? "",
     steps,
   };
@@ -675,6 +706,10 @@ export async function appendStep(filePath: string, step: FlowStep): Promise<stri
   const content = await fs.readFile(filePath, "utf8");
   const flow = parseFlow(content);
   flow.steps.push(step);
+  // Re-validate with the new step: a leading `launch` recorded into a
+  // prerequisite-bearing recording must error here (nothing written), not
+  // produce a file that fails to parse at replay.
+  validateFlow(flow);
   const updated = serializeFlow(flow);
   await fs.writeFile(filePath, updated, "utf8");
   return updated;
@@ -709,6 +744,12 @@ export async function appendStepToActiveFlow(
     return { flowFile, savedTo: session.filePath, session };
   }
   session.flow.steps.push(step);
+  try {
+    validateFlow(session.flow);
+  } catch (err) {
+    session.flow.steps.pop(); // keep the in-memory copy consistent: nothing recorded
+    throw err;
+  }
   const flowFile = serializeFlow(session.flow);
   return { flowFile, savedTo: clientFileDirective(session.filePath, flowFile), session };
 }

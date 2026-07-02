@@ -99,7 +99,7 @@ async function captureRunTarget(
     const fragment = parseFlow(await fs.readFile(fragPath, "utf8"));
     if (isE2eFlow(fragment)) {
       return {
-        warning: `"${name}" is an e2e flow (declares launch); only fragments compose via run: — kept the raw flow-execute step`,
+        warning: `"${name}" is an e2e flow (starts with a launch step); only fragments compose via run: — kept the raw flow-execute step`,
       };
     }
     return { flow: name };
@@ -118,7 +118,7 @@ export function createFlowAddStepTool(
 > {
   return {
     id: "flow-add-step",
-    description: `Execute a tool call and record it as a step in the active flow. Use when recording a flow with flow-start-recording and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning). Returns { message, toolResult, flowFile } on success. If it fails an error is returned and nothing is recorded.
+    description: `Execute a tool call and record it as a step in the active flow. Use when recording a flow with flow-start-recording and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow). Returns { message, toolResult, flowFile } on success. If it fails an error is returned and nothing is recorded.
 If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
     zodSchema,
     services: () => ({}),
@@ -155,6 +155,19 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
           ? await captureRunTarget(session, args)
           : undefined;
 
+      // A recorded `restart-app` is captured as the portable `launch` directive
+      // (same terminate-and-relaunch semantics, plus the runner's post-launch
+      // settle and readiness gate at replay). Recorded first, it makes the flow
+      // an e2e flow. Only the plain bundleId form maps; extra args (e.g. an
+      // Android `activity`) keep the raw tool step. `launch-app` is NOT
+      // rewritten — it foregrounds without terminating, a different semantic.
+      const strippedArgs = stripDeviceKeys(args);
+      const isLaunch =
+        params.command === "restart-app" &&
+        params.delayMs === undefined &&
+        typeof strippedArgs.bundleId === "string" &&
+        Object.keys(strippedArgs).length === 1;
+
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
@@ -164,6 +177,8 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         // directive so every tap reads uniformly.
         step = { kind: "tap", x: args.x as number, y: args.y as number };
         warning = captured?.warning;
+      } else if (isLaunch) {
+        step = { kind: "launch", app: strippedArgs.bundleId as string };
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
       } else {
@@ -174,7 +189,7 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         step = {
           kind: "tool",
           name: params.command,
-          args: stripDeviceKeys(args),
+          args: strippedArgs,
           delayMs: params.delayMs,
         };
       }

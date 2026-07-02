@@ -55,7 +55,6 @@ describe("flow composition (run:)", () => {
       ],
     });
     await writeFlow("main", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [
         { kind: "run", flow: "login" },
@@ -82,9 +81,11 @@ describe("flow composition (run:)", () => {
   });
 
   it("rejects running an e2e flow as a fragment", async () => {
-    await writeFlow("other-e2e", { launch: "com.acme.app", executionPrerequisite: "", steps: [] });
+    await writeFlow("other-e2e", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.acme.app" }],
+    });
     await writeFlow("main", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "run", flow: "other-e2e" }],
     });
@@ -101,7 +102,6 @@ describe("flow composition (run:)", () => {
     await writeFlow("a", { executionPrerequisite: "", steps: [{ kind: "run", flow: "b" }] });
     await writeFlow("b", { executionPrerequisite: "", steps: [{ kind: "run", flow: "a" }] });
     await writeFlow("main", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [{ kind: "run", flow: "a" }],
     });
@@ -113,16 +113,60 @@ describe("flow composition (run:)", () => {
     expect(errored?.reason).toMatch(/cyclic/i);
   });
 
-  it("fails outright when native devtools never connects on iOS", async () => {
+  it("executes a leading launch step from scratch (restart-app) and reports it", async () => {
     await writeFlow("main", {
-      launch: "com.acme.app",
       executionPrerequisite: "",
-      steps: [{ kind: "echo", message: "should never run" }],
+      steps: [
+        { kind: "launch", app: "com.acme.app" },
+        { kind: "echo", message: "running" },
+      ],
     });
-    // Registry whose native-devtools service is unavailable: the flow must
-    // abort rather than silently fall back to the AX tree. (An unresolvable
-    // service fails fast; a resolvable-but-never-connected one hits the same
-    // guard after the connect timeout.)
+    const registry = mockRegistry();
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "echo:pass"]);
+    // e2e contract: terminate + relaunch, so a running copy can't leak state.
+    expect(registry.invokeTool).toHaveBeenCalledWith("restart-app", { bundleId: "com.acme.app" });
+    expect(result.ok).toBe(true);
+  });
+
+  it("errors the launch step when no app id is declared for the platform", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { android: "com.acme.app" } }, // DEVICE is iOS
+        { kind: "echo", message: "should never run" },
+      ],
+    });
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
+    expect(result.steps[0].reason).toMatch(/no app id declared for platform/i);
+    expect(result.ok).toBe(false);
+  });
+
+  it("errors the launch step when native devtools never connects on iOS", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: "com.acme.app" },
+        { kind: "echo", message: "should never run" },
+      ],
+    });
+    // Registry whose native-devtools service is unavailable: the launch step
+    // must fail rather than let selectors silently fall back to the AX tree.
+    // (An unresolvable service fails fast; a resolvable-but-never-connected
+    // one hits the same guard after the connect timeout.)
     const registry = {
       invokeTool: vi.fn(async (id: string) =>
         id === "list-devices" ? { devices: [] } : { ok: true }
@@ -133,12 +177,16 @@ describe("flow composition (run:)", () => {
       }),
     } as unknown as Registry;
 
-    await expect(
-      createRunFlowTool(registry).execute(
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
         {},
         { name: "main", project_root: tmpDir, device: DEVICE }
       )
-    ).rejects.toThrow(/could not connect to native devtools/i);
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
+    expect(result.steps[0].reason).toMatch(/could not connect to native devtools/i);
+    expect(result.ok).toBe(false);
   });
 });
 
@@ -168,7 +216,15 @@ describe("device binding (portability)", () => {
 describe("flow validation", () => {
   it("rejects an e2e flow that declares executionPrerequisite", () => {
     expect(() =>
-      parseFlow("launch: com.acme.app\nexecutionPrerequisite: nope\nsteps: []\n")
+      parseFlow("executionPrerequisite: nope\nsteps:\n  - launch: com.acme.app\n")
+    ).toThrow(/must not declare executionPrerequisite/i);
+  });
+
+  it("a leading echo does not hide the launch step from the e2e check", () => {
+    expect(() =>
+      parseFlow(
+        "executionPrerequisite: nope\nsteps:\n  - echo: starting\n  - launch: com.acme.app\n"
+      )
     ).toThrow(/must not declare executionPrerequisite/i);
   });
 
@@ -180,9 +236,9 @@ describe("flow validation", () => {
 
   it("round-trips the new step kinds through YAML", () => {
     const flow = {
-      launch: "com.acme.app",
       executionPrerequisite: "",
       steps: [
+        { kind: "launch" as const, app: "com.acme.app" },
         // Text-only selectors serialize to bare strings, which parse back loose.
         { kind: "tap" as const, selector: { text: "Login", loose: true } },
         { kind: "tap" as const, x: 0.5, y: 0.57 },
@@ -194,10 +250,18 @@ describe("flow validation", () => {
         },
         { kind: "snapshot" as const, name: "home", maxMismatch: 0.5 },
         { kind: "run" as const, flow: "login" },
+        // Mid-flow relaunch with a per-platform map.
+        { kind: "launch" as const, app: { ios: "com.acme.app", android: "com.acme.android" } },
       ],
     };
     const parsed = parseFlow(serializeFlow(flow));
     expect(parsed.steps).toEqual(flow.steps);
-    expect(parsed.launch).toBe("com.acme.app");
+  });
+
+  it("rejects a launch step with an invalid body", () => {
+    expect(() => parseFlow("steps:\n  - launch: { web: foo }\n")).toThrow(
+      /launch needs an app id/i
+    );
+    expect(() => parseFlow("steps:\n  - launch: 42\n")).toThrow(/launch needs an app id/i);
   });
 });
