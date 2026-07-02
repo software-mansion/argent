@@ -467,8 +467,19 @@ function computeNodeOutput(
 
   // Layout container with no own info — pass children through. With
   // --compressed dumps this is what flattens FrameLayout > LinearLayout >
-  // ConstraintLayout chains down to their actual content.
-  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label && !identifier) {
+  // ConstraintLayout chains down to their actual content. Keeping such a
+  // container just because it carries a resource-id would re-inflate the tree
+  // the v2 trim exists to shrink AND break the duplicate-wrapper collapse
+  // below (an id-bearing, non-clickable middle container stops a clickable
+  // parent from collapsing onto its clickable child). So still pass through —
+  // but don't silently lose the id: propagate it onto a lone surviving child
+  // that has none, so a container-only identifier stays addressable. With 0 or
+  // 2+ kept children there is no single target, so the scaffolding id is
+  // dropped, exactly as it was before id-preservation was added.
+  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label) {
+    if (identifier && keptChildren.length === 1 && !keptChildren[0]!.identifier) {
+      keptChildren[0]!.identifier = identifier;
+    }
     return keptChildren;
   }
 

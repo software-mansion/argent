@@ -36,13 +36,41 @@ describe("describe android collapse preserves label/identifier", () => {
   it("layout-container collapse keeps its resource-id even with no label", () => {
     const xml = `<?xml version='1.0' encoding='UTF-8'?>\n<hierarchy>\n  <node class="android.widget.FrameLayout" bounds="[0,0][100,100]" resource-id="com.app:id/header_container">\n    <node class="android.widget.TextView" bounds="[0,0][100,100]" text="Hello"/>\n  </node>\n</hierarchy>`;
     const tree = parseUiAutomatorDump(xml, 100, 100);
-    const identifiers = flatten(tree)
-      .map((n) => n.identifier)
-      .filter(Boolean);
-    const labels = flatten(tree)
-      .map((n) => n.label)
-      .filter(Boolean);
+    const nodes = flatten(tree);
+    const identifiers = nodes.map((n) => n.identifier).filter(Boolean);
+    const labels = nodes.map((n) => n.label).filter(Boolean);
     expect(identifiers).toContain("com.app:id/header_container");
     expect(labels).toContain("Hello");
+    // The id is preserved by PROPAGATING it onto the surviving child, NOT by
+    // keeping the FrameLayout as an extra wrapper level (that would re-inflate
+    // the tree the v2 trim shrinks). The container must be gone, and the id
+    // must ride on the same text node as "Hello".
+    expect(nodes.map((n) => n.role)).not.toContain("FrameLayout");
+    const textNode = nodes.find((n) => n.label === "Hello");
+    expect(textNode?.identifier).toBe("com.app:id/header_container");
+  });
+
+  it("id-bearing layout container still flattens and does NOT block duplicate-wrapper collapse", () => {
+    // Regression: a clickable parent, an id-bearing non-clickable middle
+    // container, and a clickable child at identical bounds must collapse to a
+    // SINGLE tap target — not three stacked nodes with "Submit" repeated.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>\n<hierarchy>\n  <node class="android.view.ViewGroup" bounds="[0,0][100,50]" clickable="true">\n    <node class="android.widget.FrameLayout" bounds="[0,0][100,50]" resource-id="com.app:id/wrap">\n      <node class="android.widget.Button" bounds="[0,0][100,50]" clickable="true" text="Submit"/>\n    </node>\n  </node>\n</hierarchy>`;
+    const nodes = flatten(parseUiAutomatorDump(xml, 100, 50));
+    const submits = nodes.filter((n) => n.label === "Submit");
+    expect(submits).toHaveLength(1);
+    // The container's id is preserved on the collapsed target rather than lost.
+    expect(submits[0]?.identifier).toBe("com.app:id/wrap");
+    expect(nodes.map((n) => n.role)).not.toContain("FrameLayout");
+  });
+
+  it("flattens nested id-bearing layout containers down to their content", () => {
+    // Regression: nested id-only containers (android:id/content is on nearly
+    // every dump) must not each survive as a wrapper level.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>\n<hierarchy>\n  <node class="android.widget.FrameLayout" bounds="[0,0][100,200]" resource-id="android:id/content">\n    <node class="android.widget.LinearLayout" bounds="[0,0][100,200]" resource-id="com.app:id/root">\n      <node class="android.widget.TextView" bounds="[0,0][100,20]" text="A"/>\n      <node class="android.widget.TextView" bounds="[0,20][100,40]" text="B"/>\n    </node>\n  </node>\n</hierarchy>`;
+    const nodes = flatten(parseUiAutomatorDump(xml, 100, 200));
+    const roles = nodes.map((n) => n.role);
+    expect(roles).not.toContain("FrameLayout");
+    expect(roles).not.toContain("LinearLayout");
+    expect(nodes.filter((n) => n.role === "StaticText")).toHaveLength(2);
   });
 });
