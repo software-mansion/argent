@@ -446,7 +446,15 @@ export class VariantProposalStore {
     // clean. Reset only when such state exists so a clean start isn't needlessly
     // bumped past round 1. (reset() does not clear cliSession / device /
     // owned-devices, so it's safe to call here.)
-    if (transitioned && active && (this.completed || this.proposals.length > 0)) this.reset();
+    if (transitioned && active) {
+      if (this.completed || this.proposals.length > 0) this.reset();
+      // A session boundary is a genuine fresh start: also drop any queued-but-
+      // undelivered outcome from a prior (possibly non-CLI) flow so it can't
+      // leak into this session's first await. reset() deliberately PRESERVES
+      // pendingOutcomes for the propose→roll case, but that preservation should
+      // not cross a session boundary.
+      this.pendingOutcomes = [];
+    }
     this.cliSession = active;
     this.lensAgents = active ? agents.map((a) => ({ ...a })) : [];
     this.lensAgentChoice = null;
@@ -550,8 +558,17 @@ export class VariantProposalStore {
       );
     this.submittedAnnotations = cleanAnnotations;
     this.globalComment = (input.globalComment ?? "").trim().slice(0, MAX_COMMENT_LENGTH);
+    // The submit route is unauthenticated and the preview UI re-enables its
+    // Complete button, so the SAME round can be submitted more than once. A
+    // repeat submit must update the frozen outcome in place, never manufacture
+    // a second deliverable. `wasResubmit` distinguishes a first completion from
+    // a repeat; a repeat that was ALREADY delivered (`consumed`) must stay
+    // consumed — reopening it would both strand a later await (parks forever
+    // for a submit that already happened) and let the queue below resurrect the
+    // outcome as a phantom second completion.
+    const wasResubmit = this.completed;
     this.completed = true;
-    this.consumed = false;
+    if (!wasResubmit) this.consumed = false;
     // Freeze the outcome once so every parked waiter (and any later fast-path
     // await) sees the exact same selections, regardless of subsequent rounds.
     this.lastOutcome = this.buildOutcome();
@@ -578,10 +595,15 @@ export class VariantProposalStore {
       // No outcome is queued: the CLI watcher already read it over HTTP, and
       // nothing drains `pendingOutcomes` in a CLI session (no await is parked).
       this.consumed = true;
-    } else {
+    } else if (!this.consumed) {
       // No waiter was parked to receive this outcome directly. Queue it so a
       // later await_user_selection still gets it, even across an intervening
       // propose_variant that rolls the round (see `pendingOutcomes`' doc).
+      // Dedup by round: a repeat submit of this same round REPLACES its queued
+      // copy rather than enqueuing a phantom duplicate a second await would
+      // deliver. (`consumed` is true here only for an already-delivered round,
+      // whose outcome must not be re-queued.)
+      this.pendingOutcomes = this.pendingOutcomes.filter((o) => o.round !== round);
       this.pendingOutcomes.push(this.lastOutcome);
     }
     this.events.emit("changed");

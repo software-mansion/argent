@@ -76,4 +76,46 @@ describe("variant store: propose after a waiter-less submit", () => {
       expect(out.selections.map((x) => x.element)).toContain("Alpha");
     }
   });
+
+  it("a repeat waiter-less submit does NOT deliver the outcome twice", async () => {
+    // The submit route is unauthenticated and the preview UI re-enables its
+    // Complete button, so the same round can be submitted more than once with
+    // no await parked. Only ONE completion may ever be delivered — the second
+    // await must report the round already returned, not a phantom duplicate.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals.find((p) => p.element === "Alpha")!;
+    const sel = [{ elementId: a.id, variantId: a.variants[0]!.id }];
+    s.submitSelection({ selections: sel });
+    s.submitSelection({ selections: sel });
+    const first = await s.awaitSelection({ timeoutMs: 200 });
+    const second = await s.awaitSelection({ timeoutMs: 200 });
+    expect(first.status).toBe("completed");
+    expect(second.status).toBe("no_proposals");
+  });
+
+  it("a repeat submit AFTER the outcome was consumed does not resurrect it", async () => {
+    // submit → await (delivers + consumes) → submit again → await must NOT
+    // re-deliver the already-consumed outcome, and must not strand.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals.find((p) => p.element === "Alpha")!;
+    const sel = [{ elementId: a.id, variantId: a.variants[0]!.id }];
+    s.submitSelection({ selections: sel });
+    expect((await s.awaitSelection({ timeoutMs: 200 })).status).toBe("completed");
+    s.submitSelection({ selections: sel });
+    expect((await s.awaitSelection({ timeoutMs: 200 })).status).toBe("no_proposals");
+  });
+
+  it("starting a CLI session does not leak a prior waiter-less outcome into its first await", async () => {
+    // A queued-but-undelivered outcome from a prior (possibly non-CLI) flow
+    // must not surface as the CLI session's first await result.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals.find((p) => p.element === "Alpha")!;
+    s.submitSelection({ selections: [{ elementId: a.id, variantId: a.variants[0]!.id }] });
+    s.setCliSession(true, [{ id: "x", name: "X" }]);
+    const out = await s.awaitSelection({ timeoutMs: 100 });
+    expect(out.status).not.toBe("completed");
+  });
 });
