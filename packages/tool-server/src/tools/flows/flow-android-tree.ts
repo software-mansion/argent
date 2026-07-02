@@ -18,29 +18,23 @@ import {
  * Flow-owned Android tree fetch — the counterpart to `flow-ios-tree.ts` on
  * iOS.
  *
- * The agent-facing `describe` walks the accessibility tree (`uiautomator` /
- * android-devtools) and runs an interactables-only trim that drops
- * non-interactive, unlabelled layout containers. Two things then make a React
- * Native `testID` unresolvable by a flow:
+ * The android-devtools helper's `getHierarchy` dump already contains every
+ * view — UiAutomation surfaces not-important views (the
+ * `importantForAccessibility="no"` wrappers RN puts around `testID`-bearing
+ * layout containers) and their `resource-id`s. What makes a `testID`
+ * unresolvable by the agent-facing `describe` is purely host-side parsing: its
+ * interactables-only trim collapses a testID-only container (no label, not
+ * clickable) into a passthrough and discards the node carrying the id.
  *
- *   1. RN wraps `testID`-bearing layout views in `importantForAccessibility="no"`,
- *      so the framework filters them (and their descendants) out of the
- *      `AccessibilityNodeInfo` tree entirely — they never reach the host.
- *   2. Even when present, the trim collapses a testID-only container (no label,
- *      not clickable) into a passthrough and discards the node carrying the id.
- *
- * This module addresses both: it asks the helper for a *full* hierarchy
- * (`includeNotImportant: true`, which turns on
- * `FLAG_INCLUDE_NOT_IMPORTANT_VIEWS | FLAG_REPORT_VIEW_IDS` — see the helper's
- * `configureServiceInfo`), then flattens it keeping **every** view with a
- * `resource-id` (RN `testID`) or a label, with no interactables trim — exactly
- * the shape `flow-ios-tree.ts` produces on iOS. Falls back to the shared
- * `fetchTree` (the trimmed AX tree) when the helper is unavailable.
+ * This module parses the same dump without that trim: it flattens the
+ * hierarchy keeping **every** view with a `resource-id` (RN `testID`) or a
+ * label — exactly the shape `flow-ios-tree.ts` produces on iOS. Falls back to
+ * the shared `fetchTree` (the trimmed AX tree) when the helper is unavailable.
  */
 
-// A fuller tree than the agent describe: not-important views inflate the node
-// count, so raise the cap above the helper's 5000 default to avoid truncating a
-// dense screen mid-walk.
+// Flows keep far more of the dump than the trimmed agent describe, so raise
+// the cap above the helper's 5000 default to avoid truncating a dense screen
+// mid-walk.
 const FLOW_MAX_NODES = 12_000;
 
 interface PixelRect {
@@ -185,10 +179,10 @@ export function adaptFullAndroidHierarchyToDescribeResult(
 }
 
 /**
- * Query the full Android view hierarchy via the android-devtools helper with
- * not-important views included. Returns the adapted tree, or `null` when the
- * helper is unavailable / errors — in which case the caller falls back to the
- * trimmed AX tree.
+ * Query the Android view hierarchy via the android-devtools helper and adapt
+ * it untrimmed. Returns the adapted tree, or `null` when the helper is
+ * unavailable / errors — in which case the caller falls back to the trimmed
+ * AX tree.
  */
 export async function queryAndroidFullHierarchy(
   registry: Registry,
@@ -198,7 +192,7 @@ export async function queryAndroidFullHierarchy(
     const ref = androidDevtoolsRef(device);
     const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
     const [{ xml }, size] = await Promise.all([
-      devtools.getHierarchy({ includeNotImportant: true, maxNodes: FLOW_MAX_NODES }),
+      devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES }),
       devtools.getScreenSize(),
     ]);
     const tree = adaptFullAndroidHierarchyToDescribeResult(xml, size.width, size.height);

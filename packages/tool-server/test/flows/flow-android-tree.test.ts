@@ -12,7 +12,7 @@ import type { DescribeNode } from "../../src/tools/describe/contract";
 const SCREEN_W = 1080;
 const SCREEN_H = 1920;
 
-// A React Native screen dumped with FLAG_INCLUDE_NOT_IMPORTANT_VIEWS: the
+// A React Native screen as the android-devtools helper dumps it: the
 // `submit-button` testID lives on a plain, non-interactive layout container
 // (the pattern the interactables trim discards), and its tappable child carries
 // no id of its own. There is a status-bar system-chrome node, an off-screen

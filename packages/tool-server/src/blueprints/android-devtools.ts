@@ -37,14 +37,6 @@ export interface GetHierarchyOptions {
   waitForIdleMs?: number;
   maxDepth?: number;
   maxNodes?: number;
-  /**
-   * Surface views the framework filters out of the accessibility tree because
-   * they are `importantForAccessibility="no"` (the pattern React Native wraps
-   * `testID`-bearing layout containers in), and force `resource-id` reporting.
-   * Used by flows to resolve `testID` selectors; the agent-facing describe
-   * leaves it off. See the helper's `configureServiceInfo`.
-   */
-  includeNotImportant?: boolean;
 }
 
 export interface HierarchyResult {
@@ -340,7 +332,6 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
           waitForIdleMs: getOpts.waitForIdleMs ?? 500,
           maxDepth: getOpts.maxDepth ?? 128,
           maxNodes: getOpts.maxNodes ?? 5000,
-          includeNotImportant: getOpts.includeNotImportant ?? false,
         });
       },
       getScreenSize() {
