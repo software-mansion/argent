@@ -225,14 +225,55 @@ export function nodeAtPoint(
   return best;
 }
 
+// How many of the selector's provided fields this node matches exactly
+// (case-insensitive equality) rather than merely as a substring.
+function exactFieldCount(node: DescribeNode, selector: Selector): number {
+  let count = 0;
+  if (
+    selector.text !== undefined &&
+    (equalsCI(node.label, selector.text) || equalsCI(node.value, selector.text))
+  ) {
+    count++;
+  }
+  if (selector.identifier !== undefined && equalsCI(node.identifier, selector.identifier)) count++;
+  if (selector.role !== undefined && equalsCI(node.role, selector.role)) count++;
+  return count;
+}
+
 /**
- * Resolve a selector to the on-screen frame of its first visible match in
- * reading order — the element a `tap`/`type` action should target. Returns
- * undefined when no visible element matches.
+ * Resolve a selector to the on-screen frame of its best visible match — the
+ * element a `tap`/`type` action should target. An accessible container (e.g. a
+ * Touchable on iOS) aggregates its descendants' labels, so a substring text
+ * selector matches the container as well as the leaf that actually carries the
+ * text — and the container's centre can sit over a different nested child
+ * entirely. Matches are therefore ranked: exact field matches beat substring
+ * hits, then the smallest frame wins (the most specific element, mirroring
+ * nodeAtPoint's reverse lookup), with reading order as the final tiebreak.
+ * Returns undefined when no visible element matches.
  */
 export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
   const visible = findAll(root, selector).filter(isVisible);
-  return firstInReadingOrder(visible)?.frame;
+  let best: DescribeNode | undefined;
+  let bestExact = -1;
+  for (const n of visible) {
+    const exact = exactFieldCount(n, selector);
+    if (best === undefined || exact !== bestExact) {
+      if (exact > bestExact) {
+        best = n;
+        bestExact = exact;
+      }
+      continue;
+    }
+    const areaDelta = frameArea(n.frame) - frameArea(best.frame);
+    if (
+      areaDelta < 0 ||
+      (areaDelta === 0 &&
+        (n.frame.y < best.frame.y || (n.frame.y === best.frame.y && n.frame.x < best.frame.x)))
+    ) {
+      best = n;
+    }
+  }
+  return best?.frame;
 }
 
 /**

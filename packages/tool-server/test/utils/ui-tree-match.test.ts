@@ -54,6 +54,70 @@ describe("ui-tree-match", () => {
     expect(frame).toMatchObject({ x: 0.1, y: 0.3 });
   });
 
+  // iOS flattens an accessible container's descendants into its own label
+  // (e.g. an RNGH Touchable wrapping nested layers), so a text selector
+  // substring-matches the container as well as the leaf that carries the text.
+  // Modeled on the nested-touchables example screen.
+  const aggregated = node({
+    role: "AXGroup",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      node({
+        role: "AXGroup",
+        label: "Outer Touchable Inner tap gesture Inner Touchable",
+        identifier: "outer-touchable",
+        frame: { x: 0.18, y: 0.45, width: 0.64, height: 0.19 },
+      }),
+      node({
+        role: "AXStaticText",
+        label: "Outer Touchable",
+        frame: { x: 0.37, y: 0.47, width: 0.26, height: 0.02 },
+      }),
+      node({
+        role: "AXStaticText",
+        label: "Inner tap gesture",
+        frame: { x: 0.36, y: 0.52, width: 0.27, height: 0.02 },
+      }),
+      node({
+        role: "AXGroup",
+        label: "Inner Touchable",
+        identifier: "inner-touchable",
+        frame: { x: 0.28, y: 0.56, width: 0.45, height: 0.05 },
+      }),
+      node({
+        role: "AXStaticText",
+        label: "Inner Touchable",
+        frame: { x: 0.37, y: 0.57, width: 0.25, height: 0.02 },
+      }),
+    ],
+  });
+
+  it("selectorToFrame prefers an exact label over a container whose aggregated label contains it", () => {
+    // The outer AXGroup is topmost and substring-matches, but its centre sits
+    // over a nested child; the exact-label leaf must win.
+    const frame = selectorToFrame(aggregated, { text: "Outer Touchable" });
+    expect(frame).toMatchObject({ x: 0.37, y: 0.47 });
+  });
+
+  it("selectorToFrame prefers the smallest of several exact matches", () => {
+    // Both the inner AXGroup and its leaf text are exactly "Inner Touchable";
+    // the leaf (smaller, more specific) wins — same philosophy as nodeAtPoint.
+    const frame = selectorToFrame(aggregated, { text: "Inner Touchable" });
+    expect(frame).toMatchObject({ x: 0.37, y: 0.57 });
+  });
+
+  it("selectorToFrame keeps reading order as the tiebreak for equally ranked matches", () => {
+    const rows = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ label: "Row item", frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.1 } }),
+        node({ label: "Row item", frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.1 } }),
+      ],
+    });
+    expect(selectorToFrame(rows, { text: "Row item" })).toMatchObject({ y: 0.2 });
+  });
+
   it("deriveSelector prefers identifier, then text, then specific role", () => {
     expect(
       deriveSelector(
