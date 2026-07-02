@@ -1,21 +1,26 @@
 # Local packaging step 1: download fp16 base, peft-merge the trained LoRA, save merged HF model,
 # and report the key structure (so the text-only rewrite can be written against the real keys).
+# Base-agnostic: defaults to the gemma path; for another base set BASE_MODEL (+ MODEL_CLASS=causal_lm
+# for a plain text-only LM). MUST match the base the adapter was TRAINED on (see h100_train.py CONFIGS).
 import os, json, torch
-from transformers import AutoModelForImageTextToText, AutoTokenizer
+from transformers import AutoModelForImageTextToText, AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ADAPTER = os.environ.get("ADAPTER", os.path.join(HERE, "fused/silver-v7-adapter"))
-BASE = "unsloth/gemma-4-E4B-it"
+BASE = os.environ.get("BASE_MODEL", "unsloth/gemma-4-E4B-it")   # gemma default (unchanged)
+MODEL_CLASS = os.environ.get("MODEL_CLASS", "image_text_to_text")  # or "causal_lm" for a plain text LM
+TRUST = os.environ.get("TRUST_REMOTE_CODE", "0") == "1"
 MERGED = os.environ.get("MERGED", os.path.join(HERE, "fused/silver-v7-merged"))
+_Cls = AutoModelForImageTextToText if MODEL_CLASS == "image_text_to_text" else AutoModelForCausalLM
 
-print("=== loading base fp16 (downloads ~15GB first time) ===", flush=True)
-base = AutoModelForImageTextToText.from_pretrained(BASE, torch_dtype=torch.float16, low_cpu_mem_usage=True)
+print(f"=== loading base fp16 ({BASE}, class={MODEL_CLASS}; downloads ~15GB first time) ===", flush=True)
+base = _Cls.from_pretrained(BASE, torch_dtype=torch.float16, low_cpu_mem_usage=True, trust_remote_code=TRUST)
 print("=== applying adapter + merge_and_unload ===", flush=True)
 model = PeftModel.from_pretrained(base, ADAPTER).merge_and_unload()
 print("=== saving merged ===", flush=True)
 model.save_pretrained(MERGED, safe_serialization=True)
-AutoTokenizer.from_pretrained(BASE).save_pretrained(MERGED)
+AutoTokenizer.from_pretrained(BASE, trust_remote_code=TRUST).save_pretrained(MERGED)
 
 idx_path = f"{MERGED}/model.safetensors.index.json"
 if os.path.exists(idx_path):  # sharded save
