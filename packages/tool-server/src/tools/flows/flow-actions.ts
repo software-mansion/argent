@@ -33,7 +33,10 @@ export interface DirectiveOutcome {
 }
 
 /** The selector-acting steps {@link runDirective} handles. */
-export type DirectiveStep = Extract<FlowStep, { kind: "tap" | "type" | "assert" | "scroll-to" }>;
+export type DirectiveStep = Extract<
+  FlowStep,
+  { kind: "tap" | "type" | "await" | "assert" | "scroll-to" }
+>;
 
 /** Dispatch a tool with the run's resolved device id bound into its args. */
 export function invokeOnDevice(
@@ -348,15 +351,17 @@ async function resolveOrScroll(
   return scrolled.frame;
 }
 
-/** Execute one selector-acting directive (`tap` / `type` / `assert` / `scroll-to`). */
+/** Execute one selector-acting directive (`tap` / `type` / `await` / `assert` / `scroll-to`). */
 export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
   switch (step.kind) {
     case "tap":
       return runTap(env, step);
     case "type":
       return runType(env, step);
+    case "await":
+      return waitForCondition(env, step, DEFAULT_ACTION_TIMEOUT_MS, "await");
     case "assert":
-      return runAssert(env, step);
+      return waitForCondition(env, step, DEFAULT_ASSERT_TIMEOUT_MS, "assertion");
     case "scroll-to": {
       const r = await scrollToVisible(env, step.target, step.direction, step.within);
       return { ok: Boolean(r.frame), reason: r.reason };
@@ -420,32 +425,58 @@ async function runType(
 }
 
 /**
- * Evaluate a condition against the current tree, retrying for a short grace
- * window ({@link DEFAULT_ASSERT_TIMEOUT_MS}) so an update that lands a frame
- * after an action isn't missed. Unlike `await`, this reports a *failure* (not
- * "still waiting") if the condition never holds.
+ * Poll a condition against the flow tree until it holds or `timeoutMs` passes.
+ * One engine behind both conditional directives — they differ only in budget
+ * and intent:
+ *
+ * - `await` (action-length timeout) — a real wait for a transition. Evaluating
+ *   it here, rather than delegating to the `await-ui-element` tool, gives it
+ *   the same loose bare-string semantics (identifier-first, then text) and the
+ *   same full-hierarchy tree source as every other selector directive; the raw
+ *   `tool: await-ui-element` step remains the escape hatch for custom
+ *   timeout/poll/bundleId.
+ * - `assert` (short grace window, {@link DEFAULT_ASSERT_TIMEOUT_MS}) — a
+ *   correctness check that only absorbs the latency of an update landing a
+ *   frame after an action; a genuinely-false assertion still fails quickly.
+ *
+ * Mirrors `await-ui-element`'s blind-read guard: an EMPTY tree is not
+ * trustworthy evidence for `hidden` (the only condition an empty tree
+ * satisfies) when the adapter flagged the read as degraded or the selector had
+ * matched on an earlier poll — a transient blank frame mid-navigation must not
+ * confirm the element left.
  */
-async function runAssert(
+async function waitForCondition(
   env: ActionEnv,
   step: {
     condition: WaitCondition;
     selector: FlowSelector;
     expectedText?: string;
     textMatch?: TextMatchMode;
-  }
+  },
+  timeoutMs: number,
+  what: "await" | "assertion"
 ): Promise<DirectiveOutcome> {
-  const deadline = Date.now() + DEFAULT_ASSERT_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
 
   let lastMatches: ReturnType<typeof findAll> = [];
   let fetchError: string | undefined;
+  let everMatched = false;
+  let everTrustedRead = false;
 
   for (;;) {
-    if (env.signal?.aborted) return { ok: false, reason: "assertion cancelled" };
+    if (env.signal?.aborted) return { ok: false, reason: `${what} cancelled` };
     try {
-      const { tree } = await fetchFlowTree(env.registry, env.device);
-      lastMatches = flowFindAll(tree, step.selector);
+      const data = await fetchFlowTree(env.registry, env.device);
+      lastMatches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
-      if (evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)) {
+      everMatched ||= lastMatches.length > 0;
+      const blind =
+        data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
+      everTrustedRead ||= !blind;
+      if (
+        !blind &&
+        evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)
+      ) {
         return { ok: true };
       }
     } catch (err) {
@@ -454,11 +485,17 @@ async function runAssert(
     if (Date.now() >= deadline) break;
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, env.signal))) {
-      return { ok: false, reason: "assertion cancelled" };
+      return { ok: false, reason: `${what} cancelled` };
     }
   }
 
   if (fetchError) return { ok: false, reason: `could not read the UI tree: ${fetchError}` };
+  if (step.condition === "hidden" && !everTrustedRead) {
+    return {
+      ok: false,
+      reason: "could not confirm the element is hidden — the UI tree was empty or unreadable",
+    };
+  }
   return {
     ok: false,
     reason: assertReason(

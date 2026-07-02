@@ -21,7 +21,7 @@ import {
 } from "./flow-utils";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { isUnmetUiWaitResult, AWAIT_UI_ELEMENT_TOOL_ID } from "../await-ui-element";
+import { isUnmetUiWaitResult } from "../await-ui-element";
 import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-device";
 import { runDirective, invokeOnDevice, type ActionEnv } from "./flow-actions";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
@@ -56,7 +56,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Write/refresh screenshot baselines for `expect` steps instead of diffing against them."
+      "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them."
     ),
   prerequisiteAcknowledged: z
     .boolean()
@@ -80,7 +80,7 @@ export interface StepReport {
   status: StepStatus;
   /** Machine-readable explanation when the step did not pass. */
   reason?: string;
-  /** Underlying tool id for `tool` / `await` steps. */
+  /** Underlying tool id for `tool` steps. */
   tool?: string;
   /** Tool result for `tool` steps. */
   result?: unknown;
@@ -472,6 +472,7 @@ async function execLeafStep(
 
     case "tap":
     case "type":
+    case "await":
     case "assert":
     case "scroll-to": {
       const r = await runDirective(state, step);
@@ -483,29 +484,6 @@ async function execLeafStep(
         return { ...base, status: "skip", reason: "run aborted during wait" };
       }
       return { ...base, status: "pass" };
-    }
-
-    case "await": {
-      try {
-        const result = await invokeOnDevice(state, AWAIT_UI_ELEMENT_TOOL_ID, {
-          condition: step.condition,
-          selector: step.selector,
-          ...(step.expectedText !== undefined ? { expectedText: step.expectedText } : {}),
-          ...(step.textMatch !== undefined ? { textMatch: step.textMatch } : {}),
-        });
-        if (isUnmetUiWaitResult(AWAIT_UI_ELEMENT_TOOL_ID, result)) {
-          const note = (result as { note?: string }).note;
-          return {
-            ...base,
-            status: "fail",
-            tool: AWAIT_UI_ELEMENT_TOOL_ID,
-            reason: note ?? "condition not met",
-          };
-        }
-        return { ...base, status: "pass", tool: AWAIT_UI_ELEMENT_TOOL_ID, result };
-      } catch (err) {
-        return { ...base, status: "error", tool: AWAIT_UI_ELEMENT_TOOL_ID, reason: errMsg(err) };
-      }
     }
 
     case "snapshot": {

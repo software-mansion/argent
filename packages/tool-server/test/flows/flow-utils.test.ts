@@ -341,13 +341,68 @@ describe("parseFlow", () => {
     expect(() => parseFlow("steps:\n  - wait: -5\n")).toThrow("wait needs a non-negative number");
   });
 
-  it("rejects a scroll-to without a valid direction", () => {
-    expect(() => parseFlow("steps:\n  - scroll-to: { target: Account }\n")).toThrow(
-      "scroll-to needs a direction"
-    );
+  it("rejects a scroll-to with an invalid direction", () => {
     expect(() =>
       parseFlow("steps:\n  - scroll-to: { target: Account, direction: sideways }\n")
-    ).toThrow("scroll-to needs a direction");
+    ).toThrow("scroll-to direction must be one of");
+  });
+
+  it("defaults scroll-to direction to down", () => {
+    const flow = parseFlow("steps:\n  - scroll-to: { target: Account }\n");
+    expect(flow.steps).toEqual([
+      { kind: "scroll-to", target: { text: "Account", loose: true }, direction: "down" },
+    ]);
+  });
+
+  it("parses a bare-string scroll-to as a down-scroll to that target", () => {
+    const flow = parseFlow("steps:\n  - scroll-to: Account\n");
+    expect(flow.steps).toEqual([
+      { kind: "scroll-to", target: { text: "Account", loose: true }, direction: "down" },
+    ]);
+  });
+
+  it("serializes the default scroll-to back to the bare-string sugar", () => {
+    const steps = [
+      { kind: "scroll-to", target: { text: "Account", loose: true }, direction: "down" },
+    ] as FlowFile["steps"];
+    const yaml = serializeFlow({ executionPrerequisite: "", steps });
+    expect(yaml).toContain("- scroll-to: Account");
+    expect(parseFlow(yaml).steps).toEqual(steps);
+  });
+
+  it("parses a bare-string snapshot as its name", () => {
+    const flow = parseFlow("steps:\n  - snapshot: home\n");
+    expect(flow.steps).toEqual([{ kind: "snapshot", name: "home" }]);
+  });
+
+  it("serializes a name-only snapshot as a bare string, keeps the map with maxMismatch", () => {
+    const steps = [
+      { kind: "snapshot", name: "home" },
+      { kind: "snapshot", name: "cart", maxMismatch: 1.5 },
+    ] as FlowFile["steps"];
+    const yaml = serializeFlow({ executionPrerequisite: "", steps });
+    expect(yaml).toContain("- snapshot: home");
+    expect(yaml).toContain("maxMismatch: 1.5");
+    expect(parseFlow(yaml).steps).toEqual(steps);
+  });
+
+  it("rejects a snapshot name that is not path-safe", () => {
+    expect(() => parseFlow("steps:\n  - snapshot: ../evil\n")).toThrow(/must match/);
+  });
+
+  it("rejects a tap body mixing a selector with coordinates", () => {
+    expect(() => parseFlow("steps:\n  - tap: { identifier: box, x: 0.5, y: 0.5 }\n")).toThrow(
+      "tap takes a selector or x/y coordinates, not both"
+    );
+  });
+
+  it("rejects a coordinate tap with a missing or non-numeric x/y", () => {
+    expect(() => parseFlow("steps:\n  - tap: { x: 0.5 }\n")).toThrow(
+      "a coordinate tap needs numeric x and y"
+    );
+    expect(() => parseFlow('steps:\n  - tap: { x: "0.5", y: 0.5 }\n')).toThrow(
+      "a coordinate tap needs numeric x and y"
+    );
   });
 
   it("roundtrips: serialize then parse", () => {

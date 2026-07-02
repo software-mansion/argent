@@ -160,4 +160,49 @@ describe("loose (bare-string) selector resolution", () => {
     expect(result.steps[0].status).toBe("fail");
     expect(result.taps).toHaveLength(0);
   }, 20000); // an unresolved tap auto-waits then auto-scrolls before failing
+
+  it("await resolves a bare string against an identifier (testID), like every other directive", async () => {
+    // The element is exposed only via testID — a text-only await would time out.
+    currentTree = () =>
+      screen([n({ identifier: "tap-box", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]);
+
+    await writeFlow("idawait", {
+      launch: "com.acme.app",
+      executionPrerequisite: "",
+      // `await: { visible: tap-box }` ⇒ loose; identifier-first finds the testID.
+      steps: [{ kind: "await", condition: "visible", selector: { text: "tap-box", loose: true } }],
+    });
+
+    const result = await run("idawait");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["await:pass"]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("assert `text` reads the element the loose selector resolved to", async () => {
+    currentTree = () =>
+      screen([
+        n({
+          identifier: "counter",
+          label: "Taps: 3",
+          frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.1 },
+        }),
+      ]);
+
+    await writeFlow("idassert", {
+      launch: "com.acme.app",
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { text: "counter", loose: true },
+          expectedText: "Taps: 3",
+          textMatch: "equals",
+        },
+      ],
+    });
+
+    const result = await run("idassert");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:pass"]);
+  });
 });

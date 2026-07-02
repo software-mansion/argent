@@ -18,29 +18,32 @@ Flows store **no device id**: the runner binds a device (the single booted one, 
 
 Beyond raw `tool:` steps and `echo:`, flows support declarative directives interpreted by the runner (they are **not** agent-callable tools):
 
-| Directive   | YAML                                                      | Meaning                                                                 |
-| ----------- | --------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `tap`       | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }`            | tap an element by selector (auto-waits), or a raw normalized point      |
-| `type`      | `- type: { into: email, text: "a@b.com" }`                | focus a field, type, then press Enter to submit + dismiss the keyboard  |
-| `scroll-to` | `- scroll-to: { target: "Order #1234", direction: down }` | momentum-free scroll until the target is visible                        |
-| `await`     | `- await: { visible: Home }`                              | wait for a UI condition (sugar over `await-ui-element`)                 |
-| `wait`      | `- wait: 500`                                             | pause for a fixed number of milliseconds (last resort — prefer `await`) |
-| `assert`    | `- assert: { visible: Welcome }`                          | check a condition, hard-fail if it never holds                          |
-| `snapshot`  | `- snapshot: { name: home, maxMismatch: 0.5 }`            | diff a screenshot against a stored baseline                             |
-| `run`       | `- run: login`                                            | execute a fragment's steps inline                                       |
+| Directive   | YAML                                                                                                     | Meaning                                                                 |
+| ----------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `tap`       | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }`                                                           | tap an element by selector (auto-waits), or a raw normalized point      |
+| `type`      | `- type: { into: email, text: "a@b.com" }`                                                               | focus a field, type, then press Enter to submit + dismiss the keyboard  |
+| `scroll-to` | `- scroll-to: "Order #1234"` (scrolls down) or `- scroll-to: { target: …, direction: right, within: … }` | momentum-free scroll until the target is visible                        |
+| `await`     | `- await: { visible: Home }`                                                                             | wait for a UI condition                                                 |
+| `wait`      | `- wait: 500`                                                                                            | pause for a fixed number of milliseconds (last resort — prefer `await`) |
+| `assert`    | `- assert: { visible: Welcome }`                                                                         | check a condition, hard-fail if it never holds                          |
+| `snapshot`  | `- snapshot: home` or `- snapshot: { name: home, maxMismatch: 0.5 }`                                     | diff a screenshot against a stored baseline                             |
+| `run`       | `- run: login`                                                                                           | execute a fragment's steps inline                                       |
 
-A **selector** is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. A bare string is a _loose_ selector: it resolves **identifier-first, then falls back to text** (label/value), so `tap: Login` matches a `testID="Login"` or, failing that, visible text "Login" — no need to know which. (Loose fallback applies to `tap`, `type.into`, `assert`, `scroll-to`; `await` delegates to the wait tool and stays text-only.) Use the map form to be strict: `{ identifier: submit-btn }` (identifier only) or `{ text: Login }` (text only, no fallback).
+A **selector** is `{ text?, identifier?, role? }` (case-insensitive substring, all-must-match) — the same shape `await-ui-element` uses. A bare string is a _loose_ selector: it resolves **identifier-first, then falls back to text** (label/value), so `tap: Login` matches a `testID="Login"` or, failing that, visible text "Login" — no need to know which. Loose fallback applies uniformly to every selector slot (`tap`, `type.into`, `await`, `assert`, `scroll-to`). Use the map form to be strict: `{ identifier: submit-btn }` (identifier only) or `{ text: Login }` (text only, no fallback).
+
+**Quote strings YAML would mangle.** An unquoted `#` starts a YAML comment — `tap: Order #1234` silently parses as `tap: Order` — and bare `yes`/`no`/`on`/`off`/numbers coerce to non-strings. When a selector or typed text contains `#`, `:`, quotes, or could read as a boolean/number, wrap it: `tap: "Order #1234"`.
 
 For `await`/`assert` the **condition is the key**, and its value is the selector:
 
 - `{ visible: Home }`, `{ exists: { identifier: row } }`, `{ hidden: spinner }`
-- `{ text: { in: <selector>, equals: "Taps: 0" } }` — `text` locates an element (`in`) and checks its rendered content (`equals`). Reach for it only when the locator is an identifier/role; to assert a string is simply on screen, prefer `{ visible: "Taps: 0" }`.
+- `{ text: { in: <selector>, contains: "Taps:" } }` or `{ text: { in: <selector>, equals: "Taps: 0" } }` — `text` locates an element (`in`) and checks its rendered content against exactly one of `contains` (case-insensitive substring) or `equals` (case-insensitive exact match — use it when boundaries matter: `contains: "Taps: 3"` is also satisfied by "Taps: 30"). Reach for `text` only when the locator is an identifier/role; to assert a string is simply on screen, prefer `{ visible: "Taps: 0" }`.
+- A container's text aggregates its descendants' text (space-joined), so `text` can assert what a testID wrapper visibly shows even when the string lives in a child node. That also means `equals` against a wrapper must match _everything_ it shows — target the leaf holding exactly the value, or use `contains`.
 
 This condition-as-key form is the only spelling. For advanced `await` control beyond it (custom timeout, poll interval, bundleId), drop to an explicit `- tool: await-ui-element` step. **Every directive hard-stops the flow on failure**; later steps are reported `skip`. `flow-execute` returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
 
 `type` presses Enter after typing to commit the value and dismiss the keyboard, so it can't cover later targets. For a chained form whose fields feed one explicit submit — e.g. email then password then a `tap: "Log in"` — set `submit: false` on the intermediate fields so a premature Enter doesn't fire the form early: `type: { into: password, text: "hunter2", submit: false }`.
 
-`scroll-to` needs a `direction` (`up` | `down` | `left` | `right`) and optionally a `within: <selector>` that anchors the scroll inside a specific container — required to drive a **nested** scroller (e.g. a horizontal carousel inside a vertical list), since the device can't be asked which container to scroll. It scrolls in bounded momentum-free increments, re-checks after each, and stops if a scroll reveals nothing new (end of the container). `tap`/`type` also auto-scroll a target into view (vertical) before resolving, so an explicit `scroll-to` is only needed for a horizontal scroll, a nested container, or to make the intent visible in the flow.
+`scroll-to` takes an optional `direction` (`up` | `down` | `left` | `right`, default `down` — so the common case is just `- scroll-to: <selector>`) and optionally a `within: <selector>` that anchors the scroll inside a specific container — required to drive a **nested** scroller (e.g. a horizontal carousel inside a vertical list), since the device can't be asked which container to scroll. It scrolls in bounded momentum-free increments, re-checks after each, and stops if a scroll reveals nothing new (end of the container). `tap`/`type` also auto-scroll a target into view (vertical) before resolving, so an explicit `scroll-to` is only needed for a horizontal scroll, a nested container, or to make the intent visible in the flow.
 
 ### Standalone runner
 
@@ -48,14 +51,14 @@ This condition-as-key form is the only spelling. For advanced `await` control be
 
 ## 2. Tools
 
-| Tool                     | Purpose                                                                    |
-| ------------------------ | -------------------------------------------------------------------------- |
-| `flow-start-recording`   | Start recording — takes a name and executionPrerequisite, creates the file |
-| `flow-add-step`          | Execute a tool call live and record it if it succeeds                      |
-| `flow-add-echo`          | Add a label/comment that prints during replay                              |
-| `flow-finish-recording`  | Stop recording and get a summary                                           |
-| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it                    |
-| `flow-execute`           | Replay a saved flow by name                                                |
+| Tool                     | Purpose                                                                                                                      |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `flow-start-recording`   | Start recording — takes a name, plus `launch` (e2e) or `fragment: true` + optional `executionPrerequisite`; creates the file |
+| `flow-add-step`          | Execute a tool call live and record it if it succeeds                                                                        |
+| `flow-add-echo`          | Add a label/comment that prints during replay                                                                                |
+| `flow-finish-recording`  | Stop recording and get a summary                                                                                             |
+| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it                                                                      |
+| `flow-execute`           | Replay a saved flow by name                                                                                                  |
 
 ## 3. Workflow
 
@@ -85,7 +88,7 @@ Call `flow-execute` with the flow name. If the flow has an execution prerequisit
 
 If the flow has no prerequisite, it runs immediately without needing acknowledgment.
 
-**What each step reports.** Raw `tool:` and `await:` steps include the underlying tool's full `result` (screenshots and other outputs render as usual). The directive steps are summarized: `tap`/`type`/`assert` report only `status` + `reason`, and `snapshot` adds `artifacts` (diff image paths). So converting a `tool: gesture-tap` into a `tap:` directive during cleanup drops only that tap's (uninteresting) raw result — output-bearing tools like `screenshot` have no directive form and stay `tool:` steps, so their results keep flowing through.
+**What each step reports.** Raw `tool:` steps include the underlying tool's full `result` (screenshots and other outputs render as usual). The directive steps are summarized: `tap`/`type`/`await`/`assert` report only `status` + `reason`, and `snapshot` adds `artifacts` (diff image paths). So converting a `tool: gesture-tap` into a `tap:` directive during cleanup drops only that tap's (uninteresting) raw result — output-bearing tools like `screenshot` have no directive form and stay `tool:` steps, so their results keep flowing through.
 
 ## 4. flow-add-step Usage
 

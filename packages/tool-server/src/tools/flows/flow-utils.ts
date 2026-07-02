@@ -273,7 +273,10 @@ type YamlWaitBody =
   | { text: { in: YamlSelector; contains: string } }
   | { text: { in: YamlSelector; equals: string } };
 
-type YamlScrollBody = { target: YamlSelector; direction: ScrollDirection; within?: YamlSelector };
+/** `scroll-to` body: a bare target (scrolls down), or a map with options. */
+type YamlScrollBody =
+  | YamlSelector
+  | { target: YamlSelector; direction?: ScrollDirection; within?: YamlSelector };
 
 type YamlStep =
   | { echo: string }
@@ -285,7 +288,7 @@ type YamlStep =
   | { assert: YamlWaitBody }
   | { wait: number }
   | { "scroll-to": YamlScrollBody }
-  | { snapshot: { name: string; maxMismatch?: number } };
+  | { snapshot: string | { name: string; maxMismatch?: number } };
 
 type YamlFlowFile = {
   launch?: Launch;
@@ -363,21 +366,25 @@ function toYamlStep(step: FlowStep): YamlStep {
       };
     case "wait":
       return { wait: step.ms };
-    case "scroll-to":
+    case "scroll-to": {
+      const target = selectorToYaml(step.target);
+      // Sugar the common case back to a bare target: default direction, no container.
+      if (typeof target === "string" && step.direction === "down" && !step.within) {
+        return { "scroll-to": target };
+      }
       return {
         "scroll-to": {
-          target: selectorToYaml(step.target),
+          target,
           direction: step.direction,
           ...(step.within ? { within: selectorToYaml(step.within) } : {}),
         },
       };
+    }
     case "snapshot":
-      return {
-        snapshot: {
-          name: step.name,
-          ...(step.maxMismatch !== undefined ? { maxMismatch: step.maxMismatch } : {}),
-        },
-      };
+      // A name-only snapshot sugars to a bare string.
+      return step.maxMismatch === undefined
+        ? { snapshot: step.name }
+        : { snapshot: { name: step.name, maxMismatch: step.maxMismatch } };
     case "tool":
     default: {
       const y: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
@@ -486,8 +493,16 @@ function fromYamlStep(raw: YamlStep): FlowStep {
   if ("tap" in raw) {
     const body = (raw as { tap: unknown }).tap;
     const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    // A tap targets either an element (selector) or a raw point (x/y).
-    if (typeof obj.x === "number" && typeof obj.y === "number") {
+    // A tap targets either an element (selector) or a raw point (x/y) — a body
+    // mixing both is ambiguous (which wins?) and rejected rather than silently
+    // resolved one way.
+    if (obj.x !== undefined || obj.y !== undefined) {
+      if (obj.text !== undefined || obj.identifier !== undefined || obj.role !== undefined) {
+        badEntry(raw, "tap takes a selector or x/y coordinates, not both");
+      }
+      if (typeof obj.x !== "number" || typeof obj.y !== "number") {
+        badEntry(raw, "a coordinate tap needs numeric x and y");
+      }
       return { kind: "tap", x: obj.x, y: obj.y };
     }
     return { kind: "tap", selector: parseSelector(body, "tap") };
@@ -529,29 +544,44 @@ function fromYamlStep(raw: YamlStep): FlowStep {
 
   if ("scroll-to" in raw) {
     const body = (raw as { "scroll-to": unknown })["scroll-to"];
+    // Bare-string sugar for the common case: scroll down until the target is
+    // visible (`scroll-to: "Order 1234"`).
+    if (typeof body === "string") {
+      return {
+        kind: "scroll-to",
+        target: parseSelector(body, "scroll-to.target"),
+        direction: "down",
+      };
+    }
     if (body === null || typeof body !== "object") {
-      badEntry(raw, "scroll-to needs { target, direction }");
+      badEntry(raw, "scroll-to needs a target selector or { target, direction?, within? }");
     }
     const b = body as Record<string, unknown>;
     if (
-      typeof b.direction !== "string" ||
-      !SCROLL_DIRECTIONS.includes(b.direction as ScrollDirection)
+      b.direction !== undefined &&
+      (typeof b.direction !== "string" ||
+        !SCROLL_DIRECTIONS.includes(b.direction as ScrollDirection))
     ) {
-      badEntry(raw, `scroll-to needs a direction (${SCROLL_DIRECTIONS.join(", ")})`);
+      badEntry(raw, `scroll-to direction must be one of ${SCROLL_DIRECTIONS.join(", ")}`);
     }
     const step: FlowStep = {
       kind: "scroll-to",
       target: parseSelector(b.target, "scroll-to.target"),
-      direction: b.direction as ScrollDirection,
+      direction: (b.direction as ScrollDirection | undefined) ?? "down",
     };
     if (b.within !== undefined) step.within = parseSelector(b.within, "scroll-to.within");
     return step;
   }
 
   if ("snapshot" in raw) {
-    const b = (raw as { snapshot: { name?: unknown; maxMismatch?: number } }).snapshot;
+    const body = (raw as { snapshot: unknown }).snapshot;
+    // Bare-string sugar: `snapshot: home` ≡ `snapshot: { name: home }`.
+    const b =
+      typeof body === "string"
+        ? { name: body }
+        : (body as { name?: unknown; maxMismatch?: number });
     if (!b || typeof b !== "object" || typeof b.name !== "string" || !b.name) {
-      badEntry(raw, "snapshot needs a { name }");
+      badEntry(raw, "snapshot needs a name (bare string or { name })");
     }
     // The name becomes a baseline filename, so it must be path-safe (no
     // separators or "..") — same constraint as a flow name.
