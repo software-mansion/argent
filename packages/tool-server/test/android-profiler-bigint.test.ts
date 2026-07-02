@@ -175,7 +175,9 @@ describe("android stack drill-down handles bigint native-ns columns", () => {
     expect(out).toContain("reason: `App Deadline Missed`");
     expect(out).toContain("| Uninterruptible Sleep | `do_page_fault` | 400ms |");
     // The bigint total_dur_ns row rendered (coerced) instead of throwing.
-    expect(out).toContain(`| Runnable | — | ${Math.round(Number(9_600_000_000_000_000n) / 1_000_000)}ms |`);
+    expect(out).toContain(
+      `| Runnable | — | ${Math.round(Number(9_600_000_000_000_000n) / 1_000_000)}ms |`
+    );
     expect(out).toContain("### Main-thread Samples During Hang");
     expect(out).toContain("main <- onDraw <- inflate");
   });
