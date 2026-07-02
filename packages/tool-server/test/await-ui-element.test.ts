@@ -1,4 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The describe path probes device form factor before reading the tree: iOS via
+// `isTvOsSimulator` (shells `xcrun`), and Android via `isAndroidTv` (shells `adb
+// devices`) on EVERY poll. Left real, those subprocess calls make the polling
+// tests nondeterministic — under parallel-suite load a single poll's probe can
+// outlast a tight timeoutMs, flipping a semantic note to "did not complete" (the
+// pre-existing flakiness this file's Android `hidden` tests hit). Stub both to a
+// plain (mobile) verdict so the tree fetch is deterministic and off the host's
+// devices; every fixture here is a mobile target.
+vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
+  isTvOsSimulator: vi.fn(async () => false),
+}));
+vi.mock("../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/adb")>()),
+  isAndroidTv: vi.fn(async () => false),
+}));
+
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";

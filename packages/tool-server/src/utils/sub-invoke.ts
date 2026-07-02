@@ -4,11 +4,14 @@ import type { Registry, ToolContext } from "@argent/registry";
 /**
  * Dispatch a tool as a child of the current orchestrator invocation.
  *
- * run-sequence / flow-execute / flow-add-step run their steps by calling
+ * run-sequence / flow-execute / flow-add-step / find run their steps (or, for
+ * `find`, their delegated gesture-tap / keyboard effects) by calling
  * `registry.invokeTool` directly. Each such call would otherwise emit its
  * lifecycle events under a fresh, unrecorded invocation id — so the AI-client /
  * platform attribution the HTTP layer captured for the outer request never
- * reaches the nested gestures, and they're recorded as anonymous.
+ * reaches the nested gestures, and they're recorded as anonymous. (This is why a
+ * single `find … fill` emits `find` plus a child `gesture-tap` and N child
+ * `keyboard` events, all attributed to the outer request — intended.)
  *
  * When the outer request carried attribution, `ctx.recordChildInvocation` is
  * present: mint an id, register it (inheriting the outer AI client, with the

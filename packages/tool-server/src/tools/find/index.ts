@@ -10,6 +10,7 @@ import type {
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { sleepOrAbort, settleWithin } from "../../utils/timing";
@@ -174,7 +175,11 @@ type FindActionResult =
   | { kind: "tap"; tapped: boolean; timestampMs: number }
   | { kind: "focus"; focused: boolean; timestampMs: number }
   | { kind: "type"; typed: string; keys: number }
-  | { kind: "fill"; typed: string; keys: number; clearedChars: number }
+  // `backspacesSent` is the number of backspaces issued to clear the field, NOT a
+  // count of characters proven deleted — the tree doesn't report the caret
+  // position, so we can't know how many actually landed on the value vs slop
+  // past its end. Named honestly so a caller never reads it as "chars removed".
+  | { kind: "fill"; typed: string; keys: number; backspacesSent: number }
   | { kind: "get-text"; text: string };
 
 interface FindResult {
@@ -191,9 +196,20 @@ interface FindResult {
   match?: FindMatchInfo;
   // Present for actions that do something beyond locating (tap/focus/type/fill/get-text).
   actionResult?: FindActionResult;
+  // `exists` only: set when the tree could not be read at all (a fetch error /
+  // hang with no usable snapshot), so `found: false` means "couldn't tell", not
+  // "confirmed absent". Lets a caller distinguish an unreadable screen from a
+  // genuine miss instead of trusting a blind negative.
+  presenceUnknown?: boolean;
   note?: string;
 }
 
+// A tvOS simulator shape-classifies as `apple`, and an Android TV emulator as
+// `android`, so both pass this gate — but `find` is READ-ONLY on a TV target:
+// the acting actions (tap/focus/type/fill) are rejected at runtime (see the TV
+// guard in `execute`) because a D-pad-driven TV ignores coordinate taps and its
+// keyboard rejects the named `backspace` key `fill` needs. Locate / exists /
+// wait / get-text / get-attrs still work; use `tv-remote` (+ `keyboard`) to act.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
@@ -234,6 +250,45 @@ export function locatorField(
 // for unit tests.
 export function findMatches(tree: DescribeNode, by: LocatorAttr, query: string): DescribeNode[] {
   return walkMatches(tree, (n) => locatorField(n, by, query) !== null);
+}
+
+// True when `a`'s frame spatially encloses `b`'s and is strictly larger — i.e.
+// `b` nests inside `a`. A small epsilon absorbs rounding in the normalized
+// coordinates so a child flush against its parent's edge still counts.
+function frameEncloses(a: DescribeFrame, b: DescribeFrame): boolean {
+  const EPS = 1e-6;
+  const encloses =
+    a.x <= b.x + EPS &&
+    a.y <= b.y + EPS &&
+    a.x + a.width + EPS >= b.x + b.width &&
+    a.y + a.height + EPS >= b.y + b.height;
+  return encloses && a.width * a.height > b.width * b.height + EPS;
+}
+
+// Order the actionable pool for the chosen action, so `index` addresses the most
+// useful match first. Read-only actions keep plain reading order (top-to-bottom,
+// then left-to-right — what the agent "saw first"). For a TAPPING action we also
+// demote any match whose frame encloses another match: an enclosing container is
+// almost always an aggregating parent (e.g. an Android View that folds a child
+// input's text into its own content-desc), and tapping its centre hits the
+// container — or a sibling control inside it — not the specific element. Pushing
+// containers after the smaller matches they wrap makes the default `index:0` land
+// on the inner, more specific target; `matchCount` and the ambiguity note still
+// surface the choice so a caller can override with `index`.
+function orderMatches(pool: DescribeNode[], action: FindAction): DescribeNode[] {
+  if (!TAPPING_ACTIONS.has(action)) return sortReadingOrder(pool);
+  const isContainer = (n: DescribeNode) =>
+    pool.some((m) => m !== n && frameEncloses(n.frame, m.frame));
+  return pool
+    .map((node, i) => ({ node, i, container: isContainer(node) }))
+    .sort(
+      (a, b) =>
+        Number(a.container) - Number(b.container) ||
+        a.node.frame.y - b.node.frame.y ||
+        a.node.frame.x - b.node.frame.x ||
+        a.i - b.i
+    )
+    .map((e) => e.node);
 }
 
 const FLAG_KEYS: ReadonlyArray<keyof DescribeNode> = [
@@ -294,6 +349,23 @@ async function typeText(
   return invokeSubTool(registry, ctx, "keyboard", { udid, text });
 }
 
+// The point `fill` taps to focus a field before clearing it: the field's
+// trailing edge (95% across, vertical centre) rather than its centre. The clear
+// is leftward-only backspaces, so it relies on the focusing tap parking the caret
+// at/after the end of the text. A centre tap can land the caret mid-text in a
+// field whose content runs past the middle (a multi-line text view, a
+// web/contenteditable, a custom input) — the backspaces would then delete the
+// left part and leave right-hand residue. Tapping the trailing edge biases the
+// caret to the end so the whole value is deleted. Kept inside the frame and
+// clamped to the screen. (iOS single-line fields re-anchor the caret to the end
+// on focus regardless, so this only matters for the fields that don't.)
+function trailingEdgeTapPoint(frame: DescribeFrame): { x: number; y: number } {
+  return {
+    x: Math.min(frame.x + frame.width * 0.95, 1),
+    y: frame.y + frame.height / 2,
+  };
+}
+
 // Tap to focus a field, then wait `settleMs` so it is actually focused (and the
 // soft keyboard is up) before the first key. Returns false if the request was
 // aborted during the settle, so the caller can skip typing.
@@ -314,9 +386,9 @@ async function focusAndSettle(
 // EditText WITHOUT a content-desc surfaces the typed text as `label` with `value`
 // unset. We can't tell placeholder from content, so we take the longer of the
 // two: the real editable text is exactly one of them, so `max` is never shorter
-// than it, and over-deleting past the end of a field is a no-op (a focusing tap
-// parks the caret at the end) — whereas UNDER-deleting leaves stale text for
-// `fill` to type on top of.
+// than it, and over-deleting past the end of a field is a no-op (the trailing-edge
+// focus tap parks the caret at/after the end) — whereas UNDER-deleting leaves
+// stale text for `fill` to type on top of.
 //
 // This is NOT reliable on Chromium: `describeChromium`'s accessibleName prefers a
 // static aria-label / placeholder over the live `el.value`, and a form control's
@@ -328,11 +400,13 @@ function editableTextLength(node: DescribeNode): number {
 }
 
 // Send `count` backspaces to a focused field, stopping early on abort. The
-// keyboard tool exposes no select-all modifier, so a clear is N backspaces; a
-// focusing tap parks the caret at the end of the text, so they delete leftwards
-// through the value. Returns how many were actually sent. Deciding `count` (and
-// whether it may fall short of the field's true length) is the caller's job,
-// since only it knows how reliably the platform reported the field's text.
+// keyboard tool exposes no select-all modifier, so a clear is N backspaces; the
+// trailing-edge focus tap (see `trailingEdgeTapPoint`) parks the caret at/after
+// the end of the text, so they delete leftwards through the value. Returns how
+// many backspaces were actually SENT — not a count of characters proven removed
+// (the tree never reports the caret position). Deciding `count` (and whether it
+// may fall short of the field's true length) is the caller's job, since only it
+// knows how reliably the platform reported the field's text.
 async function clearField(
   registry: Registry,
   ctx: ToolContext | undefined,
@@ -363,7 +437,8 @@ export function createFindTool(registry: Registry): ToolDefinition<Params, FindR
 Locator: \`query\` is a case-insensitive substring matched against the attribute named by \`by\` (any = label/value/id, the default; text = label or value; or label / value / role / id).
 Actions (\`action\`, default \`tap\`): tap (centre), focus, type (focus + type \`text\`), fill (focus + clear + type \`text\`), exists (single presence check), wait (block until visible, \`timeoutMs\` default ${DEFAULT_WAIT_TIMEOUT_MS}ms), get-text, get-attrs.
 
-Returns { found, matchCount, match?, actionResult?, elapsed, note? }. When several match, the topmost in reading order is used (set \`index\` to pick another; \`matchCount\` reports how many). A single snapshot is taken by default — set \`timeoutMs\` to poll until the element appears before acting.
+Returns { found, matchCount, match?, actionResult?, elapsed, note? }. When several match, the topmost in reading order is used (for a tapping action an enclosing container is ranked after the smaller matches it wraps; set \`index\` to pick another; \`matchCount\` reports how many). A single snapshot is taken by default — set \`timeoutMs\` to poll until the element appears before acting.
+On a TV target (Apple TV / Android TV) find is READ-ONLY — locate / exists / wait / get-text / get-attrs only; the acting actions can't drive a D-pad UI, so use tv-remote (+ keyboard) to act.
 Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
     alwaysLoad: true,
     longRunning: true,
@@ -393,6 +468,16 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
       // await-ui-element; passed through to fetchDescribeTree below.
       const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
 
+      // A TV target is D-pad driven: coordinate taps do nothing on tvOS, and an
+      // Android TV keyboard rejects the named `backspace` key `fill` clears with
+      // (it throws mid-action, leaving the field focused/dirty). So the acting
+      // actions can't work — `find` is read-only on TV. Probe the Android form
+      // factor only for an acting action (a read-only find works on TV and
+      // shouldn't pay the adb round-trip); tvOS is already resolved above.
+      const actingOnTv =
+        TAPPING_ACTIONS.has(action) &&
+        (isTvOs || (device.platform === "android" && (await isAndroidTv(device.id))));
+
       // Start the discovery clock after setup so its fixed cost isn't charged
       // against timeoutMs (the deadline should bound polling, not resolution).
       const start = Date.now();
@@ -419,6 +504,24 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
         note: "find was cancelled before the element was located",
       });
 
+      // Reject an acting action on a TV target up front — before any device
+      // effect — so a `fill` can't focus a field and then throw on its first
+      // backspace (Android TV), and a `tap`/`type` can't silently no-op against a
+      // remote-driven screen (tvOS). Nothing is mutated; point the agent at the
+      // read-only actions and `tv-remote`.
+      if (actingOnTv) {
+        return {
+          ...baseResult(),
+          found: false,
+          matchCount: 0,
+          note:
+            `find cannot \`${action}\` on a TV target — Apple TV / Android TV are D-pad driven, so ` +
+            `coordinate taps and keyboard clears don't work (and would leave a field dirty). find is ` +
+            `read-only on TV: use exists / wait / get-text / get-attrs to locate, and drive the UI with ` +
+            `tv-remote (D-pad) plus keyboard.`,
+        };
+      }
+
       let lastTree: DescribeNode | null = null;
       let lastData: DescribeTreeData | null = null;
       let fetchError: string | undefined;
@@ -440,7 +543,15 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
         if (settled.type === "aborted") return cancelled();
         if (settled.type === "timeout") {
           if (lastTree === null) {
-            fetchError ??= `tree fetch did not complete within the ${polling ? `${timeoutMs}ms wait` : "fetch"} budget`;
+            // `wait` blocks against a wait budget; any other polling action races
+            // a poll budget; a single-shot read has only the fetch cap. Name the
+            // one that actually applied so the note isn't misleading.
+            const budgetName = !polling
+              ? "fetch"
+              : action === "wait"
+                ? `${timeoutMs}ms wait`
+                : `${timeoutMs}ms poll`;
+            fetchError ??= `tree fetch did not complete within the ${budgetName} budget`;
           }
           break;
         }
@@ -454,10 +565,11 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
 
         const matches = lastTree ? findMatches(lastTree, by, query) : [];
         const pool = requireVisible ? matches.filter(isVisible) : matches;
-        // `exists` reports presence regardless of index; the others need the
-        // index-th match in reading order to be present.
-        const satisfied =
-          action === "exists" ? matches.length > 0 : sortReadingOrder(pool)[index] !== undefined;
+        // `exists` reports presence regardless of index; the others just need the
+        // requested index to be in range (which element it maps to — reading order
+        // vs the tapping-action container demotion — is settled at resolve time,
+        // and doesn't change whether index-th exists).
+        const satisfied = action === "exists" ? matches.length > 0 : pool.length > index;
 
         if (satisfied || Date.now() >= deadline) break;
         // Clamp the poll sleep to the time left so a large pollIntervalMs can't
@@ -470,17 +582,34 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
       const allMatches = lastTree ? findMatches(lastTree, by, query) : [];
       const pool = requireVisible ? allMatches.filter(isVisible) : allMatches;
       const matchCount = pool.length;
-      const chosen = sortReadingOrder(pool)[index];
+      const chosen = orderMatches(pool, action)[index];
 
       if (action === "exists") {
         const result: FindResult = { ...baseResult(), found: matchCount > 0, matchCount };
-        const top = firstInReadingOrder(allMatches);
+        // Report the topmost VISIBLE match, so `exists`'s reported element is the
+        // one a subsequent tap (which acts on the topmost visible) would target —
+        // not a zero-area ghost that sorts above it with a degenerate tapPoint.
+        // Fall back to the topmost of all matches when none is visible.
+        const top =
+          firstInReadingOrder(allMatches.filter(isVisible)) ?? firstInReadingOrder(allMatches);
         if (top) result.match = toMatchInfo(top, by, query);
         if (matchCount === 0) {
-          const base = fetchError
-            ? `tree fetch failed: ${fetchError}`
-            : `no element matched ${by}="${query}"`;
-          result.note = appendDescribeDiagnostics(base, lastData);
+          // `exists` returns found:false for both "confirmed absent" and "couldn't
+          // read the screen". Only the latter is presence-unknown: it's when no
+          // usable tree was ever read (lastTree null ⇒ a fetch error/hang). Flag
+          // it so a caller doesn't treat a blind read as a definitive absence.
+          if (lastTree === null) {
+            result.presenceUnknown = true;
+            const base = fetchError
+              ? `presence unknown — the UI tree could not be read (${fetchError})`
+              : "presence unknown — the UI tree could not be read";
+            result.note = appendDescribeDiagnostics(base, lastData);
+          } else {
+            result.note = appendDescribeDiagnostics(
+              `no element matched ${by}="${query}"`,
+              lastData
+            );
+          }
         }
         return result;
       }
@@ -510,9 +639,13 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
       const result: FindResult = { ...baseResult(), found: true, matchCount, match };
       if (matchCount > 1) {
         const verb = TAPPING_ACTIONS.has(action) ? "acted on" : "selected";
-        // Only index 0 is the topmost; label any other index without implying it is.
-        const which =
-          index === 0 ? "index 0 (topmost in reading order)" : `index ${index} (0 = topmost)`;
+        // Describe what index 0 means for THIS action: a tapping action ranks an
+        // enclosing container after the smaller matches it wraps, so index 0 is
+        // the innermost match rather than literally the topmost in reading order.
+        const zeroMeans = TAPPING_ACTIONS.has(action)
+          ? "innermost match; enclosing containers rank after"
+          : "topmost in reading order";
+        const which = index === 0 ? `index 0 (${zeroMeans})` : `index ${index} (0 = ${zeroMeans})`;
         result.note = `${matchCount} elements matched ${by}="${query}"; ${verb} ${which}. Narrow the query or set \`index\` to target another.`;
       }
 
@@ -558,11 +691,15 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
           break;
         }
         case "fill": {
+          // Focus at the field's trailing edge (not its centre) so the leftward
+          // backspaces below start from the end of the text — see
+          // `trailingEdgeTapPoint`. `match.tapPoint` (the centre) is still what the
+          // result reports as the element's tap point.
           const focused = await focusAndSettle(
             registry,
             ctx,
             params.udid,
-            match.tapPoint,
+            trailingEdgeTapPoint(chosen.frame),
             focusSettleMs(device.platform)
           );
           if (!focused)
@@ -582,15 +719,15 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
           const knownLength = editableTextLength(chosen);
           const clearTarget = lengthHidden ? MAX_CLEAR_CHARS : knownLength;
           const clearCount = Math.min(MAX_CLEAR_CHARS, clearTarget + CLEAR_BUFFER);
-          const clearedChars = await clearField(registry, ctx, params.udid, clearCount);
+          const backspacesSent = await clearField(registry, ctx, params.udid, clearCount);
           // clearField stops early on abort but can't signal it; bail before
           // typing so a cancelled fill doesn't push `text` in and report success.
           if (signal?.aborted)
             return cancelledMidAction(
-              `after focusing and deleting ${clearedChars} character(s) but before typing; the field may be partially cleared`
+              `after focusing and sending ${backspacesSent} backspace(s) but before typing; the field may be partially cleared`
             );
           const r = await typeText(registry, ctx, params.udid, params.text!);
-          result.actionResult = { kind: "fill", typed: r.typed, keys: r.keys, clearedChars };
+          result.actionResult = { kind: "fill", typed: r.typed, keys: r.keys, backspacesSent };
           // Surface any caveat that the clear may have left stale text behind, so
           // the leftover-plus-new-text failure mode is never a silent success.
           const clearCaveats: string[] = [];

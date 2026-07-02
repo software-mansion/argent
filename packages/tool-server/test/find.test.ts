@@ -8,6 +8,16 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   isTvOsSimulator: vi.fn(async () => false),
 }));
 
+// `find` probes isAndroidTv for an acting action to keep itself read-only on TV.
+// Stub it to a plain (mobile) verdict so the Android acting tests don't shell adb;
+// the Android-TV test overrides it per-case.
+vi.mock("../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/adb")>()),
+  isAndroidTv: vi.fn(async () => false),
+}));
+
+import { isTvOsSimulator } from "../src/utils/ios-devices";
+import { isAndroidTv } from "../src/utils/adb";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
@@ -102,6 +112,9 @@ function makeFailingChromiumApi(): ChromiumCdpApi {
 
 const FRAME = { x: 0.1, y: 0.4, width: 0.8, height: 0.05 };
 const CENTER = { x: FRAME.x + FRAME.width / 2, y: FRAME.y + FRAME.height / 2 };
+// `fill` focuses at the field's trailing edge (95% across, vertical centre), not
+// its centre, so the clear's leftward backspaces start from the end of the text.
+const TRAILING = { x: FRAME.x + FRAME.width * 0.95, y: FRAME.y + FRAME.height / 2 };
 
 // ── Pure locator matching (hand-built trees, no platform adapter) ────────────
 
@@ -164,6 +177,9 @@ describe("find tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb"]);
+    // Reset the TV-probe call history so per-test spies/overrides don't leak.
+    vi.mocked(isTvOsSimulator).mockClear();
+    vi.mocked(isAndroidTv).mockClear();
   });
 
   const iosTool = (ax: AXServiceApi) => {
@@ -439,7 +455,7 @@ describe("find tool", () => {
   });
 
   // ── fill ──
-  it("`fill` focuses (centre), clears the field's text length + buffer, then types", async () => {
+  it("`fill` focuses at the trailing edge, clears the field's text length + buffer, then types", async () => {
     const { api } = makeSequencedAXService([
       axResponse([{ label: "Field", value: "abcd", frame: FRAME, traits: ["textfield"] }]),
     ]);
@@ -451,9 +467,12 @@ describe("find tool", () => {
     expect(result.found).toBe(true);
     // clear length = max(label "Field"=5, value "abcd"=4) + CLEAR_BUFFER 2
     expect(backspaces(invocations)).toHaveLength(5 + 2);
-    expect(result.actionResult).toMatchObject({ kind: "fill", typed: "new", clearedChars: 7 });
+    expect(result.actionResult).toMatchObject({ kind: "fill", typed: "new", backspacesSent: 7 });
     expect(invocations[0]!.toolId).toBe("gesture-tap");
-    expect(invocations[0]!.args).toMatchObject({ x: CENTER.x, y: CENTER.y }); // centre focus
+    // focus is biased to the trailing edge so the caret starts at the end, NOT
+    // the centre where a mid-text caret could strand right-hand residue.
+    expect(invocations[0]!.args).toMatchObject({ x: TRAILING.x, y: TRAILING.y });
+    expect((invocations[0]!.args.x as number)).toBeGreaterThan(CENTER.x);
     expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "new" } });
   });
 
@@ -491,7 +510,7 @@ describe("find tool", () => {
     expect(result.match).toMatchObject({ matchedField: "label", label: "old@example.com" });
     // 15 (label length) + CLEAR_BUFFER 2 — NOT the 2 the value-only path would send
     expect(backspaces(invocations)).toHaveLength(15 + 2);
-    expect((result.actionResult as { clearedChars: number }).clearedChars).toBe(17);
+    expect((result.actionResult as { backspacesSent: number }).backspacesSent).toBe(17);
     expect(result.note ?? "").not.toMatch(/capped/i);
     expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "new@x.io" } });
   });
@@ -524,7 +543,7 @@ describe("find tool", () => {
     expect(result.found).toBe(true);
     // full MAX_CLEAR_CHARS clear, not the 7 that label="Email" (5)+buffer implies
     expect(backspaces(invocations)).toHaveLength(64);
-    expect((result.actionResult as { clearedChars: number }).clearedChars).toBe(64);
+    expect((result.actionResult as { backspacesSent: number }).backspacesSent).toBe(64);
     expect(result.note).toMatch(/chromium/i);
     expect(result.note).toMatch(/verify/i);
     expect(result.note ?? "").not.toMatch(/capped/i); // it's the unknown-length caveat, not the cap
@@ -559,7 +578,7 @@ describe("find tool", () => {
     expect(result.found).toBe(true);
     // NOT the 3+buffer the undercounted value="abc" would imply — full cap clear.
     expect(backspaces(invocations)).toHaveLength(64);
-    expect((result.actionResult as { clearedChars: number }).clearedChars).toBe(64);
+    expect((result.actionResult as { backspacesSent: number }).backspacesSent).toBe(64);
     expect(result.note).toMatch(/chromium/i);
     expect(result.note).toMatch(/verify/i);
     expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "ZZZ" } });
@@ -688,7 +707,10 @@ describe("find tool", () => {
     expect(result.note).toMatch(/boot-device|restart/i);
   });
 
-  it("surfaces a tree-fetch failure in the note (Chromium renderer detached)", async () => {
+  it("`exists` reports presenceUnknown (not a confirmed absence) when the tree is unreadable", async () => {
+    // An unreadable screen (Chromium renderer detached, never a usable tree) must
+    // not read as "confirmed absent": exists surfaces presenceUnknown so a caller
+    // can tell "couldn't check" from "checked and it's gone".
     const { registry } = makeMockRegistry({});
     const tool = createFindTool(registry);
     const result = await tool.execute(
@@ -696,8 +718,21 @@ describe("find tool", () => {
       { udid: CHROMIUM_ID, query: "Continue", by: "text", action: "exists", index: 0 }
     );
     expect(result.found).toBe(false);
-    expect(result.note).toMatch(/tree fetch failed/i);
+    expect(result.presenceUnknown).toBe(true);
+    expect(result.note).toMatch(/presence unknown|could not be read/i);
     expect(result.note).toMatch(/renderer detached/);
+  });
+
+  it("`exists` does NOT set presenceUnknown for a genuine absence (tree read, no match)", async () => {
+    const { api } = makeSequencedAXService([axResponse([])]);
+    const { tool } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Nope", by: "label", action: "exists", index: 0 }
+    );
+    expect(result.found).toBe(false);
+    expect(result.presenceUnknown).toBeUndefined();
+    expect(result.note).toMatch(/no element matched/i);
   });
 
   // ── cancellation ──
@@ -843,6 +878,319 @@ describe("find tool", () => {
     expect(tap.args.udid).toBe(CHROMIUM_ID);
     expect(tap.args.x as number).toBeCloseTo(0.5);
     expect(tap.args.y as number).toBeCloseTo(0.825);
+  });
+
+  // ── M1: container-vs-child on a tapping action ──
+  it("taps the inner input, not the enclosing container that folds its text (Android)", async () => {
+    // A clickable card with no own label borrows its descendants' text into its
+    // content-desc ("Server / localhost"), so both the card AND the EditText match
+    // "localhost". The card sorts first in reading order (smaller y) and encloses
+    // the input — a plain reading-order pick would tap the card's centre (the M1
+    // bug). For a tapping action `find` demotes the enclosing container, so the
+    // default index 0 lands on the inner input.
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<hierarchy rotation="0">` +
+      `<node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">` +
+      `<node class="android.widget.LinearLayout" clickable="true" bounds="[40,600][1040,900]">` +
+      `<node text="Server" class="android.widget.TextView" bounds="[60,620][400,680]" />` +
+      `<node text="localhost" class="android.widget.EditText" clickable="true" focusable="true" bounds="[60,760][1000,860]" />` +
+      `</node>` +
+      `</node>` +
+      `</hierarchy>`;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const { registry, invocations } = makeMockRegistry({ android });
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
+      {},
+      { udid: ANDROID_SERIAL, query: "localhost", by: "any", action: "tap", index: 0 }
+    );
+    expect(result.found).toBe(true);
+    expect(result.matchCount).toBe(2); // both the card and the input match
+    // Chosen = the inner input (narrower frame), NOT the enclosing card.
+    expect(result.match!.frame.width).toBeCloseTo(940 / 1080, 2);
+    const tap = invocations.find((i) => i.toolId === "gesture-tap")!;
+    // input centre y ≈ 0.3375, NOT the card centre y ≈ 0.3125
+    expect(tap.args.y as number).toBeCloseTo(0.3375, 2);
+    expect(tap.args.y as number).not.toBeCloseTo(0.3125, 2);
+    // The ambiguity note describes index 0 as the innermost match, not "topmost".
+    expect(result.note).toMatch(/innermost/i);
+  });
+
+  it("keeps plain reading order for a read-only action (no container demotion)", async () => {
+    // get-text is read-only: the enclosing container is NOT demoted, so index 0 is
+    // the topmost-in-reading-order match (the card), proving demotion is scoped to
+    // tapping actions.
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<hierarchy rotation="0">` +
+      `<node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">` +
+      `<node class="android.widget.LinearLayout" clickable="true" bounds="[40,600][1040,900]">` +
+      `<node text="localhost" class="android.widget.EditText" clickable="true" focusable="true" bounds="[60,760][1000,860]" />` +
+      `</node>` +
+      `</node>` +
+      `</hierarchy>`;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const { registry } = makeMockRegistry({ android });
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
+      {},
+      { udid: ANDROID_SERIAL, query: "localhost", by: "any", action: "get-text", index: 0 }
+    );
+    expect(result.matchCount).toBe(2);
+    // Card is topmost (y ≈ 0.25) → index 0 is the card (wider frame), not the input.
+    expect(result.match!.frame.width).toBeCloseTo(1000 / 1080, 2);
+    expect(result.note).toMatch(/topmost in reading order/i);
+  });
+
+  // ── M2: find is read-only on a TV target ──
+  it("rejects an acting action on a tvOS target without mutating anything", async () => {
+    vi.mocked(isTvOsSimulator).mockResolvedValueOnce(true);
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Field", value: "abc", frame: FRAME, traits: ["textfield"] }]),
+    ]);
+    const { tool, invocations } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Field", by: "label", action: "fill", text: "new", index: 0 }
+    );
+    expect(result.found).toBe(false);
+    expect(result.matchCount).toBe(0);
+    expect(result.note).toMatch(/read-only on TV|tv-remote/i);
+    // Nothing was tapped or typed — the field is never focused or backspaced.
+    expect(invocations).toHaveLength(0);
+    expect(isTvOsSimulator).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an acting action on an Android TV target without mutating anything", async () => {
+    vi.mocked(isAndroidTv).mockResolvedValueOnce(true);
+    const { registry, invocations } = makeMockRegistry({});
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
+      {},
+      { udid: ANDROID_SERIAL, query: "Sign in", by: "text", action: "tap", index: 0 }
+    );
+    expect(result.found).toBe(false);
+    expect(result.note).toMatch(/TV/);
+    expect(result.note).toMatch(/tv-remote/i);
+    expect(invocations).toHaveLength(0);
+    expect(isAndroidTv).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a read-only action on an Android TV target (find is read-only, not blocked, on TV)", async () => {
+    // A read-only find never touches the D-pad, so it is NOT rejected on TV — only
+    // the acting actions are. get-text works on a TV target as on a phone.
+    vi.mocked(isAndroidTv).mockResolvedValue(true);
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<hierarchy rotation="0">` +
+      `<node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">` +
+      `<node text="Now Playing" class="android.widget.TextView" bounds="[60,300][900,380]" />` +
+      `</node>` +
+      `</hierarchy>`;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const { registry, invocations } = makeMockRegistry({ android });
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
+      {},
+      { udid: ANDROID_SERIAL, query: "Now Playing", by: "text", action: "get-text", index: 0 }
+    );
+    expect(result.found).toBe(true);
+    expect(result.actionResult).toMatchObject({ kind: "get-text", text: "Now Playing" });
+    // A read-only action is never rejected as an unsupported TV action.
+    expect(result.note ?? "").not.toMatch(/read-only on TV|cannot .*get-text/i);
+    expect(invocations).toHaveLength(0); // no device effect for a read
+    vi.mocked(isAndroidTv).mockResolvedValue(false); // restore default
+  });
+
+  // ── T3: the tvOS verdict is resolved ONCE, before the poll clock ──
+  it("resolves the tvOS verdict once across a polling wait, not per fetch", async () => {
+    const { api, calls } = makeSequencedAXService([
+      axResponse([]),
+      axResponse([{ label: "Loaded", frame: FRAME, traits: [] }]),
+    ]);
+    const { tool } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        query: "Loaded",
+        by: "label",
+        action: "wait",
+        index: 0,
+        timeoutMs: 2000,
+        pollIntervalMs: 10,
+      }
+    );
+    expect(result.found).toBe(true);
+    expect(calls()).toBeGreaterThan(1); // several fetches …
+    expect(isTvOsSimulator).toHaveBeenCalledTimes(1); // … but one tvOS probe
+  });
+
+  // ── T1: discovery-loop non-happy paths (slow / hung / aborted fetch) ──
+  const hangingAX = (): AXServiceApi => ({
+    degraded: false,
+    describe: () => new Promise<never>(() => {}), // never resolves
+    alertCheck: async () => false,
+    ping: async () => true,
+  });
+
+  it("bounds a single hung fetch to the wait budget instead of blocking forever", async () => {
+    const { tool } = iosTool(hangingAX());
+    const startedAt = Date.now();
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        query: "Nope",
+        by: "label",
+        action: "wait",
+        index: 0,
+        timeoutMs: 80,
+        pollIntervalMs: 10,
+      }
+    );
+    expect(result.found).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(result.note).toMatch(/did not complete within/i);
+  });
+
+  it("a final fetch straddling the deadline still yields the tree-based note, not a fetch failure", async () => {
+    // First poll returns a usable (empty) tree; later polls hang. The loop must
+    // give up at the deadline and, because it already read the screen, report the
+    // normal "no element matched" — NOT "did not complete" (reserved for never
+    // having read the screen at all).
+    let i = 0;
+    const api: AXServiceApi = {
+      degraded: false,
+      describe: () =>
+        i++ === 0 ? Promise.resolve(axResponse([])) : new Promise<never>(() => {}),
+      alertCheck: async () => false,
+      ping: async () => true,
+    };
+    const { tool } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        query: "Nope",
+        by: "label",
+        action: "wait",
+        index: 0,
+        timeoutMs: 120,
+        pollIntervalMs: 30,
+      }
+    );
+    expect(result.found).toBe(false);
+    expect(result.note).toMatch(/no element matched/i);
+    expect(result.note ?? "").not.toMatch(/did not complete/i);
+  });
+
+  it("aborts promptly while a fetch is in flight (settleWithin's aborted branch)", async () => {
+    // The fetch never resolves, so the abort is observed by settleWithin mid-fetch
+    // — not by sleepOrAbort between polls (the existing abort test covers that).
+    const { tool } = iosTool(hangingAX());
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 30);
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        query: "Nope",
+        by: "label",
+        action: "wait",
+        index: 0,
+        timeoutMs: 5000,
+        pollIntervalMs: 10,
+      },
+      { signal: controller.signal } as never
+    );
+    expect(result.found).toBe(false);
+    expect(result.note).toMatch(/cancel/i);
+    expect(result.elapsed).toBeLessThan(2000);
+  });
+
+  // ── T2: the poll-sleep is clamped to the deadline ──
+  it("clamps the poll sleep to the deadline so a large pollIntervalMs can't overshoot timeoutMs", async () => {
+    // Element never appears; pollIntervalMs (1000) dwarfs timeoutMs (100). Without
+    // the clamp the first sleep would run the full 1000ms past the single second
+    // poll. With the clamp, elapsed lands just past the 100ms deadline.
+    const { api } = makeSequencedAXService([axResponse([])]);
+    const { tool } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        query: "Never",
+        by: "label",
+        action: "wait",
+        index: 0,
+        timeoutMs: 100,
+        pollIntervalMs: 1000,
+      }
+    );
+    expect(result.found).toBe(false);
+    expect(result.elapsed).toBeGreaterThanOrEqual(100);
+    expect(result.elapsed).toBeLessThan(600);
+  });
+
+  // ── T4: `type` bails on a mid-settle abort before entering text ──
+  it("aborts a `type` during the focus settle, before any keystroke", async () => {
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Email", frame: FRAME, traits: ["textfield"] }]),
+    ]);
+    const { tool, invocations } = iosTool(api);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 20); // fires during the ~150ms iOS settle
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Email", by: "label", action: "type", text: "hi", index: 0 },
+      { signal: controller.signal } as never
+    );
+    // Located and focus-tapped, then cancelled before typing: found:true with an
+    // accurate note, and crucially NO text entered.
+    expect(result.found).toBe(true);
+    expect(result.match).toBeDefined();
+    expect(result.note).toMatch(/cancel/i);
+    expect(result.note).toMatch(/no text was entered/i);
+    expect(keyboardCalls(invocations)).toHaveLength(0);
+  });
+
+  // ── T5: matchCount counts all matches for reads, visible-only for taps ──
+  it("counts zero-area matches for read-only actions but not for tapping ones", async () => {
+    const mixedTree = {
+      role: "html",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        { role: "div", label: "Row", frame: { x: 0.1, y: 0.2, width: 0.5, height: 0.05 }, children: [] },
+        { role: "div", label: "Row", frame: { x: 0.1, y: 0.4, width: 0, height: 0 }, children: [] },
+      ],
+    };
+    const read = createFindTool(makeMockRegistry({}).registry);
+    const readResult = await read.execute(
+      { chromium: makeChromiumApi(mixedTree) },
+      { udid: CHROMIUM_ID, query: "Row", by: "label", action: "get-text", index: 0 }
+    );
+    // get-text pool = ALL matches (the zero-area one included) → 2
+    expect(readResult.matchCount).toBe(2);
+    expect((readResult.actionResult as { text: string }).text).toBe("Row");
+
+    const tapTool = createFindTool(makeMockRegistry({}).registry);
+    const tapResult = await tapTool.execute(
+      { chromium: makeChromiumApi(mixedTree) },
+      { udid: CHROMIUM_ID, query: "Row", by: "label", action: "tap", index: 0 }
+    );
+    // tap pool = VISIBLE matches only → 1 (the zero-area one is excluded)
+    expect(tapResult.matchCount).toBe(1);
   });
 
   // ── Schema ──
