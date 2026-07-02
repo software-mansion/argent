@@ -471,35 +471,17 @@ function computeNodeOutput(
     label = "[password]";
   }
 
-  // A resource-id is still worth keeping even with no label — dropping it
-  // silently here is the same class of bug as the collapse cases below fixed
-  // (a decorative-looking wrapper can still be a real, agent-addressable
-  // target via its identifier alone). Only pass straight through when there's
-  // truly no identifying info at all.
-  const identifier = attrs["resource-id"];
-
-  // Decorative ImageView (no clickable, no label, no id) — drop, pass through
-  // any surviving descendants. Most decorative images have zero kept children
+  // Decorative ImageView (no clickable, no label) — drop, pass through any
+  // surviving descendants. Most decorative images have zero kept children
   // and the entire branch evaporates.
-  if (cls.endsWith(".ImageView") && !interactive && !label && !identifier) {
+  if (cls.endsWith(".ImageView") && !interactive && !label) {
     return keptChildren;
   }
 
   // Layout container with no own info — pass children through. With
   // --compressed dumps this is what flattens FrameLayout > LinearLayout >
-  // ConstraintLayout chains down to their actual content. Keeping such a
-  // container just because it carries a resource-id would re-inflate the tree
-  // the v2 trim exists to shrink AND break the duplicate-wrapper collapse
-  // below (an id-bearing, non-clickable middle container stops a clickable
-  // parent from collapsing onto its clickable child). So still pass through —
-  // but don't silently lose the id: propagate it onto a lone surviving child
-  // that has none, so a container-only identifier stays addressable. With 0 or
-  // 2+ kept children there is no single target, so the scaffolding id is
-  // dropped, exactly as it was before id-preservation was added.
+  // ConstraintLayout chains down to their actual content.
   if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label) {
-    if (identifier && keptChildren.length === 1 && !keptChildren[0]!.identifier) {
-      keptChildren[0]!.identifier = identifier;
-    }
     return keptChildren;
   }
 
