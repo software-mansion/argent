@@ -297,6 +297,30 @@ describe("diffPngFiles", () => {
       })
     );
   });
+
+  it("hands OCR the normalized images, not the raw decoded ones (diffPngFiles wiring)", async () => {
+    // Same 2:1 aspect, different resolution: normalizeToCommonSize downscales the
+    // larger baseline (480x240) to the current's size (240x120). The OCR/font pass
+    // rescales its text bounds into that shared 240x120 space, so it must also be
+    // handed the NORMALIZED images to crop from. Feeding it the raw decoded
+    // baseline (480x240) instead would crop the wrong region while the bounds are
+    // already normalized. Pin that baselineImage/currentImage carry the normalized
+    // dimensions; the raw baseline would surface here as width 480 / height 240.
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 480, 240, { r: 0, g: 0, b: 0 });
+    await writePng(currentPath, 240, 120, { r: 0, g: 0, b: 0 });
+
+    await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+    expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baselineImage: expect.objectContaining({ width: 240, height: 120 }),
+        currentImage: expect.objectContaining({ width: 240, height: 120 }),
+      })
+    );
+  });
 });
 
 async function makeTempDir(): Promise<string> {
