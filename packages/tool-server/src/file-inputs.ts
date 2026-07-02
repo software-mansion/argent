@@ -172,8 +172,9 @@ async function resolveOne(
     await execFileAsync("tar", ["-xzf", entry.tarPath, "-C", extractDir]);
     await rm(entry.tarPath, { force: true }).catch(() => {});
     // The client tars a single top-level member named after the path's basename.
-    // Prefer that exact entry — readdir order isn't guaranteed and sidecar files
-    // (e.g. macOS "._" AppleDouble) may extract alongside it.
+    // Match it exactly (readdir order is unspecified), falling back to the first
+    // real entry when the name doesn't survive the round-trip (e.g. unicode
+    // NFC/NFD normalization).
     const entries = await readdir(extractDir);
     const expected = basename(wire.path);
     const uploaded = entries.find((e) => e === expected) ?? entries.find((e) => !e.startsWith("._"));

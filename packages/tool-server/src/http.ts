@@ -277,7 +277,9 @@ export function isWebsocketUpgradeAllowed(
   return true;
 }
 
-const UPLOAD_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// The tool call that consumes an upload arrives right after it (same client
+// invocation), so the TTL only has to outlive that gap — generously.
+const UPLOAD_TTL_MS = 15 * 60 * 1000; // 15 minutes
 // Bounds the tar-upload so a bad client can't fill the host disk.
 const MAX_UPLOAD_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 
