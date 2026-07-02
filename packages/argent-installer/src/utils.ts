@@ -297,6 +297,7 @@ export function readJsonc(filePath: string): Record<string, unknown> {
  * when there are no comments to preserve.
  */
 export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unknown): void {
+  const existedBefore = fs.existsSync(filePath);
   const { text: initial, hadBom } = readJsoncFileRaw(filePath);
   let text = setJsoncIn(initial, jsonPath, value);
 
@@ -317,7 +318,12 @@ export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unkno
   }
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, (hadBom ? "﻿" : "") + text);
+  // A freshly-created config gets a trailing newline, matching writeJson/TOML
+  // (POSIX text-file convention, avoids a git "\ No newline at end of file").
+  // An existing file's own EOL/formatting is preserved untouched — setJsoncIn
+  // edits in place — so only append when the file did not exist before.
+  const out = !existedBefore && !text.endsWith("\n") ? text + "\n" : text;
+  fs.writeFileSync(filePath, (hadBom ? "﻿" : "") + out);
 }
 
 // ── Directory helpers ─────────────────────────────────────────────────────────

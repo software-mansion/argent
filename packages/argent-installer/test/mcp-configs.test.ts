@@ -372,6 +372,17 @@ describe("Zed adapter", () => {
     expect(readJsoncFile(configPath)).not.toHaveProperty("context_servers");
   });
 
+  it("writes a freshly-created JSONC config with a trailing newline", () => {
+    // No pre-existing file: editJsoncFile creates it. Like writeJson/TOML, a
+    // freshly-created config must end with a newline (POSIX convention; avoids a
+    // git "\\ No newline at end of file" and satisfies newline-requiring linters).
+    const configPath = path.join(tmpDir, ".zed", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+    const text = fs.readFileSync(configPath, "utf8");
+    expect(text.endsWith("\n")).toBe(true);
+    expect(readJsoncFile(configPath).context_servers).toHaveProperty("argent");
+  });
+
   it("removes the file when only the argent key was present", () => {
     const configPath = path.join(tmpDir, ".zed", "settings.json");
     adapter.write(configPath, getMcpEntry());
