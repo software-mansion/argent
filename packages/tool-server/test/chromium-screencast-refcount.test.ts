@@ -180,4 +180,57 @@ describe("ScreencastManager recovers after a failed start", () => {
     await b.stop();
     expect(stopCount()).toBe(1);
   });
+
+  it("a joiner on a succeeding in-flight start shares one screencast and stops it once on the last drop", async () => {
+    // Happy-path counterpart to "does not strand a concurrent joiner when the
+    // owner's start rejects": the owner's Page.startScreencast is gated so a
+    // joiner enters while it is in flight, then the start SUCCEEDS. Both callers
+    // must take a refcount (active count 2) off a SINGLE Page.startScreencast,
+    // and on teardown Page.stopScreencast must fire exactly once — on the last
+    // drop, not per session and not before the final consumer leaves.
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    const send = vi.fn(async (method: string) => {
+      if (method === "Page.startScreencast") {
+        calls += 1;
+        if (calls === 1) await firstGate;
+      }
+      return {};
+    });
+    const cdp = { events: new TypedEventEmitter(), send } as never;
+    const mgr = new ScreencastManager(
+      cdp,
+      new TypedEventEmitter() as never,
+      { recordFrame: () => {} } as never
+    );
+    // activeCount is a compile-time `private`; read it through a cast to assert
+    // the refcount transitions directly (0 → 2 → 1 → 0).
+    const activeCount = () => (mgr as unknown as { activeCount: number }).activeCount;
+    const startCount = () => send.mock.calls.filter((c) => c[0] === "Page.startScreencast").length;
+    const stopCount = () => send.mock.calls.filter((c) => c[0] === "Page.stopScreencast").length;
+
+    const owner = mgr.start(); // owner: startScreencast is in flight (gated)
+    const joiner = mgr.start(); // joiner: enters while the owner's start is in flight
+    await Promise.resolve();
+    releaseFirst(); // the owner's start now succeeds
+    const ownerSession = await owner;
+    const joinerSession = await joiner;
+
+    // Both callers acquired off a single Page.startScreencast.
+    expect(startCount()).toBe(1);
+    expect(activeCount()).toBe(2);
+
+    // First drop: refcount falls to 1, Page.stopScreencast must NOT fire yet.
+    await ownerSession.stop();
+    expect(activeCount()).toBe(1);
+    expect(stopCount()).toBe(0);
+
+    // Last drop: refcount hits 0, Page.stopScreencast fires exactly once.
+    await joinerSession.stop();
+    expect(activeCount()).toBe(0);
+    expect(stopCount()).toBe(1);
+  });
 });
