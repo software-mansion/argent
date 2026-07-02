@@ -1785,6 +1785,51 @@ describe("installer preserves foreign MCP config", () => {
     });
   }
 
+  // Defect B's REMOVE side: the write-preservation tests above only prove
+  // `write` keeps comments/foreign servers. Uninstall (`remove`) must ALSO keep
+  // them — a full argent install→uninstall round-trip on a hand-commented JSONC
+  // file must leave the user's comment and foreign server byte-intact and the
+  // file on disk (it still has a foreign server), with only argent gone.
+  it("VS Code remove preserves a comment and a foreign server (uninstall round-trip)", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const configPath = path.join(dir, ".vscode", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      `{\n  // my own MCP server, do not touch\n  "servers": { "myserver": { "type": "stdio", "command": "my-bin", "args": ["x"] } }\n}`
+    );
+    adapter.write(configPath, getMcpEntry());
+    expect(adapter.remove(configPath)).toBe(true);
+    const raw = fs.readFileSync(configPath, "utf8");
+    expect(raw).toContain("// my own MCP server, do not touch");
+    const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
+    expect(after.servers).not.toHaveProperty("argent");
+    expect(after.servers).toHaveProperty("myserver");
+    expect(fs.existsSync(configPath)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+    it(`${name} remove preserves a comment and a foreign server (uninstall round-trip)`, () => {
+      const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+      const configPath = path.join(dir, "mcp.json");
+      fs.writeFileSync(
+        configPath,
+        `{\n  // my own MCP server, do not touch\n  "mcpServers": { "myserver": { "command": "my-bin", "args": ["x"] } }\n}`
+      );
+      adapter.write(configPath, getMcpEntry());
+      expect(adapter.remove(configPath)).toBe(true);
+      const raw = fs.readFileSync(configPath, "utf8");
+      expect(raw).toContain("// my own MCP server, do not touch");
+      const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
+      expect(after.mcpServers).not.toHaveProperty("argent");
+      expect(after.mcpServers).toHaveProperty("myserver");
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  }
+
   it("Codex remove keeps an unrelated server's empty args and a sibling empty table (TOML)", () => {
     // Same "only touch argent" contract as the JSON adapters above, but for the
     // TOML-backed Codex config: writeTomlOrRemove used to deep-prune the whole
