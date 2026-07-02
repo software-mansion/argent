@@ -110,6 +110,11 @@ async function walkDom(root: FakeEl): Promise<DescribeNode> {
     cdp: {
       send: async (method: string, params?: { expression?: string }) => {
         if (method !== "Runtime.evaluate" || !params?.expression) return {};
+        // Intentional: this test harness evaluates describeChromium's own page-eval
+        // expression against injected fake DOM globals — the whole point is to run
+        // that script string in-process. The input is our own constant, not
+        // attacker-controlled, so the implied-eval rule doesn't apply here.
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval
         const run = new Function(
           "window",
           "document",
