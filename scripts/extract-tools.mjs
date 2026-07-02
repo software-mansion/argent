@@ -23,6 +23,14 @@ const toolsRoot = join(__dir, "..", "packages", "tool-server", "src", "tools");
 // é) is left as-is rather than guessed at.
 const UNESCAPE_MAP = { n: "\n", r: "\r", t: "\t", 0: "\0" };
 
+// Sticky matcher for the `description:` key, anchored per candidate position so
+// resolving it costs no per-character substring allocation (see findOwnDescriptionValue).
+const DESCRIPTION_KEY = /description:\s*/y;
+
+// Sticky matcher for an `id: "..."` string literal, anchored at a known
+// code-context position (see findIdLiteralsInCode).
+const ID_LITERAL = /id:\s*["']([^"']+)["']/y;
+
 function walk(dir) {
   const entries = [];
   for (const name of readdirSync(dir)) {
@@ -99,11 +107,67 @@ function findOwnDescriptionValue(afterId) {
       // word boundary before the token so `...Xdescription:` doesn't match
       !/[A-Za-z0-9_$]/.test(afterId[i - 1] ?? "")
     ) {
-      const kw = afterId.slice(i).match(/^description:\s*/);
-      if (kw) return afterId.slice(i + kw[0].length);
+      DESCRIPTION_KEY.lastIndex = i;
+      if (DESCRIPTION_KEY.test(afterId)) return afterId.slice(DESCRIPTION_KEY.lastIndex);
     }
   }
   return null;
+}
+
+/**
+ * Find every `id: "..."` string literal that occurs in CODE - never one inside a
+ * string, template literal, or comment.
+ *
+ * A raw global regex over the source matched `id:` tokens anywhere, so an `id:`
+ * appearing in a comment (e.g. a `// see id: "screenshot"` cross-reference) or in
+ * another tool's description text became a tool candidate. `findOwnDescriptionValue`
+ * then read the enclosing object's real `description:` and, via first-wins dedup,
+ * that spurious entry could silently overwrite a real tool's description in the
+ * downstream security scan. Lexing to code context first removes that whole class,
+ * and also skips non-id keys like `$id:` (the `$` fails the word-boundary check).
+ *
+ * @param {string} src
+ * @returns {{ id: string, end: number }[]}  end = index just past the matched literal
+ */
+function findIdLiteralsInCode(src) {
+  const out = [];
+  let quote = null; // active string/template delimiter, or null when in code
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quote !== null) {
+      if (ch === "\\")
+        i++; // skip the escaped character
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "/" && src[i + 1] === "/") {
+      const nl = src.indexOf("\n", i + 2);
+      if (nl === -1) break; // line comment runs to EOF
+      i = nl;
+      continue;
+    }
+    if (ch === "/" && src[i + 1] === "*") {
+      const end = src.indexOf("*/", i + 2);
+      if (end === -1) break; // unterminated block comment
+      i = end + 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    // A code-context `id:` token. The word-boundary check before it means
+    // `grid:`, `$id:`, `androidId:`, etc. are not mistaken for a tool id.
+    if (ch === "i" && !/[A-Za-z0-9_$]/.test(src[i - 1] ?? "")) {
+      ID_LITERAL.lastIndex = i;
+      const m = ID_LITERAL.exec(src);
+      if (m) {
+        out.push({ id: m[1], end: ID_LITERAL.lastIndex });
+        i = ID_LITERAL.lastIndex - 1; // resume just past the value (loop's i++ advances)
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -118,12 +182,7 @@ function findOwnDescriptionValue(afterId) {
 export function extractToolsFromSource(src, filePath = "<source>") {
   const tools = [];
 
-  // Iterate over every string-literal `id:` occurrence in the file.
-  const idPattern = /\bid:\s*["']([^"']+)["']/g;
-  let idMatch;
-  while ((idMatch = idPattern.exec(src)) !== null) {
-    const id = idMatch[1];
-
+  for (const { id, end } of findIdLiteralsInCode(src)) {
     // Resolve this tool's own `description:` at the SAME object level as its
     // `id:` (see findOwnDescriptionValue). Matching by brace scope - rather than
     // grabbing the nearest `description:` by raw position - means:
@@ -133,7 +192,7 @@ export function extractToolsFromSource(src, filePath = "<source>") {
     //   - the value is parsed to its actual closing delimiter, so long multi-line
     //     template literals are captured in full.
     // A null result means this `id:` is a nested object key, not a tool.
-    const value = findOwnDescriptionValue(src.slice(idMatch.index + idMatch[0].length));
+    const value = findOwnDescriptionValue(src.slice(end));
 
     let description = null;
     if (value !== null) {
@@ -149,13 +208,24 @@ export function extractToolsFromSource(src, filePath = "<source>") {
               ? value.match(/^'((?:[^'\\]|\\.)*)'/)
               : null;
       if (valueMatch) {
-        // Unescape the standard JS escapes so the description reads as the
-        // rendered string, not the source form — e.g. a template literal's
-        // literal "\n" must become an actual newline, not survive as a stray
-        // backslash-n in the extracted (and downstream security-scanned) text.
-        description = valueMatch[1]
-          .replace(/\\([`$\\'"nrt0])/g, (_m, ch) => UNESCAPE_MAP[ch] ?? ch)
-          .trim();
+        // The literal is only the whole description if nothing extends it. A
+        // trailing `+` (string concatenation) or an unescaped `${...}` in a
+        // template (runtime interpolation) means the rendered text isn't the
+        // captured literal alone - leave description null so it falls through to
+        // the loud warn-and-skip below rather than emitting a truncated string
+        // silently into the security scan.
+        const rest = value.slice(valueMatch[0].length).replace(/^\s+/, "");
+        const isConcatenation = rest.startsWith("+");
+        const hasInterpolation = delim === "`" && /\$\{/.test(valueMatch[1].replace(/\\./g, ""));
+        if (!isConcatenation && !hasInterpolation) {
+          // Unescape the standard JS escapes so the description reads as the
+          // rendered string, not the source form — e.g. a template literal's
+          // literal "\n" must become an actual newline, not survive as a stray
+          // backslash-n in the extracted (and downstream security-scanned) text.
+          description = valueMatch[1]
+            .replace(/\\([`$\\'"nrt0])/g, (_m, ch) => UNESCAPE_MAP[ch] ?? ch)
+            .trim();
+        }
       }
     }
 
@@ -166,12 +236,14 @@ export function extractToolsFromSource(src, filePath = "<source>") {
       });
     } else if (value !== null) {
       // A real tool: its `description:` was found at the right scope but the
-      // value couldn't be parsed. Don't drop it silently (that class of bug hid
-      // run-sequence from the scanner) - warn on stderr so the failure is
-      // visible, while keeping stdout valid JSON for the downstream
-      // `spidershield scan --tools-json` consumer.
+      // value is not a single string/template literal (a concatenation, a
+      // template with `${...}` interpolation, or a non-literal like a const
+      // reference), so its rendered text can't be captured statically. Don't
+      // drop it silently (that class of bug hid run-sequence from the scanner) -
+      // warn on stderr so the failure is visible, while keeping stdout valid
+      // JSON for the downstream `spidershield scan --tools-json` consumer.
       console.error(
-        `extract-tools: WARNING: tool "${id}" in ${filePath} has an id but no parseable description; skipping.`
+        `extract-tools: WARNING: tool "${id}" in ${filePath} has a description that is not a single string/template literal (concatenation, interpolation, or a non-literal value); skipping.`
       );
     } else {
       // value === null: no sibling `description:` was found before this id's
@@ -202,10 +274,17 @@ export function extractAllTools() {
     tools.push(...extractFromFile(f));
   }
 
-  // Deduplicate by name (take first occurrence)
+  // Deduplicate by name (take first occurrence). A same-name collision means a
+  // later tool's description never reaches the security scan; warn so that drop
+  // is loud rather than a silent scan-bypass (tool ids are meant to be unique).
   const seen = new Set();
   return tools.filter((t) => {
-    if (seen.has(t.name)) return false;
+    if (seen.has(t.name)) {
+      console.error(
+        `extract-tools: WARNING: duplicate tool id "${t.name}"; keeping the first occurrence and skipping the rest.`
+      );
+      return false;
+    }
     seen.add(t.name);
     return true;
   });
