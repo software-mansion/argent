@@ -104,13 +104,19 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
 
 async function tarball(sourcePath: string): Promise<string> {
   const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
-  await execFileAsync("tar", [
-    "-czf",
-    tarPath,
-    "-C",
-    path.dirname(sourcePath),
-    path.basename(sourcePath),
-  ]);
+  try {
+    await execFileAsync("tar", [
+      "-czf",
+      tarPath,
+      "-C",
+      path.dirname(sourcePath),
+      path.basename(sourcePath),
+    ]);
+  } catch (err) {
+    // `tar` can leave a partial archive the caller never sees — clean it up.
+    await rm(tarPath, { force: true }).catch(() => {});
+    throw err;
+  }
   return tarPath;
 }
 

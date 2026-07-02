@@ -171,4 +171,20 @@ describe("resolveFileInputs — tar-upload kind", () => {
       )
     ).rejects.toThrow(/was not found on the tool-server/);
   });
+
+  it("removes the uploaded tar even when extraction fails", async () => {
+    const corruptTar = path.join(tmpDir, "corrupt.tar.gz");
+    await fs.writeFile(corruptTar, "not a real gzip archive");
+    const uploadId = "test-upload-id-corrupt";
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: TAR_UPLOAD_SPEC },
+        { appPath: wire({ path: "/client/MyApp.app", uploadId }) },
+        (id) => (id === uploadId ? { tarPath: corruptTar } : undefined)
+      )
+    ).rejects.toThrow();
+
+    await expect(fs.stat(corruptTar)).rejects.toThrow(); // removed despite the failure
+  });
 });

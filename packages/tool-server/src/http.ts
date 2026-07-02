@@ -184,8 +184,10 @@ export interface HttpAppOptions {
    * opted into network exposure (and is warned at startup).
    */
   bindHost?: string;
-  /** Max bytes accepted by `POST /upload` (tar-upload inputs). Defaults to 2 GiB. */
+  /** Max bytes accepted by a single `POST /upload` (tar-upload inputs). Defaults to 2 GiB. */
   maxUploadBytes?: number;
+  /** Max total bytes of unconsumed uploads held on disk. Defaults to 8 GiB. */
+  maxPendingUploadBytes?: number;
   /** Optional telemetry hook for per-invocation platform/device metadata. */
   recordInvocation?: (toolInvocationId: string, meta: InvocationMeta) => () => void;
   /** Optional telemetry hook for HTTP failures that happen before registry invocation. */
@@ -280,8 +282,10 @@ export function isWebsocketUpgradeAllowed(
 // The tool call that consumes an upload arrives right after it (same client
 // invocation), so the TTL only has to outlive that gap — generously.
 const UPLOAD_TTL_MS = 15 * 60 * 1000; // 15 minutes
-// Bounds the tar-upload so a bad client can't fill the host disk.
+// Bounds a single tar-upload so a bad client can't fill the host disk.
 const MAX_UPLOAD_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
+// Bounds the total of unconsumed uploads, so many small ones can't do the same.
+const MAX_PENDING_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024; // 8 GiB
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
@@ -291,11 +295,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   app.use(express.json({ limit: "48mb" }));
 
   const maxUploadBytes = options?.maxUploadBytes ?? MAX_UPLOAD_STREAM_BYTES;
+  const maxPendingUploadBytes = options?.maxPendingUploadBytes ?? MAX_PENDING_UPLOAD_BYTES;
 
   // Pending tar-upload archives, keyed by uploadId. Consumed by the first tool
   // call that references them; the TTL sweeper clears orphans from aborted or
   // failed calls.
-  const uploads = new Map<string, UploadEntry & { expireAt: number }>();
+  const uploads = new Map<string, UploadEntry & { expireAt: number; bytes: number }>();
+  const pendingUploadBytes = (): number =>
+    [...uploads.values()].reduce((total, e) => total + e.bytes, 0);
   const uploadSweeper = setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of uploads) {
@@ -457,6 +464,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // (wrong Content-Type), so we pipe it straight to disk.
   app.post("/upload", (req: Request, res: Response) => {
     idleTimer.touch();
+    if (pendingUploadBytes() >= maxPendingUploadBytes) {
+      res.status(507).json({
+        error:
+          `Pending uploads exceed the ${bytesUtil(maxPendingUploadBytes, { unitSeparator: " " })} ` +
+          `storage limit; retry once earlier uploads are consumed.`,
+      });
+      return;
+    }
     const id = randomUUID();
     const tarPath = join(tmpdir(), `argent-upload-${id}.tar.gz`);
     const ws = createWriteStream(tarPath);
@@ -483,7 +498,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     });
     ws.on("finish", () => {
       if (res.headersSent) return;
-      uploads.set(id, { tarPath, expireAt: Date.now() + UPLOAD_TTL_MS });
+      uploads.set(id, { tarPath, expireAt: Date.now() + UPLOAD_TTL_MS, bytes: received });
       res.json({ uploadId: id });
     });
     ws.on("error", (err: Error) => abort(500, err.message));
@@ -806,7 +821,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
   return {
     app,
-    dispose: () => idleTimer.dispose(),
+    dispose: () => {
+      idleTimer.dispose();
+      clearInterval(uploadSweeper);
+      for (const entry of uploads.values()) rm(entry.tarPath, { force: true }).catch(() => {});
+      uploads.clear();
+    },
     getLastActivityAt: () => idleTimer.getLastActivityAt(),
     attachChromiumWebsockets: (httpServer: HttpServer) => {
       attachChromiumServerWebsocket(

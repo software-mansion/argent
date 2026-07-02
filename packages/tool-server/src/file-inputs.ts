@@ -169,8 +169,12 @@ async function resolveOne(
     }
     const extractDir = await mkdtemp(join(tmpdir(), "argent-tar-upload-"));
     tempDirs.push(extractDir);
-    await execFileAsync("tar", ["-xzf", entry.tarPath, "-C", extractDir]);
-    await rm(entry.tarPath, { force: true }).catch(() => {});
+    // The sweeper no longer owns this tar, so remove it even if extraction throws.
+    try {
+      await execFileAsync("tar", ["-xzf", entry.tarPath, "-C", extractDir]);
+    } finally {
+      await rm(entry.tarPath, { force: true }).catch(() => {});
+    }
     // The client tars a single top-level member named after the path's basename.
     // Match it exactly (readdir order is unspecified), falling back to the first
     // real entry when the name doesn't survive the round-trip (e.g. unicode

@@ -105,6 +105,41 @@ describe("POST /upload", () => {
     expect(res.body.error).toMatch(/exceeds/i);
   });
 
+  it("rejects new uploads once total pending storage exceeds the cap", async () => {
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { maxPendingUploadBytes: 4 });
+
+    const body = await tarballOf("MyApp.app", "app-bytes"); // well over 4 bytes
+    const first = await supertest(handle.app)
+      .post("/upload")
+      .set("Content-Type", "application/gzip")
+      .send(body);
+    expect(first.status).toBe(200);
+
+    const second = await supertest(handle.app)
+      .post("/upload")
+      .set("Content-Type", "application/gzip")
+      .send(body);
+    expect(second.status).toBe(507);
+    expect(second.body.error).toMatch(/pending uploads/i);
+  });
+
+  it("removes pending upload tars and stops the sweeper on dispose", async () => {
+    const body = await tarballOf("MyApp.app", "app-bytes");
+    const res = await supertest(handle.app)
+      .post("/upload")
+      .set("Content-Type", "application/gzip")
+      .send(body);
+    const tarFile = path.join(os.tmpdir(), `argent-upload-${res.body.uploadId}.tar.gz`);
+    expect(await fs.stat(tarFile)).toBeTruthy();
+
+    handle.dispose();
+
+    await vi.waitFor(async () => {
+      await expect(fs.stat(tarFile)).rejects.toThrow();
+    });
+  });
+
   it("discards the partial file when the client disconnects mid-upload", async () => {
     const uploadFiles = async (): Promise<Set<string>> => {
       const entries = await fs.readdir(os.tmpdir());
