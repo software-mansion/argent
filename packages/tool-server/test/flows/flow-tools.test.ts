@@ -682,6 +682,45 @@ describe("flow-execute", () => {
     });
   });
 
+  it("does NOT stop the flow when a recorded `exists` find returns found:false (a valid absent answer)", async () => {
+    // Mirror of the record-side test ("records an `exists` find that returns
+    // found:false"): on replay, `exists` reporting found:false is a successful
+    // "not present" answer, not a missed locate — isMissedFindResult exempts it,
+    // so the step is recorded normally and the flow continues to the next step.
+    // Guards against a regression that drops the `r.action === "exists"` check in
+    // flow-step-results.ts, which would abort replay of every recorded exists step.
+    const registry = createMockRegistry({
+      find: { result: { found: false, action: "exists", matchCount: 0 } },
+      tap: { result: { tapped: true } },
+    });
+    const runFlow = createRunFlowTool(registry);
+
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    const content = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "find", args: { query: "Spinner", by: "text", action: "exists" } },
+        { kind: "tool", name: "tap", args: { x: 0.5 } },
+      ],
+    });
+    await fs.writeFile(path.join(dir, "exists-false-replay.yaml"), content);
+
+    const result = await runFlow.execute({}, { name: "exists-false-replay", project_root: tmpDir });
+    assertFlowRunResult(result);
+
+    // Both steps run: the exists step is NOT an error, and the following tap fires.
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+    expect(result.steps).toHaveLength(2);
+    expect(result.steps[0]).toMatchObject({
+      kind: "tool",
+      tool: "find",
+      result: { found: false, action: "exists" },
+    });
+    expect(result.steps[0]).not.toHaveProperty("error");
+    expect(result.steps[1]).toMatchObject({ kind: "tool", tool: "tap", result: { tapped: true } });
+  });
+
   it("throws when flow file does not exist", async () => {
     const registry = createMockRegistry({});
     const runFlow = createRunFlowTool(registry);

@@ -472,7 +472,7 @@ describe("find tool", () => {
     // focus is biased to the trailing edge so the caret starts at the end, NOT
     // the centre where a mid-text caret could strand right-hand residue.
     expect(invocations[0]!.args).toMatchObject({ x: TRAILING.x, y: TRAILING.y });
-    expect((invocations[0]!.args.x as number)).toBeGreaterThan(CENTER.x);
+    expect(invocations[0]!.args.x as number).toBeGreaterThan(CENTER.x);
     expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "new" } });
   });
 
@@ -968,6 +968,45 @@ describe("find tool", () => {
     expect(isTvOsSimulator).toHaveBeenCalledTimes(1);
   });
 
+  it("allows a read-only action on a tvOS target (not rejected; returns a valid absent answer)", async () => {
+    // Symmetric with the Android-TV read-only test below: a read-only find never
+    // drives the D-pad, so it is NOT rejected on tvOS — only the acting actions
+    // are (the acting gate is `TAPPING_ACTIONS.has(action) && isTvOs`). The tvOS
+    // verdict is resolved UNCONDITIONALLY (find/index.ts:469), so this guards the
+    // read-only branch that the acting-reject test can't.
+    //
+    // Unlike Android TV (uiautomator serves a real tree), tvOS find goes through
+    // describeIos, whose iOS accessibility service does NOT serve the tvOS focus
+    // tree — it short-circuits to an EMPTY tree plus a TVOS_HINT pointing at
+    // `describe` + `tv-remote`. So a read-only find on tvOS resolves to a valid
+    // "not present" answer (found:false), never found:true. What matters here is
+    // that it is a normal read result carrying that hint — NOT the acting-on-TV
+    // rejection, and NOT a blind-read presenceUnknown (the empty tree WAS read).
+    vi.mocked(isTvOsSimulator).mockResolvedValueOnce(true);
+    // The AX response is irrelevant — describeIos short-circuits tvOS before the
+    // ax-service is even resolved — but iosTool needs some api.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Now Playing", frame: FRAME, traits: [] }]),
+    ]);
+    const { tool, invocations } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Now Playing", by: "text", action: "exists", index: 0 }
+    );
+    // A valid absent answer, not a rejection: exists ran and read the (empty) tree.
+    expect(result.found).toBe(false);
+    expect(result.matchCount).toBe(0);
+    // The empty tree WAS read, so this is a confirmed absence, not "couldn't check".
+    expect(result.presenceUnknown).toBeUndefined();
+    // Crucially: NOT rejected as an unsupported acting-on-TV action.
+    expect(result.note ?? "").not.toMatch(/read-only on TV|cannot `?exists`? on a TV/i);
+    // The note carries the tvOS hint, proving the tvOS describe path ran and the
+    // verdict was threaded through (rather than the normal AX path or a rejection).
+    expect(result.note).toMatch(/Apple TV|tvOS|tv-remote/i);
+    expect(invocations).toHaveLength(0); // no device effect for a read
+    expect(isTvOsSimulator).toHaveBeenCalledTimes(1); // the tvOS verdict was resolved
+  });
+
   it("rejects an acting action on an Android TV target without mutating anything", async () => {
     vi.mocked(isAndroidTv).mockResolvedValueOnce(true);
     const { registry, invocations } = makeMockRegistry({});
@@ -1072,8 +1111,7 @@ describe("find tool", () => {
     let i = 0;
     const api: AXServiceApi = {
       degraded: false,
-      describe: () =>
-        i++ === 0 ? Promise.resolve(axResponse([])) : new Promise<never>(() => {}),
+      describe: () => (i++ === 0 ? Promise.resolve(axResponse([])) : new Promise<never>(() => {})),
       alertCheck: async () => false,
       ping: async () => true,
     };
@@ -1171,7 +1209,12 @@ describe("find tool", () => {
       role: "html",
       frame: { x: 0, y: 0, width: 1, height: 1 },
       children: [
-        { role: "div", label: "Row", frame: { x: 0.1, y: 0.2, width: 0.5, height: 0.05 }, children: [] },
+        {
+          role: "div",
+          label: "Row",
+          frame: { x: 0.1, y: 0.2, width: 0.5, height: 0.05 },
+          children: [],
+        },
         { role: "div", label: "Row", frame: { x: 0.1, y: 0.4, width: 0, height: 0 }, children: [] },
       ],
     };

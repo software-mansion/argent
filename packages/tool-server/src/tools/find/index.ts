@@ -728,16 +728,27 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
             );
           const r = await typeText(registry, ctx, params.udid, params.text!);
           result.actionResult = { kind: "fill", typed: r.typed, keys: r.keys, backspacesSent };
-          // Surface any caveat that the clear may have left stale text behind, so
-          // the leftover-plus-new-text failure mode is never a silent success.
+          // Surface any caveat that the fixed-count clear may have gone wrong, so
+          // neither failure mode is ever a silent success. On Chromium the clear
+          // runs to the cap (the length is unknowable — see above), which is safe
+          // in BOTH directions only for an <input>/<textarea> or a contenteditable
+          // that is the whole editable host. It is NOT safe when the matched node
+          // is an inner block of a larger contenteditable: the trailing-edge focus
+          // parks the caret at that block's end, so backspacing past its start
+          // merges/deletes the PRECEDING block. We can't detect an ancestor
+          // contenteditable from the a11y snapshot, so we flag both directions
+          // (under-clear residue AND over-delete into adjacent content) rather than
+          // warning only about leftover text.
           const clearCaveats: string[] = [];
           if (lengthHidden) {
             clearCaveats.push(
               `on Chromium the field's current text is not reliably exposed by the DOM ` +
                 `accessibility snapshot (an input's live value is masked by a placeholder / ` +
                 `aria-label, and a contenteditable reports only its direct text nodes), so the ` +
-                `clear was sized to the ${MAX_CLEAR_CHARS}-char cap; a longer field may retain ` +
-                `text — verify it before relying on it.`
+                `clear was sized to the ${MAX_CLEAR_CHARS}-char cap: a longer field may retain ` +
+                `text, and — for an inner block of a multi-block rich-text editor — the ` +
+                `fixed-count backspaces can run past the block's start and delete into the ` +
+                `preceding block. Verify the field and the content around it before relying on it.`
             );
           } else if (knownLength > MAX_CLEAR_CHARS) {
             // Cap is measured against the field's real length, not length+buffer,
