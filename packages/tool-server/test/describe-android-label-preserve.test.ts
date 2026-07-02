@@ -73,4 +73,20 @@ describe("describe android collapse preserves label/identifier", () => {
     expect(roles).not.toContain("LinearLayout");
     expect(nodes.filter((n) => n.role === "StaticText")).toHaveLength(2);
   });
+
+  it("duplicate-wrapper collapse must NOT leak an outer password field's value", () => {
+    // Regression: the label fallback added to the duplicate-wrapper collapse
+    // copies the outer node's label onto the surviving child. When the outer
+    // node is a password field, that label is the secret — it must be redacted
+    // to "[password]" first, never carried through raw. (Redaction happens at
+    // the point the label is derived, so the collapse's early return can't
+    // bypass it.)
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>\n<hierarchy>\n  <node class="android.widget.EditText" bounds="[0,0][100,100]" clickable="true" password="true" text="hunter2">\n    <node class="android.view.View" bounds="[0,0][100,100]" clickable="true" text=""/>\n  </node>\n</hierarchy>`;
+    const nodes = flatten(parseUiAutomatorDump(xml, 100, 100));
+    const strings = nodes.flatMap((n) =>
+      [n.label, n.value, n.identifier].filter((s): s is string => !!s)
+    );
+    expect(strings.join(" | ")).not.toContain("hunter2");
+    expect(nodes.map((n) => n.label).filter(Boolean)).toContain("[password]");
+  });
 });

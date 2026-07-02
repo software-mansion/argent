@@ -313,6 +313,17 @@ function descendantText(parsed: ParsedXmlNode, maxChars = 120): string {
   const stack: ParsedXmlNode[] = [parsed];
   while (stack.length > 0) {
     const x = stack.pop()!;
+    // A password field's `text` is the secret. Never mine it — or its subtree —
+    // into a borrowed container label; this walk reads the raw XML and would
+    // otherwise bypass the "[password]" redaction the rest of the parser
+    // applies to a password node's own label. Substitute the redacted marker.
+    if (attrIsTrue(x.attrs, "password")) {
+      if (!seen.has("[password]")) {
+        seen.add("[password]");
+        parts.push("[password]");
+      }
+      continue;
+    }
     for (const k of ["text", "content-desc"] as const) {
       const v = (x.attrs[k] ?? "").trim();
       if (v && !seen.has(v)) {
@@ -451,6 +462,15 @@ function computeNodeOutput(
   const interactive = isInteractive(attrs);
   let label = labelOf(attrs);
 
+  // Password fields: keep the ref but never leak the value. Redact HERE, at the
+  // point the label is derived, not just before `makeUiNode` — the collapse
+  // sites below copy this node's `label` onto a surviving child and return
+  // early, so a late redaction would be bypassed and the secret would ride out
+  // on the collapsed tap target. Redacting at the source covers every path.
+  if (attrIsTrue(attrs, "password")) {
+    label = "[password]";
+  }
+
   // A resource-id is still worth keeping even with no label — dropping it
   // silently here is the same class of bug as the collapse cases below fixed
   // (a decorative-looking wrapper can still be a real, agent-addressable
@@ -530,11 +550,6 @@ function computeNodeOutput(
           !c.clickable
         )
     );
-  }
-
-  // Password fields: keep the ref but never leak the value.
-  if (attrIsTrue(attrs, "password")) {
-    label = "[password]";
   }
 
   const node = makeUiNode(attrs, deriveUiAutomatorRole(cls), bounds, label, keptChildren);
