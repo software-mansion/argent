@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import * as fs from "node:fs/promises";
+import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
@@ -102,5 +103,41 @@ describe("POST /upload", () => {
 
     expect(res.status).toBe(413);
     expect(res.body.error).toMatch(/exceeds/i);
+  });
+
+  it("discards the partial file when the client disconnects mid-upload", async () => {
+    const uploadFiles = async (): Promise<Set<string>> => {
+      const entries = await fs.readdir(os.tmpdir());
+      return new Set(entries.filter((e) => e.startsWith("argent-upload-")));
+    };
+    const before = await uploadFiles();
+
+    const server = handle.app.listen(0);
+    try {
+      const { port } = server.address() as { port: number };
+      await new Promise<void>((resolve) => {
+        const req = http.request({
+          port,
+          path: "/upload",
+          method: "POST",
+          headers: { "Content-Type": "application/gzip", "Content-Length": 1024 },
+        });
+        req.on("error", () => {});
+        req.write(Buffer.alloc(16)); // less than Content-Length, then vanish
+        setTimeout(() => {
+          req.destroy();
+          resolve();
+        }, 50);
+      });
+
+      // Cleanup is async — poll briefly for the partial file to disappear.
+      await vi.waitFor(async () => {
+        const after = await uploadFiles();
+        const leaked = [...after].filter((f) => !before.has(f));
+        expect(leaked).toEqual([]);
+      });
+    } finally {
+      server.close();
+    }
   });
 });

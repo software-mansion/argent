@@ -473,6 +473,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       }
     });
     req.pipe(ws);
+    // pipe() leaves ws open if the client disconnects mid-upload.
+    req.on("close", () => {
+      if (req.readableEnded) return;
+      ws.destroy();
+      rm(tarPath, { force: true }).catch(() => {});
+    });
     ws.on("finish", () => {
       if (res.headersSent) return;
       uploads.set(id, { tarPath, expireAt: Date.now() + UPLOAD_TTL_MS });

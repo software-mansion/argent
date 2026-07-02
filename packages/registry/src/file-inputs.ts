@@ -82,8 +82,8 @@ export interface FileInputWire {
  *                 `.vpkg`). Co-located: used in place. Remote: the client tars
  *                 the path, streams it to `POST /upload`, and sets `uploadId` on
  *                 the wire. The server extracts the archive to a temp dir and
- *                 passes the extracted path to the tool. Handles bundles too big
- *                 to travel as base64-in-JSON, of any size the disk allows.
+ *                 passes the extracted path to the tool. Handles bundles too
+ *                 big to travel as base64-in-JSON.
  */
 export type FileInputKind = "file" | "directory" | "probe" | "tar-upload";
 
