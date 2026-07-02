@@ -8,11 +8,18 @@ import type { ToolDefinition } from "@argent/registry";
  * the win32 row-matching can be unit-tested without a Windows host.
  *
  * Each row is `proto localAddr foreignAddr state pid`. A row matches when it is
- * a TCP row in the LISTENING state whose local address ends in `:<port>`. The
- * leading colon guards against `:18081` matching port 8081. UDP rows (4 columns,
- * no state) and ESTABLISHED/other states are skipped, and PIDs are deduplicated
- * — a listener bound on both IPv4 `0.0.0.0:<port>` and IPv6 `[::]:<port>`
- * reports the same PID on two rows.
+ * a TCP row whose local address ends in `:<port>` and whose FOREIGN address is a
+ * wildcard endpoint (`0.0.0.0:0` / `[::]:0` / `*:*`) — the locale-independent
+ * signature of a listener. The State column is deliberately NOT used: Windows
+ * localizes it (German "ABHÖREN", French "À L'ÉCOUTE"), so keying off the literal
+ * "LISTENING" silently matched nothing on a non-English host and stop-metro
+ * no-opped while Metro kept running. An ESTABLISHED/other-state connection always
+ * has a real remote endpoint in the foreign column, so the wildcard reliably
+ * separates the listener (which we kill) from the tool-server's own CDP client
+ * socket to Metro (which we must not). The leading colon guards against `:18081`
+ * matching port 8081. UDP rows (4 columns, no state) are skipped, and PIDs are
+ * deduplicated — a listener bound on both IPv4 `0.0.0.0:<port>` and IPv6
+ * `[::]:<port>` reports the same PID on two rows.
  */
 export function parseNetstatListeningPids(netstatOutput: string, port: number): number[] {
   const pids = new Set<number>();
@@ -20,10 +27,16 @@ export function parseNetstatListeningPids(netstatOutput: string, port: number): 
     const cols = line.trim().split(/\s+/);
     // cols: [proto, localAddr, foreignAddr, state, pid]
     if (cols.length < 5 || cols[0].toUpperCase() !== "TCP") continue;
-    if (cols[3].toUpperCase() !== "LISTENING") continue;
     // The colon guards against `:18081` matching port 8081.
     if (!cols[1].endsWith(`:${port}`)) continue;
-    const pid = parseInt(cols[4], 10);
+    // Identify a listener by its wildcard foreign endpoint (locale-independent),
+    // not the localized State text.
+    const foreign = cols[2];
+    if (foreign !== "*:*" && !foreign.endsWith(":0")) continue;
+    // PID is the trailing column. Read it from the end, not a fixed index — a
+    // localized State can span multiple whitespace-split tokens (French
+    // "À L'ÉCOUTE"), which would otherwise shift the PID column.
+    const pid = parseInt(cols[cols.length - 1], 10);
     if (!Number.isNaN(pid) && pid > 0) pids.add(pid);
   }
   return [...pids];

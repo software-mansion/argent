@@ -69,6 +69,28 @@ describe("parseNetstatListeningPids", () => {
     expect(parseNetstatListeningPids("\r\nActive Connections\r\n", 8081)).toEqual([]);
   });
 
+  it("matches listeners on a LOCALIZED (non-English) Windows host", () => {
+    // Windows localizes the State column, so keying off the literal "LISTENING"
+    // used to return [] on a German/French host and stop-metro silently no-opped.
+    // The wildcard foreign address (0.0.0.0:0 / [::]:0) still identifies the
+    // listener, while a localized ESTABLISHED row (real remote endpoint) is
+    // still correctly skipped.
+    const german = [
+      "  Proto  Lokale Adresse         Remoteadresse          Status          PID",
+      "  TCP    0.0.0.0:8081           0.0.0.0:0              ABHÖREN         1234",
+      "  TCP    [::]:8081              [::]:0                 ABHÖREN         5678",
+      "  TCP    127.0.0.1:8081         127.0.0.1:52345        HERGESTELLT     9999",
+    ].join("\r\n");
+    expect(parseNetstatListeningPids(german, 8081)).toEqual([1234, 5678]);
+
+    const french = [
+      "  Proto  Adresse locale         Adresse distante       État            PID",
+      "  TCP    0.0.0.0:8081           0.0.0.0:0              À L'ÉCOUTE       2468",
+      "  TCP    127.0.0.1:8081         127.0.0.1:60000        ESTABLISHED     9999",
+    ].join("\r\n");
+    expect(parseNetstatListeningPids(french, 8081)).toEqual([2468]);
+  });
+
   it("handles bare LF line endings as well as CRLF", () => {
     const netstat =
       "Proto Local Address Foreign Address State PID\n" +
