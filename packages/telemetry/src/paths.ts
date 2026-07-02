@@ -7,7 +7,12 @@ import { argentHomeDir, configFilePath } from "@argent/configuration-core";
 // already import from `./paths.js` keep working unchanged.
 export { argentHomeDir, configFilePath };
 
-/** Anonymous identity file (UUID v4, mode 0600, atomic create). */
+/**
+ * Anonymous identity file (mode 0600, atomic create). In steady state it holds
+ * the 64-hex host fingerprint (a one-way hash of stable hardware ids) used as
+ * the telemetry distinct_id; a dashed random UUID v4 is only the fallback shape
+ * kept when the fingerprint can't be resolved.
+ */
 export function identityFilePath(): string {
   return path.join(argentHomeDir(), "telemetry-id");
 }

@@ -10,8 +10,13 @@ import {
 } from "./posthog.js";
 import { sanitize } from "./sanitize.js";
 import { getBaseProps, type Runtime } from "./base-props.js";
-import { readOrCreateAnonId, peekAnonId } from "./identity.js";
-import { resolveHostFingerprint } from "./fingerprint.js";
+import {
+  readOrCreateAnonId,
+  scheduleFingerprintUpgrade,
+  warmIdentity,
+  peekAnonId,
+} from "./identity.js";
+import { resolveHostFingerprint, resolveHostFingerprintAsync } from "./fingerprint.js";
 import { isEnabled, writeConsentFlag, getConsentState } from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import { forget as forgetImpl, type ForgetOptions, type ForgetResult } from "./erasure.js";
@@ -75,6 +80,26 @@ function activeRuntime(): Runtime {
   return state?.runtime ?? "cli";
 }
 
+/**
+ * Establish the telemetry identity OFF the hot path, for a long-lived entry
+ * point (the tool-server) that must not pay a blocking fingerprint resolve on
+ * its request-accept path.
+ *
+ * Resolves the fingerprint asynchronously and persists it (or a fallback) before
+ * the caller advertises readiness, so the first tracked event and all inbound
+ * requests find the id already on disk — never triggering a synchronous spawn in
+ * `track()`'s accept-path callback. Respects consent: a disabled machine mints
+ * no identity. Best-effort — never throws.
+ */
+export async function warmTelemetryIdentity(): Promise<void> {
+  try {
+    if (!isEnabled()) return;
+    await warmIdentity(resolveHostFingerprintAsync);
+  } catch (err) {
+    emitDebugError("warmTelemetryIdentity failed", err);
+  }
+}
+
 function buildPayload(
   event: string,
   props: Record<string, unknown>
@@ -85,8 +110,9 @@ function buildPayload(
   // Lazy id creation: only on the first event we send. resolveHostFingerprint
   // is the single shared resolution point for every entry point (installer,
   // CLI, tool-server, MCP), so the distinct_id is a stable per-machine id
-  // everywhere — not only when the tool-server runs. Spawned at most once per
-  // process; memoized in identity.ts.
+  // everywhere — not only when the tool-server runs. The sync resolve here
+  // blocks only on the truly-fresh path (nothing on disk); a fallback id already
+  // on disk is served immediately and upgraded off the hot path below.
   let distinctId: string;
   try {
     distinctId = readOrCreateAnonId(resolveHostFingerprint);
@@ -94,6 +120,13 @@ function buildPayload(
     emitDebugError("buildPayload: identity creation failed", err);
     return null;
   }
+
+  // If we are emitting under a fallback id (the fingerprint wasn't resolved
+  // synchronously), converge on the deterministic fingerprint in the background
+  // — non-blocking, bounded, and self-healing for a long-lived process that
+  // started before the binary was warm. No-op once the fingerprint is
+  // established. Never throws.
+  scheduleFingerprintUpgrade(resolveHostFingerprintAsync);
 
   const base = getBaseProps(activeRuntime());
   const sanitized = sanitize(event, props);

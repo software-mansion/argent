@@ -15,18 +15,31 @@ import { argentHomeDir, identityFilePath } from "./paths.js";
 // v4 UUID), letting us skip re-spawning the binary once one is on disk.
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
-// In-memory cache of the resolved id. The anon id is stable once resolved, so
-// the long-lived tool-server (which calls this on every tracked event) avoids
-// re-reading the file — and re-spawning the fingerprint binary — each time.
-// Keyed by the resolved path so a process whose home dir changes (e.g. tests
-// scoping HOME) doesn't serve a stale id.
+// In-memory cache of the resolved id. Keyed by the resolved path so a process
+// whose home dir changes (e.g. tests scoping HOME) doesn't serve a stale id.
+// Only a FINGERPRINT id is authoritative here — a cached fallback is provisional
+// (a later async upgrade, or another process, may migrate the on-disk id to the
+// fingerprint), so readOrCreateAnonId re-reads disk rather than short-circuiting
+// on a cached fallback.
 let cached: { path: string; id: string } | null = null;
 
-// Memoize the fingerprint resolution (including a failed/absent one as null)
-// independently of the id cache, so the binary is spawned AT MOST ONCE per
-// process even if id-file persistence keeps failing (a broken ~/.argent would
-// otherwise re-enter readOrCreateAnonId — and re-spawn — on every event).
+// Memoize the SYNCHRONOUS fingerprint resolution (including a failed/absent one
+// as null), so the blocking binary spawn on the truly-fresh path happens AT MOST
+// ONCE per process even if id-file persistence keeps failing (a broken ~/.argent
+// would otherwise re-enter readOrCreateAnonId — and re-spawn — on every event).
 let fingerprintResolved: { value: string | null } | null = null;
+
+// Coordination for the NON-BLOCKING async upgrade (scheduleFingerprintUpgrade):
+// migrate a fallback id to the fingerprint in the background without ever
+// stalling the event loop. Bounded — at most one probe in flight, spaced by a
+// cooldown and capped — so a permanently-unfingerprintable binary can't spawn on
+// every event; once the cap is hit the process still adopts a fingerprint any
+// OTHER process migrates, via the cheap disk re-read in readOrCreateAnonId.
+let upgradeInFlight = false;
+let upgradeAttempts = 0;
+let upgradeLastAttemptMs = 0;
+const UPGRADE_COOLDOWN_MS = 60_000;
+const UPGRADE_MAX_ATTEMPTS = 3;
 
 /**
  * Resolve the anonymous telemetry id.
@@ -35,64 +48,75 @@ let fingerprintResolved: { value: string | null } | null = null;
  * one-way hash emitted by `simulator-server fingerprint`, used verbatim so
  * PostHog's native unique users == unique machines, stable across reinstalls.
  *
- * Fast path: once a fingerprint id is on disk, its 64-hex shape is
- * self-describing, so we return it WITHOUT re-spawning the fingerprint binary.
- * The binary is spawned only when no fingerprint id is stored yet — a fresh
- * install, or a legacy/random fallback id we then migrate. The persisted id
- * file is migrated to the fingerprint once, **locally only** (no PostHog
- * alias/$identify event is ever emitted).
+ * Blocking is confined to ONE path: the truly-fresh machine (nothing valid on
+ * disk yet), where the fingerprint is resolved SYNCHRONOUSLY so the very first
+ * event this machine ever sends already carries the stable id instead of a
+ * random fallback that later migrates (which would split the machine across two
+ * distinct_ids). That spawn happens at most once per process (memoized).
+ *
+ * Every other case returns WITHOUT a blocking spawn:
+ *  - a fingerprint id already on disk (or cached) → served directly (steady
+ *    state; also how a stuck long-lived process adopts a fingerprint another
+ *    process migrated — a cheap disk read);
+ *  - a fallback id already on disk → returned as-is; the caller separately kicks
+ *    off scheduleFingerprintUpgrade to migrate it in the background.
  *
  * Fallbacks (binary absent, command fails, no resolver injected): keep the
- * already-stored id, or mint a fresh random UUID. This function must never
- * throw on a fingerprint-resolution failure — telemetry stays best-effort.
+ * already-stored id, or mint a fresh random UUID. This function must never throw
+ * on a fingerprint-resolution failure — telemetry stays best-effort.
  */
 export function readOrCreateAnonId(resolveFingerprint?: () => string | null): string {
   const finalPath = identityFilePath();
-  if (cached && cached.path === finalPath) return cached.id;
+
+  // Fast path A: a cached FINGERPRINT id is authoritative — serve without
+  // touching disk. A cached FALLBACK is only provisional, so we do NOT
+  // short-circuit on it: we fall through to re-read disk so a fingerprint that
+  // an async upgrade or another process has since migrated is adopted.
+  if (cached && cached.path === finalPath && FINGERPRINT_PATTERN.test(cached.id)) {
+    return cached.id;
+  }
 
   const stored = tryReadId(finalPath);
 
-  // Fast path: a fingerprint id is already persisted. Its 64-hex shape is
-  // self-describing (the random fallback is a dashed v4 UUID), so it is the
-  // stable per-machine id and we return it WITHOUT spawning the fingerprint
-  // binary. This is the steady state on every run after the first, so
-  // short-lived CLI commands pay no per-run subprocess cost. Only the
-  // canonical LOWER-case form qualifies — our writers only ever persist
+  // Fast path B: a fingerprint id is already persisted. Its canonical 64-hex
+  // shape is self-describing (the random fallback is a dashed v4 UUID), so it is
+  // the stable per-machine id and we return it WITHOUT spawning the binary. Only
+  // the canonical LOWER-case form qualifies — our writers only ever persist
   // lower-case, so a mixed-case 64-hex value is an external write; it falls
-  // through to the resolve path below, which rewrites it to the true
-  // fingerprint (or keeps it verbatim as the fallback id when resolution
-  // fails) rather than serving a non-canonical id forever.
+  // through to the fallback path and the async upgrade rewrites it to canonical.
   if (stored && FINGERPRINT_PATTERN.test(stored)) {
     cached = { path: finalPath, id: stored };
     return stored;
   }
 
-  // No fingerprint id on disk yet (fresh install, or only a legacy/random
-  // fallback id): resolve the host fingerprint. This is the ONLY place the
-  // binary is spawned, at most once per process (memoized in
-  // resolveFingerprintOnce).
-  const target = resolveFingerprintOnce(resolveFingerprint);
-
-  if (target) {
-    // Fingerprint available. Persist it if the stored value differs (none yet,
-    // or a legacy random id we're migrating); idempotent once stored === target.
-    if (stored !== target) {
-      try {
-        writeIdFileAtomic(finalPath, target);
-      } catch {
-        // Persisting the migration failed (e.g. ENOSPC / read-only home). The
-        // fingerprint is stable, so we still return `target` in memory and stay
-        // consistent across this process; a later run retries the rewrite.
-      }
-    }
-    cached = { path: finalPath, id: target };
-    return target;
-  }
-
-  // No usable fingerprint: keep whatever is already on disk.
+  // A valid (non-fingerprint) fallback id is already on disk. We are already
+  // emitting under it, so there is no rush and no reason to pay a BLOCKING spawn
+  // here: return it now. The caller's scheduleFingerprintUpgrade migrates it to
+  // the fingerprint asynchronously, and the next call then hits fast path B.
+  // This is what keeps a machine with a legacy id, or a binary that can't
+  // fingerprint, from re-spawning and blocking on every process's first event.
   if (stored) {
     cached = { path: finalPath, id: stored };
     return stored;
+  }
+
+  // Truly fresh: nothing valid on disk (fresh install, or a corrupt/empty file).
+  // This is the ONLY place the fingerprint is resolved SYNCHRONOUSLY — the
+  // one-time cost, per machine, that lets the first-ever event carry the stable
+  // id. At most once per process (memoized in resolveFingerprintOnce).
+  const target = resolveFingerprintOnce(resolveFingerprint);
+  if (target) {
+    // Fingerprint available on a fresh machine: persist it. (stored is null here,
+    // so this always writes; idempotent once persisted on later runs.)
+    try {
+      writeIdFileAtomic(finalPath, target);
+    } catch {
+      // Persisting failed (e.g. ENOSPC / read-only home). The fingerprint is
+      // stable, so we still return `target` in memory and stay consistent across
+      // this process; a later run retries the rewrite.
+    }
+    cached = { path: finalPath, id: target };
+    return target;
   }
 
   // No fingerprint and no valid stored id: mint a random id. A corrupt / empty
@@ -107,10 +131,145 @@ export function readOrCreateAnonId(resolveFingerprint?: () => string | null): st
 }
 
 /**
- * Invoke the injected resolver at most once per process and cache the validated
- * fingerprint (or null). Returns the normalized (trimmed, lower-cased) 64-hex
- * fingerprint, or null when no resolver is injected, it throws/returns nothing,
- * or the value isn't a well-formed fingerprint.
+ * Kick off a NON-BLOCKING upgrade of a fallback id to the host fingerprint.
+ *
+ * Called on tracked events (after readOrCreateAnonId) so a process currently
+ * emitting under a fallback id — a legacy random id awaiting migration, a fresh
+ * machine whose truly-fresh sync resolve failed transiently, or a long-lived
+ * tool-server that started before the binary was warm — eventually converges on
+ * the deterministic fingerprint WITHOUT ever blocking the event loop. On success
+ * it migrates the on-disk id and updates the cache, so subsequent events use the
+ * fingerprint; **local only**, no PostHog alias/$identify is emitted.
+ *
+ * Directly fixes the divergence where a stuck long-lived process kept emitting a
+ * fallback while short-lived processes migrated the on-disk id to the
+ * fingerprint (two distinct_ids for one machine). Never throws.
+ *
+ * No-op when: no async resolver is injected, a fingerprint id is already
+ * established (cached or on disk), a probe is in flight, the cooldown has not
+ * elapsed, or the attempt cap is reached.
+ */
+export function scheduleFingerprintUpgrade(
+  resolveFingerprintAsync?: () => Promise<string | null>
+): void {
+  if (!resolveFingerprintAsync) return;
+  if (upgradeInFlight) return;
+
+  const finalPath = identityFilePath();
+
+  // Already have the fingerprint (cached or persisted) → nothing to upgrade.
+  if (cached && cached.path === finalPath && FINGERPRINT_PATTERN.test(cached.id)) return;
+  const stored = tryReadId(finalPath);
+  if (stored && FINGERPRINT_PATTERN.test(stored)) return;
+
+  if (upgradeAttempts >= UPGRADE_MAX_ATTEMPTS) return;
+  const now = Date.now();
+  if (upgradeAttempts > 0 && now - upgradeLastAttemptMs < UPGRADE_COOLDOWN_MS) return;
+
+  upgradeInFlight = true;
+  upgradeAttempts += 1;
+  upgradeLastAttemptMs = now;
+
+  // Wrap in Promise.resolve().then so a synchronous throw from the resolver is
+  // funnelled into .catch rather than escaping this function.
+  void Promise.resolve()
+    .then(() => resolveFingerprintAsync())
+    .then((raw) => {
+      const fp = normalizeFingerprint(raw);
+      if (fp) adoptFingerprint(fp);
+    })
+    .catch(() => {
+      /* best-effort: a failed probe just leaves the fallback in place */
+    })
+    .finally(() => {
+      upgradeInFlight = false;
+    });
+}
+
+/**
+ * Establish the id OFF the hot path, for a long-lived entry point (the
+ * tool-server) that must not pay a blocking resolve on its accept path.
+ *
+ * Resolves the fingerprint ASYNCHRONOUSLY (no event-loop stall) before the
+ * server advertises readiness. On success the fingerprint is persisted; on
+ * failure a fallback id is read or minted, so that by the time the first event
+ * fires the on-disk id already exists and readOrCreateAnonId never enters its
+ * synchronous truly-fresh resolve on the accept path. Returns the established id.
+ * Best-effort: the fingerprint resolve never throws, and the only remaining
+ * throw path is minting a fallback onto a wedged disk (ENOSPC/EROFS after
+ * retries) — the sole caller (warmTelemetryIdentity) catches it.
+ */
+export async function warmIdentity(
+  resolveFingerprintAsync?: () => Promise<string | null>
+): Promise<string> {
+  const finalPath = identityFilePath();
+
+  if (cached && cached.path === finalPath && FINGERPRINT_PATTERN.test(cached.id)) {
+    return cached.id;
+  }
+  const stored = tryReadId(finalPath);
+  if (stored && FINGERPRINT_PATTERN.test(stored)) {
+    cached = { path: finalPath, id: stored };
+    return stored;
+  }
+
+  if (resolveFingerprintAsync) {
+    let raw: string | null = null;
+    try {
+      raw = await resolveFingerprintAsync();
+    } catch {
+      raw = null;
+    }
+    const fp = normalizeFingerprint(raw);
+    if (fp) {
+      adoptFingerprint(fp);
+      return fp;
+    }
+  }
+
+  // No fingerprint yet: ensure SOME id exists on disk (fallback), without a
+  // blocking spawn — readOrCreateAnonId() with no sync resolver reads the stored
+  // fallback or mints a random one. The next tracked event then returns it via
+  // fast path (no truly-fresh resolve), and scheduleFingerprintUpgrade keeps
+  // retrying the fingerprint in the background.
+  return readOrCreateAnonId();
+}
+
+/** Validate and normalize a raw resolver output to a canonical 64-hex id. */
+function normalizeFingerprint(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const normalized = raw.trim().toLowerCase();
+  return FINGERPRINT_PATTERN.test(normalized) ? normalized : null;
+}
+
+/**
+ * Adopt a resolved fingerprint as the id: migrate the on-disk file to it (once,
+ * if it differs) and update the in-memory cache so subsequent reads serve it.
+ * The fingerprint is deterministic, so a rename-over race between processes is
+ * safe (all write the same value). Best-effort persistence — an unwritable home
+ * still yields a consistent in-memory id, and a later run retries the write.
+ */
+function adoptFingerprint(fp: string): void {
+  const finalPath = identityFilePath();
+  const stored = tryReadId(finalPath);
+  if (stored !== fp) {
+    try {
+      writeIdFileAtomic(finalPath, fp);
+    } catch {
+      /* keep the deterministic id in memory; a later run retries the rewrite */
+    }
+  }
+  cached = { path: finalPath, id: fp };
+  // A fingerprint in `cached` is authoritative (fast path A), so readOrCreateAnonId
+  // never re-reaches the sync resolver after this — no need to touch the
+  // truly-fresh `fingerprintResolved` memo here.
+}
+
+/**
+ * Invoke the injected SYNC resolver at most once per process and cache the
+ * validated fingerprint (or null). Returns the normalized (trimmed, lower-cased)
+ * 64-hex fingerprint, or null when no resolver is injected, it throws/returns
+ * nothing, or the value isn't a well-formed fingerprint.
  */
 function resolveFingerprintOnce(resolveFingerprint?: () => string | null): string | null {
   // No resolver -> nothing to spawn or cache; callers without the binary always
@@ -118,17 +277,13 @@ function resolveFingerprintOnce(resolveFingerprint?: () => string | null): strin
   if (!resolveFingerprint) return null;
   if (fingerprintResolved) return fingerprintResolved.value;
 
-  let value: string | null = null;
   let raw: string | null;
   try {
     raw = resolveFingerprint();
   } catch {
     raw = null;
   }
-  if (raw) {
-    const normalized = raw.trim().toLowerCase();
-    if (FINGERPRINT_PATTERN.test(normalized)) value = normalized;
-  }
+  const value = normalizeFingerprint(raw);
   fingerprintResolved = { value };
   return value;
 }
@@ -311,10 +466,13 @@ export function deleteAnonId(): void {
   }
 }
 
-/** Test seam: drop the in-memory id and fingerprint caches. */
+/** Test seam: drop the in-memory id, fingerprint, and async-upgrade state. */
 export function _resetIdentityCacheForTest(): void {
   cached = null;
   fingerprintResolved = null;
+  upgradeInFlight = false;
+  upgradeAttempts = 0;
+  upgradeLastAttemptMs = 0;
 }
 
 function tryReadId(filePath: string): string | null {

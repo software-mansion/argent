@@ -1,7 +1,13 @@
 import * as fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { scopeHome } from "./helpers.js";
-import { readOrCreateAnonId, deleteAnonId, _resetIdentityCacheForTest } from "../src/identity.js";
+import {
+  readOrCreateAnonId,
+  scheduleFingerprintUpgrade,
+  warmIdentity,
+  deleteAnonId,
+  _resetIdentityCacheForTest,
+} from "../src/identity.js";
 import { identityFilePath } from "../src/paths.js";
 
 // A plausible host fingerprint: 64 hex chars, as emitted by
@@ -11,6 +17,13 @@ const FP_OTHER = "b".repeat(64);
 const LEGACY_V4 = "11111111-1111-4111-8111-111111111111";
 
 const versionNibble = (uuid: string) => uuid[14];
+
+// Drain the background-upgrade promise chain (a few microtask hops plus a
+// macrotask), so an assertion can observe its on-disk migration.
+const flushUpgrade = async (): Promise<void> => {
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
 describe("identity – fingerprint-derived id", () => {
   const { tmp } = scopeHome();
@@ -40,17 +53,26 @@ describe("identity – fingerprint-derived id", () => {
     expect(id2).toBe(id1);
   });
 
-  it("migrates a legacy random id to the fingerprint id (local rewrite)", () => {
+  it("migrates a legacy random id to the fingerprint id via the background upgrade", async () => {
     fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
     fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
 
-    const id = readOrCreateAnonId(() => FP);
-    expect(id).not.toBe(LEGACY_V4);
-    expect(id).toBe(FP);
-    // The file on disk was rewritten to the new id.
-    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
+    // The synchronous read returns the legacy id immediately — NO blocking spawn,
+    // NO sync migration here (sync resolution is reserved for a truly-fresh
+    // machine so its first-ever event carries the stable id).
+    expect(readOrCreateAnonId(() => FP)).toBe(LEGACY_V4);
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(LEGACY_V4);
+
+    // The background upgrade migrates the file to the fingerprint, off the hot
+    // path (local rewrite only — no alias/$identify).
+    scheduleFingerprintUpgrade(() => Promise.resolve(FP));
+    await flushUpgrade();
+
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(FP);
     // Mode preserved at 0600.
     expect(fs.lstatSync(identityFilePath()).mode & 0o777).toBe(0o600);
+    // Subsequent reads now serve the fingerprint via the fast path.
+    expect(readOrCreateAnonId(() => FP)).toBe(FP);
   });
 
   it("keeps the stored id when the resolver returns null", () => {
@@ -118,16 +140,22 @@ describe("identity – fingerprint-derived id", () => {
     expect(resolver).not.toHaveBeenCalled();
   });
 
-  it("does not fast-path a non-canonical (upper-case) stored 64-hex id — resolves and rewrites", () => {
+  it("upgrades a non-canonical (upper-case) stored 64-hex id to the canonical fingerprint", async () => {
     // Our writers only persist lower-case, so an upper-case 64-hex value is an
-    // external write. It must not be served verbatim forever: the resolve path
-    // runs and rewrites the file to the canonical lower-case fingerprint.
+    // external write. It is not canonical, so it falls through the lower-case
+    // fast path and is served verbatim (no block); the background upgrade then
+    // rewrites the file to the canonical lower-case fingerprint.
     fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
     fs.writeFileSync(identityFilePath(), "A".repeat(64), { mode: 0o600 });
-    const resolver = vi.fn(() => FP);
-    expect(readOrCreateAnonId(resolver)).toBe(FP);
-    expect(resolver).toHaveBeenCalledTimes(1);
+
+    expect(readOrCreateAnonId(() => FP)).toBe("A".repeat(64));
+
+    scheduleFingerprintUpgrade(() => Promise.resolve(FP));
+    await flushUpgrade();
+
     expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(FP);
+    _resetIdentityCacheForTest();
+    expect(readOrCreateAnonId(() => FP)).toBe(FP);
   });
 
   it("self-heals a corrupt id file (no fingerprint) by minting a fresh 0600 random id", () => {
@@ -162,16 +190,11 @@ describe("identity – fingerprint-derived id", () => {
     expect(versionNibble(id)).toBe("4");
   });
 
-  it("converges on the deterministic id across independent resolves (idempotent migration)", async () => {
-    // readOrCreateAnonId is synchronous and memoizes via the module-level cache,
-    // so two Promise.resolve().then() calls would run serially and the second
-    // would trivially hit the cache without re-entering the migration path.
-    // Clear the cache between resolves so the second genuinely re-runs the
-    // migration decision as a separate process would, and spy on renameSync to
-    // prove the second resolve — seeing the fingerprint already stored — does NOT
-    // rewrite. The deterministic fingerprint value is exactly what makes
-    // concurrent migrators converge, so an independent second resolve must land
-    // on the same id.
+  it("converges on the deterministic id across independent upgrades (idempotent migration)", async () => {
+    // The migration now happens via the background upgrade. Spy on renameSync to
+    // prove the first upgrade rewrites the legacy id exactly once, and a second
+    // upgrade — seeing the fingerprint already stored — does NOT rewrite. The
+    // deterministic fingerprint value is what makes concurrent migrators converge.
     fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
     fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
 
@@ -189,14 +212,21 @@ describe("identity – fingerprint-derived id", () => {
     });
     try {
       const mod = await import("../src/identity.js");
-      const a = mod.readOrCreateAnonId(() => FP);
-      expect(a).toBe(FP);
-      expect(renameCount).toBe(1); // first resolve migrates the legacy id
+      // Sync read returns the legacy id (no migrate); the upgrade migrates it.
+      expect(mod.readOrCreateAnonId(() => FP)).toBe(LEGACY_V4);
+      expect(renameCount).toBe(0);
+      mod.scheduleFingerprintUpgrade(() => Promise.resolve(FP));
+      await flushUpgrade();
+      expect(renameCount).toBe(1); // first upgrade migrates the legacy id
+      expect(mod.readOrCreateAnonId(() => FP)).toBe(FP);
+
+      // A second, independent upgrade (as another process would run) sees the
+      // fingerprint already stored and does NOT rewrite.
       mod._resetIdentityCacheForTest();
-      const b = mod.readOrCreateAnonId(() => FP);
-      expect(b).toBe(a); // converges on the same deterministic id
+      mod.scheduleFingerprintUpgrade(() => Promise.resolve(FP));
+      await flushUpgrade();
       expect(renameCount).toBe(1); // idempotent: no second rewrite
-      expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(a);
+      expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(FP);
     } finally {
       vi.doUnmock("node:fs");
       vi.resetModules();
@@ -225,15 +255,22 @@ describe("identity – fingerprint migration rewrites", () => {
     });
     try {
       const mod = await import("../src/identity.js");
-      // First run: migrates (one rename).
-      const id = mod.readOrCreateAnonId(() => FP);
+      // First run: sync read returns legacy; the background upgrade migrates once.
+      expect(mod.readOrCreateAnonId(() => FP)).toBe(LEGACY_V4);
+      mod.scheduleFingerprintUpgrade(() => Promise.resolve(FP));
+      await flushUpgrade();
       expect(renameCount).toBe(1);
+      const id = mod.readOrCreateAnonId(() => FP);
+      expect(id).toBe(FP);
 
-      // Simulate a process restart: drop the in-memory cache, stored is now the
-      // v5 id, so a second resolve must NOT rewrite.
+      // Simulate a process restart: drop the in-memory cache; stored is now the
+      // fingerprint id, so a fresh read serves it (fast path) and the upgrade is
+      // a no-op — no second rewrite.
       mod._resetIdentityCacheForTest();
       const again = mod.readOrCreateAnonId(() => FP);
       expect(again).toBe(id);
+      mod.scheduleFingerprintUpgrade(() => Promise.resolve(FP));
+      await flushUpgrade();
       expect(renameCount).toBe(1);
     } finally {
       vi.doUnmock("node:fs");
@@ -259,12 +296,16 @@ describe("identity – fingerprint migration rewrites", () => {
     });
     try {
       const mod = await import("../src/identity.js");
+      // Sync read returns the legacy fallback (never throws).
+      expect(mod.readOrCreateAnonId(() => FP)).toBe(LEGACY_V4);
+      // The background upgrade resolves the fingerprint but the on-disk rewrite
+      // fails (read-only fs). It must still hold the deterministic id in memory,
+      // so subsequent reads are the fingerprint, not the legacy fallback.
+      mod.scheduleFingerprintUpgrade(() => Promise.resolve(FP));
+      await flushUpgrade();
       const id = mod.readOrCreateAnonId(() => FP);
-      // Never throws, returns the deterministic fingerprint id...
       expect(id).toBe(FP);
       expect(id).not.toBe(LEGACY_V4);
-      // ...and is consistent within the process via the in-memory cache.
-      expect(mod.readOrCreateAnonId(() => FP)).toBe(id);
     } finally {
       vi.doUnmock("node:fs");
       vi.resetModules();
@@ -389,5 +430,167 @@ describe("identity – fingerprint migration rewrites", () => {
       vi.doUnmock("node:fs");
       vi.resetModules();
     }
+  });
+});
+
+describe("identity – async fingerprint upgrade & recovery (review C1/C2)", () => {
+  const { tmp } = scopeHome();
+
+  it("adopts a fingerprint migrated to disk out-of-band, even after caching a fallback", () => {
+    // Exact reproduction of the reviewer's C2: a process resolves a fallback first
+    // (its resolve threw), caches it, then ANOTHER process writes the fingerprint
+    // to the id file. The next read must adopt the fingerprint — a cached fallback
+    // is provisional, so we re-read disk instead of serving the fallback forever
+    // (which would report the machine under two distinct_ids at once).
+    const first = readOrCreateAnonId(() => {
+      throw new Error("cold binary");
+    });
+    expect(versionNibble(first)).toBe("4"); // random v4 fallback
+    // A short-lived process migrates the on-disk id to the fingerprint.
+    fs.writeFileSync(identityFilePath(), FP, { mode: 0o600 });
+    // Same (long-lived) process, next event: adopts the fingerprint from disk
+    // WITHOUT re-spawning the binary — a cheap disk read.
+    expect(
+      readOrCreateAnonId(() => {
+        throw new Error("cold binary");
+      })
+    ).toBe(FP);
+  });
+
+  it("recovers a stuck fallback via the background upgrade, with no other process", async () => {
+    // Truly-fresh, first (sync) resolve fails transiently -> a random fallback is
+    // minted and emitted under. Later the binary is warm; the background upgrade
+    // resolves and migrates on its own, so a long-lived process converges without
+    // needing another process to migrate the file.
+    const fallback = readOrCreateAnonId(() => null);
+    expect(versionNibble(fallback)).toBe("4");
+
+    scheduleFingerprintUpgrade(() => Promise.resolve(FP));
+    await flushUpgrade();
+
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(FP);
+    expect(readOrCreateAnonId(() => null)).toBe(FP);
+  });
+
+  it("does not run the async upgrade when a fingerprint id is already stored", async () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), FP, { mode: 0o600 });
+    const asyncResolver = vi.fn(() => Promise.resolve(FP));
+    scheduleFingerprintUpgrade(asyncResolver);
+    await flushUpgrade();
+    expect(asyncResolver).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op without an injected async resolver", async () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
+    // No resolver -> nothing to spawn; the fallback stays in place, never throws.
+    scheduleFingerprintUpgrade();
+    await flushUpgrade();
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(LEGACY_V4);
+  });
+
+  it("swallows an async resolver that rejects and leaves the fallback intact", async () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
+    expect(readOrCreateAnonId(() => null)).toBe(LEGACY_V4);
+    scheduleFingerprintUpgrade(() => Promise.reject(new Error("spawn failed")));
+    await flushUpgrade();
+    // Never throws; the fallback id is untouched and a later probe may still win.
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(LEGACY_V4);
+    expect(readOrCreateAnonId(() => null)).toBe(LEGACY_V4);
+  });
+
+  it("runs at most one upgrade probe at a time (in-flight guard, independent of the cooldown)", async () => {
+    // Isolate the in-flight guard FROM the cooldown: a probe that never settles
+    // holds the in-flight slot; then advance Date PAST the cooldown so the
+    // cooldown gate would allow another probe — only the in-flight guard blocks
+    // it. (Deleting `if (upgradeInFlight) return;` makes the second call fire a
+    // probe → calls === 2.)
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+      fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
+      let calls = 0;
+      const neverSettles = () => {
+        calls += 1;
+        return new Promise<string | null>(() => {}); // stays in flight forever
+      };
+      const drainMicrotasks = async () => {
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      };
+      scheduleFingerprintUpgrade(neverSettles); // probe 1 takes the in-flight slot
+      await drainMicrotasks();
+      expect(calls).toBe(1);
+      vi.setSystemTime(Date.now() + 61_000); // cooldown elapsed
+      scheduleFingerprintUpgrade(neverSettles); // cooldown allows; in-flight must block
+      await drainMicrotasks();
+      expect(calls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gates back-to-back upgrade probes behind a cooldown (one probe per window)", async () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
+    const asyncResolver = vi.fn(() => Promise.resolve(null));
+    // Five tracked events in quick succession -> only ONE probe fires; the rest
+    // are gated by the cooldown, so a broken binary is not re-spawned per event.
+    for (let i = 0; i < 5; i++) {
+      scheduleFingerprintUpgrade(asyncResolver);
+      await flushUpgrade();
+    }
+    expect(asyncResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps async upgrade attempts so a permanently-broken binary stops re-probing", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+      fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
+      const asyncResolver = vi.fn(() => Promise.resolve(null));
+      // Six events, each past the cooldown window -> capped at 3 attempts.
+      for (let i = 0; i < 6; i++) {
+        scheduleFingerprintUpgrade(asyncResolver);
+        await flushUpgrade();
+        vi.setSystemTime(Date.now() + 61_000);
+      }
+      expect(asyncResolver).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("warmIdentity resolves and persists the fingerprint off the hot path", async () => {
+    const id = await warmIdentity(() => Promise.resolve(FP));
+    expect(id).toBe(FP);
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(FP);
+    // A subsequent tracked event finds the fingerprint already on disk (fast path).
+    expect(readOrCreateAnonId(() => FP)).toBe(FP);
+  });
+
+  it("warmIdentity mints a fallback when the fingerprint can't be resolved, so the accept path never blocks", async () => {
+    const id = await warmIdentity(() => Promise.resolve(null));
+    // Some id exists on disk now -> the first tracked event returns it via the
+    // fast path and never enters the synchronous truly-fresh resolve.
+    expect(versionNibble(id)).toBe("4");
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
+    expect(readOrCreateAnonId(() => null)).toBe(id);
+  });
+
+  it("warmIdentity keeps an already-stored fingerprint without re-resolving", async () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), FP, { mode: 0o600 });
+    const asyncResolver = vi.fn(() => Promise.resolve(FP_OTHER));
+    const id = await warmIdentity(asyncResolver);
+    expect(id).toBe(FP);
+    expect(asyncResolver).not.toHaveBeenCalled();
+  });
+
+  it("warmIdentity swallows a rejecting resolver and still establishes a fallback id", async () => {
+    const id = await warmIdentity(() => Promise.reject(new Error("no binary")));
+    expect(versionNibble(id)).toBe("4");
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
   });
 });

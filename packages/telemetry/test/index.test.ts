@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   _resetConsentCacheForTest,
   getConsentState,
   markDisabled,
   markEnabled,
+  writeConsentFlag,
+  warmTelemetryIdentity,
   forget,
   init,
   isEnabled,
@@ -13,9 +16,10 @@ import {
   track,
 } from "../src/index.js";
 import { resetClient } from "../src/posthog.js";
+import { _resetIdentityCacheForTest } from "../src/identity.js";
 import { _resetBasePropsCacheForTest } from "../src/base-props.js";
 import { scopeHome, snapshotEnv } from "./helpers.js";
-import { configFilePath } from "../src/paths.js";
+import { configFilePath, identityFilePath } from "../src/paths.js";
 
 const posthogMock = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -28,10 +32,13 @@ const posthogMock = vi.hoisted(() => ({
 }));
 
 // Telemetry resolves the host fingerprint internally for every entry point.
-// Stub it to a fixed 64-hex value so track() uses a deterministic id without
-// spawning the real simulator-server binary.
+// Stub both the sync and async resolvers to a fixed 64-hex value so track() uses
+// a deterministic id without spawning the real simulator-server binary. (The
+// async resolver backs the background upgrade / warm-up; with the fingerprint
+// resolved synchronously here it is a no-op, but the export must exist.)
 vi.mock("../src/fingerprint.js", () => ({
   resolveHostFingerprint: () => "f".repeat(64),
+  resolveHostFingerprintAsync: () => Promise.resolve("f".repeat(64)),
 }));
 
 vi.mock("posthog-node", () => {
@@ -50,7 +57,7 @@ vi.mock("posthog-node", () => {
 });
 
 describe("telemetry public surface", () => {
-  scopeHome();
+  const { tmp } = scopeHome();
 
   beforeEach(() => {
     posthogMock.instances.length = 0;
@@ -59,10 +66,27 @@ describe("telemetry public surface", () => {
     // is_ci and friends are memoized per process; reset so a test that sets CI
     // env vars sees them recomputed rather than a value cached by a prior test.
     _resetBasePropsCacheForTest();
+    // Isolate the module-level id / fingerprint / consent caches between tests.
+    _resetIdentityCacheForTest();
+    _resetConsentCacheForTest();
     (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "phc_real";
     init("tool_server");
     markEnabled();
   });
+
+  // Helpers for the identity-wiring tests below.
+  const idFile = () => path.join(tmp(), ".argent", "telemetry-id");
+  const readId = () => {
+    try {
+      return fs.readFileSync(idFile(), "utf8").trim();
+    } catch {
+      return null;
+    }
+  };
+  const flushUpgrade = async () => {
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  };
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST;
@@ -144,6 +168,52 @@ describe("telemetry public surface", () => {
     expect(client.capture).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "$create_alias" })
     );
+  });
+
+  it("self-heals a fallback id to the fingerprint via the background upgrade wired into track()", async () => {
+    // Regression guard for the reviewer's C2: a legacy random id on disk. The
+    // first event emits under it (no blocking migrate), then buildPayload's
+    // scheduleFingerprintUpgrade (fed the async resolver, mocked to the
+    // fingerprint) migrates the on-disk id so subsequent events converge. If the
+    // scheduleFingerprintUpgrade call in buildPayload were removed, the on-disk
+    // id would never migrate and the second event would still be the legacy id.
+    const LEGACY = "11111111-1111-4111-8111-111111111111";
+    const FP = "f".repeat(64);
+    fs.mkdirSync(path.join(tmp(), ".argent"), { recursive: true });
+    fs.writeFileSync(idFile(), LEGACY, { mode: 0o600 });
+
+    track("toolserver:start", {});
+    const client = posthogMock.instances[0]!;
+    expect((client.capture.mock.calls[0]![0] as { distinctId: string }).distinctId).toBe(LEGACY);
+
+    await flushUpgrade();
+    expect(readId()).toBe(FP); // background upgrade migrated the file
+
+    track("toolserver:start", {});
+    expect((client.capture.mock.calls[1]![0] as { distinctId: string }).distinctId).toBe(FP);
+  });
+
+  it("warmTelemetryIdentity establishes the fingerprint id off the hot path", async () => {
+    expect(status().hasAnonIdOnDisk).toBe(false);
+    await warmTelemetryIdentity();
+    // The async resolver (mocked) yields the fingerprint, persisted before any event.
+    expect(readId()).toBe("f".repeat(64));
+    // A subsequent event then finds it on disk (no truly-fresh sync resolve).
+    track("toolserver:start", {});
+    const client = posthogMock.instances[0]!;
+    expect((client.capture.mock.calls[0]![0] as { distinctId: string }).distinctId).toBe(
+      "f".repeat(64)
+    );
+  });
+
+  it("warmTelemetryIdentity mints no identity when telemetry is disabled", async () => {
+    writeConsentFlag(false);
+    _resetConsentCacheForTest();
+    expect(isEnabled()).toBe(false);
+    await warmTelemetryIdentity();
+    // A disabled machine must not have a persistent identifier provisioned.
+    expect(readId()).toBeNull();
+    expect(status().hasAnonIdOnDisk).toBe(false);
   });
 
   it("captures events in CI and annotates payloads with is_ci", () => {
