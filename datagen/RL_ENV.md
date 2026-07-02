@@ -77,12 +77,46 @@ New code needed for rung 1 (small):
   emulators matters.
 
 ## Build order
-1. `transcript_to_jsonl` exporter + a mask/round-trip test (testable NOW on existing bench transcripts). ← first
+0. **Harden the judge + measure the init** (do BEFORE any RL). (a) Validate judge agreement vs a few-hundred
+   human labels — target <~3% error (DigiRL's evaluator bar) — because the judge BECOMES the reward and is the
+   #1 failure mode. (b) Add programmatic/held-out success predicates (final route/deep-link, an AX/DOM
+   assertion like "cart has item X", app-state check) and prefer them over the LLM judge where they exist.
+   (c) Measure `ornith`'s sampling entropy + pass@k — if it's already low-entropy (RL-pretrained), exploration
+   headroom is thin and you'll need higher rollout temp / a brief SFT refresh before RL bites.
+1. `transcript_to_jsonl` exporter + a mask/round-trip test (testable NOW on existing bench transcripts). ← first code
 2. `ARGENT_TEXT_ONLY` wired into the rollout argent (also unblocks a clean eval).
-3. RL task pool (held-out) + programmatic success checks.
-4. `rollout_multi` (K-sample bench variant) → RFT round on real/emulated devices.
+3. RL task pool (held-out, hundreds) + the programmatic success checks from step 0.
+4. `rollout_multi` (K-sample bench variant) → RFT rounds on real/emulated devices.
 5. Emulator fleet on vast.ai (scale rollouts).
-6. Graduate to GRPO (vLLM + chosen framework) once RFT plateaus.
+6. Graduate to GRPO (vLLM + chosen framework) once RFT plateaus (entropy floor / all-fail tasks).
+
+## Reward, judge & RFT specifics (research-backed: DigiRL, MobileRL, DAPO, ReST, RAFT)
+Our setup maps almost exactly onto **DigiRL / MobileRL** (device-control RL bootstrapped from filtered
+behavior-cloning / rejection sampling, then online RL with an autonomous evaluator). Concrete params:
+- **RFT round (do this first):** K=4-8 rollouts/task at **temp ~1.0**; keep only judge-`success`; treat
+  `partial` as fail initially; dedup + **cap successes-per-task (~2-4)** so easy tasks don't dominate; SFT
+  `ornith` (reasoning ON, completion-only, observations masked); repeat 2-4 rounds. RAFT (train on positives
+  only) is **competitive with GRPO/PPO** (arXiv 2504.11343) — most of GRPO's edge is just *dropping all-fail
+  prompts*, a data-filter you can partly mimic in RFT. **Budget:** <10k total rollouts → spend it ALL on RFT.
+- **Switch to GRPO when:** val success flat over 2-3 RFT rounds AND entropy near its floor, OR your hard tasks
+  yield zero successes across K (RFT can't learn with no positive to imitate).
+- **Reward:** terminal-dominant (+1 success / 0-−1 fail) + a **tiny** step penalty (~−0.05) + invalid-tool
+  penalty (~−0.2). MobileRL "shortest-path adjustment" rewards efficiency without hackable dense shaping.
+  Credit assignment via **learned value functions (DigiRL doubly-robust advantage)**, not per-step reward.
+- **Judge hardening:** low temp (~0.1), structured/schema output, **conservative-zero on parse failure**,
+  held-out validation set scored by the same judge to catch "reward up only on train prompts" (overoptimization
+  signature). Early-stop on a **human/programmatic gold** check, not on judge score (Gao overoptimization laws).
+- **GRPO (later):** K=8-16, temp 0.8-1.0, group-relative advantage, **KL-to-ref β~0.001** + PPO clip ~0.2,
+  **DAPO clip-higher** (fights entropy collapse — our top GRPO risk), **dynamic sampling** (drop all-pass/all-fail
+  groups), **token-level** loss aggregation, and a **success replay buffer** for all-fail batches.
+- **Loss-mask the observations — and UNIT-TEST it.** Screenshot/AX observation tokens dwarf action tokens; a
+  masking bug silently trains the model on environment text and poisons everything. (We already have this mask
+  + `test_mask.py` for SFT; the RL trainer must reuse the exact same span logic.)
+
+**Ranked failure modes to guard:** (1) judge reward-hacking / judge-is-the-ceiling → validate + programmatic
+checks + gold early-stop; (2) loss-masking bug → unit test; (3) entropy collapse (esp. from an already-RL'd
+ornith) → measure first, higher temp, clip-higher, KL leash; (4) all-fail hard tasks waste budget → dynamic
+sampling + curriculum retirement; (5) proxy overoptimization → KL cap + held-out gold monitor.
 
 ## Open questions (research in flight)
 - Framework for the GRPO rung (external-env async rollouts + LoRA + 65k ctx)?
