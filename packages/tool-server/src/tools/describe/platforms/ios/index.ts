@@ -1,6 +1,10 @@
 import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
-import { nativeDevtoolsRef, NativeDevtoolsApi } from "../../../../blueprints/native-devtools";
+import {
+  isInjectableBundleId,
+  nativeDevtoolsRef,
+  NativeDevtoolsApi,
+} from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
@@ -23,6 +27,17 @@ const TVOS_HINT =
   "Use the `describe` tool to read the focused and focusable elements, `tv-remote` " +
   "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
   "See the argent-tv-interact skill.";
+
+// Apple system apps (`com.apple.*`) can never load argent's injected dylib, so
+// the native-devtools fallback can't read their view hierarchy and restarting
+// them would never help — returning `should_restart` here puts the agent in an
+// unbounded restart-app → describe loop. Surface a terminal hint to use a
+// screenshot instead, mirroring the terminal state `native-devtools-status`
+// reports for these bundle ids.
+const NON_INJECTABLE_HINT =
+  "This is an Apple system app (com.apple.*), which cannot load argent's native-devtools " +
+  "instrumentation — the native view hierarchy is unavailable and restarting the app will NOT " +
+  "help. Use the `screenshot` tool to see the screen and interact by coordinate.";
 
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
@@ -91,6 +106,13 @@ export async function describeIos(
     const nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
 
     const target = await resolveNativeTargetApp(nativeApi, params.bundleId);
+
+    // A non-injectable system app can never connect, so `requiresAppRestart`
+    // would always be true and `should_restart` would loop forever. Return the
+    // (empty) AX result with a screenshot hint instead of restarting.
+    if (!isInjectableBundleId(target.bundleId)) {
+      return { tree, source: "ax-service", hint: NON_INJECTABLE_HINT };
+    }
 
     if (await nativeApi.requiresAppRestart(target.bundleId)) {
       return { tree, source: "ax-service", should_restart: true, hint };

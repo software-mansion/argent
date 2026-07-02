@@ -172,8 +172,11 @@ describe("describe tool", () => {
       elements: [],
     });
 
+    // An injectable (non-Apple) app: the native fallback queries it by the
+    // provided bundleId. (Apple system apps are gated off the native path — see
+    // the non-injectable test below.)
     const nativeApi = makeNativeDevtoolsApi({
-      connectedBundleIds: ["com.apple.Preferences"],
+      connectedBundleIds: ["com.example.settings"],
       describeScreenResult: {
         screenFrame: { x: 0, y: 0, width: 440, height: 956 },
         elements: [
@@ -194,7 +197,7 @@ describe("describe tool", () => {
 
     const result = await tool.execute(
       {},
-      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.settings" }
     );
     expect(result.source).toBe("native-devtools");
     expect(result.description).toMatch(/AXButton\s+"General"/);
@@ -253,6 +256,30 @@ describe("describe tool", () => {
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
     expect(elementLineCount(result.description)).toBe(0);
+  });
+
+  it("does NOT return should_restart for a non-injectable Apple system app (no restart loop)", async () => {
+    // com.apple.* apps can never load the injected dylib, so requiresAppRestart
+    // is always true for them on real hardware. Without an injectability gate,
+    // describe returns should_restart:true → the agent restarts the system app →
+    // AX is still empty → describe again → unbounded loop. The fallback must
+    // instead return the (empty) AX result with a screenshot hint.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      requiresRestart: true, // real behavior: a com.apple.* app never connects
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(elementLineCount(result.description)).toBe(0);
+    expect(result.hint).toMatch(/system app|screenshot/i);
   });
 
   it("returns empty AX result when native-devtools is unavailable", async () => {
