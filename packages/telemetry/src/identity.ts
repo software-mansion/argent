@@ -218,7 +218,7 @@ export async function warmIdentity(
     try {
       raw = await resolveFingerprintAsync();
     } catch {
-      raw = null;
+      /* leave raw as null — best-effort */
     }
     const fp = normalizeFingerprint(raw);
     if (fp) {

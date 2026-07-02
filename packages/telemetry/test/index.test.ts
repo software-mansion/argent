@@ -19,7 +19,7 @@ import { resetClient } from "../src/posthog.js";
 import { _resetIdentityCacheForTest } from "../src/identity.js";
 import { _resetBasePropsCacheForTest } from "../src/base-props.js";
 import { scopeHome, snapshotEnv } from "./helpers.js";
-import { configFilePath, identityFilePath } from "../src/paths.js";
+import { configFilePath } from "../src/paths.js";
 
 const posthogMock = vi.hoisted(() => ({
   instances: [] as Array<{
