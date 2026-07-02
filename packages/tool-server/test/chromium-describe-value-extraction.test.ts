@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import vm from "node:vm";
 
 import { describeChromium } from "../src/tools/describe/platforms/chromium";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
@@ -17,8 +16,8 @@ import type { DescribeNode } from "../src/tools/describe/contract";
 // This test runs the REAL in-page script — the exact `expression` describeChromium
 // hands to Runtime.evaluate — against a minimal, faithful DOM stand-in, so the
 // premise is verified against the actual walker. No jsdom/happy-dom dependency:
-// the script's only free identifiers are `window`, `document`, and the HTML*/
-// Element constructors, which we inject via a `vm` sandbox (see `runPageScript`).
+// we inject the DOM globals the script references as `new Function` params (see
+// `runPageScript`).
 
 type Attrs = Record<string, string>;
 
@@ -89,25 +88,40 @@ class FakeEl {
 class FakeInput extends FakeEl {}
 class FakeTextArea extends FakeEl {}
 class FakeImage extends FakeEl {}
+// Minimal `Node` stand-in. This repo's DESCRIBE_DOM_SCRIPT never references `Node`
+// directly, yet the CI runner threw "Node is not defined" evaluating it — a bare
+// `new Function` resolves any stray DOM-global reference (introduced by the host's
+// transform / eval realm) against Node.js's sparse global scope. Injecting a stub
+// (carrying the standard nodeType constants, in case a reference reads them) makes
+// the eval host-independent. Passed as the `Node` param below.
+class FakeNode {
+  static readonly ELEMENT_NODE = 1;
+  static readonly TEXT_NODE = 3;
+  static readonly COMMENT_NODE = 8;
+  static readonly DOCUMENT_NODE = 9;
+  static readonly DOCUMENT_FRAGMENT_NODE = 11;
+}
 
-// Evaluate describeChromium's real page-eval `expression` against the fake DOM.
-// A browser runs it against `window`, whose global object is COMPLETE — every DOM
-// identifier resolves (to a value or `undefined`), never to a ReferenceError. A
-// bare `new Function` instead resolves free identifiers against Node's sparse
-// global scope, so a reference to any DOM global the script doesn't strictly need
-// (or that a transform introduces) throws "X is not defined" in some environments
-// but not others. Emulate the browser's complete global with a `vm` sandbox: the
-// injected fakes cover the identifiers the script actually uses (`window`,
-// `document`, the HTML*/Element constructors), and the permissive `has` trap makes
-// every OTHER reference resolve to `undefined` rather than throw — built-ins
-// (`JSON`, `Math`, …) still fall through to the real globalThis.
-function runPageScript(expression: string, globals: Record<string, unknown>): string {
-  const sandbox = new Proxy(globals, {
-    has: () => true,
-    get: (target, key) => (key in target ? (target as never)[key] : (globalThis as never)[key]),
-  });
-  vm.createContext(sandbox);
-  return vm.runInContext(`(${expression})`, sandbox) as string;
+// Evaluate describeChromium's real page-eval `expression` against the fake DOM by
+// injecting every identifier it can reference as an explicit `new Function` param,
+// so the eval never depends on the host realm's ambient globals. `Element` and
+// `HTMLElement` map to the base fake; the form controls to their subclasses.
+function runPageScript(expression: string, win: unknown, doc: unknown): string {
+  // Evaluates our OWN constant page-script string against injected fakes — not
+  // attacker input — so the implied-eval rule doesn't apply here.
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const run = new Function(
+    "window",
+    "document",
+    "Node",
+    "Element",
+    "HTMLElement",
+    "HTMLInputElement",
+    "HTMLTextAreaElement",
+    "HTMLImageElement",
+    `return (${expression});`
+  );
+  return run(win, doc, FakeNode, FakeEl, FakeEl, FakeInput, FakeTextArea, FakeImage) as string;
 }
 
 // Run describeChromium end-to-end: its Runtime.evaluate `expression` (the real
@@ -131,15 +145,7 @@ async function walkDom(root: FakeEl): Promise<DescribeNode> {
     cdp: {
       send: async (method: string, params?: { expression?: string }) => {
         if (method !== "Runtime.evaluate" || !params?.expression) return {};
-        const value = runPageScript(params.expression, {
-          window: win,
-          document: doc,
-          HTMLInputElement: FakeInput,
-          HTMLTextAreaElement: FakeTextArea,
-          HTMLImageElement: FakeImage,
-          Element: FakeEl,
-        });
-        return { result: { value } };
+        return { result: { value: runPageScript(params.expression, win, doc) } };
       },
     },
   } as unknown as ChromiumCdpApi;
