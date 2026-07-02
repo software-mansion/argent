@@ -62,6 +62,7 @@ describe("native-profiler-analyze: missing trace file", () => {
         profilingActive: false,
         wallClockStartMs: null,
         parsedData: null,
+        cpuFilterPid: null,
         recordingTimeout: null,
         recordingTimedOut: false,
         recordingExitedUnexpectedly: false,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseAdbDevices } from "../src/utils/adb";
+import { parseAdbDevices, consolePortFromAdbSerial } from "../src/utils/adb";
 
 describe("parseAdbDevices", () => {
   it("parses a typical `adb devices` output", () => {
@@ -58,5 +58,28 @@ describe("parseAdbDevices", () => {
       "\n"
     );
     expect(parseAdbDevices(stdout)).toEqual([{ serial: "emulator-5554", state: "device" }]);
+  });
+});
+
+describe("consolePortFromAdbSerial", () => {
+  it("maps an emulator serial to its console port", () => {
+    expect(consolePortFromAdbSerial("emulator-5554")).toBe(5554);
+    expect(consolePortFromAdbSerial("emulator-5556")).toBe(5556);
+  });
+
+  it("maps a loopback adb-connect serial to the console port (adb port - 1)", () => {
+    expect(consolePortFromAdbSerial("127.0.0.1:5555")).toBe(5554);
+    expect(consolePortFromAdbSerial("localhost:5555")).toBe(5554);
+    expect(consolePortFromAdbSerial("::1:5555")).toBe(5554);
+  });
+
+  it("returns null for a wireless physical device on a non-loopback host", () => {
+    // Must not be mistaken for an emulator/VVD shadow.
+    expect(consolePortFromAdbSerial("192.168.1.5:5555")).toBeNull();
+  });
+
+  it("returns null for a bare hardware serial or malformed input", () => {
+    expect(consolePortFromAdbSerial("R5CT12345678")).toBeNull();
+    expect(consolePortFromAdbSerial("emulator-abc")).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { TypedEventEmitter } from "@argent/registry";
+import { FAILURE_CODES, FailureError, TypedEventEmitter } from "@argent/registry";
 import * as crypto from "node:crypto";
 
 export interface ScriptInfo {
@@ -238,14 +238,36 @@ export class CDPClient {
     });
   }
 
-  async evaluate(expression: string, options?: { timeout?: number }): Promise<unknown> {
-    const result = (await this.send("Runtime.evaluate", { expression }, options?.timeout)) as {
+  async evaluate(
+    expression: string,
+    options?: { timeout?: number; returnByValue?: boolean; awaitPromise?: boolean }
+  ): Promise<unknown> {
+    // returnByValue must default to true: without it CDP returns a RemoteObject
+    // reference (objectId + preview) for any object/array result and leaves
+    // `result.value` undefined, so the caller silently gets nothing back for
+    // non-primitive expressions. awaitPromise defaults to true so an expression
+    // that evaluates to a Promise resolves to its value instead of returning a
+    // bare Promise handle. Callers that drive a script via a side binding (see
+    // evaluateWithBinding) opt out of both to keep their fire-and-forget wire
+    // shape unchanged.
+    const returnByValue = options?.returnByValue ?? true;
+    const awaitPromise = options?.awaitPromise ?? true;
+    const result = (await this.send(
+      "Runtime.evaluate",
+      { expression, returnByValue, awaitPromise },
+      options?.timeout
+    )) as {
       result?: { type?: string; value?: unknown; description?: string };
       exceptionDetails?: CDPExceptionDetails;
     };
 
     if (result.exceptionDetails) {
-      throw new Error(formatExceptionDetails(result.exceptionDetails));
+      throw new FailureError(formatExceptionDetails(result.exceptionDetails), {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
+        failure_stage: "debugger_cdp_evaluate",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      });
     }
 
     return result.result?.value;
@@ -270,16 +292,28 @@ export class CDPClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingBindings.delete(id);
-        reject(new Error(`Binding response for requestId=${id} timed out`));
+        reject(
+          new FailureError(`Binding response for requestId=${id} timed out`, {
+            error_code: FAILURE_CODES.DEBUGGER_CDP_BINDING_TIMEOUT,
+            failure_stage: "debugger_cdp_binding",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+          })
+        );
       }, timeout);
 
       this.pendingBindings.set(id, { resolve, reject, timer });
 
-      this.evaluate(expression, { timeout }).catch((err) => {
-        this.pendingBindings.delete(id);
-        clearTimeout(timer);
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
+      // The script delivers its payload through the side binding, not through
+      // the Runtime.evaluate return value — keep returnByValue/awaitPromise off
+      // so we don't serialize or block on the script's own (ignored) result.
+      this.evaluate(expression, { timeout, returnByValue: false, awaitPromise: false }).catch(
+        (err) => {
+          this.pendingBindings.delete(id);
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      );
     });
   }
 
@@ -310,8 +344,14 @@ export class CDPClient {
       clearTimeout(req.timer);
       if (msg.error) {
         req.reject(
-          new Error(
-            ((msg.error as Record<string, unknown>).message as string) ?? JSON.stringify(msg.error)
+          new FailureError(
+            ((msg.error as Record<string, unknown>).message as string) ?? JSON.stringify(msg.error),
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR,
+              failure_stage: "debugger_cdp_protocol",
+              failure_area: "tool_server",
+              error_kind: "unknown",
+            }
           )
         );
       } else {

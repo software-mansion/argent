@@ -114,7 +114,7 @@ describe("handleXctraceExit", () => {
 describe("native-profiler-stop recovery branch", () => {
   beforeEach(() => {
     mockedExport.mockReset();
-    mockedExport.mockReturnValue(FAKE_EXPORT_RESULT);
+    mockedExport.mockResolvedValue(FAKE_EXPORT_RESULT);
   });
 
   afterEach(() => {

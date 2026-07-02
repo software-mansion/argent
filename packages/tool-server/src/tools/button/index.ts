@@ -31,15 +31,22 @@ interface Result {
  * tool still reports as a successful `{ pressed }`.
  */
 const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>> = {
-  ios: new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),
-  android: new Set(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch"]),
+  "ios": new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),
+  // Remote iOS sims expose the same hardware buttons as local iOS.
+  "ios-remote": new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),
+  "android": new Set(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch"]),
   // Chromium apps have no hardware buttons; the capability gate already
   // excludes them, the empty set keeps the lookup total if one slips through.
-  chromium: new Set([]),
+  "chromium": new Set([]),
+  // Vega is remote-driven: hardware buttons / D-pad go through the dedicated
+  // `tv-remote` tool, and this tool's capability omits `vega` so a Vega device is
+  // rejected before this map is consulted. Empty set keeps the record total.
+  "vega": new Set([]),
 };
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 

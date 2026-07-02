@@ -1,162 +1,86 @@
 import { z } from "zod";
-import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
-import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
-import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
-import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "./chromium-keys";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import type { KeyboardParams, KeyboardResult } from "./types";
+import { makeIosImpl } from "./platforms/ios";
+import { makeAndroidImpl } from "./platforms/android";
+import { makeChromiumImpl } from "./platforms/chromium";
+import { vegaImpl } from "./platforms/vega";
 
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id)."
+    ),
   text: z
     .string()
     .optional()
-    .describe(
-      "Text to type character by character. Handles uppercase and common punctuation. Use when paste is unreliable."
-    ),
+    .describe("Text to type character by character. Handles uppercase and common punctuation."),
   key: z
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12"
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
     ),
-  delayMs: z.number().optional().describe("Delay in ms between key presses (default 50)"),
+  delayMs: z
+    .number()
+    .optional()
+    .describe(
+      "Delay in ms between key presses (default 50). Ignored on Vega (text/keys injected in a single shot) and on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence)."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
-  typed: string;
-  keys: number;
-}
-
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
 };
 
-async function runChromium(api: ChromiumCdpApi, params: Params): Promise<Result> {
-  const delay = params.delayMs ?? 50;
-  let keysPressed = 0;
-
-  if (params.key) {
-    const named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
-    if (!named) {
-      throw new Error(
-        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`
-      );
-    }
-    await api.dispatchKeyEvent({
-      type: "keyDown",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    await sleep(delay);
-    await api.dispatchKeyEvent({
-      type: "keyUp",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    keysPressed++;
-  }
-
-  if (params.text) {
-    for (const char of params.text) {
-      const desc = charToChromiumKey(char);
-      if (!desc) {
-        throw new Error(`No CDP key descriptor for character "${char}"`);
-      }
-      await api.dispatchKeyEvent({
-        type: "keyDown",
-        key: desc.key,
-        code: desc.code,
-        windowsVirtualKeyCode: desc.windowsVirtualKeyCode,
-      });
-      // `char` delivers the actual codepoint to the focused input; without
-      // this the field receives no value.
-      await api.dispatchKeyEvent({ type: "char", text: desc.text });
-      await api.dispatchKeyEvent({
-        type: "keyUp",
-        key: desc.key,
-        code: desc.code,
-        windowsVirtualKeyCode: desc.windowsVirtualKeyCode,
-      });
-      keysPressed++;
-      await sleep(delay);
-    }
-  }
-
-  return { typed: params.text ?? params.key ?? "", keys: keysPressed };
-}
-
-export const keyboardTool: ToolDefinition<Params, Result> = {
-  id: "keyboard",
-  description: `Type text or press special keys on the device (iOS simulator, Android emulator, or Chromium app) using keyboard events.
-Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys.
-Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
+// `keyboard` goes through `dispatchByPlatform`. The chromium branch resolves the
+// CDP session and the vega branch injects over `adb` (`inputd-cli`); the
+// ios/android branches runtime-probe their TV kind (TV is a `runtimeKind`, not a
+// `platform`, so a tvOS sim is "ios" and an Android TV "android" by id shape)
+// and route a TV target to the focus-driven backend, otherwise to the
+// simulator-server (see platforms/{ios,android,chromium,vega,tv}.ts). No service
+// is declared eagerly: distinguishing a TV target is async, and declaring
+// simulator-server up front would also spawn it for a tvOS udid it can't drive.
+export function createKeyboardTool(registry: Registry): ToolDefinition<Params, KeyboardResult> {
+  return {
+    id: "keyboard",
+    description: `Type text or press special keys on the device (iOS simulator, Android emulator, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
+Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
+Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator-server / emulator backend / Chromium CDP / Vega adb / TV control daemons are not reachable for the given device.
 - text: types a string character by character (supports uppercase, digits, common punctuation)
-- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)
-Provide text, key, or both. Use instead of paste when paste is unreliable or unsupported by the focused field.`,
-  zodSchema,
-  capability,
-  services: (params): Record<string, ServiceRef> => {
-    const device = resolveDevice(params.udid);
-    if (device.platform === "chromium") {
-      return { chromium: chromiumCdpRef(device) };
-    }
-    return { simulatorServer: simulatorServerRef(device) };
-  },
-  async execute(services, params) {
-    const device = resolveDevice(params.udid);
-    if (device.platform === "chromium") {
-      const chromium = services.chromium as ChromiumCdpApi;
-      return runChromium(chromium, params);
-    }
-    const api = services.simulatorServer as SimulatorServerApi;
-    const delay = params.delayMs ?? 50;
-    let keysPressed = 0;
-
-    const pressKeyCode = async (keyCode: number, withShift = false) => {
-      if (withShift) {
-        api.pressKey("Down", SHIFT_KEYCODE);
-        await sleep(10);
-      }
-      api.pressKey("Down", keyCode);
-      await sleep(delay);
-      api.pressKey("Up", keyCode);
-      if (withShift) {
-        await sleep(10);
-        api.pressKey("Up", SHIFT_KEYCODE);
-      }
-      keysPressed++;
-    };
-
-    if (params.key) {
-      const code = NAMED_KEYS[params.key.toLowerCase()];
-      if (code == null) {
-        throw new Error(
-          `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`
-        );
-      }
-      await pressKeyCode(code);
-    }
-
-    if (params.text) {
-      for (const char of params.text) {
-        const press = charToKeyPress(char);
-        if (!press) throw new Error(`No keycode for character "${char}"`);
-        await pressKeyCode(press.keyCode, press.withShift);
-        await sleep(delay);
-      }
-    }
-
-    return { typed: params.text ?? params.key ?? "", keys: keysPressed };
-  },
-};
+- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
+On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
+Provide text, key, or both.`,
+    zodSchema,
+    capability,
+    searchHint:
+      "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
+    // No eager service: each branch resolves its backend lazily (TV control,
+    // simulator-server, CDP, or Vega adb), since distinguishing a TV target is
+    // async and a tvOS udid must never resolve simulator-server.
+    services: () => ({}),
+    execute: dispatchByPlatform<
+      Record<string, unknown>,
+      Record<string, unknown>,
+      KeyboardParams,
+      KeyboardResult,
+      Record<string, unknown>,
+      Record<string, unknown>
+    >({
+      toolId: "keyboard",
+      capability,
+      ios: makeIosImpl(registry),
+      android: makeAndroidImpl(registry),
+      chromium: makeChromiumImpl(registry),
+      vega: vegaImpl,
+    }),
+  };
+}

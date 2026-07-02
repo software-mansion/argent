@@ -1,4 +1,10 @@
-import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  TypedEventEmitter,
+  type ServiceBlueprint,
+  type ServiceEvents,
+} from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
 import { FIBER_ROOT_TRACKER_SCRIPT } from "../utils/react-profiler/scripts";
@@ -60,11 +66,24 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     const port = debuggerApi.port;
     const colonIdx = payload.indexOf(":");
     if (colonIdx < 0) {
-      throw new Error(`ReactProfilerSession payload must be "port:deviceId", got: "${payload}"`);
+      throw new FailureError(
+        `ReactProfilerSession payload must be "port:deviceId", got: "${payload}"`,
+        {
+          error_code: FAILURE_CODES.REACT_PROFILER_SESSION_PAYLOAD_INVALID,
+          failure_stage: "react_profiler_session_payload",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
     }
     const deviceId = payload.slice(colonIdx + 1);
     if (!deviceId) {
-      throw new Error(`ReactProfilerSession payload missing deviceId: "${payload}"`);
+      throw new FailureError(`ReactProfilerSession payload missing deviceId: "${payload}"`, {
+        error_code: FAILURE_CODES.REACT_PROFILER_SESSION_PAYLOAD_DEVICE_MISSING,
+        failure_stage: "react_profiler_session_payload",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
     const ignore = () => {};
     const warnOnError = (label: string) => (err: unknown) => {
@@ -161,7 +180,16 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       if (state.profilingActive) {
         clearCachedProfilerPaths(state.port, state.deviceId);
       }
-      events.emit("terminated", error ?? new Error("CDP disconnected"));
+      events.emit(
+        "terminated",
+        error ??
+          new FailureError("CDP disconnected", {
+            error_code: FAILURE_CODES.REACT_PROFILER_SESSION_CDP_DISCONNECTED,
+            failure_stage: "react_profiler_session_cdp_lifecycle",
+            failure_area: "tool_server",
+            error_kind: "network",
+          })
+      );
     });
 
     return {

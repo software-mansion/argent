@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 <description>
-Argent MCP tools are available in this project for iOS simulator, Android emulator, and Chromium (CDP) app control. Argent MCP tools are the preferred form of interaction with the application. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`.
+If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -15,10 +15,25 @@ Use cases:
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
 - Any code change that affects visible mobile UI, layout, styling, copy, navigation, or screen composition
 - Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
-- Running, debugging, or testing a React Native app (iOS or Android)
+- Running, debugging, or testing a React Native app (iOS, Android or Vega)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
 - Running, debugging, or testing a Chromium (CDP) app — an Electron app (boot with `boot-device` + `electronAppPath`) or a Chromium browser exposing CDP (auto-discovered on port `9222` / `ARGENT_CHROMIUM_PORTS`); on Chromium scroll with `gesture-scroll` and drag with `gesture-drag` — `gesture-swipe` is touch-only
   </description>
+
+<availability_check>
+<important>Run this check once per session, before the first argent tool call or `argent` command. Do not re-probe before later calls.</important>
+
+Confirm argent is available:
+
+1. Are `mcp__argent__*` tools in your tool list? If none are present, argent is not available.
+2. If still unsure, run `command -v argent`. A non-zero exit means the CLI is not on PATH.
+
+If argent IS available, ignore the rest of this block and follow this rule normally.
+
+If argent is ABSENT, treat it as an expected state, not an error to retry. Do not call `mcp__argent__*` tools, do not run `argent` commands, and do not attempt any argent workflow. Tell the user once, and ask if you should continue without argent:
+
+> Argent isn't installed in this environment. To enable the mobile/Chromium tooling this repo is configured for, run `npx @swmansion/argent init -y` (or `npm i -g @swmansion/argent && argent init -y`).
+> </availability_check>
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from a screenshot</important>
@@ -65,7 +80,7 @@ Decision order:
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc.
-- When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
+- When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
   </general_rules>
 
 <react_native_detection>
@@ -83,7 +98,7 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 PLATFORM DETECTION
-If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS.
+If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
@@ -95,7 +110,12 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for any TV target use the TV skill below.
+
+TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
+Skill: `argent-tv-interact`
+When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh.
+Prompt keywords: apple tv, tvos, android tv, leanback, vega, fire tv, vvd, d-pad
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`

@@ -9,6 +9,7 @@ import {
   globalInstallCommand,
   formatShellCommand,
 } from "../src/utils.js";
+import { getUpdateTriggerFromEnv, resolveUpdatePackageAction } from "../src/update.js";
 import { PACKAGE_NAME, NPM_REGISTRY } from "../src/constants.js";
 
 describe("update — version comparison logic", () => {
@@ -74,6 +75,24 @@ describe("update — registry safety", () => {
       const cmdStr = formatShellCommand(cmd);
       expect(cmdStr).not.toContain("--registry");
     }
+  });
+});
+
+describe("update — telemetry package action tagging", () => {
+  it("distinguishes standalone update/install from MCP-triggered update", () => {
+    expect(resolveUpdatePackageAction("update", "0.8.0")).toBe("standalone_update");
+    expect(resolveUpdatePackageAction("update", null)).toBe("standalone_install");
+    expect(resolveUpdatePackageAction("mcp_update", "0.8.0")).toBe("mcp_update");
+  });
+
+  it("reads only the supported MCP update trigger env enum", () => {
+    expect(
+      getUpdateTriggerFromEnv({ ARGENT_UPDATE_TRIGGER: "mcp_update" } as NodeJS.ProcessEnv)
+    ).toBe("mcp_update");
+    expect(
+      getUpdateTriggerFromEnv({ ARGENT_UPDATE_TRIGGER: "https://internal" } as NodeJS.ProcessEnv)
+    ).toBe("update");
+    expect(getUpdateTriggerFromEnv({} as NodeJS.ProcessEnv)).toBe("update");
   });
 });
 

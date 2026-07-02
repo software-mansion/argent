@@ -94,7 +94,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all nine adapters", () => {
+  it("contains all ten adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -106,6 +106,7 @@ describe("ALL_ADAPTERS", () => {
       "Codex",
       "Hermes",
       "opencode",
+      "Kiro",
     ]);
   });
 });
@@ -1032,6 +1033,119 @@ describe("opencode adapter", () => {
     const servers = parsed.mcp as Record<string, unknown>;
     expect(servers).toHaveProperty("argent");
     expect((servers.argent as Record<string, unknown>).type).toBe("local");
+  });
+});
+
+// ── Kiro adapter ─────────────────────────────────────────────────────────────
+
+describe("Kiro adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Kiro")!;
+
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
+  it("writes { mcpServers: { argent: ... } } without type", () => {
+    const configPath = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.command).toBe("argent");
+    expect(argent.args).toEqual(["mcp"]);
+    expect(argent).not.toHaveProperty("type");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+
+    expect(adapter.remove(configPath)).toBe(true);
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.json"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("preserves other servers when writing", () => {
+    const configPath = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { command: "other" } } }));
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("other");
+    expect(servers).toHaveProperty("argent");
+  });
+
+  it("projectPath returns .kiro/settings/mcp.json under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".kiro", "settings", "mcp.json"));
+  });
+
+  it("globalPath returns ~/.kiro/settings/mcp.json", () => {
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".kiro", "settings", "mcp.json"));
+  });
+
+  it("detect() returns true when local .kiro dir exists", () => {
+    const localKiro = path.join(process.cwd(), ".kiro");
+    const existed = fs.existsSync(localKiro);
+    if (!existed) fs.mkdirSync(localKiro, { recursive: true });
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      if (!existed) fs.rmdirSync(localKiro);
+    }
+  });
+
+  it("addAllowlist sets autoApprove: ['*'] on the argent entry (local)", () => {
+    const configPath = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "local");
+
+    const config = readJsonFile(configPath);
+    const entry = (config.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
+    expect(entry.autoApprove).toEqual(["*"]);
+  });
+
+  it("addAllowlist sets autoApprove: ['*'] on the argent entry (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".kiro", "settings", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "global");
+
+    const config = readJsonFile(configPath);
+    const entry = (config.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
+    expect(entry.autoApprove).toEqual(["*"]);
+  });
+
+  it("removeAllowlist deletes autoApprove from the argent entry", () => {
+    const configPath = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+
+    adapter.removeAllowlist!(tmpDir, "local");
+
+    const config = readJsonFile(configPath);
+    const entry = (config.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
+    expect(entry).not.toHaveProperty("autoApprove");
+  });
+
+  it("removeAllowlist is a no-op when file does not exist", () => {
+    expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
   });
 });
 

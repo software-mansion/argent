@@ -377,6 +377,9 @@ async function runDetached(
     startedAt: new Date().toISOString(),
     bundlePath: paths.bundlePath,
     host,
+    // Mark this as an explicitly-started (possibly supervisor-managed) server so
+    // the MCP auto-spawn path's kill-before-respawn never terminates it.
+    managed: "cli",
     ...(token ? { token } : {}),
   });
   const url = formatToolsServerUrl(host, actualPort);
@@ -432,6 +435,8 @@ async function runForeground(
         startedAt: new Date().toISOString(),
         bundlePath: paths.bundlePath,
         host,
+        // See runDetached: tag CLI-started servers so auto-spawn won't kill them.
+        managed: "cli",
         ...(token ? { token } : {}),
       });
       stateWritten = true;

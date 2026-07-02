@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { DescribeFrame, DescribeNode } from "../../contract";
 
 interface ParsedXmlNode {
@@ -242,7 +243,7 @@ interface PruneOptions {
   includeSystem: boolean;
 }
 
-function attrIsTrue(attrs: Record<string, string>, key: string): boolean {
+export function attrIsTrue(attrs: Record<string, string>, key: string): boolean {
   return attrs[key] === "true";
 }
 
@@ -261,7 +262,7 @@ function isInteractive(attrs: Record<string, string>): boolean {
   return false;
 }
 
-function labelOf(attrs: Record<string, string>): string {
+export function labelOf(attrs: Record<string, string>): string {
   // The DescribeNode contract surfaces the screen-reader-meaningful label and
   // the user-typed text separately, so we prefer `content-desc` (the role
   // description / placeholder) and let `text` come through as `value` when
@@ -619,7 +620,12 @@ export function parseUiAutomatorDump(
   if (xmlEnd !== -1) xml = xml.slice(0, xmlEnd + "</hierarchy>".length);
   const root = parseUiAutomatorXml(xml);
   if (!root) {
-    throw new Error("Failed to parse uiautomator dump output");
+    throw new FailureError("Failed to parse uiautomator dump output", {
+      error_code: FAILURE_CODES.ANDROID_UIAUTOMATOR_PARSE_FAILED,
+      failure_stage: "android_uiautomator_parse_dump",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+    });
   }
   const includeSystem = options.includeSystem === true;
   const opts: PruneOptions = { screenW, screenH, includeSystem };

@@ -1,0 +1,42 @@
+name: Repo Hygiene
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: No merge-conflict markers
+        run: |
+          if git grep -nIE '^(<{7}|={7}|>{7})( |$)'; then
+            echo "::error::Merge-conflict markers found in tracked files."
+            exit 1
+          fi
+
+      - name: No focused tests (.only)
+        # git grep -E is POSIX ERE (no \b), so word boundaries are spelled out:
+        # left = line start or a non-identifier char; right = a non-identifier char or EOL.
+        run: |
+          if git grep -nE '(^|[^A-Za-z0-9_.])(describe|it|test|bench)\.only([^A-Za-z0-9_]|$)' -- '*.test.ts' '*.spec.ts' '*.test.tsx' '*.spec.tsx'; then
+            echo "::error::Focused test(s) found (.only) — remove before merging."
+            exit 1
+          fi
+
+      - name: Workspace versions in sync
+        run: node scripts/check-workspace-versions.mjs

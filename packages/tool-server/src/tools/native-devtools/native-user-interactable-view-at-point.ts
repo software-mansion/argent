@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeDevtoolsRef,
   precheckNativeDevtools,
@@ -7,6 +7,7 @@ import {
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
+import { ensureDeps } from "../../utils/check-deps";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -62,8 +63,7 @@ type Result =
 
 export const nativeUserInteractableViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-user-interactable-view-at-point",
-  requires: ["xcrun"],
-  capability: { apple: { simulator: true, device: true } },
+  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Inspect the deepest UIView at a raw native window point that would actually receive touch input.
 
 Unlike native-view-at-point, this respects userInteractionEnabled and is closer to
@@ -78,6 +78,9 @@ If status is restart_required: call restart-app then retry.`,
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
+    const device = resolveDevice(params.udid);
+    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
+
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
     const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
@@ -102,7 +105,12 @@ If status is restart_required: call restart-app then retry.`,
     )) as { view?: unknown | null; error?: string };
 
     if (result.error) {
-      throw new Error(result.error);
+      throw new FailureError(result.error, {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_USER_INTERACTABLE_VIEW_AT_POINT_ERROR,
+        failure_stage: "native_devtools_user_interactable_view_at_point",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      });
     }
 
     return { status: "ok", view: result.view ?? null };

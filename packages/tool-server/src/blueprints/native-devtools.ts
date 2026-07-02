@@ -1,23 +1,20 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as readline from "node:readline";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   TypedEventEmitter,
+  FAILURE_CODES,
+  FailureError,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { bootstrapDylibPath, bootstrapDylibPathTcp } from "@argent/native-devtools-ios";
-import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
+import { pickIosHost, buildDyldInsertLibraries, type IosEndpoint } from "../utils/ios-host";
+
+// Re-exported for the env-merging unit test that imports it from this module.
+export { buildDyldInsertLibraries };
 
 export type NativeDevtoolsTransport = "unix" | "tcp";
-
-export const NATIVE_DEVTOOLS_TCP_PORT = Number(process.env.NATIVE_DEVTOOLS_TCP_PORT) || 9230;
-
-const execFileAsync = promisify(execFile);
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
@@ -190,158 +187,10 @@ interface AppConnection {
   networkLog: NetworkEvent[];
 }
 
-/** Current bootstrap filename; `libInjectionBootstrap.dylib` is legacy (pre-rename) and still stripped when merging env. */
-const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
-  "libArgentInjectionBootstrap.dylib",
-  "libInjectionBootstrap.dylib",
-]);
-
 function getNativeDevtoolsSocketPath(udid: string): string {
   // Deterministic, short — well under the 104-char macOS Unix socket limit
   // /tmp/argent-nd-XXXXXXXX.sock = 28 chars
   return `/tmp/argent-nd-${udid.slice(0, 8)}.sock`;
-}
-
-function splitDyldInsertLibraries(value: string): string[] {
-  return value
-    .split(":")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
-
-/**
- * Strips Argent bootstrap dylibs (by basename, including the legacy pre-rename name)
- * and entries that don't exist on disk (truncated artifacts from the simctl getenv
- * 127-byte bug, stale paths from old installs, etc.).
- * Entries starting with '@' (loader-path references) are always preserved.
- * Third-party dylibs present on disk (e.g. SimCam) are kept verbatim.
- */
-function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: string): boolean {
-  if (entry === bootstrapPath) {
-    return false;
-  }
-
-  if (ARGENT_BOOTSTRAP_DYLIB_BASENAMES.has(path.basename(entry))) {
-    return false;
-  }
-
-  if (entry.startsWith("@")) {
-    return true;
-  }
-
-  return fs.existsSync(entry);
-}
-
-export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
-  const preserved = splitDyldInsertLibraries(currentValue).filter((entry) =>
-    shouldPreserveDyldInsertLibrariesEntry(entry, bootstrapPath)
-  );
-  return [...preserved, bootstrapPath].join(":");
-}
-
-async function ensureAccessibilityEnabled(udid: string): Promise<void> {
-  // iOS 26+ requires AccessibilityEnabled and ApplicationAccessibilityEnabled to be set
-  // in the simulator's defaults for SwiftUI to populate the accessibility tree.
-  // Without these flags, all UIAccessibility APIs return nil/0 for SwiftUI views.
-  const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
-  await Promise.all(
-    flags.map((flag) =>
-      execFileAsync(
-        "xcrun",
-        [
-          "simctl",
-          "spawn",
-          udid,
-          "defaults",
-          "write",
-          "com.apple.Accessibility",
-          flag,
-          "-bool",
-          "true",
-        ],
-        { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-      )
-    )
-  );
-}
-
-async function ensureEnv(
-  udid: string,
-  endpoint: { transport: "unix"; socketPath: string } | { transport: "tcp"; port: number }
-): Promise<void> {
-  const bootstrapPath =
-    endpoint.transport === "tcp" ? bootstrapDylibPathTcp() : bootstrapDylibPath();
-
-  // Read from launchctl inside the simulator (via simctl spawn) instead of
-  // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
-  // which corrupts the colon-separated path list and causes stale entries to
-  // accumulate on every ensureEnv() cycle.
-  const result = await execFileAsync(
-    "xcrun",
-    ["simctl", "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
-    { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-  ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
-
-  const existing = (result.stdout ?? "").trim();
-  const updated = buildDyldInsertLibraries(existing, bootstrapPath);
-
-  if (updated !== existing) {
-    await execFileAsync(
-      "xcrun",
-      ["simctl", "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  }
-
-  // Always re-set the endpoint env var — deterministic value, cheap no-op if already correct,
-  // ensures correctness after tool-server restarts.
-  if (endpoint.transport === "tcp") {
-    await execFileAsync(
-      "xcrun",
-      [
-        "simctl",
-        "spawn",
-        udid,
-        "launchctl",
-        "setenv",
-        "NATIVE_DEVTOOLS_IOS_CDP_PORT",
-        String(endpoint.port),
-      ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  } else {
-    await execFileAsync(
-      "xcrun",
-      [
-        "simctl",
-        "spawn",
-        udid,
-        "launchctl",
-        "setenv",
-        "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
-        endpoint.socketPath,
-      ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  }
-
-  // Ensure the accessibility runtime is enabled so that describeScreen works on iOS 26+.
-  await ensureAccessibilityEnabled(udid);
-}
-
-async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
-    encoding: "utf8",
-  });
-
-  const bundleIds = new Set<string>();
-  for (const line of stdout.split("\n")) {
-    const match = line.match(/UIKitApplication:([^[]+)/);
-    if (match) {
-      bundleIds.add(match[1].trim());
-    }
-  }
-  return bundleIds;
 }
 
 export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, DeviceInfo> = {
@@ -354,27 +203,44 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
   async factory(_deps, _payload, options) {
     const opts = options as unknown as NativeDevtoolsFactoryOptions | undefined;
     if (!opts?.device) {
-      throw new Error(
+      throw new FailureError(
         `${NATIVE_DEVTOOLS_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use nativeDevtoolsRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`
+          `Use nativeDevtoolsRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_FACTORY_OPTIONS_MISSING,
+          failure_stage: "native_devtools_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 
     const { device } = opts;
-    const transport: NativeDevtoolsTransport = opts.transport ?? "unix";
-    if (device.platform !== "ios") {
-      throw new Error(
-        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`
+    if (device.platform !== "ios" && device.platform !== "ios-remote") {
+      throw new FailureError(
+        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_WRONG_PLATFORM,
+          failure_stage: "native_devtools_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
+    const host = pickIosHost(device);
+    // Remote sims can't use unix sockets because the QUIC reverse tunnel
+    // only bridges TCP streams.
+    const transport: NativeDevtoolsTransport = host.requiresTcp
+      ? "tcp"
+      : (opts.transport ?? "unix");
 
     const udid = device.id;
     const socketPath = getNativeDevtoolsSocketPath(udid);
-    const tcpPort = NATIVE_DEVTOOLS_TCP_PORT;
-    const endpoint =
-      transport === "tcp"
-        ? ({ transport: "tcp", port: tcpPort } as const)
-        : ({ transport: "unix", socketPath } as const);
+    // For TCP, `port` starts undefined (ephemeral) and is populated by the
+    // listen block below. ensureEnvReady and the dispose path read it after
+    // that point.
+    const endpoint: IosEndpoint =
+      transport === "tcp" ? { transport: "tcp" } : { transport: "unix", socketPath };
     const MAX_LOG_ENTRIES = 1000;
     const connections = new Map<string, AppConnection>();
     const pendingRpc = new Map<
@@ -411,7 +277,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       if (inFlight) return inFlight;
 
       inFlight = Promise.resolve()
-        .then(() => ensureEnv(udid, endpoint))
+        .then(() => host.setupNativeDevtoolsEnv(udid, endpoint))
         .then(() => {
           envSetup = true;
           initFailure = null;
@@ -443,7 +309,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     };
 
     const isAppRunning = async (bundleId: string): Promise<boolean> => {
-      const runningBundleIds = await listRunningUIKitApplicationBundleIds(udid);
+      const runningBundleIds = await host.listRunningBundleIds(udid);
       return runningBundleIds.has(bundleId);
     };
 
@@ -455,7 +321,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       const conn = connections.get(targetBundleId);
       if (!conn) {
         return Promise.reject(
-          new Error("Native devtools not connected for bundleId: " + targetBundleId)
+          new FailureError("Native devtools not connected for bundleId: " + targetBundleId, {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
+            failure_stage: "native_devtools_rpc_connection",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          })
         );
       }
       const id = nextRpcId++;
@@ -470,7 +341,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         setTimeout(() => {
           if (pendingRpc.has(id)) {
             pendingRpc.delete(id);
-            reject(new Error(`ViewInspector RPC timed out: ${method}`));
+            reject(
+              new FailureError(`ViewInspector RPC timed out: ${method}`, {
+                error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+                failure_stage: "native_devtools_rpc_request",
+                failure_area: "tool_server",
+                error_kind: "timeout",
+              })
+            );
           }
         }, 5000);
       });
@@ -548,8 +426,16 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           const pending = pendingRpc.get(p.id);
           if (!pending) return;
           pendingRpc.delete(p.id);
-          if (p.error) pending.reject(new Error(p.error.message));
-          else pending.resolve(p.result);
+          if (p.error) {
+            pending.reject(
+              new FailureError(p.error.message, {
+                error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+                failure_stage: "native_devtools_rpc_response",
+                failure_area: "tool_server",
+                error_kind: "subprocess",
+              })
+            );
+          } else pending.resolve(p.result);
         }
       });
 
@@ -569,8 +455,27 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       });
     });
 
-    if (transport === "tcp") {
-      server.listen(tcpPort, "127.0.0.1");
+    if (endpoint.transport === "tcp") {
+      // `endpoint.port` is undefined here — bind ephemeral and write the
+      // realized port back so each per-device instance gets its own.
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(endpoint.port ?? 0, "127.0.0.1", () => {
+          server.off("error", reject);
+          const addr = server.address();
+          if (addr === null || typeof addr === "string") {
+            server.close();
+            reject(new Error("native-devtools server failed to bind a TCP port"));
+            return;
+          }
+          endpoint.port = addr.port;
+          resolve();
+        });
+      });
+      // Wire the reverse tunnel (no-op on local) before kicking off ensureEnv
+      // so the dylib's first dial — which can happen as soon as the env is
+      // written — lands on our listener.
+      await host.startProxy(udid, endpoint.port!);
     } else {
       server.listen(socketPath);
     }
@@ -696,9 +601,19 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           }
         }
         for (const { reject } of pendingRpc.values()) {
-          reject(new Error("NativeDevtools service disposed"));
+          reject(
+            new FailureError("NativeDevtools service disposed", {
+              error_code: FAILURE_CODES.NATIVE_DEVTOOLS_SERVICE_DISPOSED,
+              failure_stage: "native_devtools_dispose",
+              failure_area: "tool_server",
+              error_kind: "unknown",
+            })
+          );
         }
         pendingRpc.clear();
+        if (endpoint.transport === "tcp") {
+          await host.stopProxy(udid, endpoint.port!);
+        }
       },
       events,
     };

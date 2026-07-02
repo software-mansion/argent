@@ -1,10 +1,18 @@
-import { attachRegistryLogger } from "@argent/registry";
+import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
+import {
+  init as telemetryInit,
+  attachRegistryTelemetry,
+  track as telemetryTrack,
+  shutdown as telemetryShutdown,
+  aiTelemetryFromMeta,
+} from "@argent/telemetry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import { variantProposalStore } from "./utils/variant-proposals";
+import { shutdownOwnedDevices } from "./utils/device-shutdown";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 const DEFAULT_PORT = "3001";
@@ -52,12 +60,27 @@ export function start(): void {
   // The tool server should exit on uncaught errors (state may be corrupted),
   // but attempt graceful cleanup first so child processes are not orphaned.
   let shuttingDown = false;
+  let crashing = false;
+  // Module-scoped so a crash that overlaps an in-flight graceful shutdown can
+  // escalate it: shutdown() exits with finalExitCode (read at the actual
+  // process.exit), not the argument it was first invoked with. Without this a
+  // crash arriving mid-shutdown would be swallowed by the re-entrancy guard and
+  // the in-flight shutdown(0) would exit 0, hiding the crash from supervisors.
+  let finalExitCode = 0;
   let shutdown: ((exitCode?: number) => Promise<void>) | null = null;
 
-  function crashShutdown(label: string, detail: string): void {
+  // The crash classification is passed in explicitly rather than re-derived from
+  // `label`: `label` is a human-readable stderr prefix, and coupling the emitted
+  // failure code to its exact wording would silently misclassify the crash if the
+  // message were ever reworded.
+  function crashShutdown(label: string, detail: string, signal: FailureSignal): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
-    if (shuttingDown) return; // avoid re-entrant shutdown
-    shuttingDown = true;
+    // A second fatal event must not re-run teardown or schedule a second timer.
+    if (crashing) return;
+    crashing = true;
+    shutdownReason = "crash";
+    finalExitCode = 1;
+    shutdownFailureSignal = signal;
     setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
       shutdown(1).catch(() => process.exit(1));
@@ -67,12 +90,23 @@ export function start(): void {
   }
 
   process.on("uncaughtException", (err) => {
-    crashShutdown("Uncaught exception", String(err.stack ?? err));
+    crashShutdown("Uncaught exception", String(err.stack ?? err), {
+      error_code: FAILURE_CODES.TOOLSERVER_UNCAUGHT_EXCEPTION,
+      failure_stage: "toolserver_uncaught_exception",
+      failure_area: "tool_server",
+      error_kind: "crash",
+    });
   });
   process.on("unhandledRejection", (reason) => {
     crashShutdown(
       "Unhandled rejection",
-      reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+      reason instanceof Error ? (reason.stack ?? reason.message) : String(reason),
+      {
+        error_code: FAILURE_CODES.TOOLSERVER_UNHANDLED_REJECTION,
+        failure_stage: "toolserver_unhandled_rejection",
+        failure_area: "tool_server",
+        error_kind: "crash",
+      }
     );
   });
 
@@ -88,6 +122,14 @@ export function start(): void {
   // ── Bootstrap ─────────────────────────────────────────────────────
   const registry = createRegistry();
   attachRegistryLogger(registry);
+
+  // Tool events use the queued client; shutdown gets a bounded final flush.
+  telemetryInit("tool_server");
+  const telemetryHandle = attachRegistryTelemetry(registry);
+  const serverStartedAt = Date.now();
+  let shutdownReason: "idle" | "signal" | "crash" = "signal";
+  let shutdownFailureSignal: FailureSignal | null = null;
+
   const updateChecker = startUpdateChecker();
 
   const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
@@ -135,46 +177,127 @@ export function start(): void {
   };
   const onSelectionSubmitted = (): void => {
     cancelPendingClose();
+    // A CLI-driven Lens session (`argent lens`) keeps the window open across
+    // rounds — the user iterates and their feedback is piped into the spawned
+    // terminal, so a submit must never animate-close the window.
+    if (variantProposalStore.isCliSession()) return;
     pendingCloseTimer = setTimeout(() => {
       pendingCloseTimer = null;
       previewWindow.requestClose();
     }, PREVIEW_CLOSE_DELAY_MS);
   };
-  // User clicked "Close" in the preview window — dismiss it immediately (the
-  // animated close), leaving any parked await still waiting.
-  const onCloseRequested = (): void => {
+  // `argent lens` toggles a CLI session: begin ⇒ open the window now (no await
+  // needed — the agent proposes without blocking), end ⇒ close it.
+  const onCliSessionChanged = (active: boolean): void => {
     cancelPendingClose();
-    previewWindow.requestClose();
+    if (active) {
+      const url = previewWindowBaseUrl();
+      if (url) previewWindow.ensureOpen(url);
+    } else {
+      previewWindow.requestClose();
+      // Tear down any simulator Lens booted itself for this session (the picker
+      // "boot it first" action). Devices the user had already running were never
+      // marked owned, so they're left alone. Fire-and-forget — teardown must not
+      // block the session-end response.
+      const owned = variantProposalStore.takeOwnedDevices();
+      if (owned.length) {
+        void shutdownOwnedDevices(owned).catch(() => {
+          /* best-effort: a device already gone must not surface here */
+        });
+      }
+    }
   };
   variantProposalStore.events.on("awaitParked", onAwaitParked);
   variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
-  variantProposalStore.events.on("closeRequested", onCloseRequested);
+  variantProposalStore.events.on("cliSessionChanged", onCliSessionChanged);
 
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
   shutdown = async (exitCode = 0) => {
+    // Escalate before the re-entrancy guard can short-circuit a later,
+    // higher-severity call (e.g. a crash overlapping a graceful shutdown).
+    if (exitCode > finalExitCode) finalExitCode = exitCode;
+    if (shuttingDown) return;
+    shuttingDown = true;
+
     variantProposalStore.events.off("awaitParked", onAwaitParked);
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
-    variantProposalStore.events.off("closeRequested", onCloseRequested);
+    variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
     cancelPendingClose();
+
+    // Drain any simulators Lens booted headless for a CLI session. The happy
+    // path drains via onCliSessionChanged(false) when the CLI ends the session,
+    // but a server-initiated exit (signal, idle timeout) never gets that POST —
+    // without this the headless sim (no GUI window) is left Booted and orphaned.
+    // Idempotent: takeOwnedDevices drains the set once, so it's [] here if the
+    // CLI already ended cleanly.
+    const ownedDevices = variantProposalStore.takeOwnedDevices();
+    if (ownedDevices.length) {
+      await shutdownOwnedDevices(ownedDevices).catch(() => {
+        /* best-effort: a device already gone must not block shutdown */
+      });
+    }
+
     previewWindow.dispose();
     updateChecker.dispose();
     stopWatcher();
     httpHandle.dispose();
-    await registry.dispose();
+
+    // Tear the registry down BEFORE recording toolserver:stop. A crash that
+    // escalates mid-shutdown (crashShutdown sets shutdownReason="crash" plus a
+    // failure signal, then re-enters here and the guard short-circuits it) would
+    // otherwise be lost behind an already-sent reason:"signal" stop event — the
+    // exit code escalates via finalExitCode but the telemetry didn't. Recording
+    // the stop event last means it reflects everything up to this point.
+    // Guarded so a dispose failure can't skip the stop event itself.
+    try {
+      await registry.dispose();
+    } catch (err) {
+      process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
+    }
+
+    // Capture toolserver:stop, then drain — the final telemetry action, so the
+    // reason/signal are as fresh as possible. (A crash during the drain below is
+    // inherently unobservable: the queue is already closing.)
+    try {
+      telemetryTrack("toolserver:stop", {
+        reason: shutdownReason,
+        uptime_ms: Date.now() - serverStartedAt,
+        total_tool_calls: telemetryHandle.getTotalToolCalls(),
+        ...(shutdownFailureSignal ?? {}),
+      });
+      telemetryHandle.detach();
+      await telemetryShutdown(1500);
+    } catch {
+      // Telemetry must never block process exit.
+    }
+
     if (server) {
-      const forceExit = setTimeout(() => process.exit(exitCode), PROCESS_TIMEOUT_MS);
+      const forceExit = setTimeout(() => process.exit(finalExitCode), PROCESS_TIMEOUT_MS);
       await new Promise<void>((resolve) => server!.close(() => resolve()));
       clearTimeout(forceExit);
     }
-    process.exit(exitCode);
+    process.exit(finalExitCode);
   };
 
   const httpHandle = createHttpApp(registry, {
     idleTimeoutMs,
-    onIdle: shutdown,
+    onIdle: () => {
+      shutdownReason = "idle";
+      void shutdown?.();
+    },
     onShutdown: shutdown,
     bindHost: HOST,
+    recordInvocation: telemetryHandle.recordInvocation,
+    recordFailure: (toolId, meta, signal, durationMs) => {
+      telemetryTrack("tool:fail", {
+        tool: toolId,
+        ...(meta.platform ? { platform: meta.platform } : {}),
+        duration_ms: durationMs,
+        ...signal,
+        ...aiTelemetryFromMeta(meta),
+      });
+    },
   });
 
   // Block advertising readiness until the first watcher poll completes — this
@@ -192,6 +315,12 @@ export function start(): void {
         if (idleTimeoutMs > 0) {
           process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
         }
+        // Report start only after the HTTP listener actually binds.
+        try {
+          telemetryTrack("toolserver:start", {});
+        } catch {
+          /* swallow */
+        }
       });
       // Surface bind failures (EADDRINUSE / EACCES on privileged ports) as a
       // clean exit instead of routing through uncaughtException → crashShutdown.
@@ -208,10 +337,13 @@ export function start(): void {
       httpHandle.attachChromiumWebsockets(server);
     })
     .catch((err) => {
-      process.stderr.write(
-        `[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`
-      );
-      process.exit(1);
+      void (async () => {
+        process.stderr.write(
+          `[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`
+        );
+        shutdownReason = "crash";
+        await shutdown?.(1);
+      })();
     });
 
   // ── Lifecycle ─────────────────────────────────────────────────────

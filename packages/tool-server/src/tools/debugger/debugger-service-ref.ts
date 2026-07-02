@@ -9,6 +9,7 @@ import { chromiumJsRuntimeDebuggerRef } from "../../blueprints/chromium-js-runti
  */
 export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
 };
@@ -18,9 +19,15 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
  * they depend on Metro, the RN inspector, or the React DevTools backend. The
  * absent `chromium` field makes the HTTP capability gate reject them with a
  * clear "not supported on chromium app" message before they ever run.
+ *
+ * Remote (cloud) sims ARE supported: the app reaches the developer's local
+ * Metro through a sim-remote reverse tunnel established lazily in the
+ * JsRuntimeDebugger blueprint (every Metro-backed tool funnels through it), so
+ * no per-tool transport plumbing is needed here.
  */
 export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 

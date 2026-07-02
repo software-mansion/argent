@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeDevtoolsRef,
   precheckNativeDevtools,
@@ -7,6 +7,7 @@ import {
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
+import { ensureDeps } from "../../utils/check-deps";
 import {
   parseNativeDescribeScreenResult,
   type NativeDescribeScreenResult,
@@ -40,8 +41,7 @@ type Result =
 
 export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
   id: "native-describe-screen",
-  requires: ["xcrun"],
-  capability: { apple: { simulator: true, device: true } },
+  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:
@@ -61,6 +61,9 @@ If status is restart_required: call restart-app then retry.`,
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
+    const device = resolveDevice(params.udid);
+    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
+
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
     const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
@@ -78,7 +81,12 @@ If status is restart_required: call restart-app then retry.`,
     )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
 
     if (result.error) {
-      throw new Error(result.error);
+      throw new FailureError(result.error, {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_DESCRIBE_ERROR,
+        failure_stage: "native_devtools_describe_screen",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      });
     }
 
     const parsed = parseNativeDescribeScreenResult(result);

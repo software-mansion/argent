@@ -126,6 +126,16 @@ describe("parseFlow", () => {
     expect(() => parseFlow("- echo: Hello\n")).toThrow("expected an object with a steps array");
   });
 
+  it("throws a validation error (not a TypeError) on a primitive step entry", () => {
+    const content = 'executionPrerequisite: ""\nsteps:\n  - tap\n';
+    expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
+  });
+
+  it("throws a validation error on a null step entry", () => {
+    const content = 'executionPrerequisite: ""\nsteps:\n  - ~\n';
+    expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
+  });
+
   it("roundtrips: serialize then parse", () => {
     const flow: FlowFile = {
       executionPrerequisite: "App freshly loaded on home screen",

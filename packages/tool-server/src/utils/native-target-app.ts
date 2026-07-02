@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { NativeAppState, NativeDevtoolsApi } from "../blueprints/native-devtools";
 
 export type NativeTargetResolutionSource =
@@ -46,9 +47,15 @@ export async function resolveNativeTargetApp(
 
   const connectedApps = await inspectConnectedNativeApps(api);
   if (connectedApps.length === 0) {
-    throw new Error(
+    throw new FailureError(
       "No native-devtools-connected apps are available for auto-targeting. " +
-        "Launch or restart the app first, provide bundleId explicitly, or use screenshot to inspect visible Home/system UI."
+        "Launch or restart the app first, provide bundleId explicitly, or use screenshot to inspect visible Home/system UI.",
+      {
+        error_code: FAILURE_CODES.NATIVE_TARGET_NO_CONNECTED_APPS,
+        failure_stage: "native_target_auto_resolve",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
 
@@ -61,10 +68,16 @@ export async function resolveNativeTargetApp(
       };
     }
     const app = connectedApps[0];
-    throw new Error(
+    throw new FailureError(
       "A single native-devtools-connected app is available, but it is not foreground-like and may be backgrounded while home/system UI is visible.\n" +
         `- ${app.bundleId} (applicationState=${app.applicationState}, foregroundActiveScenes=${app.foregroundActiveSceneCount}, foregroundInactiveScenes=${app.foregroundInactiveSceneCount})\n` +
-        "Provide bundleId explicitly if you still want to target this app."
+        "Provide bundleId explicitly if you still want to target this app.",
+      {
+        error_code: FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND,
+        failure_stage: "native_target_auto_resolve",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
 
@@ -78,9 +91,15 @@ export async function resolveNativeTargetApp(
         `- ${app.bundleId} (applicationState=${app.applicationState}, foregroundActiveScenes=${app.foregroundActiveSceneCount}, foregroundInactiveScenes=${app.foregroundInactiveSceneCount})`
     )
     .join("\n");
-  throw new Error(
+  throw new FailureError(
     "Multiple native-devtools-connected apps are available and none can be identified as uniquely frontmost.\n" +
       `${appList}\n` +
-      "Provide bundleId explicitly."
+      "Provide bundleId explicitly.",
+    {
+      error_code: FAILURE_CODES.NATIVE_TARGET_MULTIPLE_APPS_AMBIGUOUS,
+      failure_stage: "native_target_auto_resolve",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
   );
 }

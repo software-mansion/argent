@@ -29,7 +29,7 @@ For implementation tasks that modify visible UI, this workflow can also serve as
    - **Permission prompts / system modal overlays**: try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably.
    - **Fallback**: use `screenshot` to estimate where the desired component is, then verify immediately after the action.
 3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...) — you receive a screenshot automatically.
-4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with normal downscaled `screenshot`. Pick evidence by what's being asserted:
+4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, prefer blocking until it settles with `await-ui-element` (expected element `visible`, or a spinner `hidden`) over a guessed delay — but only with a selector you can trust (`text`/`identifier`/`role`) that the screen is known to have or that you saw in a prior `describe`; a guessed one just times out. Otherwise use a short fixed wait. Pick evidence by what's being asserted:
    - **Visual** (layout, spacing, color, typography, image/icon rendering, clipping, overflow, text rendering): prefer `screenshot-diff` against the baseline captured in step 1 — it surfaces pixel-visible changes the auto-screenshot might miss. Fall back to visual inspection of the auto-screenshot only when a stable baseline isn't available.
    - **Structural** (navigation state, element existence, accessibility labels/values, selection, hierarchy, route): verify with `describe`, `debugger-component-tree`, or `native-describe-screen`.
    - **Runtime / log / network** (console errors, API calls, persistence, timing): verify with `view-network-logs`, `debugger-log-registry`, `debugger-evaluate`, or targeted tests.
@@ -58,9 +58,9 @@ Steps:
 ```
 1. screenshot → see login screen
 2. gesture-tap { x: 0.5, y: 0.4 }  → tap email field
-3. paste { text: "user@example.com" }
+3. keyboard { text: "user@example.com" }
 4. gesture-tap { x: 0.5, y: 0.55 } → tap password field
-5. paste { text: "password123" }
+5. keyboard { text: "password123" }
 6. gesture-tap { x: 0.5, y: 0.7 }  → tap Login button
 7. screenshot → verify home screen appeared
 ```
@@ -89,11 +89,20 @@ Steps:
 8. Report combined verdict from expected behavior, visual inspection, diff summary, and structural evidence.
 ```
 
+### Wait for a loading spinner
+
+```
+1. gesture-tap { x: 0.5, y: 0.7 } → trigger an action that fetches data
+2. screenshot → loading spinner is showing
+3. await-ui-element { condition: hidden, selector: { text: "Loading" } } → block until the fetch finishes and the spinner disappears
+4. describe / screenshot → verify the fetched content rendered
+```
+
 ---
 
 ## 4. Recovery Pattern
 
-- If screenshot shows loading/transition: wait 500ms, retake with `screenshot`.
+- If a screen is mid-transition or loading: block until it settles with `await-ui-element` (wait for the target element to be `visible`, or the spinner/placeholder to be `hidden`) instead of a blind fixed delay, then re-check. Fall back to a fixed wait + `screenshot` only when no element reliably marks the transition.
 - If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
 - If a permission dialog or modal is visible: re-run `describe` first. Stay in screenshot-driven navigation only when the overlay is not exposed reliably, then switch back to `describe` / `debugger-component-tree` as soon as it is dismissed.
 - If tap fails twice at same coordinates: stop, re-discover, report if element not found.
@@ -101,7 +110,7 @@ Steps:
 
 ## Tips
 
-- **Use `paste` for text entry on iOS** — faster and more reliable than key-by-key `keyboard`. `paste` is iOS-only; on Android use `keyboard` instead.
+- **Wait on the UI, don't poll.** When a step needs the screen to change first, gate it with `await-ui-element` (block until an element is `visible`/`hidden` or contains `text`) rather than repeated `screenshot` calls with fixed sleeps. See the `await-ui-element` section of `argent-device-interact`.
 - **Use `gesture-custom` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Permission modals**: try `describe` first. Use `screenshot` only as fallback, tap one visible button at a time, and verify with the returned screenshot before continuing.

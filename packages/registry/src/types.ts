@@ -13,6 +13,18 @@ export enum ServiceState {
   ERROR = "ERROR",
 }
 
+/**
+ * True when a service node is (or is becoming) a live, disposable process —
+ * i.e. there is something real to tear down. ERROR and TERMINATING nodes hold
+ * no running instance: a start that threw (e.g. SimulatorServer rejecting a
+ * tvOS UDID) leaves an ERROR node behind, and reporting that as "stopped" is
+ * misleading. The stop tools use this so `stopped: true` means a server was
+ * actually running.
+ */
+export function isLiveServiceState(state: ServiceState): boolean {
+  return state === ServiceState.RUNNING || state === ServiceState.STARTING;
+}
+
 export type ServiceEvents = {
   terminated: (error?: Error) => void;
 };
@@ -69,6 +81,27 @@ export interface InvokeToolOptions {
    * "legacy caller — behave exactly as before the file boundary existed".
    */
   fileInputs?: Record<string, ResolvedFileInput>;
+  /** Optional caller-provided id used to correlate outer request metadata. */
+  toolInvocationId?: string;
+  /**
+   * Registers a freshly-minted invocation id against the outer request's
+   * telemetry attribution, returning a release fn. Set by the tool-server's HTTP
+   * layer (bound to the request's metadata) and forwarded verbatim into
+   * {@link ToolContext}. Orchestrator tools (run-sequence, flow-execute,
+   * flow-add-step) call it for every sub-tool they dispatch through
+   * {@link Registry.invokeTool} so nested invocations inherit attribution
+   * instead of being recorded as anonymous; they also pass it back down here so
+   * propagation survives arbitrary nesting.
+   *
+   * The outer request's AI client is inherited unchanged. The platform is
+   * re-derived from each sub-tool's own `childArgs` (its `udid` / `device_id` /
+   * `avdName`), falling back to the outer request's platform when the sub-tool
+   * carries no device arg — an orchestrator like flow-execute has no platform of
+   * its own and a single flow can target several devices, so the child's device
+   * arg is the only correct platform source. Opaque to the registry — it neither
+   * reads nor validates the recorded metadata.
+   */
+  recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;
 }
 
 /**
@@ -86,9 +119,9 @@ export interface ToolContext extends InvokeToolOptions {
 
 // ── Device + Capability Types ──
 
-export type Platform = "ios" | "android" | "chromium";
+export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega";
 
-export type DeviceKind = "simulator" | "emulator" | "device" | "app" | "unknown";
+export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
@@ -114,6 +147,15 @@ export interface ToolCapability {
     simulator?: boolean;
     device?: boolean;
   };
+  /**
+   * Remote-iOS support, driven via `sim-remote`. Independent matrix from
+   * `apple` because remote sims have different host-binary requirements
+   * (`sim-remote` instead of `xcrun`) and a different transport stack
+   * (MoQ + TCP proxy instead of local WebSocket + Unix sockets).
+   */
+  appleRemote?: {
+    simulator?: boolean;
+  };
   android?: {
     emulator?: boolean;
     device?: boolean;
@@ -121,6 +163,10 @@ export interface ToolCapability {
   };
   chromium?: {
     app?: boolean;
+  };
+  vega?: {
+    vvd?: boolean;
+    device?: boolean;
   };
   /** Optional refiner. Returns true if this device is supported. */
   supports?: (device: DeviceInfo) => boolean;
@@ -146,7 +192,7 @@ export interface ToolCapability {
  * On a missing binary, the HTTP layer returns 424 Failed Dependency with an
  * install hint the agent can surface verbatim.
  */
-export type ToolDependency = "adb" | "xcrun" | "emulator";
+export type ToolDependency = "adb" | "xcrun" | "emulator" | "sim-remote" | "vega";
 
 // ── Tool Types ──
 
@@ -188,6 +234,19 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * is still registered; gating happens at invocation, not at registration.
    */
   featureFlag?: string;
+  /**
+   * Runtime predicate to hide this tool from exposure even when its feature flag
+   * (if any) is on. Evaluated at the HTTP edge on every `GET /tools` and
+   * `POST /tools/:name` — the same cadence as the feature-flag check — so a tool
+   * can appear/disappear with live server state without restarting the
+   * long-lived tool-server. Returning true hides the tool (absent from the list,
+   * 404 on invocation). Use for tools valid only in one server mode; e.g.
+   * `await_user_selection` is hidden while an `argent lens` CLI session owns the
+   * preview window, because feedback is relayed into the agent's terminal
+   * instead of through a blocking await — so the tool should not be offered at
+   * all rather than offered-but-forbidden.
+   */
+  hideWhen?: () => boolean;
   /** Per-platform support declaration. Cross-platform tools assert against this before dispatching. */
   capability?: ToolCapability;
   /**
@@ -222,7 +281,7 @@ export type RegistryEvents = {
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
-  toolInvoked: (toolId: string) => void;
-  toolCompleted: (toolId: string, durationMs: number) => void;
-  toolFailed: (toolId: string, error: Error) => void;
+  toolInvoked: (toolId: string, toolInvocationId: string) => void;
+  toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number) => void;
+  toolFailed: (toolId: string, toolInvocationId: string, error: Error, durationMs?: number) => void;
 };

@@ -19,6 +19,7 @@
  *   argent run <tool> [flags]     Invoke a tool by name
  *   argent server start [flags]   Spawn a long-lived tool-server (foreground by default)
  *   argent server status|stop|logs   Manage the shared tool-server
+ *   argent lens                   Open Argent Lens bound to a fresh claude session (macOS)
  *   argent link [flags]           Route client requests to a remote tool-server
  *   argent unlink                 Remove the persisted remote link
  *   argent enable <flag>          Enable a feature flag (global by default)
@@ -70,11 +71,13 @@ Commands:
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
   server      Manage the shared tool-server (start / status / stop / logs)
+  lens        Open Argent Lens bound to a fresh claude session (macOS)
   link        Route client requests to a remote tool-server
   unlink      Remove the persisted remote tool-server link
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
+  telemetry   Manage anonymous opt-out telemetry (status / enable / disable)
 
 Options:
   --help, -h     Show this help message
@@ -117,6 +120,8 @@ async function main(): Promise<void> {
       return (await loadCli()).run(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "server":
       return (await loadCli()).server(rest, { paths: BUNDLED_RUNTIME_PATHS });
+    case "lens":
+      return (await loadCli()).lens(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "link":
       return (await loadCli()).link(rest);
     case "unlink":
@@ -127,6 +132,8 @@ async function main(): Promise<void> {
       return (await loadCli()).disable(rest);
     case "flags":
       return (await loadCli()).flags(rest);
+    case "telemetry":
+      return (await loadCli()).telemetry(rest);
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");

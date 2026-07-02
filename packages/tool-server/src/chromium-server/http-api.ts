@@ -202,11 +202,17 @@ interface WsRequest {
  *
  * Lives in this file rather than the Express router because Express doesn't
  * own the HTTP upgrade handshake — the `ws` library does.
+ *
+ * `authorizeUpgrade` gates every handshake (Host / Origin guard). Because the
+ * `ws` library — not Express — owns the upgrade, none of the HTTP middleware
+ * (Host guard, auth) runs here, so this is the only place the same-origin /
+ * DNS-rebinding defense can be applied to the control channel.
  */
 export function attachChromiumServerWebsocket(
   httpServer: Server,
   basePath: string,
-  resolveServer: (req: IncomingMessage) => ChromiumServer | null
+  resolveServer: (req: IncomingMessage) => ChromiumServer | null,
+  authorizeUpgrade: (req: IncomingMessage) => boolean
 ): WebSocketServer {
   // noServer mode: we handle the upgrade ourselves so we can route by URL.
   const wss = new WebSocketServer({ noServer: true });
@@ -214,6 +220,15 @@ export function attachChromiumServerWebsocket(
   httpServer.on("upgrade", (req, socket, head) => {
     const url = req.url ?? "";
     if (!url.startsWith(basePath) || !url.endsWith("/ws")) return;
+    // Reject cross-origin / DNS-rebinding handshakes before the socket is bound
+    // to a device. Without this, any web page could open this control channel
+    // cross-origin (CSWSH) and inject synthetic input — the HTTP Host/auth
+    // middleware never runs on an upgrade. Checked before resolveServer so a
+    // cross-origin probe can't even learn whether a device exists.
+    if (!authorizeUpgrade(req)) {
+      socket.destroy();
+      return;
+    }
     const server = resolveServer(req);
     if (!server) {
       socket.destroy();

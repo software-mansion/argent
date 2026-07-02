@@ -20,13 +20,16 @@
     "format": "prettier --write .",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
-    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json"
+    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
+    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs scripts/next-canary-version.test.mjs",
+    "check:versions": "node scripts/check-workspace-versions.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.5.0",
-    "globals": "^17.6.0",
-    "prettier": "^3.8.4",
-    "typescript-eslint": "^8.61.1"
+    "globals": "^17.7.0",
+    "prettier": "^3.8.5",
+    "semver": "^7.8.5",
+    "typescript-eslint": "^8.62.0"
   }
 }

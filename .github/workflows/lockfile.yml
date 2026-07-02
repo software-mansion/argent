@@ -1,0 +1,31 @@
+name: Lockfile
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lockfile-sync:
+    name: package-lock.json in sync
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Verify package-lock.json is in sync with package.json
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          if ! git diff --exit-code -- package-lock.json; then
+            echo "::error::package-lock.json is out of sync. Run 'npm install' locally and commit the updated package-lock.json."
+            exit 1
+          fi

@@ -1,10 +1,15 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, shellQuote } from "../../../utils/adb";
-import { assertAmStartOk, resolveLauncherActivity } from "../../launch-app/platforms/android";
-import type { RestartAppAndroidServices, RestartAppParams, RestartAppResult } from "../types";
+import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
+import {
+  assertAmStartOk,
+  normalizeActivityComponent,
+  resolveLauncherActivity,
+} from "../../launch-app/platforms/android";
+import type { RestartAppParams, RestartAppResult } from "../types";
 
 export const androidImpl: PlatformImpl<
-  RestartAppAndroidServices,
+  Record<string, unknown>,
   RestartAppParams,
   RestartAppResult
 > = {
@@ -19,13 +24,13 @@ export const androidImpl: PlatformImpl<
     // assertion launch-app moved to.
     let component: string;
     if (activity) {
-      component = activity.startsWith(".")
-        ? `${bundleId}/${activity}`
-        : activity.includes("/")
-          ? activity
-          : `${bundleId}/${activity}`;
+      // Shared with launch-app so a bare class name ("MainActivity") becomes a
+      // relative `${pkg}/.MainActivity` rather than the `${pkg}/MainActivity`
+      // that `am start` rejects — the two tools must agree on this.
+      component = normalizeActivityComponent(bundleId, activity);
     } else {
-      component = await resolveLauncherActivity(udid, bundleId);
+      const isTv = await isAndroidTv(udid);
+      component = await resolveLauncherActivity(udid, bundleId, isTv);
     }
     const out = await adbShell(udid, `am start -W -n ${shellQuote(component)}`, {
       timeoutMs: 30_000,
@@ -33,9 +38,16 @@ export const androidImpl: PlatformImpl<
     try {
       assertAmStartOk(out);
     } catch (err) {
-      throw new Error(`relaunch failed: ${err instanceof Error ? err.message : String(err)}`, {
-        cause: err,
-      });
+      throw new FailureError(
+        `relaunch failed: ${err instanceof Error ? err.message : String(err)}`,
+        {
+          error_code: FAILURE_CODES.ANDROID_RESTART_FAILED,
+          failure_stage: "android_restart_am_start",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        },
+        { cause: err instanceof Error ? err : new Error(String(err)) }
+      );
     }
     return { restarted: true, bundleId };
   },

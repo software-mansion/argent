@@ -1,5 +1,5 @@
 import * as path from "path";
-import { execSyncWithTimeout } from "./run-with-timeout";
+import { execAsyncWithTimeout } from "./run-with-timeout";
 
 /**
  * Known xctrace schema names that contain CPU time-profile data.
@@ -29,28 +29,18 @@ export interface ExportDiagnostics {
   errors: Record<string, string>;
 }
 
-function getXctraceVersion(): number {
-  try {
-    const output = execSyncWithTimeout("xctrace version 2>&1 || true", {
-      encoding: "utf-8",
-    }) as string;
-    const match = output.match(/(\d+)\./);
-    return match ? parseInt(match[1]!, 10) : 0;
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * Run `xctrace export --toc` to discover what tables/schemas exist in the trace.
  * Returns an array of schema names found in the TOC.
  */
-function discoverTraceSchemas(traceFile: string): string[] {
+async function discoverTraceSchemas(
+  traceFile: string,
+  diagnostics?: ExportDiagnostics
+): Promise<string[]> {
   try {
-    const toc = execSyncWithTimeout(`xctrace export --input "${traceFile}" --toc`, {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }) as string;
+    const { stdout: toc } = await execAsyncWithTimeout(
+      `xctrace export --input "${traceFile}" --toc`
+    );
     const schemas: string[] = [];
     const schemaRe = /schema="([^"]+)"/g;
     let m;
@@ -58,7 +48,13 @@ function discoverTraceSchemas(traceFile: string): string[] {
       schemas.push(m[1]);
     }
     return schemas;
-  } catch {
+  } catch (err) {
+    // Record rather than swallow: a `--toc` failure (e.g. ENOBUFS, timeout)
+    // leaves us with no schema list, which previously surfaced downstream as a
+    // misleading "schema not found / brute-force failed" message.
+    if (diagnostics) {
+      diagnostics.errors.toc = err instanceof Error ? err.message : String(err);
+    }
     return [];
   }
 }
@@ -67,8 +63,11 @@ function discoverTraceSchemas(traceFile: string): string[] {
  * Find the correct CPU schema xpath by checking the trace TOC.
  * Falls back to trying known schema candidates if TOC parsing fails.
  */
-function resolveCpuXpath(traceFile: string, diagnostics: ExportDiagnostics): string | null {
-  const tocSchemas = discoverTraceSchemas(traceFile);
+async function resolveCpuXpath(
+  traceFile: string,
+  diagnostics: ExportDiagnostics
+): Promise<string | null> {
+  const tocSchemas = await discoverTraceSchemas(traceFile, diagnostics);
   diagnostics.tocSchemas = tocSchemas;
 
   if (tocSchemas.length > 0) {
@@ -91,20 +90,17 @@ function resolveCpuXpath(traceFile: string, diagnostics: ExportDiagnostics): str
  * Try exporting CPU data with each known schema name until one succeeds.
  * Used as a fallback when TOC discovery doesn't find a match or fails.
  */
-function tryCpuExportFallback(
+async function tryCpuExportFallback(
   traceFile: string,
   outPath: string,
   diagnostics: ExportDiagnostics
-): boolean {
+): Promise<boolean> {
   const triedSchemas: string[] = [];
   for (const candidate of CPU_SCHEMA_CANDIDATES) {
     const xpath = `/trace-toc/run[@number="1"]/data/table[@schema="${candidate}"]`;
     try {
-      execSyncWithTimeout(
-        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${xpath}'`,
-        {
-          stdio: "pipe",
-        }
+      await execAsyncWithTimeout(
+        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${xpath}'`
       );
       diagnostics.cpuSchemaUsed = candidate;
       return true;
@@ -118,10 +114,10 @@ function tryCpuExportFallback(
   return false;
 }
 
-export function exportIosTraceData(traceFile: string): {
+export async function exportIosTraceData(traceFile: string): Promise<{
   files: Record<string, string | null>;
   diagnostics: ExportDiagnostics;
-} {
+}> {
   const exportedFiles: Record<string, string | null> = {};
   const diagnostics: ExportDiagnostics = {
     tocSchemas: [],
@@ -136,13 +132,12 @@ export function exportIosTraceData(traceFile: string): {
 
     if (key === "cpu") {
       // Dynamic CPU schema resolution
-      const resolvedXpath = resolveCpuXpath(traceFile, diagnostics);
+      const resolvedXpath = await resolveCpuXpath(traceFile, diagnostics);
 
       if (resolvedXpath) {
         try {
-          execSyncWithTimeout(
-            `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${resolvedXpath}'`,
-            { stdio: "pipe" }
+          await execAsyncWithTimeout(
+            `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${resolvedXpath}'`
           );
           exportedFiles[key] = outPath;
           continue;
@@ -154,7 +149,7 @@ export function exportIosTraceData(traceFile: string): {
       }
 
       // Fallback: brute-force try all known CPU schemas
-      if (tryCpuExportFallback(traceFile, outPath, diagnostics)) {
+      if (await tryCpuExportFallback(traceFile, outPath, diagnostics)) {
         exportedFiles[key] = outPath;
       } else {
         exportedFiles[key] = null;
@@ -162,40 +157,19 @@ export function exportIosTraceData(traceFile: string): {
       continue;
     }
 
-    if (key === "leaks") {
-      const xcVersion = getXctraceVersion();
-      const halFlag = xcVersion >= 15 ? " --hal" : "";
-      try {
-        execSyncWithTimeout(
-          `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'${halFlag}`,
-          { stdio: "pipe" }
-        );
-        exportedFiles[key] = outPath;
-      } catch {
-        if (halFlag) {
-          try {
-            execSyncWithTimeout(
-              `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
-              { stdio: "pipe" }
-            );
-            exportedFiles[key] = outPath;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            diagnostics.errors[key] = msg;
-            exportedFiles[key] = null;
-          }
-        } else {
-          exportedFiles[key] = null;
-        }
-      }
-      continue;
-    }
-
-    // Default export (hangs, etc.)
+    // Default export (hangs + leaks).
+    //
+    // Leaks need no special handling: a single `xctrace export --xpath` of the
+    // `Leaks` track detail (EXPORTS.leaks). Unlike the CPU/hangs schema tables,
+    // that detail exports self-closing attribute rows — `<row
+    // leaked-object="…" size="…" responsible-frame="…" count="…"
+    // responsible-library="…" />` — which is exactly what parseLeaksXml
+    // matches. (A previous `--hal` gate here passed a flag that `xctrace
+    // export` does not accept; the first attempt always failed and fell back to
+    // this same plain export, so it has been removed.)
     try {
-      execSyncWithTimeout(
-        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
-        { stdio: "pipe" }
+      await execAsyncWithTimeout(
+        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`
       );
       exportedFiles[key] = outPath;
     } catch (err) {
