@@ -1,18 +1,29 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { Registry, type DeviceInfo } from "@argent/registry";
 
 // Capture the adb command strings instead of shelling out to a real device.
-// Keep `shellQuote` real (android-input relies on it) — only stub the transport.
-// `vi.hoisted` so the mock fn exists when the hoisted `vi.mock` factory runs.
-const { adbShell } = vi.hoisted(() => ({
+// Keep `shellQuote` real (android-input relies on it) — only stub the transport
+// and the `isAndroidTv` runtime probe (so the phone/TV branch is deterministic).
+// `vi.hoisted` so the mock fns exist when the hoisted `vi.mock` factory runs.
+const { adbShell, isAndroidTv } = vi.hoisted(() => ({
   // Typed params so `adbShell.mock.calls[0]` is a `[serial, cmd, opts?]` tuple
   // (an untyped `vi.fn(async () => "")` infers a zero-arg call and TS2493s on
   // destructuring — vitest transforms tests with esbuild, so only `tsc` catches it).
   adbShell: vi.fn(async (_serial: string, _cmd: string, _opts?: unknown): Promise<string> => ""),
+  isAndroidTv: vi.fn(async (_serial: string): Promise<boolean> => false),
 }));
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   adbShell,
+  isAndroidTv,
 }));
+
+// Stub the TV backend so the routing test can prove a TV target goes here and a
+// phone target does not, without driving the real focus daemon.
+const { typeTv } = vi.hoisted(() => ({
+  typeTv: vi.fn(async (): Promise<{ typed: string; keys: number }> => ({ typed: "TV", keys: 0 })),
+}));
+vi.mock("../src/tools/keyboard/platforms/tv", () => ({ typeTv }));
 
 import {
   ANDROID_NAMED_KEYCODES,
@@ -22,6 +33,9 @@ import {
   injectAndroidNamedKey,
 } from "../src/utils/android-input";
 import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
+import { InvalidToolInputError } from "../src/utils/capability";
+import { makeAndroidImpl } from "../src/tools/keyboard/platforms/android";
+import type { KeyboardParams } from "../src/tools/keyboard/types";
 
 const SERIAL = "emulator-5554";
 
@@ -42,6 +56,51 @@ describe("android-input — keycode maps", () => {
       );
     }
     expect(ANDROID_BUTTON_KEYCODES.back).toBe(4); // KEYCODE_BACK
+  });
+
+  it("pins the exact android.view.KeyEvent code for every named key (not self-referential)", () => {
+    // Assert against literal keycodes, independent of the source constant, so a
+    // typo or a wrong value is caught — the injection tests below compare to the
+    // constant itself and would pass even if the value were wrong.
+    expect(ANDROID_NAMED_KEYCODES).toEqual({
+      "enter": 66,
+      "return": 66,
+      "escape": 111,
+      "esc": 111,
+      "backspace": 67,
+      "delete": 67,
+      "tab": 61,
+      "space": 62,
+      "arrow-up": 19,
+      "arrow-down": 20,
+      "arrow-left": 21,
+      "arrow-right": 22,
+      "f1": 131,
+      "f2": 132,
+      "f3": 133,
+      "f4": 134,
+      "f5": 135,
+      "f6": 136,
+      "f7": 137,
+      "f8": 138,
+      "f9": 139,
+      "f10": 140,
+      "f11": 141,
+      "f12": 142,
+    });
+  });
+
+  it("pins the exact keycode for every Android hardware button (catches swapped codes)", () => {
+    // `toEqual` (exact) so e.g. swapping volumeUp/volumeDown — green under a
+    // presence-only check — turns this red.
+    expect(ANDROID_BUTTON_KEYCODES).toEqual({
+      home: 3,
+      back: 4,
+      power: 26,
+      volumeUp: 24,
+      volumeDown: 25,
+      appSwitch: 187,
+    });
   });
 
   it("maps `delete` to backspace (KEYCODE_DEL), matching iOS and the HID vocabulary", () => {
@@ -80,12 +139,18 @@ describe("android-input — injection", () => {
     );
   });
 
-  it("rejects an unknown named key", async () => {
+  it("rejects an unknown named key as invalid input (→ HTTP 400)", async () => {
+    // InvalidToolInputError (not a plain Error) so the HTTP layer maps it to 400
+    // — an unknown key is a caller mistake, not an internal server fault.
     await expect(injectAndroidNamedKey(SERIAL, "nope")).rejects.toThrow(/Unknown key/);
+    await expect(injectAndroidNamedKey(SERIAL, "nope")).rejects.toBeInstanceOf(
+      InvalidToolInputError
+    );
   });
 
-  it("rejects newlines rather than silently truncating", () => {
+  it("rejects newlines as invalid input (→ HTTP 400) rather than silently truncating", () => {
     expect(() => assertTypeableAndroidText("line1\nline2")).toThrow(/newline/);
+    expect(() => assertTypeableAndroidText("line1\nline2")).toThrow(InvalidToolInputError);
     expect(() => assertTypeableAndroidText("ok")).not.toThrow();
   });
 });
@@ -150,8 +215,11 @@ describe("android-input — rejects text `adb input text` can't type", () => {
     await expect(injectAndroidText(SERIAL, "hi 😀")).rejects.toThrow(/printable ASCII/);
   });
 
-  it("rejects accented / non-ASCII letters (silently dropped by input text)", async () => {
+  it("rejects accented / non-ASCII letters (silently dropped by input text) as HTTP-400 input", async () => {
     await expect(injectAndroidText(SERIAL, "café")).rejects.toThrow(/é/);
+    // Caller input error, not a 500: must be InvalidToolInputError so `keyboard`
+    // with `café` on Android returns 400, not a generic internal error.
+    await expect(injectAndroidText(SERIAL, "café")).rejects.toBeInstanceOf(InvalidToolInputError);
   });
 
   it("does not shell out at all when the text is rejected", async () => {
@@ -164,5 +232,53 @@ describe("android-input — rejects text `adb input text` can't type", () => {
     expect(() =>
       assertTypeableAndroidText("hello WORLD 123 !@#$%^&*()_+-=[]{};:'\",.<>/?`~|\\")
     ).not.toThrow();
+  });
+});
+
+// Exercises `makeAndroidImpl().handler` end-to-end (the piece the low-level
+// helper tests above never invoke): the isAndroidTv phone-vs-TV branch, the
+// `keys` count, and the `{ typed, keys }` result shape.
+describe("android keyboard impl — routing, keys count, result shape", () => {
+  const impl = makeAndroidImpl(new Registry());
+  const phone = { id: SERIAL, platform: "android", kind: "handset" } as unknown as DeviceInfo;
+
+  beforeEach(() => {
+    adbShell.mockClear();
+    typeTv.mockClear();
+    isAndroidTv.mockReset();
+    isAndroidTv.mockResolvedValue(false);
+  });
+
+  it("routes a non-TV android target to the adb phone path (not typeTv)", async () => {
+    const res = await impl.handler({}, { udid: SERIAL, text: "hi there" } as KeyboardParams, phone);
+    // `keys` = 8 codepoints; `typed` echoes the text; text goes over `input text`.
+    expect(res).toEqual({ typed: "hi there", keys: 8 });
+    expect(typeTv).not.toHaveBeenCalled();
+    expect(adbShell).toHaveBeenCalledWith(SERIAL, "input text 'hi there'", expect.anything());
+  });
+
+  it("routes an android TV target to typeTv (focus daemon), never the phone path", async () => {
+    isAndroidTv.mockResolvedValue(true);
+    const sentinel = { typed: "TV", keys: 0 };
+    typeTv.mockResolvedValue(sentinel);
+    const res = await impl.handler({}, { udid: SERIAL, text: "hi" } as KeyboardParams, phone);
+    expect(res).toBe(sentinel);
+    // Phone injection must not fire for a TV target.
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("counts a named key as 1 and returns it as `typed` when no text is given", async () => {
+    const res = await impl.handler({}, { udid: SERIAL, key: "enter" } as KeyboardParams, phone);
+    expect(res).toEqual({ typed: "enter", keys: 1 });
+    expect(adbShell).toHaveBeenCalledWith(SERIAL, "input keyevent 66", expect.anything());
+  });
+
+  it("counts key + text together (1 + codepoints) and returns text as `typed`", async () => {
+    const res = await impl.handler(
+      {},
+      { udid: SERIAL, key: "enter", text: "abc" } as KeyboardParams,
+      phone
+    );
+    expect(res).toEqual({ typed: "abc", keys: 4 });
   });
 });

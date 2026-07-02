@@ -17,6 +17,7 @@
  * simulator-server; only key/text/button events move to this transport.
  */
 import { adbShell, shellQuote } from "./adb";
+import { InvalidToolInputError } from "./capability";
 
 // android.view.KeyEvent keycodes for the keyboard tool's named-`key` vocabulary
 // (must cover every key in ../tools/keyboard/key-codes.ts NAMED_KEYS).
@@ -66,7 +67,9 @@ export function assertTypeableAndroidText(text: string): void {
   // Keep the newline case as its own message: it's the one non-typeable char
   // with an obvious alternative, so point the caller at it.
   if (/[\n\r]/.test(text)) {
-    throw new Error(
+    // Well-typed but not injectable: a caller input error (HTTP 400 via
+    // InvalidToolInputError), not an internal server fault (500).
+    throw new InvalidToolInputError(
       'keyboard text must not contain a newline on Android; press it with key: "enter" instead'
     );
   }
@@ -74,7 +77,7 @@ export function assertTypeableAndroidText(text: string): void {
     const cp = char.codePointAt(0)!;
     if (cp < 0x20 || cp > 0x7e) {
       const hex = cp.toString(16).toUpperCase().padStart(4, "0");
-      throw new Error(
+      throw new InvalidToolInputError(
         `keyboard text can only contain printable ASCII on Android; character "${char}" ` +
           `(U+${hex}) can't be typed via \`adb input text\` — emoji crash it and other ` +
           `non-ASCII (accented, CJK) is silently dropped. Remove it.`
@@ -127,7 +130,8 @@ export async function injectAndroidKeycode(serial: string, keycode: number): Pro
 export async function injectAndroidNamedKey(serial: string, name: string): Promise<void> {
   const keycode = ANDROID_NAMED_KEYCODES[name.toLowerCase()];
   if (keycode == null) {
-    throw new Error(
+    // Unknown key name is a caller input error (HTTP 400), not a 500.
+    throw new InvalidToolInputError(
       `Unknown key "${name}". Supported: ${Object.keys(ANDROID_NAMED_KEYCODES).join(", ")}`
     );
   }

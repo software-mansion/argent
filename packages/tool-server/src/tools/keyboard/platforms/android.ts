@@ -22,8 +22,10 @@ async function typeAndroidPhone(
   }
   if (params.text) {
     await injectAndroidText(device.id, params.text);
-    // Count by codepoint (not UTF-16 units) so a non-BMP char reports keys: 1,
-    // matching the tv and simulator-server keyboard backends.
+    // Count by codepoint (not UTF-16 units) to match the tv / simulator-server
+    // backends. `injectAndroidText` has already rejected any non-ASCII (so this
+    // equals `params.text.length` here), but keep the codepoint-safe count so the
+    // result stays correct if the printable-ASCII guard is ever relaxed.
     keysPressed += [...params.text].length;
   }
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };

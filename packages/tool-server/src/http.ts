@@ -21,6 +21,7 @@ import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs } from "./file-inputs";
 import {
   assertSupported,
+  InvalidToolInputError,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
@@ -715,6 +716,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
         if (unsupportedErr) {
           res.status(400).json({ error: unsupportedErr.message });
+          return;
+        }
+        // A tool rejecting its arguments (e.g. a newline in Android keyboard
+        // text, an unknown named key) is a client input error, not an internal
+        // fault — surface it as 400, matching the zod-validation path, instead
+        // of a misleading 500.
+        const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
+        if (invalidInputErr) {
+          res.status(400).json({ error: invalidInputErr.message });
           return;
         }
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);

@@ -25,6 +25,7 @@ import {
   __resetDepCacheForTests,
   ensureDep,
 } from "../src/utils/check-deps";
+import { InvalidToolInputError } from "../src/utils/capability";
 
 function stubProbe(missing: readonly string[]): void {
   execFileMock.mockImplementation(
@@ -169,6 +170,28 @@ describe("http dependency gate", () => {
     const res = await request(app).post("/tools/cross-platform-thing").send({});
     expect(res.status).toBe(424);
     expect(res.body.error).toMatch(/android-platform-tools/);
+  });
+
+  it("maps an InvalidToolInputError thrown from execute to 400, not 500", async () => {
+    // A tool rejecting its (well-typed) arguments — e.g. a newline / non-ASCII
+    // char in Android `keyboard` text, an unknown named key — is a client input
+    // error, not an internal fault. It reaches the dispatcher wrapped in
+    // ToolExecutionError, so the mapping must walk the cause chain.
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "picky-input",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      async execute() {
+        throw new InvalidToolInputError("that argument can't be carried out on this device");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app).post("/tools/picky-input").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("that argument can't be carried out on this device");
   });
 
   it("does not call the dep probe for tools without a `requires` declaration", async () => {

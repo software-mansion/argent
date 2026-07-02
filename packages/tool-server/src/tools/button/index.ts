@@ -5,6 +5,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../../utils/android-input";
+import { ensureDep } from "../../utils/check-deps";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -53,7 +54,7 @@ const capability: ToolCapability = {
 
 export const buttonTool: ToolDefinition<Params, Result> = {
   id: "button",
-  description: `Press a device hardware button (iOS simulator or Android emulator). Sends Down then Up events automatically.
+  description: `Press a device hardware button (iOS simulator or device, Android emulator or device). Sends Down then Up events automatically.
 Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
@@ -85,6 +86,12 @@ Fails if the device backend is not reachable — the simulator-server for iOS, o
       // created with `hw.keyboard = no` / `hw.mainKeys = no`. adb lands
       // regardless and surfaces a failure as a throw. The BUTTONS_BY_PLATFORM
       // guard above guarantees a keycode exists for every accepted button.
+      //
+      // Preflight adb here (the tool declares no global `requires` because the
+      // iOS path doesn't need it, and `services` skips the sim-server for
+      // Android) so a missing binary fails with the clean 424 install hint,
+      // mirroring the sibling `keyboard` tool's per-platform `requires: ["adb"]`.
+      await ensureDep("adb");
       await injectAndroidKeycode(params.udid, ANDROID_BUTTON_KEYCODES[params.button]!);
       return { pressed: params.button };
     }
