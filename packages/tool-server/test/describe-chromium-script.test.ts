@@ -99,7 +99,12 @@ function el(opts: Opts = {}): MockElement {
   node.__attrs = opts.attrs ?? {};
   node.__rect = rect;
   node.children = opts.children ?? [];
-  node.childNodes = opts.text ? [{ nodeType: 3, nodeValue: opts.text }] : [];
+  // The text node carries the element's own painted-text rect (`content`) so a Range
+  // over just this text node measures the own-text extent — matching the real browser,
+  // where selectNodeContents(textNode) spans the text and NOT sibling element boxes.
+  node.childNodes = opts.text
+    ? [{ nodeType: 3, nodeValue: opts.text, __content: opts.content ?? null }]
+    : [];
   // An open shadow root is a DocumentFragment exposing `.children`; the walker reads
   // `getShadowRoot.call(el)` then iterates `shadow.children`. null unless a fixture sets it.
   node.shadowRoot = opts.shadow ? ({ children: opts.shadow } as unknown) : null;
@@ -272,6 +277,16 @@ function identifiersOf(tree: unknown): string[] {
   (function rec(n: Record<string, unknown> | null) {
     if (!n) return;
     if (typeof n.identifier === "string") out.push(n.identifier);
+    for (const c of (n.children as Record<string, unknown>[]) ?? []) rec(c);
+  })(tree as Record<string, unknown>);
+  return out;
+}
+
+function rolesOf(tree: unknown): string[] {
+  const out: string[] = [];
+  (function rec(n: Record<string, unknown> | null) {
+    if (!n) return;
+    if (typeof n.role === "string") out.push(n.role);
     for (const c of (n.children as Record<string, unknown>[]) ?? []) rec(c);
   })(tree as Record<string, unknown>);
   return out;
@@ -534,6 +549,63 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     ]);
     expect(valuesOf(tree)).toContain("REALTEXT");
     expect(valuesOf(tree)).not.toContain("HIDDENKID2");
+    // The wrapper's frame is its OWN text rect ({0,40,60,12} → 0.06 x 0.012),
+    // NOT the union with the invisible child's still-laid-out box (BOX reaches
+    // y=130, which would have made the frame ~0.09 tall and mis-placed the tap
+    // point). selectNodeContents over the element would have picked up BOX; the
+    // own-text-only measurement does not.
+    const findByValue = (
+      n: Record<string, unknown> | null,
+      v: string
+    ): Record<string, unknown> | null => {
+      if (!n) return null;
+      if (n.value === v) return n;
+      for (const c of (n.children as Record<string, unknown>[]) ?? []) {
+        const r = findByValue(c, v);
+        if (r) return r;
+      }
+      return null;
+    };
+    const real = findByValue(tree as Record<string, unknown>, "REALTEXT");
+    const f = real!.frame as { y: number; width: number; height: number };
+    expect(f.width).toBeCloseTo(0.06, 5);
+    expect(f.height).toBeCloseTo(0.012, 5);
+  });
+
+  it("keeps a box-less wrapper's SEMANTIC role instead of promoting it away", () => {
+    // A display:contents <nav> (semantic role) with a single child and no
+    // clickable/name/text/id of its own must NOT be promoted to its child —
+    // that would silently drop the "nav" role. Only a plain <div> layer is
+    // promoted (see "still promotes an anonymous box-less wrapper" above).
+    const { tree } = run([
+      el({
+        tag: "nav",
+        style: { display: "contents" },
+        rect: ZERO,
+        children: [el({ text: "NAVITEM", rect: BOX })],
+      }),
+    ]);
+    expect(rolesOf(tree)).toContain("nav");
+    expect(valuesOf(tree)).toContain("NAVITEM");
+  });
+
+  it("a large fully visibility:hidden subtree does not starve the node budget", () => {
+    // A closed drawer/modal can be a large visibility:hidden subtree. Descending
+    // into it (to catch a visibility:visible override) must not spend the node
+    // budget on nodes that emit nothing, or genuinely visible content elsewhere
+    // gets truncated. MAX_NODES is 5000; 5100 hidden nodes before a visible one
+    // used to exhaust it.
+    const hiddenKids: MockElement[] = [];
+    for (let i = 0; i < 5100; i++) {
+      hiddenKids.push(el({ text: "HK" + i, style: { visibility: "hidden" }, rect: BOX }));
+    }
+    const { tree, truncated } = run([
+      el({ style: { display: "contents" }, rect: ZERO, children: hiddenKids }),
+      el({ text: "VISIBLE_AFTER", rect: BOX }),
+    ]);
+    expect(truncated).toBe(false);
+    expect(valuesOf(tree)).toContain("VISIBLE_AFTER");
+    expect(valuesOf(tree)).not.toContain("HK0");
   });
 
   // ---- visibility:hidden inherits but a descendant can override it back to visible ----

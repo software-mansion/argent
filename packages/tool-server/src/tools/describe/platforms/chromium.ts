@@ -185,19 +185,33 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
 
   // Painted extent of an element's own inline TEXT. A box-less element (display:contents,
   // or a zero-width box whose text overflows) has a 0x0 border box yet its text still
-  // paints; a Range measures that. It returns 0x0 when an ancestor transform (e.g.
-  // scale(0)) or display:none collapses the paint. It does NOT distinguish a
-  // visibility:hidden / opacity:0 *descendant* — those keep their layout box, so the
-  // Range is non-zero even though nothing paints — which is why walk() consults this only
-  // when the element has its own text, never to resurrect a wrapper whose element
-  // children were all pruned as invisible.
+  // paints; a Range over its own text measures that. Measure ONLY the element's direct
+  // text-node children — NOT selectNodeContents(el) over the whole subtree, which also
+  // spans the still-laid-out boxes of visibility:hidden / opacity:0 element descendants
+  // (they keep a layout box but paint nothing), oversizing the frame and mis-placing the
+  // tap point. Returns 0x0 when an ancestor transform (e.g. scale(0)) or display:none
+  // collapses the paint. walk() consults this only when the element has its own text.
   function contentFrame(el) {
     try {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      const r = range.getBoundingClientRect();
-      if (r.width <= 0 || r.height <= 0) return null;
-      return normRect(r);
+      let box = null;
+      for (const child of getChildNodes.call(el)) {
+        // nodeType via the prototype getter (clobber-safe, like ownText); own text only.
+        if (getNodeType.call(child) !== 3) continue;
+        const range = document.createRange();
+        range.selectNodeContents(child);
+        const r = range.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        if (!box) {
+          box = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+        } else {
+          if (r.left < box.left) box.left = r.left;
+          if (r.top < box.top) box.top = r.top;
+          if (r.right > box.right) box.right = r.right;
+          if (r.bottom > box.bottom) box.bottom = r.bottom;
+        }
+      }
+      if (!box || box.right <= box.left || box.bottom <= box.top) return null;
+      return normRect(box);
     } catch (e) {
       return null;
     }
@@ -262,11 +276,20 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     if (!(el instanceof Element)) return null;
     const style = window.getComputedStyle(el);
     if (hidden(el, style)) return null;
-    if (nodeBudget <= 0) {
-      truncated = true;
-      return null;
+    // Charge the node budget only for elements that can actually EMIT. A
+    // visibility:hidden element paints nothing itself and is descended into
+    // purely to catch a descendant that overrides visibility back to visible
+    // (see hidden()); it is otherwise promoted/dropped. Counting it would let a
+    // large fully-hidden subtree (a closed drawer/modal) exhaust the budget and
+    // truncate genuinely visible content elsewhere in the tree. Its visible
+    // descendants, if any, still consume the budget themselves.
+    if (style.visibility !== "hidden") {
+      if (nodeBudget <= 0) {
+        truncated = true;
+        return null;
+      }
+      nodeBudget--;
     }
-    nodeBudget--;
 
     const childResults = [];
     for (const child of getChildrenEls.call(el)) {
@@ -348,7 +371,20 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
       if (childResults.length === 0 && selfFrame.width <= 0 && selfFrame.height <= 0) {
         return null;
       }
-      if (!clickable && !name && !text && !id && childResults.length === 1) {
+      if (
+        !clickable &&
+        !name &&
+        !text &&
+        !id &&
+        childResults.length === 1 &&
+        (role === "div" || invisibleSelf)
+      ) {
+        // Only a pure layout wrapper (a plain div, e.g. a display:contents RNW
+        // wrapper) or a visibility:hidden element with no meaningful paint of
+        // its own is promoted away. A box-less element with a SEMANTIC role
+        // (list, nav, section, listitem, ...) is kept so its role isn't lost —
+        // mirroring the role === "div" gate on the boxed structural collapse
+        // below.
         return childResults[0];
       }
     } else {
