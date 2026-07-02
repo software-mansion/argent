@@ -192,7 +192,8 @@ export async function queryAndroidFullHierarchy(
     const ref = androidDevtoolsRef(device);
     const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
     const [{ xml }, size] = await Promise.all([
-      devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES }),
+      // clearCache: await/assert polls must see text changes, not cached reads.
+      devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true }),
       devtools.getScreenSize(),
     ]);
     const tree = adaptFullAndroidHierarchyToDescribeResult(xml, size.width, size.height);
