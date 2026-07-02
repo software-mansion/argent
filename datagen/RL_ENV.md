@@ -37,10 +37,10 @@ serve context) and optimizes the thing we measure (task success), not a next-tok
   the eval bench so we never train on eval tasks.
 - **Reward.** The existing LLM judge (success/partial/fail → 1/0.3/0). `[research: guard against judge
   reward-hacking — add a programmatic/held-out success check where possible; judge-as-sole-reward is risky]`.
-- **Device fleet.** Rollout throughput is THE bottleneck (each episode is minutes). Need many parallel
-  **Android emulators** (Linux-native, scriptable, resettable) — iOS sims are mac-only and won't scale on
-  vast.ai. `[research: does vast.ai expose /dev/kvm? if not → redroid/containerized Android, or a separate
-  device-farm host]`. Argent already drives Android via adb/uiautomator; give each emulator a distinct serial.
+- **Device fleet.** See "## Rollout fleet (researched)" below — immediate path is LOCAL/free; the scaled
+  Android fleet has a hard host-privilege constraint. The *real* per-episode bottleneck is model inference
+  (5-20 generates over 33k+ ctx), not boot; parallel rollouts need parallel inference (= GPU = $$), so the
+  frugal path runs rollouts serially on the local Mac and only scales when RFT justifies paid infra.
 - **Trainer.** RFT: our `h100_train.py` (unchanged — SFT on the exported successes). GRPO: `[research:
   TRL GRPOTrainer vs veRL vs verifiers vs prime-rl — need async external-env rollouts + LoRA + long ctx]`.
 
@@ -118,8 +118,33 @@ checks + gold early-stop; (2) loss-masking bug → unit test; (3) entropy collap
 ornith) → measure first, higher temp, clip-higher, KL leash; (4) all-fail hard tasks waste budget → dynamic
 sampling + curriculum retirement; (5) proxy overoptimization → KL cap + held-out gold monitor.
 
-## Open questions (research in flight)
-- Framework for the GRPO rung (external-env async rollouts + LoRA + 65k ctx)?
-- vLLM support for gemma3n hybrid attention — or must GRPO use ornith/standard arch only?
-- /dev/kvm on vast.ai — real emulators, or containerized Android (redroid)?
-- Judge-as-reward hardening (programmatic checks, held-out verification) to prevent reward-hacking?
+## Rollout fleet (researched: DigiRL/MobileGym precedents + vast.ai/redroid constraints)
+- **Immediate (frugal RFT): rollouts run LOCALLY on the Mac** — reuse the existing silver-bench iOS-sim path
+  (free, already works), 1 ollama policy + a few sims, serial episodes. No cloud cost. This is the RFT rung.
+- **Scaled fleet (GRPO, later) has a HARD host-privilege constraint — the biggest blocker, and it's not GPU:**
+  - **Stock vast.ai / RunPod pods CANNOT host it.** They're unprivileged containers; vast's Docker-Options
+    field ignores `--device` / `--privileged` / `--cap-add`, so `/dev/kvm` (AVD emulator) can't be passed in
+    and redroid's `--privileged` + host `binder`/`ashmem` can't be granted. Treat marketplace GPU **pods** as
+    non-qualifying by default (~0% have usable KVM).
+  - **Rent kernels, not pods:** vast.ai **VM instances** (`vms_enabled=true`, `docker.io/vastai/kvm` images →
+    root + real kernel) or **whole-machine/bare-metal**. **Gate each box** on `ls -l /dev/binder` (redroid) or
+    `/dev/kvm` (AVD) BEFORE admitting it to the fleet.
+  - **Substrate = redroid** (containerized Android, shared host kernel, NO KVM): **~15-25/box @ 0.5-2 GB each**
+    (3-5× denser than AVD's 10-30 @ 4-6 GB *with* KVM), boots in seconds, sideload APKs (Bluesky
+    `xyz.blueskyweb.app`, Mastodon `org.joinmastodon.android` run GMS-free). **Prefer ARM64 hosts** (skip x86
+    ARM-translation). Use the AVD emulator only where nested `/dev/kvm` is confirmed.
+  - **Attach:** `adb connect 127.0.0.1:<5555+i>` (serial = `host:port`) → one Argent tool-server per instance
+    via `ANDROID_SERIAL`, one shared adb server (5037), unique forward ports (adb forward table is global).
+    Maps cleanly onto the existing device-allocator (one instance = one serial → one tool-server).
+  - **Fast episode reset:** golden `/data` volume swap, or `am force-stop <pkg>` + deep-link relaunch
+    (sub-second, keeps login); AVD live snapshot `emu avd snapshot load golden` (~1-2s) where KVM exists.
+  - **Precedents:** DigiRL (≤64 AVDs), MobileGym/MobileRL (100s-1000s Dockerized AVDs = batch size), Google
+    Cuttlefish (~40 per 128-core box, needs KVM+privileged). Managed farms (Genymotion ~$0.6/dev-hr, AWS Device
+    Farm) are 1-2 orders too expensive for RL rollouts — keep for occasional real-device eval only.
+
+## Open questions (research in flight / to resume — agents hit session limits)
+- **Framework for the GRPO rung** (external-env async rollouts + LoRA + 65k ctx): TRL GRPOTrainer vs veRL vs
+  `verifiers` vs prime-rl — NOT yet resolved (agent capped). Bias: whichever cleanly supports a custom
+  external-device rollout loop (most assume a pure-function env).
+- **vLLM support for gemma3n hybrid attention** — if absent (likely), the GRPO rung must use ornith / a
+  standard-arch base for serving. NOT yet resolved (agent shallow). RFT doesn't need vLLM, so this is deferrable.

@@ -4,6 +4,12 @@ CLI installed: `~/.local/bin/vastai` (v1.1.3, on PATH). The training kernel, env
 UNCHANGED — only the box-provisioning layer moves from `runpodctl` to `vastai`. Provide the API key and
 run `vastai set api-key <KEY>` once; everything below then works.
 
+> **Training box ≠ rollout box.** SFT/GRPO *training* runs fine on a stock vast.ai **pod** (unprivileged
+> container — all it needs is the GPU). The RL **Android rollout fleet does NOT** — stock pods can't get
+> `/dev/kvm` or `--privileged`, so it needs a root-capable **VM instance** (`vms_enabled=true`) or
+> bare-metal. See RL_ENV.md "Rollout fleet". Budget rule: RL rollouts run local/free first; pay GPU only
+> for the training update (memory `silver_compute_budget`).
+
 ## runpodctl → vastai mapping
 | task | runpodctl | vastai |
 |---|---|---|
