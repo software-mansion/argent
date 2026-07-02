@@ -1,10 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
-import { invokeSubTool } from "../../utils/sub-invoke";
-import { settleTree } from "./flow-actions";
-import { bindDeviceArgs } from "./flow-device";
+import { settleTree, invokeOnDevice, type ActionEnv } from "./flow-actions";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 
 /** Default visual tolerance (percent of pixels) when a flow/step sets none. */
@@ -39,40 +36,32 @@ function baselineDir(flowsDir: string, flowName: string): string {
  * a portable flow doesn't hard-fail on an un-baselined device class.
  */
 export async function runSnapshot(
-  registry: Registry,
-  ctx: ToolContext | undefined,
-  device: DeviceInfo,
+  env: ActionEnv,
   opts: {
     flowsDir: string;
     flowName: string;
     name: string;
     maxMismatch: number;
     updateBaselines: boolean;
-  },
-  signal?: AbortSignal
+  }
 ): Promise<VisualOutcome> {
   // Wait for the UI to settle (a transition/reflow finished) so the capture is
   // stable run-to-run, rather than guessing a fixed delay. `settleTree` returns
   // undefined only on abort; a best-effort timeout still proceeds to capture.
-  await settleTree(registry, device, signal);
-  if (signal?.aborted) {
+  await settleTree(env);
+  if (env.signal?.aborted) {
     return { status: "skip", reason: "run aborted during snapshot settle" };
   }
 
   // Full-resolution capture, not attached to any agent context — a baseline.
-  const shot = (await invokeSubTool(
-    registry,
-    ctx,
-    "screenshot",
-    bindDeviceArgs(registry, "screenshot", device.id, {
-      scale: 1.0,
-      includeImageInContext: false,
-    })
-  )) as { image: { hostPath: string } };
+  const shot = (await invokeOnDevice(env, "screenshot", {
+    scale: 1.0,
+    includeImageInContext: false,
+  })) as { image: { hostPath: string } };
   const currentPath = shot.image.hostPath;
 
   const { w, h } = await pngDimensions(currentPath);
-  const key = `${opts.name}__${device.platform}-${w}x${h}.png`;
+  const key = `${opts.name}__${env.device.platform}-${w}x${h}.png`;
   const dir = baselineDir(opts.flowsDir, opts.flowName);
   const baselinePath = path.join(dir, key);
 

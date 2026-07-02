@@ -23,7 +23,7 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult, AWAIT_UI_ELEMENT_TOOL_ID } from "../await-ui-element";
 import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-device";
-import { runTap, runType, runAssert, runScrollTo } from "./flow-actions";
+import { runDirective, invokeOnDevice, type ActionEnv } from "./flow-actions";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import { runSnapshot, DEFAULT_MAX_MISMATCH } from "./flow-visual";
@@ -139,7 +139,7 @@ const NATIVE_READY_POLL_MS = 250;
 /**
  * Poll until native-devtools is connected for `bundleId`. Returns true once
  * connected, false on timeout / abort / the service being unavailable. The
- * caller decides how to treat false (iOS flows fail; see execute).
+ * caller decides how to treat false (iOS flows fail; see treeSourceGate).
  */
 async function waitForNativeDevtools(
   registry: Registry,
@@ -173,11 +173,7 @@ async function waitForNativeDevtools(
  * synchronously on first `resolveService`. There is no post-launch race to wait
  * out: one resolution either brings the helper up (install + spawn + ping
  * handshake in the factory) or it can't run on this device. So this is a
- * one-shot probe, not a poll. Returns true when the helper is ready. On failure
- * the caller hard-fails rather than let `fetchFlowTree` silently degrade to the
- * trimmed accessibility tree — where a testID on a not-important RN container is
- * absent, producing the same confusing "not visible" failures the iOS gate
- * guards against.
+ * one-shot probe, not a poll.
  */
 async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Promise<boolean> {
   try {
@@ -189,11 +185,89 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
   }
 }
 
-interface ExecState {
-  registry: Registry;
-  ctx?: ToolContext;
-  device: DeviceInfo;
-  signal?: AbortSignal;
+/**
+ * Gate an e2e run on the platform's full-hierarchy tree source being ready. If
+ * it never comes up, selectors would silently fall back to the trimmed AX tree
+ * — where a testID container the flow addresses is absent, producing confusing
+ * "not visible" failures — so the run fails outright rather than degrade.
+ * Returns null when ready (or the platform needs no gate / the run was
+ * aborted), else the failure to report.
+ */
+async function treeSourceGate(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string,
+  signal?: AbortSignal
+): Promise<{ message: string; errorKind: "timeout" | "dependency_missing" } | null> {
+  if (device.platform === "ios" && !signal?.aborted) {
+    const connected = await waitForNativeDevtools(registry, device, bundleId, signal);
+    if (!connected && !signal?.aborted) {
+      return {
+        message:
+          `could not connect to native devtools for ${bundleId}. Re-run to relaunch the app and retry. ` +
+          `If it keeps failing, a stale or duplicate argent server may be holding the devtools connection — restart the argent server and try again.`,
+        errorKind: "timeout",
+      };
+    }
+  }
+  if (device.platform === "android" && !signal?.aborted) {
+    const ready = await androidDevtoolsReady(registry, device);
+    if (!ready && !signal?.aborted) {
+      return {
+        message:
+          `could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
+          `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`,
+        errorKind: "dependency_missing",
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Start an e2e flow's app from a clean state (its contract): terminate and
+ * relaunch via `restart-app` so a copy left running by a prior run can't leak
+ * state into this one (Chromium has no app lifecycle to restart — the renderer
+ * is always live — so fall back to `launch-app` there). Then pin the status bar
+ * right after the relaunch, let the app settle, and wait for the platform's
+ * full-hierarchy tree source (see {@link treeSourceGate}). Returns whether the
+ * status bar was pinned (and so must be restored); on a gate failure the bar is
+ * restored here before throwing.
+ */
+async function launchE2eApp(env: ActionEnv, flow: FlowFile, flowName: string): Promise<boolean> {
+  const { registry, device, signal } = env;
+  const bundleId = appIdForPlatform(flow.launch, device.platform);
+  if (!bundleId) {
+    throw new FailureError(
+      `Flow "${flowName}" declares no app id for platform "${device.platform}". Add a launch entry for it.`,
+      {
+        error_code: FAILURE_CODES.FLOW_APP_ID_MISSING,
+        failure_stage: "flow_app_launch",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  const launchTool = device.platform === "chromium" ? "launch-app" : "restart-app";
+  await invokeOnDevice(env, launchTool, { bundleId });
+  const pinned = await pinStatusBar(device);
+  // Let the app finish coming up before step 1 reads/acts on the UI, so a
+  // slow cold start doesn't eat into the first step's auto-wait budget.
+  await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
+  const gate = await treeSourceGate(registry, device, bundleId, signal);
+  if (gate) {
+    if (pinned) await restoreStatusBar(device);
+    throw new FailureError(`Flow "${flowName}" ${gate.message}`, {
+      error_code: FAILURE_CODES.FLOW_NATIVE_DEVTOOLS_UNAVAILABLE,
+      failure_stage: "flow_native_devtools_connect",
+      failure_area: "tool_server",
+      error_kind: gate.errorKind,
+    });
+  }
+  return pinned;
+}
+
+interface ExecState extends ActionEnv {
   flowsDir: string;
   topFlowName: string;
   updateBaselines: boolean;
@@ -244,97 +318,20 @@ returns a notice with the prerequisite instead of running.`,
         device: params.device,
         platform: params.platform as FlowPlatform | undefined,
       });
+      const env: ActionEnv = { registry, ctx, device, signal };
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
-      // never drives a snapshot diff and every screenshot is consistent. The
-      // `simctl status_bar override` is a device-level op independent of the
-      // app, so we pin as early as possible (see below). No-op (returns false)
-      // on chromium/vega; restored on teardown.
-      let statusBarPinned: boolean;
-
-      // An e2e flow starts its app from a clean state (its contract): terminate
-      // and relaunch via `restart-app` so a copy left running by a prior run
-      // can't leak state into this one. Chromium has no app lifecycle to
-      // restart (the renderer is always live), so fall back to `launch-app`
-      // there. Fragments inherit whatever app the caller already has open.
-      if (isE2eFlow(flow)) {
-        const bundleId = appIdForPlatform(flow.launch, device.platform);
-        if (!bundleId) {
-          throw new FailureError(
-            `Flow "${params.name}" declares no app id for platform "${device.platform}". Add a launch entry for it.`,
-            {
-              error_code: FAILURE_CODES.FLOW_APP_ID_MISSING,
-              failure_stage: "flow_app_launch",
-              failure_area: "tool_server",
-              error_kind: "validation",
-            }
-          );
-        }
-        const launchTool = device.platform === "chromium" ? "launch-app" : "restart-app";
-        await invokeSubTool(
-          registry,
-          ctx,
-          launchTool,
-          bindDeviceArgs(registry, launchTool, device.id, { bundleId })
-        );
-        // Pin right after the relaunch.
-        statusBarPinned = await pinStatusBar(device);
-        // Let the app finish coming up before step 1 reads/acts on the UI, so a
-        // slow cold start doesn't eat into the first step's auto-wait budget.
-        await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
-        // Flows resolve selectors against the native UIView hierarchy, which the
-        // injected dylib serves over a connection it opens asynchronously — wait
-        // for it so step 1 doesn't race the cold start. If it never connects,
-        // selectors would silently fall back to the AX tree (which drops testID
-        // containers), so fail outright rather than run against the wrong tree.
-        if (device.platform === "ios" && !signal?.aborted) {
-          const connected = await waitForNativeDevtools(registry, device, bundleId, signal);
-          if (!connected && !signal?.aborted) {
-            if (statusBarPinned) await restoreStatusBar(device);
-            throw new FailureError(
-              `Flow "${params.name}" could not connect to native devtools for ${bundleId}. Re-run to relaunch the app and retry. ` +
-                `If it keeps failing, a stale or duplicate argent server may be holding the devtools connection — restart the argent server and try again.`,
-              {
-                error_code: FAILURE_CODES.FLOW_NATIVE_DEVTOOLS_UNAVAILABLE,
-                failure_stage: "flow_native_devtools_connect",
-                failure_area: "tool_server",
-                error_kind: "timeout",
-              }
-            );
-          }
-        }
-        // Android resolves testID selectors against the full accessibility
-        // hierarchy served by the android-devtools helper. If the helper can't
-        // run, selectors silently fall back to the trimmed AX tree (which drops
-        // testID-bearing not-important containers), so probe for it up front and
-        // fail explicitly rather than degrade — the iOS gate's rationale, minus
-        // the poll (the helper spawns synchronously, so there's no race).
-        if (device.platform === "android" && !signal?.aborted) {
-          const ready = await androidDevtoolsReady(registry, device);
-          if (!ready && !signal?.aborted) {
-            if (statusBarPinned) await restoreStatusBar(device);
-            throw new FailureError(
-              `Flow "${params.name}" could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
-                `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`,
-              {
-                error_code: FAILURE_CODES.FLOW_NATIVE_DEVTOOLS_UNAVAILABLE,
-                failure_stage: "flow_native_devtools_connect",
-                failure_area: "tool_server",
-                error_kind: "dependency_missing",
-              }
-            );
-          }
-        }
-      } else {
-        // Fragment run directly (no relaunch): pin before the first step runs.
-        statusBarPinned = await pinStatusBar(device);
-      }
+      // never drives a snapshot diff and every screenshot is consistent. An e2e
+      // flow pins right after its app relaunch (see launchE2eApp) so the
+      // override propagates during the post-launch waits; a directly-run
+      // fragment (no relaunch) pins before its first step. No-op (returns
+      // false) on chromium/vega; restored on teardown.
+      const statusBarPinned = isE2eFlow(flow)
+        ? await launchE2eApp(env, flow, params.name)
+        : await pinStatusBar(device);
 
       const state: ExecState = {
-        registry,
-        ctx,
-        device,
-        signal,
+        ...env,
         flowsDir,
         topFlowName: params.name,
         updateBaselines: Boolean(params.updateBaselines),
@@ -410,7 +407,7 @@ async function execSteps(
     }
 
     if (step.kind === "run") {
-      await execRunStep(state, step, sourceFlow, runStack);
+      await execRunStep(state, step, runStack);
       continue;
     }
 
@@ -423,33 +420,21 @@ async function execSteps(
 async function execRunStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "run" }>,
-  sourceFlow: string,
   runStack: string[]
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
 
-  if (runStack.includes(target)) {
-    state.reports.push({
-      index,
-      kind: "run",
-      status: "error",
-      flow: target,
-      reason: `cyclic flow reference: ${[...runStack, target].join(" → ")}`,
-    });
+  const fail = (reason: string): void => {
+    state.reports.push({ index, kind: "run", status: "error", flow: target, reason });
     state.stopped = true;
-    return;
+  };
+
+  if (runStack.includes(target)) {
+    return fail(`cyclic flow reference: ${[...runStack, target].join(" → ")}`);
   }
   if (runStack.length >= MAX_RUN_DEPTH) {
-    state.reports.push({
-      index,
-      kind: "run",
-      status: "error",
-      flow: target,
-      reason: "max run depth exceeded",
-    });
-    state.stopped = true;
-    return;
+    return fail("max run depth exceeded");
   }
 
   let fragment: FlowFile;
@@ -458,27 +443,13 @@ async function execRunStep(
     const fragPath = path.join(state.flowsDir, `${target}.yaml`);
     fragment = parseFlow(await fs.readFile(fragPath, "utf8"));
   } catch (err) {
-    state.reports.push({
-      index,
-      kind: "run",
-      status: "error",
-      flow: target,
-      reason: `could not load fragment "${target}": ${err instanceof Error ? err.message : String(err)}`,
-    });
-    state.stopped = true;
-    return;
+    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
   if (isE2eFlow(fragment)) {
-    state.reports.push({
-      index,
-      kind: "run",
-      status: "error",
-      flow: target,
-      reason: `"${target}" is an e2e flow (declares launch); only fragments can be run from another flow`,
-    });
-    state.stopped = true;
-    return;
+    return fail(
+      `"${target}" is an e2e flow (declares launch); only fragments can be run from another flow`
+    );
   }
 
   // Marker for the composition point, then expand the fragment's steps inline.
@@ -499,43 +470,11 @@ async function execLeafStep(
     case "echo":
       return { ...base, status: "pass", message: step.message };
 
-    case "tap": {
-      const r = await runTap(
-        registry,
-        ctx,
-        device,
-        { selector: step.selector, x: step.x, y: step.y },
-        signal
-      );
-      return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
-    }
-
-    case "type": {
-      const r = await runType(registry, ctx, device, step.into, step.text, step.submit, signal);
-      return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
-    }
-
-    case "assert": {
-      const r = await runAssert(
-        registry,
-        device,
-        step.condition,
-        step.selector,
-        step.expectedText,
-        step.textMatch,
-        signal
-      );
-      return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
-    }
-
+    case "tap":
+    case "type":
+    case "assert":
     case "scroll-to": {
-      const r = await runScrollTo(
-        registry,
-        ctx,
-        device,
-        { target: step.target, direction: step.direction, within: step.within },
-        signal
-      );
+      const r = await runDirective(state, step);
       return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
     }
 
@@ -547,14 +486,13 @@ async function execLeafStep(
     }
 
     case "await": {
-      const args = bindDeviceArgs(registry, AWAIT_UI_ELEMENT_TOOL_ID, device.id, {
-        condition: step.condition,
-        selector: step.selector,
-        ...(step.expectedText !== undefined ? { expectedText: step.expectedText } : {}),
-        ...(step.textMatch !== undefined ? { textMatch: step.textMatch } : {}),
-      });
       try {
-        const result = await invokeSubTool(registry, ctx, AWAIT_UI_ELEMENT_TOOL_ID, args);
+        const result = await invokeOnDevice(state, AWAIT_UI_ELEMENT_TOOL_ID, {
+          condition: step.condition,
+          selector: step.selector,
+          ...(step.expectedText !== undefined ? { expectedText: step.expectedText } : {}),
+          ...(step.textMatch !== undefined ? { textMatch: step.textMatch } : {}),
+        });
         if (isUnmetUiWaitResult(AWAIT_UI_ELEMENT_TOOL_ID, result)) {
           const note = (result as { note?: string }).note;
           return {
@@ -572,19 +510,13 @@ async function execLeafStep(
 
     case "snapshot": {
       try {
-        const r = await runSnapshot(
-          registry,
-          ctx,
-          device,
-          {
-            flowsDir: state.flowsDir,
-            flowName: state.topFlowName,
-            name: step.name,
-            maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
-            updateBaselines: state.updateBaselines,
-          },
-          signal
-        );
+        const r = await runSnapshot(state, {
+          flowsDir: state.flowsDir,
+          flowName: state.topFlowName,
+          name: step.name,
+          maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
+          updateBaselines: state.updateBaselines,
+        });
         return { ...base, status: r.status, reason: r.reason, artifacts: r.artifacts };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };

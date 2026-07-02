@@ -8,6 +8,7 @@ import {
   isVisible,
   assertText,
   treeFingerprint,
+  type Selector,
   type WaitCondition,
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
@@ -15,12 +16,37 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-ios-tree";
-import type { FlowSelector, ScrollDirection } from "./flow-utils";
+import type { FlowSelector, FlowStep, ScrollDirection } from "./flow-utils";
+
+/** Everything a directive needs to act on the run's device. */
+export interface ActionEnv {
+  registry: Registry;
+  ctx?: ToolContext;
+  device: DeviceInfo;
+  signal?: AbortSignal;
+}
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
 export interface DirectiveOutcome {
   ok: boolean;
   reason?: string;
+}
+
+/** The selector-acting steps {@link runDirective} handles. */
+export type DirectiveStep = Extract<FlowStep, { kind: "tap" | "type" | "assert" | "scroll-to" }>;
+
+/** Dispatch a tool with the run's resolved device id bound into its args. */
+export function invokeOnDevice(
+  env: ActionEnv,
+  tool: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  return invokeSubTool(
+    env.registry,
+    env.ctx,
+    tool,
+    bindDeviceArgs(env.registry, tool, env.device.id, args)
+  );
 }
 
 const DEFAULT_ACTION_TIMEOUT_MS = 5000;
@@ -102,30 +128,36 @@ function describeSelector(s: FlowSelector): string {
 }
 
 /**
- * Resolve a selector's matches honoring the bare-string `loose` flag. A loose
- * selector (`tap: foo`) tries the identifier locator first and, only if it finds
- * nothing, falls back to text (label/value) — so a hand-written `foo` matches a
- * `testID="foo"` as well as visible text. Explicit `{ text }` / `{ identifier }`
- * selectors carry no flag and match strictly. Lives in the flow runner only; the
- * shared match engine and the tools that consume it are untouched.
+ * The strict selectors a flow selector resolves through, in order. A loose
+ * selector (bare-string sugar, `tap: foo`) tries the identifier locator first
+ * and falls back to text (label/value) only when that finds nothing — so a
+ * hand-written `foo` matches a `testID="foo"` as well as visible text. Explicit
+ * `{ text }` / `{ identifier }` selectors carry no flag and match strictly.
+ * Lives in the flow runner only; the shared match engine and the tools that
+ * consume it are untouched.
  */
+function selectorAlternatives(sel: FlowSelector): Selector[] {
+  return sel.loose && sel.text !== undefined
+    ? [{ identifier: sel.text }, { text: sel.text }]
+    : [sel];
+}
+
+/** Resolve a selector's matches honoring the bare-string `loose` fallback. */
 function flowFindAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
-  if (sel.loose && sel.text !== undefined) {
-    const byIdentifier = findAll(tree, { identifier: sel.text });
-    if (byIdentifier.length > 0) return byIdentifier;
-    return findAll(tree, { text: sel.text });
+  for (const s of selectorAlternatives(sel)) {
+    const matches = findAll(tree, s);
+    if (matches.length > 0) return matches;
   }
-  return findAll(tree, sel);
+  return [];
 }
 
 /** Identifier-first-then-text frame resolution for a (possibly loose) selector. */
 function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFrame | undefined {
-  if (sel.loose && sel.text !== undefined) {
-    return (
-      selectorToFrame(tree, { identifier: sel.text }) ?? selectorToFrame(tree, { text: sel.text })
-    );
+  for (const s of selectorAlternatives(sel)) {
+    const frame = selectorToFrame(tree, s);
+    if (frame) return frame;
   }
-  return selectorToFrame(tree, sel);
+  return undefined;
 }
 
 /**
@@ -136,18 +168,14 @@ function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFra
  * from landing mid-deceleration (where a scroll view swallows it) or acting on a
  * frame that has already moved.
  */
-export async function settleTree(
-  registry: Registry,
-  device: DeviceInfo,
-  signal?: AbortSignal
-): Promise<DescribeNode | undefined> {
+export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefined> {
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   let prevFp: string | undefined;
   let prevTree: DescribeNode | undefined;
   for (;;) {
-    if (signal?.aborted) return undefined;
+    if (env.signal?.aborted) return undefined;
     try {
-      const { tree } = await fetchFlowTree(registry, device);
+      const { tree } = await fetchFlowTree(env.registry, env.device);
       const fp = treeFingerprint(tree);
       if (prevFp !== undefined && fp === prevFp) return tree;
       prevFp = fp;
@@ -156,7 +184,7 @@ export async function settleTree(
       // transient describe failure mid-navigation — retry until the deadline
     }
     if (Date.now() >= deadline) return prevTree;
-    if (!(await sleepOrAbort(SETTLE_POLL_MS, signal))) return undefined;
+    if (!(await sleepOrAbort(SETTLE_POLL_MS, env.signal))) return undefined;
   }
 }
 
@@ -166,22 +194,20 @@ export async function settleTree(
  * or undefined if the deadline passes / the run is aborted.
  */
 async function waitForFrame(
-  registry: Registry,
-  device: DeviceInfo,
-  selector: FlowSelector,
-  signal?: AbortSignal
+  env: ActionEnv,
+  selector: FlowSelector
 ): Promise<DescribeFrame | undefined> {
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
   for (;;) {
-    if (signal?.aborted) return undefined;
-    const tree = await settleTree(registry, device, signal);
+    if (env.signal?.aborted) return undefined;
+    const tree = await settleTree(env);
     if (tree) {
       const frame = flowSelectorToFrame(tree, selector);
       if (frame) return frame;
     }
     if (Date.now() >= deadline) return undefined;
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
-    if (!(await sleepOrAbort(sleepMs, signal))) return undefined;
+    if (!(await sleepOrAbort(sleepMs, env.signal))) return undefined;
   }
 }
 
@@ -203,9 +229,7 @@ interface ScrollResolve {
  * uses wheel events (already momentum-free).
  */
 async function scrollIncrement(
-  registry: Registry,
-  ctx: ToolContext | undefined,
-  device: DeviceInfo,
+  env: ActionEnv,
   direction: ScrollDirection,
   region: DescribeFrame
 ): Promise<void> {
@@ -213,7 +237,7 @@ async function scrollIncrement(
   const cy = clamp01(region.y + region.height / 2);
   const dist = SCROLL_INCREMENT;
 
-  if (device.platform === "chromium") {
+  if (env.device.platform === "chromium") {
     // Positive deltaY/deltaX reveals content below / to the right (see gesture-scroll).
     const delta =
       direction === "down"
@@ -223,12 +247,7 @@ async function scrollIncrement(
           : direction === "right"
             ? { deltaX: dist }
             : { deltaX: -dist };
-    await invokeSubTool(
-      registry,
-      ctx,
-      "gesture-scroll",
-      bindDeviceArgs(registry, "gesture-scroll", device.id, { x: cx, y: cy, ...delta })
-    );
+    await invokeOnDevice(env, "gesture-scroll", { x: cx, y: cy, ...delta });
     return;
   }
 
@@ -248,19 +267,14 @@ async function scrollIncrement(
       to = { x: clamp01(cx + dist), y: cy };
       break;
   }
-  await invokeSubTool(
-    registry,
-    ctx,
-    "gesture-swipe",
-    bindDeviceArgs(registry, "gesture-swipe", device.id, {
-      fromX: cx,
-      fromY: cy,
-      toX: to.x,
-      toY: to.y,
-      settle: true,
-      durationMs: 600,
-    })
-  );
+  await invokeOnDevice(env, "gesture-swipe", {
+    fromX: cx,
+    fromY: cy,
+    toX: to.x,
+    toY: to.y,
+    settle: true,
+    durationMs: 600,
+  });
 }
 
 /**
@@ -277,19 +291,16 @@ async function scrollIncrement(
  * immediately (no scroll).
  */
 async function scrollToVisible(
-  registry: Registry,
-  ctx: ToolContext | undefined,
-  device: DeviceInfo,
+  env: ActionEnv,
   target: FlowSelector,
   direction: ScrollDirection,
-  within: FlowSelector | undefined,
-  signal?: AbortSignal
+  within: FlowSelector | undefined
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
-    if (signal?.aborted) return { reason: "scroll cancelled" };
+    if (env.signal?.aborted) return { reason: "scroll cancelled" };
 
-    const tree = await settleTree(registry, device, signal);
+    const tree = await settleTree(env);
     if (!tree) return { reason: "scroll cancelled" };
 
     // Anchor the gesture inside the container (so the right nested scroller
@@ -313,7 +324,7 @@ async function scrollToVisible(
     }
     prevFp = fp;
 
-    await scrollIncrement(registry, ctx, device, direction, region);
+    await scrollIncrement(env, direction, region);
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
@@ -328,44 +339,29 @@ async function scrollToVisible(
  * directions/containers.
  */
 async function resolveOrScroll(
-  registry: Registry,
-  ctx: ToolContext | undefined,
-  device: DeviceInfo,
-  selector: FlowSelector,
-  signal?: AbortSignal
+  env: ActionEnv,
+  selector: FlowSelector
 ): Promise<DescribeFrame | undefined> {
-  const frame = await waitForFrame(registry, device, selector, signal);
+  const frame = await waitForFrame(env, selector);
   if (frame) return frame;
-  const scrolled = await scrollToVisible(
-    registry,
-    ctx,
-    device,
-    selector,
-    "down",
-    undefined,
-    signal
-  );
+  const scrolled = await scrollToVisible(env, selector, "down", undefined);
   return scrolled.frame;
 }
 
-/** Scroll a target into view (the `scroll-to` directive). */
-export async function runScrollTo(
-  registry: Registry,
-  ctx: ToolContext | undefined,
-  device: DeviceInfo,
-  step: { target: FlowSelector; direction: ScrollDirection; within?: FlowSelector },
-  signal?: AbortSignal
-): Promise<DirectiveOutcome> {
-  const r = await scrollToVisible(
-    registry,
-    ctx,
-    device,
-    step.target,
-    step.direction,
-    step.within,
-    signal
-  );
-  return { ok: Boolean(r.frame), reason: r.reason };
+/** Execute one selector-acting directive (`tap` / `type` / `assert` / `scroll-to`). */
+export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
+  switch (step.kind) {
+    case "tap":
+      return runTap(env, step);
+    case "type":
+      return runType(env, step);
+    case "assert":
+      return runAssert(env, step);
+    case "scroll-to": {
+      const r = await scrollToVisible(env, step.target, step.direction, step.within);
+      return { ok: Boolean(r.frame), reason: r.reason };
+    }
+  }
 }
 
 /**
@@ -373,16 +369,13 @@ export async function runScrollTo(
  * normalized point. Coordinate taps are the fallback for elements with no
  * stable selector (e.g. an unlabeled view).
  */
-export async function runTap(
-  registry: Registry,
-  ctx: ToolContext | undefined,
-  device: DeviceInfo,
-  target: { selector?: FlowSelector; x?: number; y?: number },
-  signal?: AbortSignal
+async function runTap(
+  env: ActionEnv,
+  target: { selector?: FlowSelector; x?: number; y?: number }
 ): Promise<DirectiveOutcome> {
   let point: { x: number; y: number };
   if (target.selector) {
-    const frame = await resolveOrScroll(registry, ctx, device, target.selector, signal);
+    const frame = await resolveOrScroll(env, target.selector);
     if (!frame) {
       return {
         ok: false,
@@ -395,12 +388,7 @@ export async function runTap(
   } else {
     return { ok: false, reason: "tap needs a selector or x/y coordinates" };
   }
-  await invokeSubTool(
-    registry,
-    ctx,
-    "gesture-tap",
-    bindDeviceArgs(registry, "gesture-tap", device.id, point)
-  );
+  await invokeOnDevice(env, "gesture-tap", point);
   return { ok: true };
 }
 
@@ -410,41 +398,23 @@ export async function runTap(
  * value and dismiss the keyboard, so it can't obscure later steps (chained
  * form fields that end in an explicit submit `tap` should pass `submit: false`).
  */
-export async function runType(
-  registry: Registry,
-  ctx: ToolContext | undefined,
-  device: DeviceInfo,
-  into: FlowSelector,
-  text: string,
-  submit: boolean | undefined,
-  signal?: AbortSignal
+async function runType(
+  env: ActionEnv,
+  step: { into: FlowSelector; text: string; submit?: boolean }
 ): Promise<DirectiveOutcome> {
-  const frame = await resolveOrScroll(registry, ctx, device, into, signal);
+  const frame = await resolveOrScroll(env, step.into);
   if (!frame) {
-    return { ok: false, reason: `no visible field matched selector ${describeSelector(into)}` };
+    return {
+      ok: false,
+      reason: `no visible field matched selector ${describeSelector(step.into)}`,
+    };
   }
-  const { x, y } = getDescribeTapPoint(frame);
-  await invokeSubTool(
-    registry,
-    ctx,
-    "gesture-tap",
-    bindDeviceArgs(registry, "gesture-tap", device.id, { x, y })
-  );
-  await invokeSubTool(
-    registry,
-    ctx,
-    "keyboard",
-    bindDeviceArgs(registry, "keyboard", device.id, { text })
-  );
-  if (submit !== false) {
+  await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
+  await invokeOnDevice(env, "keyboard", { text: step.text });
+  if (step.submit !== false) {
     // Press Enter as a separate keyboard call — the tool dispatches `key`
     // before `text`, so a combined `{ text, key }` would submit before typing.
-    await invokeSubTool(
-      registry,
-      ctx,
-      "keyboard",
-      bindDeviceArgs(registry, "keyboard", device.id, { key: "enter" })
-    );
+    await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
   return { ok: true };
 }
@@ -455,14 +425,14 @@ export async function runType(
  * after an action isn't missed. Unlike `await`, this reports a *failure* (not
  * "still waiting") if the condition never holds.
  */
-export async function runAssert(
-  registry: Registry,
-  device: DeviceInfo,
-  condition: WaitCondition,
-  selector: FlowSelector,
-  expectedText: string | undefined,
-  textMatch: TextMatchMode | undefined,
-  signal?: AbortSignal
+async function runAssert(
+  env: ActionEnv,
+  step: {
+    condition: WaitCondition;
+    selector: FlowSelector;
+    expectedText?: string;
+    textMatch?: TextMatchMode;
+  }
 ): Promise<DirectiveOutcome> {
   const deadline = Date.now() + DEFAULT_ASSERT_TIMEOUT_MS;
 
@@ -470,24 +440,34 @@ export async function runAssert(
   let fetchError: string | undefined;
 
   for (;;) {
-    if (signal?.aborted) return { ok: false, reason: "assertion cancelled" };
+    if (env.signal?.aborted) return { ok: false, reason: "assertion cancelled" };
     try {
-      const { tree } = await fetchFlowTree(registry, device);
-      lastMatches = flowFindAll(tree, selector);
+      const { tree } = await fetchFlowTree(env.registry, env.device);
+      lastMatches = flowFindAll(tree, step.selector);
       fetchError = undefined;
-      if (evaluateCondition(condition, expectedText, lastMatches, textMatch)) return { ok: true };
+      if (evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)) {
+        return { ok: true };
+      }
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
     }
     if (Date.now() >= deadline) break;
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
-    if (!(await sleepOrAbort(sleepMs, signal))) return { ok: false, reason: "assertion cancelled" };
+    if (!(await sleepOrAbort(sleepMs, env.signal))) {
+      return { ok: false, reason: "assertion cancelled" };
+    }
   }
 
   if (fetchError) return { ok: false, reason: `could not read the UI tree: ${fetchError}` };
   return {
     ok: false,
-    reason: assertReason(condition, selector, expectedText, textMatch, lastMatches),
+    reason: assertReason(
+      step.condition,
+      step.selector,
+      step.expectedText,
+      step.textMatch,
+      lastMatches
+    ),
   };
 }
 
