@@ -12,9 +12,13 @@ describe("variant store: propose after a waiter-less submit", () => {
     s.submitSelection({ selections: [{ elementId: a.id, variantId: a.variants[0]!.id }] });
 
     // A new element proposed during this lingering completed round must begin a
-    // fresh round, not vanish behind the frozen pre-submit outcome.
+    // fresh round, not vanish behind the frozen pre-submit outcome. Pre-fix,
+    // Beta was appended onto the already-completed round 1 (round 1,
+    // totalElements 2) and then dropped; the fix rolls a fresh round so Beta is
+    // round 2's sole element.
     const b = s.proposeVariant({ element: "Beta", variant: variant("B1") });
-    expect(b.totalElements).toBeGreaterThanOrEqual(1); // Beta is accepted
+    expect(b.round).toBe(2);
+    expect(b.totalElements).toBe(1);
 
     // Alpha's already-decided outcome is delivered first (it must never be
     // silently discarded), then a second await surfaces Beta's fresh round.
@@ -105,6 +109,60 @@ describe("variant store: propose after a waiter-less submit", () => {
     expect((await s.awaitSelection({ timeoutMs: 200 })).status).toBe("completed");
     s.submitSelection({ selections: sel });
     expect((await s.awaitSelection({ timeoutMs: 200 })).status).toBe("no_proposals");
+  });
+
+  it("bounds the undelivered-outcome queue against a runaway waiter-less submitter", async () => {
+    // The submit route is unauthenticated. A caller that proposes-and-submits
+    // repeatedly without ever awaiting rolls a fresh round each cycle and queues
+    // one outcome per round; without a cap the queue grows without limit. It is
+    // bounded to MAX_PENDING_OUTCOMES (32), keeping the most recent decisions.
+    const s = new VariantProposalStore();
+    for (let i = 0; i < 50; i++) {
+      s.proposeVariant({ element: `El${i}`, variant: variant(`V${i}`) });
+      const p = s.snapshot().proposals[0]!;
+      s.submitSelection({ selections: [{ elementId: p.id, variantId: p.variants[0]!.id }] });
+    }
+    // Drain every queued outcome; count completions and note the first/last round.
+    let completed = 0;
+    let firstRound = 0;
+    let lastRound = 0;
+    for (let i = 0; i < 60; i++) {
+      const out = await s.awaitSelection({ timeoutMs: 50 });
+      if (out.status !== "completed") break;
+      if (completed === 0) firstRound = out.round;
+      lastRound = out.round;
+      completed++;
+    }
+    expect(completed).toBe(32); // capped, not 50
+    // Oldest entries were dropped; the most recent decisions are retained.
+    expect(firstRound).toBe(19);
+    expect(lastRound).toBe(50);
+  });
+
+  it("an already-aborted await does not drain (and lose) a queued outcome", async () => {
+    // The pendingOutcomes fast-path mutates state (shift()). If the caller's
+    // signal is already aborted (HTTP client disconnected before the request
+    // reached awaitSelection), draining the queue for a dead caller would
+    // permanently destroy the human's already-submitted selection — the exact
+    // loss the queue exists to prevent. It must reject with AbortError instead,
+    // leaving the outcome for the next live await.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: a.id, variantId: a.variants[0]!.id }] });
+
+    const ac = new AbortController();
+    ac.abort();
+    await expect(s.awaitSelection({ timeoutMs: 1_000, signal: ac.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+
+    // The decision survived: a fresh live await still delivers Alpha.
+    const retry = await s.awaitSelection({ timeoutMs: 100 });
+    expect(retry.status).toBe("completed");
+    if (retry.status === "completed") {
+      expect(retry.selections.map((x) => x.element)).toContain("Alpha");
+    }
   });
 
   it("starting a CLI session does not leak a prior waiter-less outcome into its first await", async () => {

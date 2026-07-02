@@ -16,10 +16,12 @@
  * visible to the browser polling `/preview/variants`, and a selection POSTed by
  * the browser immediately unblocks the parked tool call.
  *
- * Rounds: a "round" is one propose→await→submit cycle. After a completed
- * selection is consumed by `await_user_selection`, the next `propose_variant`
- * transparently opens a fresh round so the workflow is repeatable within a
- * single long-lived tool-server process.
+ * Rounds: a "round" is one propose→await→submit cycle. Once a round is
+ * completed (the user submitted), the next `propose_variant` transparently
+ * opens a fresh round — whether or not that completed outcome was already
+ * consumed by `await_user_selection` — so the workflow is repeatable within a
+ * single long-lived tool-server process. A selection submitted with no await
+ * parked is preserved across that roll and delivered on the next await.
  */
 
 import { TypedEventEmitter } from "@argent/registry";
@@ -186,6 +188,17 @@ interface Waiter {
  * everything ingested here is capped to bound memory regardless of caller —
  * the same cap annotations already used. */
 const MAX_COMMENT_LENGTH = 2_000;
+
+/**
+ * Max number of undelivered completed outcomes retained in `pendingOutcomes`.
+ * The submit route is unauthenticated, so a caller that proposes-and-submits
+ * repeatedly without ever calling `await_user_selection` could otherwise grow
+ * this queue without limit (each entry retains the full selections/annotations
+ * arrays). Bounding it keeps the same "bound memory regardless of caller"
+ * guarantee as `MAX_COMMENT_LENGTH`; the cap is far above any real flow, which
+ * drains the queue via an await long before a couple of entries accumulate.
+ */
+const MAX_PENDING_OUTCOMES = 32;
 
 function slug(s: string): string {
   return s
@@ -605,6 +618,13 @@ export class VariantProposalStore {
       // whose outcome must not be re-queued.)
       this.pendingOutcomes = this.pendingOutcomes.filter((o) => o.round !== round);
       this.pendingOutcomes.push(this.lastOutcome);
+      // Bound the queue so a caller repeatedly submitting without ever awaiting
+      // cannot grow it without limit (the route is unauthenticated). Drop the
+      // oldest entries — the agent is furthest behind on those — mirroring the
+      // MAX_COMMENT_LENGTH "bound memory regardless of caller" guarantee.
+      if (this.pendingOutcomes.length > MAX_PENDING_OUTCOMES) {
+        this.pendingOutcomes.splice(0, this.pendingOutcomes.length - MAX_PENDING_OUTCOMES);
+      }
     }
     this.events.emit("changed");
     this.events.emit("selectionSubmitted");
@@ -671,6 +691,19 @@ export class VariantProposalStore {
    * round is superseded), so concurrent / re-entrant awaits never strand.
    */
   awaitSelection(opts: { signal?: AbortSignal; timeoutMs: number }): Promise<AwaitOutcome> {
+    // Honor an already-aborted signal before touching any state. The caller has
+    // disconnected, so there is no one to receive a resolved value — and, most
+    // importantly, the `pendingOutcomes` fast-path below MUTATES state (it
+    // `shift()`s a queued outcome). Draining it for a dead caller would destroy
+    // a human's already-submitted selection, the exact loss `pendingOutcomes`
+    // exists to prevent. Reject with the same AbortError the parked path uses so
+    // callers handle both the pre-aborted and mid-park cases identically.
+    if (opts.signal?.aborted) {
+      const err = new Error("await_user_selection aborted (client disconnected)");
+      err.name = "AbortError";
+      return Promise.reject(err);
+    }
+
     // Deliver the OLDEST undelivered outcome first, even if propose_variant
     // has since rolled the store into a fresh round for new elements — this
     // outcome is real, already-decided-by-the-human data and must never be
