@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { getActiveFlow, appendStepToActiveFlow, type FlowSavedTo } from "./flow-utils";
 import { isMissedFindResult, missedFindError } from "./flow-step-results";
+import { isUnmetUiWaitResult } from "../await-ui-element";
 import { invokeSubTool } from "../../utils/sub-invoke";
 
 const zodSchema = z.object({
@@ -28,7 +29,7 @@ export function createFlowAddStepTool(
 > {
   return {
     id: "flow-add-step",
-    description: `Execute a tool call live and record it as a step in the active flow unless the tool throws or a find step returns { found: false } (a find with action: "exists" is exempt — its found: false is a valid "not present" answer and is still recorded). Use when recording a flow with flow-start-recording and you want to run and capture each action. Returns { message, toolResult, flowFile } after recording. If the tool throws, or find does not locate an element, an error is returned and nothing is recorded. Error if the tool name is not found in the registry or arguments are invalid JSON.`,
+    description: `Execute a tool call live and record it as a step in the active flow unless the tool throws, a find step returns { found: false } (a find with action: "exists" is exempt — its found: false is a valid "not present" answer and is still recorded), or an await-ui-element step's condition is not met ({ success: false }). Use when recording a flow with flow-start-recording and you want to run and capture each action. Returns { message, toolResult, flowFile } after recording. If the tool throws, find does not locate an element, or a wait's condition is not met, an error is returned and nothing is recorded. Error if the tool name is not found in the registry or arguments are invalid JSON.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, ctx) {
@@ -38,6 +39,19 @@ export function createFlowAddStepTool(
       const toolResult = await invokeSubTool(registry, ctx, params.command, args);
       if (isMissedFindResult(params.command, toolResult)) {
         throw new Error(missedFindError(toolResult));
+      }
+      // An await-ui-element whose condition never held returns { success: false }
+      // instead of throwing. Recording it would bake a step that `flow-run` halts
+      // on for every replay (it stops on `isUnmetUiWaitResult` too) — reject it at
+      // record time, symmetric with the missed-find guard above, so a recorded
+      // flow only ever contains steps that actually succeeded live.
+      if (isUnmetUiWaitResult(params.command, toolResult)) {
+        const note = (toolResult as { note?: unknown }).note;
+        throw new Error(
+          typeof note === "string" && note.length > 0
+            ? `await-ui-element condition was not met: ${note}`
+            : "await-ui-element condition was not met"
+        );
       }
 
       const { flowFile, savedTo } = await appendStepToActiveFlow({

@@ -312,6 +312,62 @@ describe("flow-add-step", () => {
     expect(flow.steps).toEqual([]);
   });
 
+  it("does not record when an await-ui-element step's condition is not met (L6)", async () => {
+    // An unmet await-ui-element returns { success: false } instead of throwing.
+    // Recording it would bake a step that flow-run halts on for EVERY replay
+    // (flow-run stops on isUnmetUiWaitResult), so flow-add-step must reject it at
+    // record time — symmetric with the missed-find guard above.
+    const registry = createMockRegistry({
+      "await-ui-element": {
+        result: { success: false, elapsed: 5000, note: "no element matched the selector" },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "wait-miss-recording", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          command: "await-ui-element",
+          args: '{"condition":"visible","selector":{"text":"Continue"}}',
+        }
+      )
+    ).rejects.toThrow(/await-ui-element condition was not met.*selector/i);
+
+    const content = await readFlowFile("wait-miss-recording");
+    const flow = parseFlow(content);
+    expect(flow.steps).toEqual([]);
+  });
+
+  it("records a met await-ui-element step (success:true is a normal recordable step)", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": { result: { success: true, elapsed: 120 } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "wait-hit-recording", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        command: "await-ui-element",
+        args: '{"condition":"visible","selector":{"text":"Continue"}}',
+      }
+    );
+    expect(result.toolResult).toMatchObject({ success: true });
+    const flow = parseFlow(result.flowFile);
+    expect(flow.steps).toHaveLength(1);
+    expect(flow.steps[0]).toMatchObject({ kind: "tool", name: "await-ui-element" });
+  });
+
   it("records find steps when the element is found", async () => {
     const registry = createMockRegistry({
       find: { result: { found: true, matchCount: 1 } },

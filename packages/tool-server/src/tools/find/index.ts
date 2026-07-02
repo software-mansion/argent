@@ -10,7 +10,7 @@ import type {
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
-import { isAndroidTv } from "../../utils/adb";
+import { getAndroidRuntimeKind } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { sleepOrAbort, settleWithin } from "../../utils/timing";
@@ -123,7 +123,10 @@ const zodSchema = z
       .min(0)
       .default(0)
       .describe(
-        "When several elements match, which one to act on (0 = topmost in reading order, the default)."
+        "When several elements match, which one to act on (default 0). Ordering is action-dependent: " +
+          "a read-only action (exists/get-text/get-attrs/wait) uses plain reading order, so 0 is the " +
+          "topmost; a tapping action (tap/focus/type/fill) ranks an enclosing container after the " +
+          "smaller matches it wraps, so 0 is the innermost match. `matchCount` reports how many matched."
       ),
     timeoutMs: z
       .number()
@@ -350,19 +353,25 @@ async function typeText(
 }
 
 // The point `fill` taps to focus a field before clearing it: the field's
-// trailing edge (95% across, vertical centre) rather than its centre. The clear
+// bottom-trailing corner (95% across, 90% down) rather than its centre. The clear
 // is leftward-only backspaces, so it relies on the focusing tap parking the caret
-// at/after the end of the text. A centre tap can land the caret mid-text in a
-// field whose content runs past the middle (a multi-line text view, a
-// web/contenteditable, a custom input) — the backspaces would then delete the
-// left part and leave right-hand residue. Tapping the trailing edge biases the
-// caret to the end so the whole value is deleted. Kept inside the frame and
-// clamped to the screen. (iOS single-line fields re-anchor the caret to the end
-// on focus regardless, so this only matters for the fields that don't.)
+// at/after the END of the text — the last character, on the last line. A centre
+// tap can strand the caret mid-text in EITHER axis of a content-sized field:
+//   - horizontally, in a field whose text runs past the middle (a long single
+//     line, a web/contenteditable, a custom input) → the backspaces delete the
+//     left part and leave right-hand residue;
+//   - vertically, in a multi-line text view → the caret parks on an interior
+//     line and every line BELOW it survives (the bug the old `height/2` left
+//     open — its own comment named "a multi-line text view" as the target case).
+// Biasing to the bottom-right corner puts the caret past the last line's end so
+// the whole value clears. Kept inside the frame and clamped to the screen. (iOS
+// single-line fields re-anchor the caret to the end on focus regardless, and a
+// short field collapses this to roughly its centre, so it only changes behaviour
+// for the tall / long fields that need it.)
 function trailingEdgeTapPoint(frame: DescribeFrame): { x: number; y: number } {
   return {
     x: Math.min(frame.x + frame.width * 0.95, 1),
-    y: frame.y + frame.height / 2,
+    y: Math.min(frame.y + frame.height * 0.9, 1),
   };
 }
 
@@ -381,14 +390,20 @@ async function focusAndSettle(
 }
 
 // Length of a field's current editable text, on the platforms where the tree
-// actually exposes it: iOS (and an Android EditText WITH a content-desc) put the
-// typed text in `value` while `label` is a static placeholder, whereas an Android
-// EditText WITHOUT a content-desc surfaces the typed text as `label` with `value`
-// unset. We can't tell placeholder from content, so we take the longer of the
-// two: the real editable text is exactly one of them, so `max` is never shorter
-// than it, and over-deleting past the end of a field is a no-op (the trailing-edge
-// focus tap parks the caret at/after the end) — whereas UNDER-deleting leaves
-// stale text for `fill` to type on top of.
+// actually exposes it. Where the live text lands depends on the adapter: iOS (and
+// an Android EditText WITH a content-desc) put the typed text in `value` while
+// `label` holds a static placeholder; an Android EditText WITHOUT a content-desc
+// has no `value` and surfaces the typed text as `label`. So `value`, WHENEVER it
+// is present, is the content — and `label` is then only a placeholder we must NOT
+// count; only when `value` is entirely absent does `label` carry the text.
+//
+// (An earlier version took `max(value,label)` to be safe, but that counts the
+// placeholder on an empty field — `value:"" , label:"Search"` → 6 phantom
+// backspaces, each a keyboard round-trip, and a >64-char placeholder even trips a
+// bogus "clear may be incomplete" warning for an already-empty field. Preferring
+// `value` when present avoids both while staying exact for the content case; a
+// tiny CLEAR_BUFFER at the call site still absorbs IME / caret slop, and
+// over-deleting past a field's end is a no-op anyway.)
 //
 // This is NOT reliable on Chromium: `describeChromium`'s accessibleName prefers a
 // static aria-label / placeholder over the live `el.value`, and a form control's
@@ -396,7 +411,8 @@ async function focusAndSettle(
 // the current content is in NEITHER attribute and its length is unknowable here.
 // The `fill` handler special-cases Chromium instead of trusting this.
 function editableTextLength(node: DescribeNode): number {
-  return Math.max(node.value?.length ?? 0, node.label?.length ?? 0);
+  if (node.value !== undefined) return node.value.length;
+  return node.label?.length ?? 0;
 }
 
 // Send `count` backspaces to a focused field, stopping early on abort. The
@@ -436,6 +452,7 @@ export function createFindTool(registry: Registry): ToolDefinition<Params, FindR
 
 Locator: \`query\` is a case-insensitive substring matched against the attribute named by \`by\` (any = label/value/id, the default; text = label or value; or label / value / role / id).
 Actions (\`action\`, default \`tap\`): tap (centre), focus, type (focus + type \`text\`), fill (focus + clear + type \`text\`), exists (single presence check), wait (block until visible, \`timeoutMs\` default ${DEFAULT_WAIT_TIMEOUT_MS}ms), get-text, get-attrs.
+\`fill\` is DESTRUCTIVE: it clears the field with backspaces before typing, and the clear is sized from an accessibility tree that can under- or over-report the length (masked/rich-text/Chromium fields) — the result \`note\` flags when a clear may be incomplete or may have deleted adjacent content, so check it. Prefer \`fill\` only when you must replace existing text; use \`type\` to append.
 
 Returns { found, matchCount, match?, actionResult?, elapsed, note? }. When several match, the topmost in reading order is used (for a tapping action an enclosing container is ranked after the smaller matches it wraps; set \`index\` to pick another; \`matchCount\` reports how many). A single snapshot is taken by default — set \`timeoutMs\` to poll until the element appears before acting.
 On a TV target (Apple TV / Android TV) find is READ-ONLY — locate / exists / wait / get-text / get-attrs only; the acting actions can't drive a D-pad UI, so use tv-remote (+ keyboard) to act.
@@ -474,9 +491,23 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
       // actions can't work — `find` is read-only on TV. Probe the Android form
       // factor only for an acting action (a read-only find works on TV and
       // shouldn't pay the adb round-trip); tvOS is already resolved above.
+      //
+      // Fail CLOSED on an indeterminate Android probe: `getAndroidRuntimeKind`
+      // returns undefined only when the serial isn't a ready `device` (offline /
+      // mid-boot) or its form factor can't be read yet — none is a target we
+      // should fire a blind coordinate tap / backspace at, and a booted mobile
+      // device reports "mobile" reliably. iOS is deliberately asymmetric:
+      // `getSimulatorRuntimeKind` (behind `isTvOs`) also returns undefined for a
+      // *physical* iPhone — a legit acting target that isn't in the simulator
+      // list — so we can't fail closed there without blocking every real device;
+      // a rare stalled-xcrun tvOS miss is accepted over that regression.
+      const androidActingKind =
+        TAPPING_ACTIONS.has(action) && device.platform === "android"
+          ? await getAndroidRuntimeKind(device.id)
+          : undefined;
       const actingOnTv =
         TAPPING_ACTIONS.has(action) &&
-        (isTvOs || (device.platform === "android" && (await isAndroidTv(device.id))));
+        (isTvOs || (device.platform === "android" && androidActingKind !== "mobile"));
 
       // Start the discovery clock after setup so its fixed cost isn't charged
       // against timeoutMs (the deadline should bound polling, not resolution).
@@ -595,15 +626,27 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
         if (top) result.match = toMatchInfo(top, by, query);
         if (matchCount === 0) {
           // `exists` returns found:false for both "confirmed absent" and "couldn't
-          // read the screen". Only the latter is presence-unknown: it's when no
-          // usable tree was ever read (lastTree null ⇒ a fetch error/hang). Flag
-          // it so a caller doesn't treat a blind read as a definitive absence.
-          if (lastTree === null) {
+          // actually see the screen". Only the latter is presence-unknown. A BLIND
+          // read is any of: no usable tree was ever read (lastTree null ⇒ a fetch
+          // error/hang), OR the adapter flagged the snapshot as untrustworthy — an
+          // empty/degraded iOS AX tree, native-injection-pending, or a tvOS focus
+          // tree the AX service can't serve all come back EMPTY plus a `hint` /
+          // `should_restart` rather than throwing. Gating only on lastTree===null
+          // (the old check) missed those: on tvOS / a device mid-restart, exists
+          // read an empty-but-flagged tree and reported a confirmed absence. Mirror
+          // await-ui-element's `isBlindRead` so a caller never treats "couldn't see
+          // the screen" as "the element is gone".
+          const blind =
+            lastTree === null || Boolean(lastData?.hint) || Boolean(lastData?.should_restart);
+          if (blind) {
             result.presenceUnknown = true;
-            const base = fetchError
-              ? `presence unknown — the UI tree could not be read (${fetchError})`
-              : "presence unknown — the UI tree could not be read";
-            result.note = appendDescribeDiagnostics(base, lastData);
+            const reason =
+              lastTree === null
+                ? fetchError
+                  ? `the UI tree could not be read (${fetchError})`
+                  : "the UI tree could not be read"
+                : "the UI tree was empty or could not be read reliably";
+            result.note = appendDescribeDiagnostics(`presence unknown — ${reason}`, lastData);
           } else {
             result.note = appendDescribeDiagnostics(
               `no element matched ${by}="${query}"`,
@@ -618,7 +661,12 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
         // Distinguish "no element matched" from "matched but not on screen" and
         // "matched but the requested index is out of range" so the agent can act.
         let note: string;
-        if (fetchError && allMatches.length === 0) {
+        if (fetchError && lastTree === null) {
+          // Only when NO usable tree was ever read is a fetchError the cause. A
+          // fetchError left over from a transient error poll AFTER an earlier poll
+          // read the screen (lastTree set) must not mislabel a genuine miss as a
+          // fetch failure — fall through to "no element matched". Mirrors the
+          // `exists` branch's lastTree===null guard.
           note = `tree fetch failed: ${fetchError}`;
         } else if (allMatches.length === 0) {
           note = `no element matched ${by}="${query}"`;
@@ -639,11 +687,14 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
       const result: FindResult = { ...baseResult(), found: true, matchCount, match };
       if (matchCount > 1) {
         const verb = TAPPING_ACTIONS.has(action) ? "acted on" : "selected";
-        // Describe what index 0 means for THIS action: a tapping action ranks an
-        // enclosing container after the smaller matches it wraps, so index 0 is
-        // the innermost match rather than literally the topmost in reading order.
+        // Describe what index 0 means for THIS action. A tapping action ranks an
+        // enclosing container after the smaller matches it wraps — so 0 is the
+        // topmost match EXCEPT that a container is demoted below what it encloses.
+        // (Avoid calling 0 the "innermost match" flatly: when the matches are
+        // disjoint siblings with no nesting there is no inner/outer at all — it is
+        // just the topmost, and only nesting changes that.)
         const zeroMeans = TAPPING_ACTIONS.has(action)
-          ? "innermost match; enclosing containers rank after"
+          ? "topmost, but an enclosing container ranks after the matches it wraps"
           : "topmost in reading order";
         const which = index === 0 ? `index 0 (${zeroMeans})` : `index ${index} (0 = ${zeroMeans})`;
         result.note = `${matchCount} elements matched ${by}="${query}"; ${verb} ${which}. Narrow the query or set \`index\` to target another.`;
@@ -691,15 +742,36 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
           break;
         }
         case "fill": {
-          // Focus at the field's trailing edge (not its centre) so the leftward
-          // backspaces below start from the end of the text — see
-          // `trailingEdgeTapPoint`. `match.tapPoint` (the centre) is still what the
-          // result reports as the element's tap point.
+          // Resolve the editable REGION to clear, which is not always `chosen`.
+          // The container demotion in `orderMatches` ranks an enclosing match after
+          // the inner element for tapping actions — right for a plain tap (hit the
+          // specific control), but wrong for fill's clear when a text field is
+          // wrapped by a larger matching node: an iOS search bar exposes a narrow
+          // inner AXTextField (~5% wide) INSIDE a wide AXGroup that actually carries
+          // the value; an Android EditText can be folded into a container. The wide
+          // node spans the editable region and holds the live text, so the caret
+          // must be parked at ITS trailing edge and the clear sized to ITS length.
+          // Trusting the demoted proxy's frame instead lands the trailing-edge tap
+          // at the field's far LEFT — the backspaces then delete nothing and the
+          // new text is prepended onto the old (the reproduced "abcd" → "WxyzAbcd"
+          // bug). Pick the tightest match that still encloses `chosen`.
+          const enclosing = pool.filter(
+            (n) => n !== chosen && frameEncloses(n.frame, chosen.frame)
+          );
+          const editable = enclosing.length
+            ? enclosing.reduce((a, b) =>
+                a.frame.width * a.frame.height <= b.frame.width * b.frame.height ? a : b
+              )
+            : chosen;
+          // Focus at the editable region's trailing edge (not its centre) so the
+          // leftward backspaces below start from the end of the text — see
+          // `trailingEdgeTapPoint`. `match.tapPoint` (the located element's centre)
+          // is still what the result reports as the tap point.
           const focused = await focusAndSettle(
             registry,
             ctx,
             params.udid,
-            trailingEdgeTapPoint(chosen.frame),
+            trailingEdgeTapPoint(editable.frame),
             focusSettleMs(device.platform)
           );
           if (!focused)
@@ -713,10 +785,10 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
           // undercount that omits text nested in inline children (a <b>, a mention
           // span). Trusting either would under-clear and leave stale text for the
           // new value to be typed on top of, so on Chromium we always clear up to
-          // the cap and flag it. Elsewhere max(value,label) is the true length and
-          // never shorter than the real text.
+          // the cap and flag it. Elsewhere `editableTextLength` reads the real
+          // length off the editable region (never shorter than the live text).
           const lengthHidden = device.platform === "chromium";
-          const knownLength = editableTextLength(chosen);
+          const knownLength = editableTextLength(editable);
           const clearTarget = lengthHidden ? MAX_CLEAR_CHARS : knownLength;
           const clearCount = Math.min(MAX_CLEAR_CHARS, clearTarget + CLEAR_BUFFER);
           const backspacesSent = await clearField(registry, ctx, params.udid, clearCount);
@@ -761,8 +833,12 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
           }
           // A password's real length is hidden: `value` is unset and any `label`
           // is a redacted placeholder ("[password]"), so the clear can't be sized
-          // reliably — warn even though some backspaces were sent.
-          if (chosen.password && !chosen.value) {
+          // reliably — warn even though some backspaces were sent. NOTE this only
+          // fires where the adapter sets `password` (Android uiautomator, Chromium
+          // <input type=password>); iOS AX exposes no secure-field flag, so an iOS
+          // secure field with an empty/short AXValue can still under-clear here
+          // without this warning — a known gap the tree gives us no signal to close.
+          if (editable.password && !editable.value) {
             clearCaveats.push(
               "this looks like a password field with a masked value, so the field's length was unknown — " +
                 "the clear may be incomplete; verify the field is empty before relying on it."

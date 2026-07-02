@@ -8,16 +8,17 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   isTvOsSimulator: vi.fn(async () => false),
 }));
 
-// `find` probes isAndroidTv for an acting action to keep itself read-only on TV.
-// Stub it to a plain (mobile) verdict so the Android acting tests don't shell adb;
-// the Android-TV test overrides it per-case.
+// `find` probes getAndroidRuntimeKind for an acting action to keep itself
+// read-only on TV (and to fail closed on an indeterminate probe). Stub it to a
+// plain "mobile" verdict so the Android acting tests don't shell adb; the
+// Android-TV / indeterminate tests override it per-case.
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
-  isAndroidTv: vi.fn(async () => false),
+  getAndroidRuntimeKind: vi.fn(async () => "mobile"),
 }));
 
 import { isTvOsSimulator } from "../src/utils/ios-devices";
-import { isAndroidTv } from "../src/utils/adb";
+import { getAndroidRuntimeKind } from "../src/utils/adb";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
@@ -112,9 +113,10 @@ function makeFailingChromiumApi(): ChromiumCdpApi {
 
 const FRAME = { x: 0.1, y: 0.4, width: 0.8, height: 0.05 };
 const CENTER = { x: FRAME.x + FRAME.width / 2, y: FRAME.y + FRAME.height / 2 };
-// `fill` focuses at the field's trailing edge (95% across, vertical centre), not
-// its centre, so the clear's leftward backspaces start from the end of the text.
-const TRAILING = { x: FRAME.x + FRAME.width * 0.95, y: FRAME.y + FRAME.height / 2 };
+// `fill` focuses at the field's bottom-trailing corner (95% across, 90% down),
+// not its centre, so the clear's leftward backspaces start from the end of the
+// text on the last line (handles multi-line fields, not just long single lines).
+const TRAILING = { x: FRAME.x + FRAME.width * 0.95, y: FRAME.y + FRAME.height * 0.9 };
 
 // ── Pure locator matching (hand-built trees, no platform adapter) ────────────
 
@@ -177,9 +179,13 @@ describe("find tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb"]);
-    // Reset the TV-probe call history so per-test spies/overrides don't leak.
-    vi.mocked(isTvOsSimulator).mockClear();
-    vi.mocked(isAndroidTv).mockClear();
+    // Reset call history AND implementation so a per-test TV override can't leak
+    // into a later test — mockClear alone keeps the sticky implementation, which
+    // would let a `mockResolvedValue("tv")` bleed into a following acting test.
+    vi.mocked(isTvOsSimulator).mockReset();
+    vi.mocked(isTvOsSimulator).mockResolvedValue(false);
+    vi.mocked(getAndroidRuntimeKind).mockReset();
+    vi.mocked(getAndroidRuntimeKind).mockResolvedValue("mobile");
   });
 
   const iosTool = (ax: AXServiceApi) => {
@@ -358,6 +364,43 @@ describe("find tool", () => {
     expect(result.found).toBe(true);
   });
 
+  it("`exists` reports the topmost VISIBLE match, not a zero-area ghost that sorts above it", async () => {
+    // Two matches: a zero-area ghost at y=0.1 (sorts first in reading order) and a
+    // real visible one lower at y=0.5. exists must report the VISIBLE match — the
+    // element a subsequent tap would hit — not the ghost with its degenerate
+    // tapPoint. (Every other exists test has ≤1 match, so the .filter(isVisible)
+    // that picks the visible one was never exercised — T1.)
+    const tree = {
+      role: "html",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "button",
+          label: "Submit",
+          frame: { x: 0.1, y: 0.1, width: 0, height: 0 }, // zero-area ghost, sorts first
+          children: [],
+        },
+        {
+          role: "button",
+          label: "Submit",
+          frame: { x: 0.1, y: 0.5, width: 0.6, height: 0.05 }, // the real, visible one
+          children: [],
+        },
+      ],
+    };
+    const { registry } = makeMockRegistry({});
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      { udid: CHROMIUM_ID, query: "Submit", by: "label", action: "exists", index: 0 }
+    );
+    expect(result.found).toBe(true);
+    expect(result.matchCount).toBe(2); // both counted for a read-only presence check
+    // Reported match is the visible one (y≈0.5), NOT the zero-area ghost (y≈0.1).
+    expect(result.match!.frame.y).toBeCloseTo(0.5, 2);
+    expect(result.match!.visible).toBe(true);
+  });
+
   it("`exists` returns found:false for a missing element", async () => {
     const { api } = makeSequencedAXService([axResponse([])]);
     const { tool } = iosTool(api);
@@ -465,14 +508,16 @@ describe("find tool", () => {
       { udid: IOS_UDID, query: "Field", by: "label", action: "fill", text: "new", index: 0 }
     );
     expect(result.found).toBe(true);
-    // clear length = max(label "Field"=5, value "abcd"=4) + CLEAR_BUFFER 2
-    expect(backspaces(invocations)).toHaveLength(5 + 2);
-    expect(result.actionResult).toMatchObject({ kind: "fill", typed: "new", backspacesSent: 7 });
+    // clear length = the live text length (value "abcd"=4) + CLEAR_BUFFER 2. The
+    // static placeholder label "Field" is NOT counted now that `value` is present.
+    expect(backspaces(invocations)).toHaveLength(4 + 2);
+    expect(result.actionResult).toMatchObject({ kind: "fill", typed: "new", backspacesSent: 6 });
     expect(invocations[0]!.toolId).toBe("gesture-tap");
-    // focus is biased to the trailing edge so the caret starts at the end, NOT
-    // the centre where a mid-text caret could strand right-hand residue.
+    // focus is biased to the bottom-trailing corner so the caret starts at the
+    // end, NOT the centre where a mid-text caret could strand right-hand residue.
     expect(invocations[0]!.args).toMatchObject({ x: TRAILING.x, y: TRAILING.y });
     expect(invocations[0]!.args.x as number).toBeGreaterThan(CENTER.x);
+    expect(invocations[0]!.args.y as number).toBeGreaterThan(CENTER.y);
     expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "new" } });
   });
 
@@ -581,6 +626,10 @@ describe("find tool", () => {
     expect((result.actionResult as { backspacesSent: number }).backspacesSent).toBe(64);
     expect(result.note).toMatch(/chromium/i);
     expect(result.note).toMatch(/verify/i);
+    // The caveat warns about BOTH directions, not just leftover text: a fixed-count
+    // clear on an inner block of a multi-block editor can backspace past the block's
+    // start and delete into the PRECEDING block. Guards commit b473a39c's direction.
+    expect(result.note).toMatch(/preceding block/i);
     expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "ZZZ" } });
   });
 
@@ -637,6 +686,65 @@ describe("find tool", () => {
     );
     expect(result.match?.flags?.password).toBe(true);
     expect(result.note).toMatch(/password/i);
+  });
+
+  it("`fill` clears the enclosing editable region, not the demoted inner proxy (H1)", async () => {
+    // The iOS search-bar shape that reproduced the "abcd" → "WxyzAbcd" bug: a wide
+    // AXGroup that actually carries the value ("abcd") wraps a narrow inner
+    // AXTextField proxy (no value). Both match "Search". For a tapping action the
+    // container is demoted, so index 0 = the narrow proxy. fill must still focus +
+    // size the clear against the WIDE region: trusting the proxy's frame parks the
+    // caret at the field's far left (backspaces delete nothing, new text prepends).
+    const group = {
+      label: "Search",
+      value: "abcd",
+      frame: { x: 0.1, y: 0.4, width: 0.761, height: 0.05 },
+      traits: [],
+    };
+    const proxy = {
+      label: "Search",
+      frame: { x: 0.11, y: 0.41, width: 0.051, height: 0.03 },
+      traits: ["searchField"],
+    };
+    const { api } = makeSequencedAXService([axResponse([group, proxy])]);
+    const { tool, invocations } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Search", by: "label", action: "fill", text: "wxyz", index: 0 }
+    );
+    expect(result.found).toBe(true);
+    expect(result.matchCount).toBe(2);
+    // index 0 is the demoted-past inner proxy (narrow frame ≈ 0.051 wide).
+    expect(result.match!.frame.width).toBeCloseTo(0.051, 3);
+    // …but the focus tap lands on the WIDE region's trailing edge (x ≈ 0.82), well
+    // to the right of the proxy's own trailing edge (≈ 0.16) — this is the fix.
+    const focusTap = invocations.find((i) => i.toolId === "gesture-tap")!;
+    expect(focusTap.args.x as number).toBeCloseTo(0.1 + 0.761 * 0.95, 2);
+    expect(focusTap.args.x as number).toBeGreaterThan(0.5);
+    // The clear is sized from the WIDE region's value ("abcd"=4) + CLEAR_BUFFER,
+    // NOT the proxy's placeholder label ("Search"=6 → the old 8-backspace path).
+    expect(backspaces(invocations)).toHaveLength(4 + 2);
+    expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "wxyz" } });
+  });
+
+  it("`fill` on an empty field backspaces only the buffer, not the placeholder label (L3)", async () => {
+    // An empty iOS field exposes value="" with the placeholder in `label`
+    // ("Search"). Sizing from the label would send 6+buffer phantom backspaces
+    // (each a keyboard round-trip); preferring the present `value` sizes it to the
+    // real (zero) length, so only the CLEAR_BUFFER backspaces are sent.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Search", value: "", frame: FRAME, traits: ["searchField"] }]),
+    ]);
+    const { tool, invocations } = iosTool(api);
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, query: "Search", by: "label", action: "fill", text: "hi", index: 0 }
+    );
+    expect(result.found).toBe(true);
+    // 0 (empty value) + CLEAR_BUFFER 2 — NOT 6 (label) + 2 the placeholder implies.
+    expect(backspaces(invocations)).toHaveLength(2);
+    expect(result.note ?? "").not.toMatch(/capped|incomplete/i);
+    expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "hi" } });
   });
 
   // ── get-text / get-attrs ──
@@ -705,6 +813,9 @@ describe("find tool", () => {
     );
     expect(result.found).toBe(false);
     expect(result.note).toMatch(/boot-device|restart/i);
+    // A degraded AX tree is untrustworthy, so an empty one is a BLIND read, not a
+    // confirmed absence — exists flags presenceUnknown (M1).
+    expect(result.presenceUnknown).toBe(true);
   });
 
   it("`exists` reports presenceUnknown (not a confirmed absence) when the tree is unreadable", async () => {
@@ -916,8 +1027,9 @@ describe("find tool", () => {
     // input centre y ≈ 0.3375, NOT the card centre y ≈ 0.3125
     expect(tap.args.y as number).toBeCloseTo(0.3375, 2);
     expect(tap.args.y as number).not.toBeCloseTo(0.3125, 2);
-    // The ambiguity note describes index 0 as the innermost match, not "topmost".
-    expect(result.note).toMatch(/innermost/i);
+    // The ambiguity note explains a tapping action demotes the enclosing
+    // container below the matches it wraps (so index 0 is the inner input).
+    expect(result.note).toMatch(/enclosing container ranks after/i);
   });
 
   it("keeps plain reading order for a read-only action (no container demotion)", async () => {
@@ -993,11 +1105,14 @@ describe("find tool", () => {
       {},
       { udid: IOS_UDID, query: "Now Playing", by: "text", action: "exists", index: 0 }
     );
-    // A valid absent answer, not a rejection: exists ran and read the (empty) tree.
+    // A valid read result, not an acting-on-TV rejection: exists ran the tvOS
+    // describe path. The tree came back EMPTY but flagged (TVOS_HINT) — the AX
+    // service can't serve the tvOS focus tree — so this is a BLIND read, not a
+    // confirmed absence: exists must surface presenceUnknown so a caller doesn't
+    // read "couldn't see the screen" as "the element is gone" (M1).
     expect(result.found).toBe(false);
     expect(result.matchCount).toBe(0);
-    // The empty tree WAS read, so this is a confirmed absence, not "couldn't check".
-    expect(result.presenceUnknown).toBeUndefined();
+    expect(result.presenceUnknown).toBe(true);
     // Crucially: NOT rejected as an unsupported acting-on-TV action.
     expect(result.note ?? "").not.toMatch(/read-only on TV|cannot `?exists`? on a TV/i);
     // The note carries the tvOS hint, proving the tvOS describe path ran and the
@@ -1008,7 +1123,7 @@ describe("find tool", () => {
   });
 
   it("rejects an acting action on an Android TV target without mutating anything", async () => {
-    vi.mocked(isAndroidTv).mockResolvedValueOnce(true);
+    vi.mocked(getAndroidRuntimeKind).mockResolvedValueOnce("tv");
     const { registry, invocations } = makeMockRegistry({});
     const tool = createFindTool(registry);
     const result = await tool.execute(
@@ -1019,13 +1134,34 @@ describe("find tool", () => {
     expect(result.note).toMatch(/TV/);
     expect(result.note).toMatch(/tv-remote/i);
     expect(invocations).toHaveLength(0);
-    expect(isAndroidTv).toHaveBeenCalledTimes(1);
+    expect(getAndroidRuntimeKind).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed: rejects an acting action when the Android form factor can't be determined", async () => {
+    // Mid-boot / offline: getAndroidRuntimeKind returns undefined. We can't prove
+    // the target is a mobile device, so an acting find must NOT fire a blind
+    // coordinate tap (which would no-op on a TV and be reported as tapped:true) —
+    // it fails closed exactly like a confirmed TV target (L2).
+    vi.mocked(getAndroidRuntimeKind).mockResolvedValueOnce(undefined);
+    const { registry, invocations } = makeMockRegistry({});
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
+      {},
+      { udid: ANDROID_SERIAL, query: "Sign in", by: "text", action: "tap", index: 0 }
+    );
+    expect(result.found).toBe(false);
+    expect(result.matchCount).toBe(0);
+    expect(result.note).toMatch(/tv-remote/i);
+    expect(invocations).toHaveLength(0); // nothing tapped
+    expect(getAndroidRuntimeKind).toHaveBeenCalledTimes(1);
   });
 
   it("allows a read-only action on an Android TV target (find is read-only, not blocked, on TV)", async () => {
     // A read-only find never touches the D-pad, so it is NOT rejected on TV — only
-    // the acting actions are. get-text works on a TV target as on a phone.
-    vi.mocked(isAndroidTv).mockResolvedValue(true);
+    // the acting actions are. get-text works on a TV target as on a phone. Even if
+    // the form-factor probe WOULD say "tv", a read-only find never calls it (the
+    // acting-guard short-circuits on the action), so no adb round-trip is paid.
+    vi.mocked(getAndroidRuntimeKind).mockResolvedValueOnce("tv");
     const xml =
       `<?xml version="1.0" encoding="UTF-8"?>` +
       `<hierarchy rotation="0">` +
@@ -1048,7 +1184,9 @@ describe("find tool", () => {
     // A read-only action is never rejected as an unsupported TV action.
     expect(result.note ?? "").not.toMatch(/read-only on TV|cannot .*get-text/i);
     expect(invocations).toHaveLength(0); // no device effect for a read
-    vi.mocked(isAndroidTv).mockResolvedValue(false); // restore default
+    // Read-only never probes the form factor, so the "tv" override was never read.
+    expect(getAndroidRuntimeKind).not.toHaveBeenCalled();
+    // No manual restore needed: beforeEach resets the mock implementation (T4).
   });
 
   // ── T3: the tvOS verdict is resolved ONCE, before the poll clock ──

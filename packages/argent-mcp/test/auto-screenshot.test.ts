@@ -180,6 +180,32 @@ describe("getAutoScreenshotDelayMs", () => {
     process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS = "abc";
     expect(getAutoScreenshotDelayMs("gesture-tap")).toBe(1500);
   });
+
+  // N1: a read-only `find` shouldn't over-wait the tap settle for an unchanged
+  // screen — it uses describe's short delay, keyed off args.action.
+  it("uses the describe delay for a read-only find action", () => {
+    for (const action of ["exists", "get-text", "get-attrs", "wait"]) {
+      expect(getAutoScreenshotDelayMs("find", { action })).toBe(
+        AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["describe"]
+      );
+    }
+    // normalized names work too
+    expect(getAutoScreenshotDelayMs("mcp__argent__find", { action: "exists" })).toBe(
+      AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["describe"]
+    );
+  });
+
+  it("keeps the tap settle delay for a find tapping action (or omitted action → default tap)", () => {
+    expect(getAutoScreenshotDelayMs("find", { action: "tap" })).toBe(
+      AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["find"]
+    );
+    expect(getAutoScreenshotDelayMs("find", { action: "fill", text: "x" })).toBe(
+      AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["find"]
+    );
+    // omitted action defaults to tap → full settle; and no args at all
+    expect(getAutoScreenshotDelayMs("find", {})).toBe(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["find"]);
+    expect(getAutoScreenshotDelayMs("find")).toBe(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["find"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

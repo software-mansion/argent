@@ -48,11 +48,25 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "keyboard": 300,
   "describe": 100,
   // `find`'s headline action is a tap (which can trigger a transition), so match
-  // gesture-tap's settle delay; the read-only actions just over-wait harmlessly.
+  // gesture-tap's settle delay. Its read-only actions (exists/get-text/get-attrs/
+  // wait) don't mutate the screen, so they use the shorter describe-style delay
+  // instead — see `getAutoScreenshotDelayMs`, which keys off `args.action`.
   "find": 1500,
 };
 
 const DEFAULT_DELAY_MS = 1400;
+
+// `find` actions that don't touch the device — their auto-screenshot doesn't need
+// the tap settle delay (it would just over-wait ~1.5s for an unchanged screen).
+// Kept in sync with the tool's ACTIONS by name (argent-mcp must not import from
+// tool-server); the default action is `tap`, so an omitted action is NOT read-only.
+const READ_ONLY_FIND_ACTIONS = new Set(["exists", "get-text", "get-attrs", "wait"]);
+
+function isReadOnlyFindAction(args: unknown): boolean {
+  if (!args || typeof args !== "object") return false;
+  const action = (args as { action?: unknown }).action;
+  return typeof action === "string" && READ_ONLY_FIND_ACTIONS.has(action);
+}
 
 // Auto-screenshot is on by default; the opt-out is the off-by-default
 // `disable-auto-screenshot` flag. `options` mirrors isFlagEnabled so tests can
@@ -87,9 +101,12 @@ export function shouldAutoScreenshot(toolName: string): boolean {
   return canonical !== "screenshot" && AUTO_SCREENSHOT_TOOLS.has(canonical);
 }
 
-export function getAutoScreenshotDelayMs(toolName: string): number {
+export function getAutoScreenshotDelayMs(toolName: string, args?: unknown): number {
   const canonical = normalizeToolName(toolName);
-  const base = AUTO_SCREENSHOT_DELAY_MS_BY_TOOL[canonical] ?? DEFAULT_DELAY_MS;
+  const base =
+    canonical === "find" && isReadOnlyFindAction(args)
+      ? AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["describe"]!
+      : (AUTO_SCREENSHOT_DELAY_MS_BY_TOOL[canonical] ?? DEFAULT_DELAY_MS);
   const envOverride = process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS;
   if (envOverride) {
     const envMs = parseInt(envOverride, 10);

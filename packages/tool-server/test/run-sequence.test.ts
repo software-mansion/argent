@@ -81,6 +81,34 @@ describe("run-sequence", () => {
     expect(failed && "error" in failed && failed.error).toMatch(/not allowed/);
   });
 
+  it("does NOT allow `find` — a missed find would silently continue the sequence (T3)", async () => {
+    // `find` is deliberately excluded from run-sequence: a missed `find … tap`
+    // returns { found: false } WITHOUT throwing, and run-sequence's stop guard only
+    // recognises an unmet await-ui-element (isUnmetUiWaitResult), not a missed find
+    // (isMissedFindResult lives in the flow runners). Wiring find in without teaching
+    // the guard would let the sequence run the NEXT step blind against a screen where
+    // the find failed. This locks the exclusion so adding find to ALLOWED_TOOLS
+    // without the guard can't slip through green.
+    const { registry, calls } = makeMockRegistry();
+    const tool = createRunSequenceTool(registry);
+    const result = await tool.execute!(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "find", args: { query: "Sign In", action: "tap" } },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      }
+    );
+    // The find step is rejected as not-allowed and halts before the tap runs.
+    expect(result.completed).toBe(0);
+    expect(calls.map((c) => c.tool)).toEqual([]); // find was never invoked
+    const failed = result.steps[0];
+    expect(failed && "error" in failed && failed.error).toMatch(/not allowed/);
+    expect(failed && "error" in failed && failed.error).toMatch(/find/);
+  });
+
   it("declares no eager service so a tvOS udid never spawns simulator-server", () => {
     const { registry } = makeMockRegistry();
     const tool = createRunSequenceTool(registry);
