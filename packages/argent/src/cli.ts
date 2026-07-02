@@ -34,6 +34,7 @@ import type * as Mcp from "@argent/mcp";
 import type * as Cli from "@argent/cli";
 import { BUNDLED_RUNTIME_PATHS } from "./bundled-paths.js";
 import { installFatalHandlers } from "./fatal-handlers.js";
+import { installerHelpRequested, printInstallerHelp } from "./installer-help.js";
 
 const PACKAGE_NAME = "@swmansion/argent";
 
@@ -103,6 +104,17 @@ async function loadCli(): Promise<typeof Cli> {
 }
 
 async function main(): Promise<void> {
+  // The installer subcommands (init / install / update / uninstall / remove)
+  // forward their argv straight to the side-effecting installer functions,
+  // which do not short-circuit on `--help` — so `argent uninstall --help`
+  // would run the real (destructive) command. Intercept help for exactly that
+  // set before dispatching. All other subcommands handle `--help` themselves.
+  if (installerHelpRequested(command, rest)) {
+    // installerHelpRequested only returns true for an InstallerCommand.
+    printInstallerHelp(command as Parameters<typeof printInstallerHelp>[0]);
+    return;
+  }
+
   switch (command) {
     case "mcp":
       return (await loadMcp()).startMcpServer({ paths: BUNDLED_RUNTIME_PATHS });
