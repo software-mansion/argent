@@ -32,7 +32,7 @@ interface Result {
  * rejection — an unsupported button would otherwise be a silent no-op that the
  * tool still reports as a successful `{ pressed }`.
  */
-const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>> = {
+export const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>> = {
   "ios": new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),
   // Remote iOS sims expose the same hardware buttons as local iOS.
   "ios-remote": new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),

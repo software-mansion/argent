@@ -36,6 +36,7 @@ import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { makeAndroidImpl } from "../src/tools/keyboard/platforms/android";
 import type { KeyboardParams } from "../src/tools/keyboard/types";
+import { BUTTONS_BY_PLATFORM } from "../src/tools/button";
 
 const SERIAL = "emulator-5554";
 
@@ -48,9 +49,12 @@ describe("android-input — keycode maps", () => {
     }
   });
 
-  it("maps the button tool's Android buttons to keycodes", () => {
-    // Mirror BUTTONS_BY_PLATFORM.android in tools/button/index.ts.
-    for (const button of ["home", "back", "power", "volumeUp", "volumeDown", "appSwitch"]) {
+  it("has a keycode for every button the button tool accepts on Android", () => {
+    // Derive from the SOURCE set (button/index.ts) rather than a hardcoded list,
+    // so adding a button to BUTTONS_BY_PLATFORM.android without a matching
+    // keycode fails here — otherwise button/index.ts would inject
+    // `input keyevent undefined` (the `!` assertion hides it at compile time).
+    for (const button of BUTTONS_BY_PLATFORM.android) {
       expect(ANDROID_BUTTON_KEYCODES[button], `missing keycode for "${button}"`).toBeTypeOf(
         "number"
       );
@@ -273,12 +277,18 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(adbShell).toHaveBeenCalledWith(SERIAL, "input keyevent 66", expect.anything());
   });
 
-  it("counts key + text together (1 + codepoints) and returns text as `typed`", async () => {
+  it("counts key + text together (1 + codepoints), emits BOTH, returns text as `typed`", async () => {
     const res = await impl.handler(
       {},
       { udid: SERIAL, key: "enter", text: "abc" } as KeyboardParams,
       phone
     );
     expect(res).toEqual({ typed: "abc", keys: 4 });
+    // Assert both side effects fired: an impl that dropped the keyevent when
+    // text co-occurs would still return { typed:"abc", keys:4 } — pin the adb
+    // calls so that regression is caught.
+    const cmds = adbShell.mock.calls.map((c) => c[1]);
+    expect(cmds).toContain("input keyevent 66"); // KEYCODE_ENTER
+    expect(cmds).toContain("input text 'abc'");
   });
 });
