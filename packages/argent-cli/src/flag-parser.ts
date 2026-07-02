@@ -11,6 +11,12 @@
 //   --args '<json>'       (whole-payload escape hatch; merges with parsed flags)
 //   --args -              (read whole-payload JSON from stdin)
 //
+// Exception: when the tool's own schema declares a property named `args` (e.g.
+// flow-add-step, whose `args` is a JSON string of the step's tool arguments),
+// `--args <value>` is treated as that per-field value — coerced by its declared
+// type, exactly like any other field — NOT the whole-payload escape hatch. Such
+// a tool has no whole-payload shortcut; use individual flags / --<field>-json.
+//
 // Scalar field types come from JSON Schema: string, number, integer, boolean, enum.
 // Array fields: items.type must be a scalar to get a repeatable flag.
 // Object fields and arrays of objects fall through to --field-json.
@@ -127,7 +133,11 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
     }
 
     // ── Whole-payload escape hatch ──
-    if (flag === "args") {
+    //
+    // Skipped when the tool declares its own `args` field: then `--args` is a
+    // normal per-field flag (handled below) and wins over the escape hatch, so
+    // the field's value isn't silently swallowed as the whole payload.
+    if (flag === "args" && properties.args === undefined) {
       const { value, nextIndex } =
         inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, "args");
       rawArgs = value;
