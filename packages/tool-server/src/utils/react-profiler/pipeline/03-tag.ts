@@ -23,6 +23,14 @@ import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline
 //    `Memo(AnimatedComponent(View))`), or end-of-string — so it still matches
 //    real names while rejecting tokens that bleed into more lowercase
 //    (`MotionlessIndicator`).
+//  - KNOWN LIMITATION: only acronym/digit-GLUED device-motion prefixes
+//    (`CMMotionManager`, `G2MotionSensor`) are rejected. A BARE `Motion` starting
+//    a PascalCase word (`MotionSensor`, `MotionManager`) still matches — it is
+//    structurally indistinguishable from a real animation name of the same shape
+//    (`MotionView`, and `@legendapp/motion`'s `Motion.View`), which we DO want to
+//    tag. This over-tag is accepted collateral: it only excludes a component from
+//    perf findings, and a hardcoded device-motion denylist would be more fragile
+//    than the rare false positive it removes.
 const ANIMATED_PATTERN = /(?<![A-Z0-9])(Animated|Animation|Transition|Motion)(?=[A-Z0-9_(.]|$)/;
 const RECYCLER_CHILD_PATTERN = /(ListItem|CellItem|Cell|Row|Item)$/i;
 const RECYCLER_PARENT_PATTERN =

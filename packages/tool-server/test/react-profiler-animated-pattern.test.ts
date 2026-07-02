@@ -99,6 +99,19 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
       expect(tagged.components.get(n)!.isAnimated).toBe(false);
     }
   });
+  it("DOES tag a bare Motion-prefixed device name (accepted collateral of matching MotionView)", () => {
+    // KNOWN LIMITATION: a bare `Motion` word-start (no acronym/digit prefix) is
+    // structurally indistinguishable from a real animation name of the same
+    // shape (MotionView, legend-motion's Motion.View), which we DO tag — so
+    // these CoreMotion-style device names are over-tagged as animated. Only the
+    // acronym/digit-GLUED forms (above) are rejected. Pinned here so any future
+    // change to this behavior is a deliberate one, not an accident.
+    const names = ["MotionSensor", "MotionManager", "MotionDetector", "MotionTracker"];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated, n).toBe(true);
+    }
+  });
   it("does NOT tag a digit-suffixed acronym prefix either", () => {
     // The leading boundary must reject digits too, not just uppercase — a
     // digit immediately before the token is the tail of an acronym/model
