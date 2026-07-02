@@ -216,6 +216,24 @@ describe("telemetry public surface", () => {
     expect(status().hasAnonIdOnDisk).toBe(false);
   });
 
+  it("warmTelemetryIdentity provisions no identity when the PostHog key is unusable", async () => {
+    // Consent-enabled but an unusable key: like track()/buildPayload, warm-up must
+    // resolve the client first and bail before spawning the fingerprint binary or
+    // writing a durable per-machine id for events that can never be transmitted.
+    // The async resolver is mocked to a fingerprint, so without the getClient()
+    // gate warmIdentity would persist "f".repeat(64); asserting no id proves the
+    // short-circuit.
+    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "";
+    resetClient();
+    _resetConsentCacheForTest();
+    expect(isEnabled()).toBe(true);
+
+    await warmTelemetryIdentity();
+
+    expect(readId()).toBeNull();
+    expect(status().hasAnonIdOnDisk).toBe(false);
+  });
+
   it("captures events in CI and annotates payloads with is_ci", () => {
     const restore = snapshotEnv(["CI"]);
     try {

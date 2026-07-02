@@ -308,6 +308,27 @@ function isCorruptIdFile(filePath: string): boolean {
 // deterministic value, so the result is identical regardless of who wins.
 function writeIdFileAtomic(finalPath: string, id: string): void {
   fs.mkdirSync(argentHomeDir(), { recursive: true });
+
+  // Fail closed on a NON-REGULAR occupant (symlink, dir, fifo, ...) — matching
+  // the mint path, which lstat-guards and leaves a symlink untouched (fails
+  // closed via isCorruptIdFile/mintRandomId). rename() does not follow a
+  // symlink, so without this guard the fingerprint writers (the truly-fresh
+  // write and adoptFingerprint) would silently swap a symlink at the identity
+  // path for a regular file — diverging from the mint path's handling of the
+  // exact same occupant. Both id writers must treat the path identically, so
+  // refuse here too. ENOENT (fresh) or a regular file (steady-state migration)
+  // proceeds and is replaced atomically. Callers already treat a write failure
+  // as best-effort (keep the id in memory), so the symlink is preserved.
+  let occupant: fs.Stats | undefined;
+  try {
+    occupant = fs.lstatSync(finalPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  if (occupant && !occupant.isFile()) {
+    throw new Error("telemetry: refusing to replace a non-regular file at the identity path");
+  }
+
   const tmpPath = path.join(
     argentHomeDir(),
     `.telemetry-id.tmp.${process.pid}.${crypto.randomUUID()}`

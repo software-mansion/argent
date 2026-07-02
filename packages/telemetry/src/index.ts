@@ -1,4 +1,4 @@
-// Anonymous opt-out telemetry for Argent. Public functions swallow telemetry
+// Opt-out telemetry for Argent. Public functions swallow telemetry
 // failures and surface diagnostics only when ARGENT_TELEMETRY_DEBUG=1.
 
 import {
@@ -94,6 +94,13 @@ function activeRuntime(): Runtime {
 export async function warmTelemetryIdentity(): Promise<void> {
   try {
     if (!isEnabled()) return;
+    // Mirror track()/buildPayload, which resolve the client before provisioning
+    // the id: there is no reason to spawn the fingerprint binary and write a
+    // durable per-machine id for events that can never be transmitted (no usable
+    // PostHog key). Unreachable in the shipped build (the bundled token is
+    // usable), but reachable in the emergency-local / token-stripped builds that
+    // resolveConfig() anticipates ("" / "phc_disabled").
+    if (!getClient()) return;
     await warmIdentity(resolveHostFingerprintAsync);
   } catch (err) {
     emitDebugError("warmTelemetryIdentity failed", err);

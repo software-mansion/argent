@@ -65,6 +65,20 @@ describe("resolveHostFingerprint", () => {
     );
   });
 
+  it("hard-bounds the spawn: SIGKILL kill signal, capped stdout, and the timeout", () => {
+    // The sync path blocks the event loop, so a JS-side watchdog can't run — the
+    // bound must come from spawnSync itself. killSignal SIGKILL (untrappable)
+    // guarantees a SIGTERM-ignoring binary is reaped at the cap instead of
+    // freezing the command; maxBuffer caps captured stdout.
+    execFileSyncMock.mockReturnValue(`${"a".repeat(64)}\n`);
+    resolveHostFingerprint();
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "/fake/simulator-server",
+      ["fingerprint"],
+      expect.objectContaining({ killSignal: "SIGKILL", maxBuffer: 4096, timeout: 5_000 })
+    );
+  });
+
   it("returns null for empty / whitespace-only output", () => {
     execFileSyncMock.mockReturnValue("   \n");
     expect(resolveHostFingerprint()).toBeNull();

@@ -179,6 +179,40 @@ describe("identity – fingerprint-derived id", () => {
     expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
   });
 
+  it("fails closed on a symlink at the id path even when a fingerprint resolves (truly-fresh write)", () => {
+    // The mint path (no fingerprint) leaves a symlink untouched and fails closed.
+    // The fingerprint WRITE path must handle the identity path identically — never
+    // silently swap the symlink for a regular file via rename(). So with a symlink
+    // squatting the path and a resolvable fingerprint, the symlink is preserved and
+    // the deterministic id is still returned in memory (best-effort persistence).
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    const evilTarget = `${tmp()}/evil.txt`;
+    fs.writeFileSync(evilTarget, "not-the-id");
+    fs.symlinkSync(evilTarget, identityFilePath());
+
+    const id = readOrCreateAnonId(() => FP);
+    expect(id).toBe(FP); // deterministic id held in memory
+    // The symlink was NOT replaced with a regular file.
+    expect(fs.lstatSync(identityFilePath()).isSymbolicLink()).toBe(true);
+    // rename() does not follow the link, so the pointed-to file is untouched.
+    expect(fs.readFileSync(evilTarget, "utf8")).toBe("not-the-id");
+  });
+
+  it("fails closed on a symlink at the id path in the async adopt path (warmIdentity)", async () => {
+    // Same guarantee for the OTHER writer that reaches writeIdFileAtomic:
+    // adoptFingerprint (here via warmIdentity). It must not clobber a symlink
+    // either, so the two fingerprint-write paths stay consistent with the mint path.
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    const evilTarget = `${tmp()}/evil2.txt`;
+    fs.writeFileSync(evilTarget, "not-the-id");
+    fs.symlinkSync(evilTarget, identityFilePath());
+
+    const id = await warmIdentity(() => Promise.resolve(FP));
+    expect(id).toBe(FP);
+    expect(fs.lstatSync(identityFilePath()).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(evilTarget, "utf8")).toBe("not-the-id");
+  });
+
   it("mints a random (v4) id when no resolver is injected", () => {
     const id = readOrCreateAnonId();
     expect(versionNibble(id)).toBe("4");

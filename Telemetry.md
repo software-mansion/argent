@@ -29,7 +29,8 @@ We use telemetry, in our Legitimate Interest, only to:
 - understand which features are used, so we can prioritise development;
 - detect where installation, updates, or tools fail, so we can fix them;
 - measure reliability and performance (e.g. how long operations run, error rates);
-- understand the environments Argent runs in (operating system, runtime versions, terminal vs CI).
+- understand the environments Argent runs in (operating system, runtime versions, terminal vs CI);
+- measure how many distinct devices use Argent, without over-counting reinstallations.
 
 We do not use telemetry for advertising, marketing, profiling, automated decision-making, or sale of data, and we never combine it with any account or with Personal Data collected through other Services.
 
@@ -52,7 +53,7 @@ We do not use telemetry for advertising, marketing, profiling, automated decisio
 
 - Argent version, Node.js version, operating system, processor architecture;
 - whether the process runs in an interactive terminal and whether it runs in a CI environment;
-- whether Argent is used in connection with Android, iOS, or a Chromium-based target.
+- whether Argent is used in connection with Android, iOS, tvOS (Apple TV), Android TV, VegaOS, or a Chromium-based target.
 
 ### Diagnostics
 
@@ -60,7 +61,7 @@ We do not use telemetry for advertising, marketing, profiling, automated decisio
 
 ### Identifiers
 
-- a randomly generated identifier that persists for an installation, used only to distinguish unique installations and to de-duplicate events. It does not contain, and is not derived from, your name, username, account, or any device identifier;
+- an installation identifier used to distinguish devices and to de-duplicate events. It is a **one-way HMAC-SHA256 hash derived from a device identifier: the raw device identifier** is never transmitted or stored and cannot be recovered from the hash. The identifier is stable across installations and reinstallations of Argent on the same device, so that reinstalling Argent does not create a new counted user. It is not linked to your name, username, or any account;
 - a random session identifier generated for each usage session.
 
 ## What we never collect

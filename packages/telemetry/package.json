@@ -2,7 +2,7 @@
   "private": true,
   "name": "@argent/telemetry",
   "version": "0.14.0",
-  "description": "Anonymous opt-out telemetry client for Argent CLI / installer / tool-server",
+  "description": "Opt-out telemetry client for Argent CLI / installer / tool-server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

@@ -8,7 +8,7 @@ import { argentHomeDir, configFilePath } from "@argent/configuration-core";
 export { argentHomeDir, configFilePath };
 
 /**
- * Anonymous identity file (mode 0600, atomic create). In steady state it holds
+ * Telemetry identity file (mode 0600, atomic create). In steady state it holds
  * the 64-hex host fingerprint (a one-way hash of stable hardware ids) used as
  * the telemetry distinct_id; a dashed random UUID v4 is only the fallback shape
  * kept when the fingerprint can't be resolved.

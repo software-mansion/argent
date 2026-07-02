@@ -10,8 +10,9 @@ import { simulatorServerBinaryPath } from "@argent/native-devtools-ios";
 // toward resolving; the cap only exists to bound a genuinely wedged binary.
 const FINGERPRINT_TIMEOUT_MS = 5_000;
 
-// Cap captured stdout so a wedged binary that streams unbounded output can't
-// grow the buffer without limit. A fingerprint is 64 bytes; 4 KiB is generous.
+// Cap captured stdout so a wedged binary that streams output is bounded to a
+// small cap rather than Node's 1 MiB execFileSync default. A fingerprint is 64
+// bytes; 4 KiB is generous.
 const FINGERPRINT_MAX_BUFFER = 4096;
 
 /**
@@ -26,12 +27,28 @@ const FINGERPRINT_MAX_BUFFER = 4096;
  * tool-server's off-the-accept-path warm-up — uses the async variant below so
  * it never stalls the loop. Best-effort: returns null (never throws) when the
  * binary is absent or the command fails.
+ *
+ * HARD-bounded so the synchronous call always returns: because this blocks the
+ * event loop, a child that outlives the cap would freeze the whole command with
+ * no chance for a JS-side watchdog to run. execFileSync's `timeout` sends
+ * `killSignal` exactly once and never escalates, and the default SIGTERM can be
+ * trapped/ignored — so we pass SIGKILL (untrappable) as the kill signal. That is
+ * the sync-path equivalent of the async variant's watchdog + SIGKILL: a wedged or
+ * SIGTERM-ignoring binary is reaped at the cap and this returns null instead of
+ * blocking indefinitely.
  */
 export function resolveHostFingerprint(): string | null {
   try {
     const out = execFileSync(simulatorServerBinaryPath(), ["fingerprint"], {
       encoding: "utf8",
       timeout: FINGERPRINT_TIMEOUT_MS,
+      // Reap with SIGKILL, not the default SIGTERM: a binary that ignores SIGTERM
+      // would otherwise block the (synchronous) event loop past the cap forever.
+      // SIGKILL can't be trapped, so the timeout is a genuine bound here.
+      killSignal: "SIGKILL",
+      // Cap captured stdout (same limit as the async variant): a binary streaming
+      // output is SIGKILL'd at this cap rather than filling Node's 1 MiB default.
+      maxBuffer: FINGERPRINT_MAX_BUFFER,
       // Ignore stderr so a binary that logs diagnostics doesn't pollute the
       // caller's stderr; stdout (index 1) is captured as the return value.
       stdio: ["ignore", "pipe", "ignore"],
