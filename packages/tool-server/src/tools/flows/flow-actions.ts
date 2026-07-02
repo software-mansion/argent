@@ -52,7 +52,7 @@ export function invokeOnDevice(
   );
 }
 
-const DEFAULT_ACTION_TIMEOUT_MS = 5000;
+const DEFAULT_ACTION_TIMEOUT_MS = 7500;
 const POLL_INTERVAL_MS = 300;
 
 // Settle detection: re-read the tree until two consecutive reads match, so a tap
@@ -121,7 +121,7 @@ function axisFullyInside(
 // re-render (e.g. a counter that increments a frame after a tap). Like
 // Playwright's web-first assertions, assert retries for a short grace window so
 // it absorbs that latency; a genuinely-false assertion still fails quickly.
-const DEFAULT_ASSERT_TIMEOUT_MS = 500;
+const DEFAULT_ASSERT_TIMEOUT_MS = 1000;
 
 function describeSelector(s: FlowSelector): string {
   return Object.entries(s)
@@ -359,7 +359,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     case "type":
       return runType(env, step);
     case "await":
-      return waitForCondition(env, step, DEFAULT_ACTION_TIMEOUT_MS, "await");
+      return waitForCondition(env, step, step.timeout ?? DEFAULT_ACTION_TIMEOUT_MS, "await");
     case "assert":
       return waitForCondition(env, step, DEFAULT_ASSERT_TIMEOUT_MS, "assertion");
     case "scroll-to": {
@@ -462,6 +462,7 @@ async function waitForCondition(
   let fetchError: string | undefined;
   let everMatched = false;
   let everTrustedRead = false;
+  let finalPoll = false;
 
   for (;;) {
     if (env.signal?.aborted) return { ok: false, reason: `${what} cancelled` };
@@ -482,7 +483,11 @@ async function waitForCondition(
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
     }
-    if (Date.now() >= deadline) break;
+    if (Date.now() >= deadline) {
+      if (finalPoll) break;
+      finalPoll = true;
+      continue;
+    }
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, env.signal))) {
       return { ok: false, reason: `${what} cancelled` };

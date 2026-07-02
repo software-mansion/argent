@@ -217,6 +217,7 @@ export type FlowStep =
       selector: FlowSelector;
       expectedText?: string;
       textMatch?: TextMatchMode;
+      timeout?: number;
     }
   | {
       kind: "assert";
@@ -271,13 +272,15 @@ type TapBody = YamlSelector | { x: number; y: number };
  *   - `{ visible: "Account" }`            ← exists/visible/hidden take a selector
  *   - `{ text: { in: "Taps:", contains: "Taps: 0" } }`  ← substring check
  *   - `{ text: { in: "Taps:", equals: "Taps: 0" } }`    ← exact-text check
+ *   - `{ visible: "Account", timeout: 10000 }`            ← custom timeout (await only)
  */
-type YamlWaitBody =
+type YamlWaitBody = (
   | { exists: YamlSelector }
   | { visible: YamlSelector }
   | { hidden: YamlSelector }
   | { text: { in: YamlSelector; contains: string } }
-  | { text: { in: YamlSelector; equals: string } };
+  | { text: { in: YamlSelector; equals: string } }
+) & { timeout?: number };
 
 /** `scroll-to` body: a bare target (scrolls down), or a map with options. */
 type YamlScrollBody =
@@ -324,21 +327,30 @@ function waitToYaml(
   condition: WaitCondition,
   selector: Selector,
   expectedText: string | undefined,
-  textMatch: TextMatchMode | undefined
+  textMatch: TextMatchMode | undefined,
+  timeoutMs: number | undefined
 ): YamlWaitBody {
   const sel = selectorToYaml(selector);
+  let body: YamlWaitBody;
   switch (condition) {
     case "exists":
-      return { exists: sel };
+      body = { exists: sel };
+      break;
     case "visible":
-      return { visible: sel };
+      body = { visible: sel };
+      break;
     case "hidden":
-      return { hidden: sel };
+      body = { hidden: sel };
+      break;
     case "text":
-      return textMatch === "equals"
-        ? { text: { in: sel, equals: expectedText ?? "" } }
-        : { text: { in: sel, contains: expectedText ?? "" } };
+      body =
+        textMatch === "equals"
+          ? { text: { in: sel, equals: expectedText ?? "" } }
+          : { text: { in: sel, contains: expectedText ?? "" } };
+      break;
   }
+  if (timeoutMs !== undefined) body.timeout = timeoutMs;
+  return body;
 }
 
 function toYamlStep(step: FlowStep): YamlStep {
@@ -366,11 +378,11 @@ function toYamlStep(step: FlowStep): YamlStep {
     }
     case "await":
       return {
-        await: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch),
+        await: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch, step.timeout),
       };
     case "assert":
       return {
-        assert: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch),
+        assert: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch, undefined),
       };
     case "wait":
       return { wait: step.ms };
@@ -438,6 +450,7 @@ type WaitFields = {
   selector: Selector;
   expectedText?: string;
   textMatch?: TextMatchMode;
+  timeout?: number;
 };
 
 /**
@@ -445,9 +458,7 @@ type WaitFields = {
  * optional expected text. The condition is the key and its value is the
  * selector (`{ visible: "Home" }`, `{ text: { in, contains } }`). The `text`
  * check takes exactly one of `contains` (substring) or `equals` (exact text).
- * This is the only accepted spelling; for advanced await control beyond this
- * surface (timeout, poll interval, bundleId) drop to an explicit
- * `tool: await-ui-element` step.
+ * `await` additionally accepts an optional `timeout` sibling key (milliseconds).
  */
 function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   if (raw === null || typeof raw !== "object") {
@@ -464,6 +475,14 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
     );
   }
   const condition = present[0]!;
+
+  let timeout: number | undefined;
+  if (kind === "await" && "timeout" in b) {
+    if (typeof b.timeout !== "number" || b.timeout <= 0) {
+      badEntry({ [kind]: b }, "await.timeout must be a positive number");
+    }
+    timeout = b.timeout as number;
+  }
 
   // `text` locates an element (`in`) and checks its rendered content against
   // exactly one of `contains` (substring) or `equals` (exact text).
@@ -488,10 +507,11 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
       selector: parseSelector(tb.in, `${kind}.text.in`),
       expectedText: expected,
       textMatch,
+      timeout,
     };
   }
 
-  return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`) };
+  return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`), timeout };
 }
 
 const LAUNCH_PLATFORMS = ["ios", "android", "chromium"] as const;
