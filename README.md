@@ -116,24 +116,24 @@ argent init
 
 ## CLI Reference
 
-| Command            | Description                                                            |
-| ------------------ | ---------------------------------------------------------------------- |
-| `argent init`      | Install globally and configure MCP in the current workspace            |
-| `argent install`   | Alias for `init` command                                               |
-| `argent update`    | Pull the latest version and refresh workspace configuration            |
-| `argent remove`    | Unregister the MCP server and uninstall the package                    |
-| `argent uninstall` | Alias for `remove` command                                             |
-| `argent mcp`       | Start MCP server instance, used internally by agent                    |
-| `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)  |
-| `argent run`       | Invoke a tool by name                                                  |
-| `argent server`    | Manage the shared tool-server: `start` / `status` / `stop` / `logs`    |
-| `argent lens`      | Open Argent Lens bound to a fresh Claude session (macOS)               |
-| `argent link`      | Route client requests to a remote tool-server                          |
-| `argent unlink`    | Remove the persisted remote tool-server link                           |
-| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local) |
-| `argent disable`   | Disable a feature flag (`--scope project` for project-local)           |
-| `argent flags`     | List available feature flags and their state                           |
-| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`            |
+| Command            | Description                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `argent init`      | Install globally and configure MCP in the current workspace                                                                     |
+| `argent install`   | Alias for `init` command                                                                                                        |
+| `argent update`    | Pull the latest version and refresh workspace configuration                                                                     |
+| `argent remove`    | Unregister the MCP server and uninstall the package                                                                             |
+| `argent uninstall` | Alias for `remove` command                                                                                                      |
+| `argent mcp`       | Start MCP server instance, used internally by agent                                                                             |
+| `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)                                                           |
+| `argent run`       | Invoke a tool by name                                                                                                           |
+| `argent server`    | Manage the shared tool-server: `start` / `status` / `stop` / `logs`                                                             |
+| `argent lens`      | Open Argent Lens bound to a fresh Claude session (macOS; behind the `argent-lens` flag — run `argent enable argent-lens` first) |
+| `argent link`      | Route client requests to a remote tool-server                                                                                   |
+| `argent unlink`    | Remove the persisted remote tool-server link                                                                                    |
+| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                                          |
+| `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                                    |
+| `argent flags`     | List available feature flags and their state                                                                                    |
+| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`                                                                     |
 
 ## Supported Editors
 
