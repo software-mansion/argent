@@ -35,6 +35,41 @@ function run(opts: { hook: unknown }): string[] {
   }
 }
 
+// The SUCCESS path fires __argent_callback ASYNCHRONOUSLY (after `await
+// Promise.all(...)` on the host measurements), so the binding must stay installed
+// across the await — the synchronous run() helper restores it in its finally
+// before the callback lands and would drop it. Also injects a real __r so the
+// Paper branch can resolve UIManager + Dimensions.
+async function runToSuccess(opts: { hook: unknown; r: unknown }): Promise<string[]> {
+  const g = globalThis as Record<string, unknown>;
+  const saved = {
+    window: g.window,
+    hook: g.__REACT_DEVTOOLS_GLOBAL_HOOK__,
+    cb: g.__argent_callback,
+    r: g.__r,
+  };
+  const payloads: string[] = [];
+  g.window = g;
+  g.__REACT_DEVTOOLS_GLOBAL_HOOK__ = opts.hook;
+  g.__r = opts.r;
+  const landed = new Promise<void>((resolve) => {
+    g.__argent_callback = (p: string) => {
+      payloads.push(p);
+      resolve();
+    };
+  });
+  try {
+    void (0, eval)(makeComponentTreeScript({ requestId: "t" }));
+    await Promise.race([landed, new Promise((r) => setTimeout(r, 2000))]);
+    return payloads;
+  } finally {
+    g.window = saved.window;
+    g.__REACT_DEVTOOLS_GLOBAL_HOOK__ = saved.hook;
+    g.__argent_callback = saved.cb;
+    g.__r = saved.r;
+  }
+}
+
 afterEach(() => {
   const g = globalThis as Record<string, unknown>;
   delete g.window;
@@ -69,6 +104,71 @@ describe("component-tree delivers errors via the binding channel", () => {
       error?: string;
     };
     expect(inner.error).toBe("No fiber roots");
+  });
+
+  it("invokes __argent_callback on the 'Could not find UIManager' error path", async () => {
+    // Fiber roots present (passes the 'No fiber roots' guard), but the stub __r
+    // (function(){} → undefined) never yields a module with .UIManager and Fabric
+    // is absent → 'Could not find UIManager'. Fires synchronously, before the
+    // measurement await, so the synchronous run() helper captures it.
+    const hook = {
+      renderers: new Map([[1, {}]]),
+      getFiberRoots: () => new Set([{ current: {} }]),
+    };
+    const payloads = run({ hook });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(payloads.length).toBeGreaterThan(0);
+    const inner = JSON.parse((JSON.parse(payloads[0]!) as { result: string }).result) as {
+      error?: string;
+    };
+    expect(inner.error).toBe("Could not find UIManager");
+  });
+
+  it("delivers the SUCCESS result through the binding (parsed.error is undefined)", async () => {
+    // Guards against a regression where the top-level try/catch redirects or
+    // suppresses the happy-path callback. Minimal Paper fiber tree: one named
+    // component whose host child carries a nativeTag that measureInWindow resolves.
+    const hostFiber = {
+      type: "RCTView",
+      stateNode: { _nativeTag: 42 },
+      child: null,
+      sibling: null,
+    };
+    const buttonFiber = {
+      type: { displayName: "MyButton" },
+      memoizedProps: { testID: "btn" },
+      child: hostFiber,
+      sibling: null,
+    };
+    const root = { current: { child: buttonFiber, sibling: null } };
+    const hook = { renderers: new Map([[1, {}]]), getFiberRoots: () => new Set([root]) };
+    // __r(0) exposes UIManager (measure) + Dimensions (screen size); Fabric absent → Paper path.
+    const moduleObj = {
+      UIManager: {
+        measureInWindow: (_tag: number, cb: (x: number, y: number, w: number, h: number) => void) =>
+          cb(10, 20, 100, 50),
+      },
+      Dimensions: { get: () => ({ width: 390, height: 844 }) },
+    };
+    const r = (i: number) => (i === 0 ? moduleObj : undefined);
+
+    const payloads = await runToSuccess({ hook, r });
+    expect(payloads.length).toBeGreaterThan(0);
+    const outer = JSON.parse(payloads[0]!) as { requestId: string; result: string };
+    expect(outer.requestId).toBe("t");
+    const inner = JSON.parse(outer.result) as {
+      error?: string;
+      screenW: number;
+      screenH: number;
+      components: Array<{ name: string; testID?: string; rect: unknown }>;
+    };
+    expect(inner.error).toBeUndefined();
+    expect(inner.screenW).toBe(390);
+    expect(inner.screenH).toBe(844);
+    expect(inner.components.length).toBeGreaterThan(0);
+    expect(inner.components[0]!.name).toBe("MyButton");
+    expect(inner.components[0]!.testID).toBe("btn");
+    expect(inner.components[0]!.rect).toEqual({ x: 10, y: 20, w: 100, h: 50 });
   });
 
   it("routes an UNEXPECTED throw (outside the named guards) through the binding", async () => {

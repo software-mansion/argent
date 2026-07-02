@@ -26,6 +26,23 @@ describe("LogFileWriter round-trips levels of any length", () => {
     expect(w.readAll()[0]!.level).toBe("warning");
   });
 
+  it("filters by the canonical multi-char level 'warning'", () => {
+    // The exact behavior this change restores: filtering by the full CDP level.
+    // With the old `.slice(0, 5)` the persisted level was "warni", so a filter
+    // for "warning" matched nothing (total === 0).
+    w = new LogFileWriter(59234);
+    w.write({
+      id: 0,
+      timestamp: new Date(1710000000000).toISOString(),
+      level: "warning",
+      message: "x",
+    });
+    const { total, entries } = w.readFiltered({ level: "warning" });
+    expect(total).toBe(1);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.level).toBe("warning");
+  });
+
   it("filters by 'assert'", () => {
     w = new LogFileWriter(59232);
     w.write({
