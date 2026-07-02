@@ -2,19 +2,17 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { argentHomeDir, identityFilePath } from "./paths.js";
-import { uuidv5 } from "./uuidv5.js";
-
-// Fixed namespace UUID for Argent telemetry machine ids. NEVER change this: it
-// pins the deterministic mapping (host fingerprint -> distinct_id). Changing it
-// would re-bucket every machine as a brand-new user.
-const TELEMETRY_ID_NAMESPACE = "a8f1d3c2-6b04-4e7a-9d51-2c8e0f3a7b6d";
 
 // The simulator-server `fingerprint` subcommand emits exactly 64 lowercase hex
-// chars. Require that exact shape (after lower-casing) so a truncated/partial
-// read, a bare hex token (git SHA, all-zeros), or an error banner is rejected
-// and we fall back to a random id rather than hashing garbage into a "stable"
-// id. uuidv5 is case-sensitive, so we lower-case before both matching and
-// hashing — a future binary that emitted upper-case hex must map to the same id.
+// chars — a one-way hash of stable hardware identifiers, so no raw hardware id
+// is ever exposed. That validated hash is used verbatim as the telemetry
+// distinct_id. Require the exact shape (after lower-casing) so a truncated read,
+// a bare hex token (git SHA, all-zeros), or an error banner is rejected and we
+// fall back to a random id rather than persisting garbage as a "stable" id. We
+// lower-case before matching so a future binary emitting upper-case hex still
+// maps to the same id — and it doubles as the self-describing marker for the
+// fast path below (a fingerprint id is 64-hex; the random fallback is a dashed
+// v4 UUID), letting us skip re-spawning the binary once one is on disk.
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
 // In-memory cache of the resolved id. The anon id is stable once resolved, so
@@ -33,10 +31,16 @@ let fingerprintResolved: { value: string | null } | null = null;
 /**
  * Resolve the anonymous telemetry id.
  *
- * When `resolveFingerprint` yields a host fingerprint, the id is the
- * deterministic `uuidv5(fingerprint, NAMESPACE)` — so PostHog's native unique
- * users == unique machines. The persisted id file is migrated to that value
- * once, **locally only** (no PostHog alias/$identify event is ever emitted).
+ * When a host fingerprint is available, the id IS that fingerprint — the 64-hex
+ * one-way hash emitted by `simulator-server fingerprint`, used verbatim so
+ * PostHog's native unique users == unique machines, stable across reinstalls.
+ *
+ * Fast path: once a fingerprint id is on disk, its 64-hex shape is
+ * self-describing, so we return it WITHOUT re-spawning the fingerprint binary.
+ * The binary is spawned only when no fingerprint id is stored yet — a fresh
+ * install, or a legacy/random fallback id we then migrate. The persisted id
+ * file is migrated to the fingerprint once, **locally only** (no PostHog
+ * alias/$identify event is ever emitted).
  *
  * Fallbacks (binary absent, command fails, no resolver injected): keep the
  * already-stored id, or mint a fresh random UUID. This function must never
@@ -47,17 +51,37 @@ export function readOrCreateAnonId(resolveFingerprint?: () => string | null): st
   if (cached && cached.path === finalPath) return cached.id;
 
   const stored = tryReadId(finalPath);
-  const target = deriveFingerprintId(resolveFingerprint);
+
+  // Fast path: a fingerprint id is already persisted. Its 64-hex shape is
+  // self-describing (the random fallback is a dashed v4 UUID), so it is the
+  // stable per-machine id and we return it WITHOUT spawning the fingerprint
+  // binary. This is the steady state on every run after the first, so
+  // short-lived CLI commands pay no per-run subprocess cost. Only the
+  // canonical LOWER-case form qualifies — our writers only ever persist
+  // lower-case, so a mixed-case 64-hex value is an external write; it falls
+  // through to the resolve path below, which rewrites it to the true
+  // fingerprint (or keeps it verbatim as the fallback id when resolution
+  // fails) rather than serving a non-canonical id forever.
+  if (stored && FINGERPRINT_PATTERN.test(stored)) {
+    cached = { path: finalPath, id: stored };
+    return stored;
+  }
+
+  // No fingerprint id on disk yet (fresh install, or only a legacy/random
+  // fallback id): resolve the host fingerprint. This is the ONLY place the
+  // binary is spawned, at most once per process (memoized in
+  // resolveFingerprintOnce).
+  const target = resolveFingerprintOnce(resolveFingerprint);
 
   if (target) {
-    // Deterministic per-machine id available. Migrate the file if it differs
-    // (legacy random id, or none yet); idempotent once stored === target.
+    // Fingerprint available. Persist it if the stored value differs (none yet,
+    // or a legacy random id we're migrating); idempotent once stored === target.
     if (stored !== target) {
       try {
         writeIdFileAtomic(finalPath, target);
       } catch {
         // Persisting the migration failed (e.g. ENOSPC / read-only home). The
-        // id is deterministic, so we still return `target` in memory and stay
+        // fingerprint is stable, so we still return `target` in memory and stay
         // consistent across this process; a later run retries the rewrite.
       }
     }
@@ -80,16 +104,6 @@ export function readOrCreateAnonId(resolveFingerprint?: () => string | null): st
   // check→clear gap is adopted, not destroyed — two concurrent heals converge on
   // one id instead of splitting a machine into two distinct_ids.
   return mintRandomId(finalPath);
-}
-
-/**
- * Run the injected resolver and map its fingerprint to the deterministic id.
- * Returns null when no resolver is injected, the resolver throws/returns
- * nothing, or the value doesn't look like a fingerprint.
- */
-function deriveFingerprintId(resolveFingerprint?: () => string | null): string | null {
-  const fingerprint = resolveFingerprintOnce(resolveFingerprint);
-  return fingerprint ? uuidv5(fingerprint, TELEMETRY_ID_NAMESPACE) : null;
 }
 
 /**

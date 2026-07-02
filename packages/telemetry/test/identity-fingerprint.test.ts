@@ -15,9 +15,9 @@ const versionNibble = (uuid: string) => uuid[14];
 describe("identity – fingerprint-derived id", () => {
   const { tmp } = scopeHome();
 
-  it("derives a stable v5 id from the fingerprint on a fresh install", () => {
+  it("uses the host fingerprint verbatim as the id on a fresh install", () => {
     const id = readOrCreateAnonId(() => FP);
-    expect(versionNibble(id)).toBe("5");
+    expect(id).toBe(FP);
     // Persisted, and re-reading returns the same value.
     expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
     _resetIdentityCacheForTest();
@@ -46,7 +46,7 @@ describe("identity – fingerprint-derived id", () => {
 
     const id = readOrCreateAnonId(() => FP);
     expect(id).not.toBe(LEGACY_V4);
-    expect(versionNibble(id)).toBe("5");
+    expect(id).toBe(FP);
     // The file on disk was rewritten to the new id.
     expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
     // Mode preserved at 0600.
@@ -105,6 +105,31 @@ describe("identity – fingerprint-derived id", () => {
     expect(resolver).toHaveBeenCalledTimes(1);
   });
 
+  it("skips the resolver entirely when a fingerprint id is already stored", () => {
+    // Steady state after the first run: the 64-hex id on disk is self-describing,
+    // so readOrCreateAnonId returns it WITHOUT spawning the fingerprint binary
+    // (the resolver stands in for that subprocess). This is the per-run-spawn fix
+    // — a short-lived CLI command must not pay the ~150ms fingerprint cost when
+    // the stable id is already persisted.
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), FP, { mode: 0o600 });
+    const resolver = vi.fn(() => FP);
+    expect(readOrCreateAnonId(resolver)).toBe(FP);
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it("does not fast-path a non-canonical (upper-case) stored 64-hex id — resolves and rewrites", () => {
+    // Our writers only persist lower-case, so an upper-case 64-hex value is an
+    // external write. It must not be served verbatim forever: the resolve path
+    // runs and rewrites the file to the canonical lower-case fingerprint.
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), "A".repeat(64), { mode: 0o600 });
+    const resolver = vi.fn(() => FP);
+    expect(readOrCreateAnonId(resolver)).toBe(FP);
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(FP);
+  });
+
   it("self-heals a corrupt id file (no fingerprint) by minting a fresh 0600 random id", () => {
     fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
     // Empty file with a non-0600 mode: occupies the path but fails the id
@@ -122,7 +147,7 @@ describe("identity – fingerprint-derived id", () => {
     fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
     fs.writeFileSync(identityFilePath(), "garbage-not-a-uuid", { mode: 0o600 });
     const id = readOrCreateAnonId(() => FP);
-    expect(versionNibble(id)).toBe("5");
+    expect(id).toBe(FP);
     expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
   });
 
@@ -143,9 +168,10 @@ describe("identity – fingerprint-derived id", () => {
     // would trivially hit the cache without re-entering the migration path.
     // Clear the cache between resolves so the second genuinely re-runs the
     // migration decision as a separate process would, and spy on renameSync to
-    // prove the second resolve — seeing stored === target — does NOT rewrite.
-    // The deterministic v5 value is exactly what makes concurrent migrators
-    // converge, so an independent second resolve must land on the same id.
+    // prove the second resolve — seeing the fingerprint already stored — does NOT
+    // rewrite. The deterministic fingerprint value is exactly what makes
+    // concurrent migrators converge, so an independent second resolve must land
+    // on the same id.
     fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
     fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
 
@@ -164,7 +190,7 @@ describe("identity – fingerprint-derived id", () => {
     try {
       const mod = await import("../src/identity.js");
       const a = mod.readOrCreateAnonId(() => FP);
-      expect(versionNibble(a)).toBe("5");
+      expect(a).toBe(FP);
       expect(renameCount).toBe(1); // first resolve migrates the legacy id
       mod._resetIdentityCacheForTest();
       const b = mod.readOrCreateAnonId(() => FP);
@@ -234,8 +260,8 @@ describe("identity – fingerprint migration rewrites", () => {
     try {
       const mod = await import("../src/identity.js");
       const id = mod.readOrCreateAnonId(() => FP);
-      // Never throws, returns the deterministic v5 id...
-      expect(id[14]).toBe("5");
+      // Never throws, returns the deterministic fingerprint id...
+      expect(id).toBe(FP);
       expect(id).not.toBe(LEGACY_V4);
       // ...and is consistent within the process via the in-memory cache.
       expect(mod.readOrCreateAnonId(() => FP)).toBe(id);
