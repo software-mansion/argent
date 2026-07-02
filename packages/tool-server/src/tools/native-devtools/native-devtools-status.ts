@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
+  isInjectableBundleId,
   nativeDevtoolsRef,
   precheckNativeDevtools,
   type NativeDevtoolsApi,
@@ -23,6 +24,7 @@ type Result =
       connected: boolean;
       requiresRestart: boolean;
       nextLaunchWillBeInjected: boolean;
+      injectable: boolean;
     };
 
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
@@ -31,14 +33,16 @@ export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
 Use when you need to verify native devtools readiness before calling native-full-hierarchy, native-describe-screen, or native-network-logs.
 
-Returns { envSetup, appRunning, connected, requiresRestart, nextLaunchWillBeInjected }:
+Returns { envSetup, appRunning, connected, requiresRestart, nextLaunchWillBeInjected, injectable }:
 - envSetup: DYLD_INSERT_LIBRARIES is configured in the simulator's launchd environment
 - appRunning: the target bundle currently has a running UIKit process on the simulator
 - connected: the dylib is active in the current running process for this bundleId
 - requiresRestart: the app is already running but its current process does not have native devtools injected
 - nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place
+- injectable: whether native devtools can ever be injected into this app. Apple system apps (bundle ids under com.apple.) are platform binaries with library validation, so the dylib can never load into them.
 
 Call this before using app-scoped native hierarchy tools or native-network-logs.
+If injectable is false: this is a TERMINAL state — the app can never be injected. Do NOT restart/retry; use the standard describe / screenshot / view-at-point tools instead.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app, then proceed with the native feature.
 Fails if the simulator server is not running for the given UDID or the bundleId is not found.`,
@@ -55,8 +59,24 @@ Fails if the simulator server is not running for the given UDID or the bundleId 
     const blocked = await precheckNativeDevtools(api, params.udid);
     if (blocked) return blocked;
 
+    const injectable = isInjectableBundleId(params.bundleId);
     const appRunning = await api.isAppRunning(params.bundleId);
     const connected = api.isConnected(params.bundleId);
+
+    // Non-injectable apps (Apple system apps) can never load the dylib no matter
+    // how many times they relaunch. Report a terminal state so agents stop
+    // looping restart-app → retry: no restart is required and the next launch
+    // will not be injected either. envSetup/appRunning/connected stay measured.
+    if (!injectable) {
+      return {
+        envSetup: api.isEnvSetup(),
+        appRunning,
+        connected,
+        requiresRestart: false,
+        nextLaunchWillBeInjected: false,
+        injectable: false,
+      };
+    }
 
     // When the app isn't connected, the cached env latch can be stale: an
     // out-of-band simulator reboot wipes DYLD_INSERT_LIBRARIES from launchd
@@ -74,6 +94,7 @@ Fails if the simulator server is not running for the given UDID or the bundleId 
       connected,
       requiresRestart: appRunning && !connected,
       nextLaunchWillBeInjected: envSetup,
+      injectable: true,
     };
   },
 };

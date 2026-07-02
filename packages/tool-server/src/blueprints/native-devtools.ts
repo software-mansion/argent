@@ -18,6 +18,23 @@ export type NativeDevtoolsTransport = "unix" | "tcp";
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
+/**
+ * Whether the Argent native devtools dylib can ever be injected into an app.
+ *
+ * Apple system / built-in apps (bundle ids under `com.apple.`) are platform
+ * binaries shipped with library validation enabled. The simulator refuses to
+ * honour `DYLD_INSERT_LIBRARIES` for them, so our dylib can never load — no
+ * amount of relaunching changes that. Third-party apps the user installs carry
+ * no such restriction and inject normally. Treating the `com.apple.` prefix as
+ * non-injectable gives the native-* tools a terminal signal instead of an
+ * unbounded restart-app → retry loop.
+ *
+ * Bundle ids are case-sensitive, so a case-sensitive prefix check is correct.
+ */
+export function isInjectableBundleId(bundleId: string): boolean {
+  return !bundleId.startsWith("com.apple.");
+}
+
 // Max consecutive init failures per service instance before it stops retrying.
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
 
@@ -79,6 +96,24 @@ export async function precheckNativeDevtools(
       lastError: "ensureEnvReady threw without recording state",
       givenUp: false,
     });
+  }
+
+  // Terminal case: an app that can never be injected (Apple system app). Throw
+  // instead of returning a restart-required block so the native-* feature tools
+  // surface a hard error rather than instructing an unbounded restart→retry
+  // loop that can never succeed. The 2-arg overload (bundleId undefined), used
+  // by native-devtools-status, must NOT throw — it reports the state instead.
+  if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
+    throw new FailureError(
+      `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools can never be injected into it. ` +
+        "The native-* tools are unavailable for this app — use the standard describe / screenshot / view-at-point tools instead.",
+      {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+        failure_stage: "native_devtools_precheck",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
 
   if (bundleId !== undefined && (await api.requiresAppRestart(bundleId))) {

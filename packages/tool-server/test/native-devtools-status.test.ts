@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { FailureError, FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
+  isInjectableBundleId,
+  precheckNativeDevtools,
   MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailure,
@@ -82,6 +85,7 @@ describe("native-devtools-status tool", () => {
       connected: false,
       requiresRestart: true,
       nextLaunchWillBeInjected: true,
+      injectable: true,
     });
 
     expect(ensureEnvReady).toHaveBeenCalledOnce();
@@ -107,6 +111,7 @@ describe("native-devtools-status tool", () => {
       connected: false,
       requiresRestart: true,
       nextLaunchWillBeInjected: true,
+      injectable: true,
     });
 
     expect(reverifyEnv).toHaveBeenCalledOnce();
@@ -126,6 +131,7 @@ describe("native-devtools-status tool", () => {
       connected: true,
       requiresRestart: false,
       nextLaunchWillBeInjected: true,
+      injectable: true,
     });
 
     expect(reverifyEnv).not.toHaveBeenCalled();
@@ -145,7 +151,79 @@ describe("native-devtools-status tool", () => {
       connected: false,
       requiresRestart: false,
       nextLaunchWillBeInjected: true,
+      injectable: true,
     });
+  });
+
+  it("reports a com.apple.* system app as a terminal, non-injectable state", async () => {
+    // Apple system apps can never load the dylib. Even with the app running and
+    // env set up, status must report injectable:false and neither require a
+    // restart nor promise the next launch will be injected — otherwise an agent
+    // loops restart-app → retry forever.
+    const { api, reverifyEnv } = makeNativeApi({
+      appRunning: true,
+      connected: false,
+      envSetup: true,
+    });
+
+    await expect(
+      nativeDevtoolsStatusTool.execute(
+        { nativeDevtools: api },
+        { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.apple.Preferences" }
+      )
+    ).resolves.toEqual({
+      envSetup: true,
+      appRunning: true,
+      connected: false,
+      requiresRestart: false,
+      nextLaunchWillBeInjected: false,
+      injectable: false,
+    });
+
+    // A non-injectable app is terminal — there is nothing to repair, so the
+    // stale-latch reverify path must not run.
+    expect(reverifyEnv).not.toHaveBeenCalled();
+  });
+});
+
+describe("isInjectableBundleId", () => {
+  it("treats com.apple.* system apps as non-injectable", () => {
+    expect(isInjectableBundleId("com.apple.Preferences")).toBe(false);
+    expect(isInjectableBundleId("com.apple.mobilesafari")).toBe(false);
+  });
+
+  it("treats third-party apps as injectable", () => {
+    expect(isInjectableBundleId("com.example.MyApp")).toBe(true);
+    expect(isInjectableBundleId("com.latekvo.pokemon")).toBe(true);
+    // Prefix match is exact — a lookalike that only contains the substring is
+    // still injectable.
+    expect(isInjectableBundleId("com.appleseed.App")).toBe(true);
+  });
+});
+
+describe("precheckNativeDevtools — non-injectable terminal error", () => {
+  const UDID = "33333333-3333-3333-3333-333333333333";
+
+  it("throws NATIVE_DEVTOOLS_NOT_INJECTABLE for a com.apple.* bundle (3-arg)", async () => {
+    const { api } = makeNativeApi({ appRunning: true, connected: false });
+
+    await expect(precheckNativeDevtools(api, UDID, "com.apple.Preferences")).rejects.toBeInstanceOf(
+      FailureError
+    );
+
+    try {
+      await precheckNativeDevtools(api, UDID, "com.apple.Preferences");
+      throw new Error("expected precheckNativeDevtools to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(FailureError);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+    }
+  });
+
+  it("does not throw for the same api via the 2-arg overload (status path)", async () => {
+    const { api } = makeNativeApi({ appRunning: true, connected: false });
+
+    await expect(precheckNativeDevtools(api, UDID)).resolves.toBeNull();
   });
 });
 
