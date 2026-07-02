@@ -9,6 +9,7 @@ import type {
 } from "@argent/registry";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
+import { isTvOsSimulator } from "../../utils/ios-devices";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { sleepOrAbort, settleWithin } from "../../utils/timing";
@@ -379,13 +380,22 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
     },
     async execute(services, params, ctx?: ToolContext) {
       const signal = ctx?.signal;
-      const start = Date.now();
       const { by, query, action, index } = params;
 
       const device = resolveDevice(params.udid);
       assertSupported(FIND_TOOL_ID, capability, device);
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "android") await ensureDeps(androidRequires);
+
+      // Resolve the tvOS verdict once, before the wait clock and outside the
+      // per-fetch budget: describeIos would otherwise re-shell `xcrun` on every
+      // poll (blowing a tight timeoutMs for an uncached UDID). Mirrors
+      // await-ui-element; passed through to fetchDescribeTree below.
+      const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
+
+      // Start the discovery clock after setup so its fixed cost isn't charged
+      // against timeoutMs (the deadline should bound polling, not resolution).
+      const start = Date.now();
 
       // `wait` blocks (default budget); every other action is a single check
       // unless the caller passes timeoutMs to opt into polling.
@@ -422,7 +432,7 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
         // generous cap. Either way an abort mid-fetch is observed promptly.
         const budget = polling ? Math.max(0, deadline - Date.now()) : SINGLE_SHOT_FETCH_BUDGET_MS;
         const settled = await settleWithin(
-          fetchDescribeTree(registry, device, params, services),
+          fetchDescribeTree(registry, device, params, services, { isTvOs }),
           budget,
           signal
         );
@@ -506,6 +516,19 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
         result.note = `${matchCount} elements matched ${by}="${query}"; ${verb} ${which}. Narrow the query or set \`index\` to target another.`;
       }
 
+      // A cancel that lands AFTER the element was located and a device effect was
+      // already dispatched (the focus tap always fires; a `fill` may also have
+      // sent backspaces). Unlike `cancelled()`, report the element as found with
+      // an accurate account of what was mutated, so a caller doing recovery isn't
+      // told "nothing happened" when the field was in fact focused / partly cleared.
+      const cancelledMidAction = (detail: string): FindResult => ({
+        ...baseResult(),
+        found: true,
+        matchCount,
+        match,
+        note: [result.note, `find was cancelled ${detail}`].filter(Boolean).join(" "),
+      });
+
       // ── Perform the action ─────────────────────────────────────────────────
       switch (action) {
         case "tap": {
@@ -526,7 +549,10 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
             match.tapPoint,
             focusSettleMs(device.platform)
           );
-          if (!focused) return cancelled();
+          if (!focused)
+            return cancelledMidAction(
+              "after focusing the element but before typing; the field is focused but no text was entered"
+            );
           const r = await typeText(registry, ctx, params.udid, params.text!);
           result.actionResult = { kind: "type", typed: r.typed, keys: r.keys };
           break;
@@ -539,21 +565,30 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
             match.tapPoint,
             focusSettleMs(device.platform)
           );
-          if (!focused) return cancelled();
-          // Size the clear. On Chromium the DOM a11y snapshot masks the live
-          // `el.value` behind a static aria-label / placeholder (and never sets
-          // `value` for a form control), so the field's current length is
-          // unknowable — clear up to the cap so a populated field is emptied
-          // regardless, and flag it. Elsewhere max(value,label) is the true
-          // length and never shorter than the real text.
-          const lengthHidden = device.platform === "chromium" && !chosen.value;
+          if (!focused)
+            return cancelledMidAction(
+              "after focusing the element but before clearing; the field is focused but not yet modified"
+            );
+          // Size the clear. On Chromium the DOM a11y snapshot never gives a
+          // reliable editable length: a form control's live `el.value` is masked
+          // behind a static aria-label / placeholder (and `value` is empty), while
+          // a contenteditable reports only its *direct* text nodes in `value` — an
+          // undercount that omits text nested in inline children (a <b>, a mention
+          // span). Trusting either would under-clear and leave stale text for the
+          // new value to be typed on top of, so on Chromium we always clear up to
+          // the cap and flag it. Elsewhere max(value,label) is the true length and
+          // never shorter than the real text.
+          const lengthHidden = device.platform === "chromium";
           const knownLength = editableTextLength(chosen);
           const clearTarget = lengthHidden ? MAX_CLEAR_CHARS : knownLength;
           const clearCount = Math.min(MAX_CLEAR_CHARS, clearTarget + CLEAR_BUFFER);
           const clearedChars = await clearField(registry, ctx, params.udid, clearCount);
           // clearField stops early on abort but can't signal it; bail before
           // typing so a cancelled fill doesn't push `text` in and report success.
-          if (signal?.aborted) return cancelled();
+          if (signal?.aborted)
+            return cancelledMidAction(
+              `after focusing and deleting ${clearedChars} character(s) but before typing; the field may be partially cleared`
+            );
           const r = await typeText(registry, ctx, params.udid, params.text!);
           result.actionResult = { kind: "fill", typed: r.typed, keys: r.keys, clearedChars };
           // Surface any caveat that the clear may have left stale text behind, so
@@ -561,10 +596,11 @@ Example: tap "Sign In" → { query: "Sign In", by: "text", action: "tap" }.`,
           const clearCaveats: string[] = [];
           if (lengthHidden) {
             clearCaveats.push(
-              `on Chromium the field's current text is not exposed by the DOM accessibility ` +
-                `snapshot (a placeholder or aria-label masks the live value), so the clear was ` +
-                `sized to the ${MAX_CLEAR_CHARS}-char cap; a longer field may retain text — verify ` +
-                `it before relying on it.`
+              `on Chromium the field's current text is not reliably exposed by the DOM ` +
+                `accessibility snapshot (an input's live value is masked by a placeholder / ` +
+                `aria-label, and a contenteditable reports only its direct text nodes), so the ` +
+                `clear was sized to the ${MAX_CLEAR_CHARS}-char cap; a longer field may retain ` +
+                `text — verify it before relying on it.`
             );
           } else if (knownLength > MAX_CLEAR_CHARS) {
             // Cap is measured against the field's real length, not length+buffer,

@@ -28,7 +28,7 @@ export function createFlowAddStepTool(
 > {
   return {
     id: "flow-add-step",
-    description: `Execute a tool call live and record it as a step in the active flow unless the tool throws or a find step returns { found: false }. Use when recording a flow with flow-start-recording and you want to run and capture each action. Returns { message, toolResult, flowFile } after recording. If the tool throws, or find does not locate an element, an error is returned and nothing is recorded. Error if the tool name is not found in the registry or arguments are invalid JSON.`,
+    description: `Execute a tool call live and record it as a step in the active flow unless the tool throws or a find step returns { found: false } (a find with action: "exists" is exempt — its found: false is a valid "not present" answer and is still recorded). Use when recording a flow with flow-start-recording and you want to run and capture each action. Returns { message, toolResult, flowFile } after recording. If the tool throws, or find does not locate an element, an error is returned and nothing is recorded. Error if the tool name is not found in the registry or arguments are invalid JSON.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, ctx) {

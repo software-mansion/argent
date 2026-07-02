@@ -1,4 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// describeIos probes isTvOsSimulator, which shells `xcrun simctl list` (~100ms,
+// uncached for an unknown UDID). Stub it so these tests stay deterministic and
+// off the host's simulators — every iOS fixture here is a plain mobile device.
+vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
+  isTvOsSimulator: vi.fn(async () => false),
+}));
+
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
@@ -522,6 +531,40 @@ describe("find tool", () => {
     expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "new@x.io" } });
   });
 
+  it("`fill` on a Chromium contenteditable clears to the cap despite a non-empty (undercounted) value", async () => {
+    // A contenteditable is described with `value` = its DIRECT text nodes only —
+    // text nested in inline children (a <b>, a mention span) is excluded, so a
+    // populated field reports a non-empty but UNDERCOUNTED value. Sizing the
+    // clear from that undercount would delete only the leading chars and leave
+    // the rest for the new text to be typed on top of. On Chromium the length is
+    // never trusted: clear to the cap and warn regardless of a non-empty value.
+    const tree = {
+      role: "textbox",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "textbox",
+          value: "abc", // direct text only; real content ("abc<b>…</b>") is far longer
+          frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.05 },
+          children: [],
+        },
+      ],
+    };
+    const { registry, invocations } = makeMockRegistry({});
+    const tool = createFindTool(registry);
+    const result = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      { udid: CHROMIUM_ID, query: "abc", by: "value", action: "fill", text: "ZZZ", index: 0 }
+    );
+    expect(result.found).toBe(true);
+    // NOT the 3+buffer the undercounted value="abc" would imply — full cap clear.
+    expect(backspaces(invocations)).toHaveLength(64);
+    expect((result.actionResult as { clearedChars: number }).clearedChars).toBe(64);
+    expect(result.note).toMatch(/chromium/i);
+    expect(result.note).toMatch(/verify/i);
+    expect(invocations.at(-1)).toMatchObject({ toolId: "keyboard", args: { text: "ZZZ" } });
+  });
+
   it("`fill` sizes from the field text, and only warns `capped` past MAX_CLEAR_CHARS chars", async () => {
     const fillIos = async (value: string) => {
       const svc = makeSequencedAXService([
@@ -693,8 +736,12 @@ describe("find tool", () => {
       { udid: IOS_UDID, query: "Field", by: "label", action: "fill", text: "new", index: 0 },
       { signal: controller.signal } as never
     );
-    expect(result.found).toBe(false);
+    // The element WAS located and the focus tap fired, so a mid-action cancel is
+    // reported as found:true with an accurate note (not "nothing happened").
+    expect(result.found).toBe(true);
+    expect(result.match).toBeDefined();
     expect(result.note).toMatch(/cancel/i);
+    expect(result.note).toMatch(/not yet modified/i);
     // the focus tap may have fired, but no keystrokes (clear/type) ran
     expect(keyboardCalls(invocations)).toHaveLength(0);
   });
@@ -734,8 +781,13 @@ describe("find tool", () => {
       { signal: controller.signal } as never
     );
 
-    expect(result.found).toBe(false);
+    // The element was located and the field was partially cleared before the
+    // cancel, so the result reports found:true and says the field may be
+    // partially cleared — not "cancelled before the element was located".
+    expect(result.found).toBe(true);
+    expect(result.match).toBeDefined();
     expect(result.note).toMatch(/cancel/i);
+    expect(result.note).toMatch(/partially cleared/i);
     // the text was never typed (no keyboard call carrying `text`)
     expect(
       invocations.some((i) => i.toolId === "keyboard" && typeof i.args.text === "string")
