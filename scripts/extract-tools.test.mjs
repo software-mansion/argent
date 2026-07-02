@@ -32,10 +32,13 @@ function runExtractor() {
   return { tools: JSON.parse(res.stdout).tools, stderr: res.stderr ?? "" };
 }
 
-// Independently discover every string-literal tool id in the source tree, using
-// the same `id: "..."` shape the extractor keys off but WITHOUT its (buggy)
-// description step. This is the set the extractor must fully capture. Tools
-// whose id is a const reference (e.g. await-ui-element's
+// Independently discover every string-literal `id: "..."` in the source tree,
+// using the same shape the extractor keys off but WITHOUT its description step.
+// This is a SUPERSET of the tool set the extractor emits: it also matches nested
+// object keys (e.g. `defaultPayload: { id: "x" }`) and id:-like tokens the
+// extractor deliberately skips. The "no silent drops" test below relies on that:
+// every discovered id must be either emitted or loudly warned, never dropped in
+// silence. Tools whose id is a const reference (e.g. await-ui-element's
 // `id: AWAIT_UI_ELEMENT_TOOL_ID`) are not string literals and are not in scope
 // for this extractor by design, so they are excluded here too.
 function discoverIdLiterals() {
@@ -57,12 +60,25 @@ function discoverIdLiterals() {
   return ids;
 }
 
-test("run-sequence (long multi-line description) is captured", () => {
+test("run-sequence's long description is captured IN FULL, not truncated", () => {
   const { tools } = runExtractor();
-  const names = tools.map((t) => t.name);
+  const runSequence = tools.find((t) => t.name === "run-sequence");
   assert.ok(
-    names.includes("run-sequence"),
+    runSequence,
     "run-sequence was dropped — the description lookahead regressed to a fixed window"
+  );
+  // Assert fullness, not just presence: the original bug truncated at a fixed
+  // 2000-char window, so a re-truncation could still emit the tool with a
+  // shortened description and pass a name-only check. The description is ~4285
+  // chars; assert it runs well past the old window AND reaches its closing
+  // backtick (the final sentence), so the capture is provably complete.
+  assert.ok(
+    runSequence.description.length > 3000,
+    `run-sequence description truncated to ${runSequence.description.length} chars (past the old 2000-char window expected)`
+  );
+  assert.ok(
+    runSequence.description.includes("returns partial results"),
+    "run-sequence description does not reach its final sentence — captured value is truncated"
   );
 });
 
@@ -72,21 +88,36 @@ test("gesture-tap is captured (control)", () => {
   assert.ok(names.includes("gesture-tap"));
 });
 
-test("every tool definition in the source is captured (no silent drops)", () => {
+test("no tool definition is silently dropped (every id: is emitted or loudly warned)", () => {
   const { tools, stderr } = runExtractor();
   const extracted = new Set(tools.map((t) => t.name));
   const discovered = discoverIdLiterals();
 
-  const missing = [...discovered].filter((id) => !extracted.has(id));
-  assert.deepEqual(missing, [], `tool definitions dropped by the extractor: ${missing.join(", ")}`);
-  assert.equal(
-    tools.length,
-    discovered.size,
-    "extracted tool count must equal the number of tool definitions in the source"
+  // No fabricated tools: every emitted name is a real id: literal in the source.
+  const fabricated = [...extracted].filter((id) => !discovered.has(id));
+  assert.deepEqual(
+    fabricated,
+    [],
+    `extractor emitted names with no id: literal in the source: ${fabricated.join(", ")}`
   );
 
-  // A healthy tree emits no warnings; a future drop must be loud, never silent.
-  assert.ok(!/WARNING/.test(stderr), `extractor emitted warnings:\n${stderr}`);
+  // Completeness WITHOUT a false positive when a tool legitimately uses a shape
+  // the extractor is designed to skip: an id: literal the extractor does not
+  // emit — a nested object key (e.g. `defaultPayload: { id: "x" }`), a tool
+  // whose description isn't a static string/template literal, or a
+  // description-less tool — must be named in a stderr WARNING, i.e. skipped
+  // LOUDLY. This is the exact invariant the PR restores (the old fixed-window
+  // matcher dropped long-description tools SILENTLY): the check stays green when
+  // a future tool uses one of those shapes (the extractor warns and the count
+  // shifts) and fails only on a genuinely SILENT drop.
+  const silentlyDropped = [...discovered].filter(
+    (id) => !extracted.has(id) && !stderr.includes(`"${id}"`)
+  );
+  assert.deepEqual(
+    silentlyDropped,
+    [],
+    `id: literals dropped by the extractor with no stderr warning: ${silentlyDropped.join(", ")}`
+  );
 });
 
 // --- Boundary-parsing rules (pure, fixture-driven) -------------------------
@@ -185,6 +216,54 @@ test("standard escapes render as their actual characters, not literal backslash 
   assert.equal(description, "Line one.\nLine two.\tTabbed. Say `hi` and $done.");
 });
 
+test("a non-static description (concatenation / interpolation) is dropped loudly, not truncated silently", () => {
+  // The captured literal is only the whole description if nothing extends it. A
+  // `+` concatenation or a template `${...}` interpolation means the rendered
+  // text is more than the leading literal; emitting just that literal would feed
+  // a SILENTLY truncated string into the security scan — the same silent-partial
+  // class this script exists to prevent. Both must warn on stderr and be skipped.
+  for (const [label, src] of [
+    [
+      "concatenation",
+      `defineTool({ id: "concat-tool", description: "part A " + "part B", handler() {} });`,
+    ],
+    [
+      "interpolation",
+      'defineTool({ id: "interp-tool", description: `hello ${world} rest`, handler() {} });',
+    ],
+  ]) {
+    const warnings = [];
+    const originalError = console.error;
+    console.error = (...args) => warnings.push(args.join(" "));
+    let tools;
+    try {
+      tools = extractToolsFromSource(src, "fixture.ts");
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(tools.length, 0, `${label}: a truncated description must not be emitted`);
+    assert.ok(
+      warnings.some(
+        (w) =>
+          /WARNING/.test(w) && w.includes(label === "concatenation" ? "concat-tool" : "interp-tool")
+      ),
+      `${label}: expected a stderr WARNING; got ${JSON.stringify(warnings)}`
+    );
+  }
+});
+
+test("an escaped \\${ in a template is a literal, not interpolation, and is captured", () => {
+  // \\${...} is an escaped dollar-brace: it renders as the literal text "${...}"
+  // and is NOT runtime interpolation, so the tool must be captured normally.
+  const src =
+    'defineTool({ id: "escaped-dollar", description: `price is \\${amount} today`, handler() {} });';
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.equal(
+    tools.find((t) => t.name === "escaped-dollar")?.description,
+    "price is ${amount} today"
+  );
+});
+
 test("an id: key inside a nested object value is not mistaken for a tool", () => {
   // A structured value between a tool's id: and its description: (a
   // defaultPayload, example, etc.) can itself contain an `id:` key. That nested
@@ -207,7 +286,7 @@ test("an id: key inside a nested object value is not mistaken for a tool", () =>
 });
 
 test("a balanced nested object (with a deep inner id:) between id: and description: keeps the tool", () => {
-  // Mirrors the real `capability: { apple: { ... } }` shape 12 tools already
+  // Mirrors the real `capability: { apple: { ... } }` shape 7 tools already
   // use, but with an inner id: key added at depth 2 - the deepest footgun form.
   // The tool must be captured in full and the inner id: must not leak out.
   const src = `
@@ -267,6 +346,36 @@ test("a block comment between id: and description: keeps the tool", () => {
     "a block comment between id: and description: dropped the tool or matched the fake description"
   );
   assert.equal(tools.length, 1);
+});
+
+test("an id: literal inside a comment does not corrupt a real tool's description", () => {
+  // id detection must be lexically aware: an `id: "..."` in a COMMENT (a common
+  // cross-reference to another tool) must not be picked up as a tool candidate.
+  // If it were, it would read the enclosing object's real description and, via
+  // first-wins dedup, silently overwrite the referenced tool's description in the
+  // security scan — a silent mis-capture, the exact class this script prevents.
+  const src = `
+    export const foo = defineTool({
+      // Related to id: "screenshot"; call that first to capture the screen.
+      id: "foo-tool",
+      description: "Foo tool description.",
+      handler: async () => {},
+    });
+    export const shot = defineTool({
+      id: "screenshot",
+      description: "Take a screenshot of the device.",
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(
+    byName["screenshot"],
+    "Take a screenshot of the device.",
+    "a commented id: cross-reference overwrote the real tool's description"
+  );
+  assert.equal(byName["foo-tool"], "Foo tool description.");
+  assert.equal(tools.length, 2, "exactly the two real tools should be emitted");
 });
 
 test("a top-level tool with no description is dropped loudly (stderr warning)", () => {
