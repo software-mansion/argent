@@ -111,8 +111,10 @@ describe("android stack drill-down handles bigint native-ns columns", () => {
     // exceeds 2^53 (see readCell) — so both arrive as bigint here, exactly as
     // the WASM engine hands them back on a long-uptime device. Without the
     // Number() coercions the arithmetic throws "Cannot mix BigInt and other
-    // types". state total_dur_ns stays a plain Number: it is a hang-window-
-    // clipped duration sum (hang-state-breakdown.sql), always well under 2^53.
+    // types". state total_dur_ns is a hang-window-clipped duration sum
+    // (hang-state-breakdown.sql) that stays well under 2^53 in practice, but is
+    // now coerced defensively too — the second state row below forces a bigint
+    // to prove that read is robust.
     const HANG_TS_NS = TRACE_START_NS + 1_000_000_000n; // absolute, > 2^53
     const HANG_DUR_NS = 9_500_000_000_000_000n; // > 2^53 → decodes as bigint
     expect(Number.isSafeInteger(Number(HANG_TS_NS))).toBe(false);
@@ -142,6 +144,15 @@ describe("android stack drill-down handles bigint native-ns columns", () => {
             total_dur_ns: 400_000_000, // Number: clipped duration sum, < 2^53
             occurrences: 3,
           },
+          {
+            // Defensive: force a bigint total_dur_ns (> 2^53). It can't happen
+            // for a clipped sum in practice, but the read is coerced anyway, so
+            // this must render rather than throw "Cannot mix BigInt".
+            state: "Runnable",
+            blocked_function: null,
+            total_dur_ns: 9_600_000_000_000_000n,
+            occurrences: 1,
+          },
         ],
       },
       {
@@ -163,6 +174,8 @@ describe("android stack drill-down handles bigint native-ns columns", () => {
     expect(out).toContain(`## Hang #0 — jank (${expectedDurationMs}ms)`);
     expect(out).toContain("reason: `App Deadline Missed`");
     expect(out).toContain("| Uninterruptible Sleep | `do_page_fault` | 400ms |");
+    // The bigint total_dur_ns row rendered (coerced) instead of throwing.
+    expect(out).toContain(`| Runnable | — | ${Math.round(Number(9_600_000_000_000_000n) / 1_000_000)}ms |`);
     expect(out).toContain("### Main-thread Samples During Hang");
     expect(out).toContain("main <- onDraw <- inflate");
   });

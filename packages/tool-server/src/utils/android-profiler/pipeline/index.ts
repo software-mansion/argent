@@ -291,7 +291,12 @@ async function renderHangStacksAndroid(
     lines.push("### Main-thread State Breakdown", "");
     lines.push("| State | Blocked on | Duration |", "|---|---|---|");
     for (const row of stateRows) {
-      const ms = Math.round(row.total_dur_ns / 1_000_000);
+      // Coerce like every other trace-processor duration column: readCell keeps
+      // a value as bigint above 2^53, and mixing bigint with the Number divisor
+      // throws. total_dur_ns is a clipped per-hang SUM so it stays well under
+      // 2^53 in practice, but coerce anyway to keep every duration read here
+      // uniform and robust to a future unclipped/aggregate query.
+      const ms = Math.round(Number(row.total_dur_ns) / 1_000_000);
       lines.push(
         `| ${row.state} | ${row.blocked_function ? `\`${row.blocked_function}\`` : "—"} | ${ms}ms |`
       );
@@ -328,7 +333,7 @@ async function renderHangStacksAndroid(
       stateRows.map((r) => ({
         state: r.state,
         blockedFunction: r.blocked_function,
-        durationMs: Math.round(r.total_dur_ns / 1_000_000),
+        durationMs: Math.round(Number(r.total_dur_ns) / 1_000_000),
       }))
     );
     lines.push("### Main-thread Samples During Hang", "");
