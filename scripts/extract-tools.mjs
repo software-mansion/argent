@@ -46,7 +46,7 @@ function walk(dir) {
  * `description:` token whenever they occur inside a string / template literal:
  *   - the first `description:` seen at depth 0 (a sibling of the `id:`) is the
  *     tool's own description; a balanced nested object between the two (e.g.
- *     `capability: { apple: { simulator: true } }`, which 12 real tools already
+ *     `capability: { apple: { simulator: true } }`, which 7 real tools already
  *     have) does not hide it, and
  *   - if a `}` drops the depth below 0 first, the `id:`'s enclosing object closed
  *     before any sibling `description:` - the `id:` is a key nested inside another
