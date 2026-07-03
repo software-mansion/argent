@@ -55,11 +55,14 @@ export const NON_INJECTABLE_NATIVE_WARNING =
  * description). `describe` reads these apps via the ax-service without injection
  * and `screenshot` is always available, so both are safe next steps here.
  *
- * The `describe` iOS fallback hint deliberately does NOT reuse this string: it
- * is reached only after `describe`'s own ax-service path already returned empty,
- * so re-recommending `describe` there would be circular. That hint leads with
- * `screenshot` and appends {@link NON_INJECTABLE_NATIVE_WARNING} instead, so the
- * dead-end warning stays identical across all three surfaces.
+ * The `describe` iOS fallback hint (`NON_INJECTABLE_HINT`) deliberately does NOT
+ * reuse this string: it is reached only after `describe`'s own ax-service path
+ * already returned empty, so re-recommending `describe` there would be circular.
+ * That hint leads with `screenshot` and appends
+ * {@link NON_INJECTABLE_NATIVE_WARNING}, so the dead-end warning is identical
+ * across all three surfaces. (The one runtime exception is that `describeIos`
+ * substitutes the sim's re-boot hint for `NON_INJECTABLE_HINT` when the
+ * ax-service is degraded — see that call site.)
  */
 export const NON_INJECTABLE_RECOVERY =
   "Use the standard `describe` tool (its accessibility path reads the screen without injection) " +
