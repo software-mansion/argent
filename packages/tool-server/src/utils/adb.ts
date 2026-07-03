@@ -578,7 +578,15 @@ const TERMINAL_ADB_ERROR_PATTERNS: RegExp[] = [
   /device(?: '[^']*')? offline/i,
 ];
 
-function isTerminalAdbError(message: string): boolean {
+/**
+ * True when an adb error message names a terminal device state (unauthorized /
+ * not found / offline / no devices) — a transport-level condition no retry or
+ * alternate interpretation fixes. Exported so callers that probe the device
+ * (e.g. settings-permissions' `pm path` existence preflight) can distinguish
+ * "the command failed because the device is unreachable" from "the command ran
+ * and answered negatively".
+ */
+export function isTerminalAdbError(message: string): boolean {
   return TERMINAL_ADB_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 

@@ -1,0 +1,81 @@
+import { z } from "zod";
+import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { PERMISSION_ACTIONS, PERMISSION_NAMES } from "./types";
+import type { SettingsPermissionsResult, SettingsPermissionsServices } from "./types";
+import { iosImpl } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
+
+// Mirror launch-app / restart-app: the leading-letter rule keeps a value like
+// `--user` from masquerading as a flag, and the safe alphabet keeps the value
+// inert when interpolated into an `adb shell` string (shellQuote is the real
+// guard; this is defense in depth).
+const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
+
+const zodSchema = z
+  .object({
+    udid: z
+      .string()
+      .min(1)
+      .describe("Target device id from `list-devices` (iOS simulator UDID or Android serial)."),
+    action: z
+      .enum(PERMISSION_ACTIONS)
+      .describe(
+        "`grant` pre-authorizes the permission, `deny` refuses it, `reset` returns it to the not-yet-asked state so the app prompts on next use."
+      ),
+    permission: z
+      .enum(PERMISSION_NAMES)
+      .describe(
+        "The permission to change. `notifications` is Android-only (iOS has no simctl service for it); `reminders` is iOS-only; `camera` works on Android and on iOS only when the installed Xcode's `simctl privacy` supports it."
+      ),
+    bundleId: z
+      .string()
+      .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
+      .optional()
+      .describe(
+        "App to change the permission for. iOS: bundle id (e.g. com.example.app). Android: package name. Required for grant/deny and for every action on Android; on iOS, `reset` without a bundleId resets the service for ALL apps — but on recent iOS runtimes simctl's device-wide reset can leave existing per-app entries untouched, so prefer passing the bundleId."
+      ),
+  })
+  .superRefine((val, ctx) => {
+    if (val.action !== "reset" && !val.bundleId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["bundleId"],
+        message: "bundleId is required for grant/deny — only `reset` can apply device-wide (iOS).",
+      });
+    }
+  });
+
+type Params = z.infer<typeof zodSchema>;
+
+const capability: ToolCapability = {
+  // `simctl privacy` edits the simulator's TCC store — physical iPhones have no
+  // equivalent host-side switch, so no `device: true` on apple.
+  apple: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+};
+
+export const settingsPermissionsTool: ToolDefinition<Params, SettingsPermissionsResult> = {
+  id: "settings-permissions",
+  description: `Grant, deny, or reset a runtime permission for an app without navigating the system Settings UI. Use during test setup to pre-authorize (or explicitly deny) a service before the app asks, or \`reset\` so the permission dialog appears again on next use.
+Permissions: camera, microphone, photos, contacts, notifications, calendar, location, location-always, media-library, motion, reminders.
+iOS simulator: runs \`xcrun simctl privacy\`. \`notifications\` is not supported (no such simctl service). \`reset\` with no bundleId asks simctl to reset the service for ALL apps — but on recent iOS runtimes that can leave existing per-app entries untouched, so prefer a per-app reset with bundleId.
+Android: runs \`pm grant\` / \`pm revoke\` (reset also clears the user-set permission flags) on the mapped \`android.permission.*\` runtime permissions. The app must be installed and declare them in its manifest; \`reminders\` has no Android equivalent; bundleId is always required.
+Some permission changes terminate the app if it is running (system behavior on both platforms) — set permissions before launching, or relaunch after.
+Returns { action, permission, bundleId, applied, skipped? }: \`applied\` lists the platform-level services/permissions actually changed; \`skipped\` (Android) lists mapped permissions pm rejected, e.g. ones the manifest doesn't declare. Fails if nothing could be applied.`,
+  searchHint: "grant deny reset revoke app permissions privacy camera microphone location settings",
+  zodSchema,
+  capability,
+  services: () => ({}),
+  execute: dispatchByPlatform<
+    SettingsPermissionsServices,
+    SettingsPermissionsServices,
+    Params,
+    SettingsPermissionsResult
+  >({
+    toolId: "settings-permissions",
+    capability,
+    ios: iosImpl,
+    android: androidImpl,
+  }),
+};
