@@ -52,6 +52,11 @@ export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
     }
     return false; // chromium / vega: no status bar to normalize
   } catch {
+    // A command may have failed after the override was already partially
+    // applied (e.g. Android demo mode entered but a later broadcast failed).
+    // The caller sees `false` and never restores, so undo here; both cleanup
+    // commands are harmless no-ops when nothing was applied.
+    await restoreStatusBar(device);
     return false;
   }
 }
