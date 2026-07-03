@@ -55,6 +55,12 @@ function resolveDefaultTemplatePath(): string {
 const STARTUP_TIMEOUT_MS = 10_000;
 const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
 const NOTIFY_REGISTER_TIMEOUT_MS = 2_000;
+// `simctl listapps` emits a verbose plist for every installed app (entitlements,
+// group containers, ...); on a well-populated simulator it can run into several MB,
+// larger than Node's 1 MiB default execFileSync buffer (which throws ENOBUFS, not
+// truncates). Capture it generously so listing can't spuriously fail. 64 MiB is far
+// above any realistic listapps output.
+const LISTAPPS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_START_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 1_200;
 const COLD_START_SIGNATURE = "Cannot find process matching name:";
@@ -231,11 +237,13 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
     const listAppsPlist = execFileSync("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      maxBuffer: LISTAPPS_MAX_BUFFER_BYTES,
     });
     listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "-"], {
       input: listAppsPlist,
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      maxBuffer: LISTAPPS_MAX_BUFFER_BYTES,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -151,6 +151,30 @@ describe("native-profiler-start malloc_stack_logging", () => {
     expect(efsArgs.some((a) => a.includes("get_app_container"))).toBe(true);
   });
 
+  it("captures the listapps plist with a large buffer so a big simulator can't overflow it", async () => {
+    // getInstalledApps buffers the FULL plist into Node (it's larger than the JSON
+    // plutil emits), so the listapps capture must raise maxBuffer well above Node's
+    // 1 MiB default — otherwise a well-populated simulator throws ENOBUFS where the
+    // old shell pipe (which only buffered the smaller JSON) worked.
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    await startNativeProfilerIos(api, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      malloc_stack_logging: true,
+    });
+
+    const listappsCall = execFileSyncFn.mock.calls.find(
+      (c) => Array.isArray(c[1]) && (c[1] as string[]).includes("listapps")
+    );
+    expect(listappsCall).toBeTruthy();
+    const opts = listappsCall![2] as { maxBuffer?: number };
+    expect(opts?.maxBuffer).toBeGreaterThan(8 * 1024 * 1024);
+  });
+
   it("does not terminate the app if the debug dir can't be created (malloc mode)", async () => {
     // getDebugDir()'s mkdir runs BEFORE the terminate, so a failure (e.g. ENOSPC)
     // must leave the running app untouched — never killed-without-relaunch.
