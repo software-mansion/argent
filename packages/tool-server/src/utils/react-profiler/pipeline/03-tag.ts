@@ -5,8 +5,8 @@
  *   isAnimated     — component is part of an animation subtree
  *   isRecyclerChild — component is a FlatList/VirtualizedList item
  *
- * These flags drive filtering in Stage 4. Components tagged here are
- * excluded from findings and recorded in IssueReport.excluded.
+ * These flags drive filtering in Stage 4: components tagged here are
+ * excluded from the ranked findings.
  */
 import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline";
 
@@ -23,14 +23,19 @@ import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline
 //    `Memo(AnimatedComponent(View))`), or end-of-string — so it still matches
 //    real names while rejecting tokens that bleed into more lowercase
 //    (`MotionlessIndicator`).
-//  - KNOWN LIMITATION: only acronym/digit-GLUED device-motion prefixes
-//    (`CMMotionManager`, `G2MotionSensor`) are rejected. A BARE `Motion` starting
-//    a PascalCase word (`MotionSensor`, `MotionManager`) still matches — it is
-//    structurally indistinguishable from a real animation name of the same shape
-//    (`MotionView`, and `@legendapp/motion`'s `Motion.View`), which we DO want to
-//    tag. This over-tag is accepted collateral: it only excludes a component from
-//    perf findings, and a hardcoded device-motion denylist would be more fragile
-//    than the rare false positive it removes.
+//  - KNOWN LIMITATION: only acronym/digit-GLUED prefixes (`CMMotionManager`,
+//    `G2MotionSensor`) are rejected. A BARE token that starts a PascalCase word
+//    still matches even in a non-animation name: `MotionSensor`/`MotionManager`
+//    (device motion), and — since `Transition` is also an ordinary word (state
+//    machines, phase changes) — `StateTransitionDiagram`, `TransitionMatrix`.
+//    The match is unanchored on purpose so real mid-name animation forms are
+//    caught (`FadeTransition`, `FadeInAnimation`, `SharedElementTransition`),
+//    which makes each over-tag structurally
+//    indistinguishable from a genuine animation name of the same shape
+//    (`MotionView`, `@legendapp/motion`'s `Motion.View`). This over-tag is
+//    accepted collateral: it only excludes a component from perf findings, and a
+//    hardcoded denylist would be more fragile than the rare false positive it
+//    removes.
 const ANIMATED_PATTERN = /(?<![A-Z0-9])(Animated|Animation|Transition|Motion)(?=[A-Z0-9_(.]|$)/;
 const RECYCLER_CHILD_PATTERN = /(ListItem|CellItem|Cell|Row|Item)$/i;
 const RECYCLER_PARENT_PATTERN =

@@ -65,10 +65,21 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
   it("does NOT tag a capitalized token that merely trails into lowercase letters", () => {
     // Case-sensitivity alone isn't a boundary: without one, "MotionlessIndicator"
     // still matches "Motion" as a bare substring, same bug class as the
-    // original lowercase false positives.
-    const tagged = tag(enrich(["MotionlessIndicator", "AnimationsDisabledBanner"]));
-    for (const n of ["MotionlessIndicator", "AnimationsDisabledBanner"]) {
-      expect(tagged.components.get(n)!.isAnimated).toBe(false);
+    // original lowercase false positives. One case per token so each token's
+    // trailing boundary is pinned independently — otherwise a regression that
+    // reopened this bug for a single token (Transition especially: it is a heavy
+    // non-animation word — state machines, `TransitionalScreen`) would hide
+    // behind the other tokens sharing the same regex and leave the suite green.
+    const names = [
+      "MotionlessIndicator", // Motion
+      "AnimationsDisabledBanner", // Animation
+      "TransitionalScreen", // Transition
+      "TransitionerRow", // Transition
+      "AnimatedlyBanner", // Animated ("animatedly" adverb) trailing into lowercase
+    ];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated, n).toBe(false);
     }
   });
   it("DOES still tag real animation components with a digit/underscore suffix", () => {
@@ -125,11 +136,16 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
     }
   });
 
-  // Full match/no-match matrix. The paren/dot/HOC-wrapped and dotted forms are
-  // the real regression this fix targets: they are the display names React DevTools
-  // actually produces for animated subtrees (and the exact prefixes the codebase
-  // hard-codes in skip-rules.ts / component-tree.ts), yet the over-tightened
-  // pre-fix regex failed to match them, leaking them back into findings.
+  // Full match/no-match matrix, covering every token's wrapped/dotted forms —
+  // not just Animated* — so a token-specific boundary regression in Motion,
+  // Transition, or Animation can't ride on the Animated cases staying green.
+  // The paren/dot/HOC-wrapped forms are the display names React DevTools produces
+  // for animated subtrees. Only the parenthesized `Animated(...)` /
+  // `AnimatedComponent(...)` forms are what skip-rules.ts / component-tree.ts
+  // hard-code as skips; the dotted (`Animated.View`, `Motion.View`), other-token,
+  // and nested-HOC (`Memo(AnimatedComponent(View))`) forms go beyond those two
+  // prefixes. An intermediate, over-tightened version of this regex failed to
+  // match the wrapped forms, leaking them back into findings.
   const MUST_MATCH = [
     "Animated",
     "AnimatedView",
@@ -148,6 +164,15 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
     "Transition",
     "Animated2",
     "Animated_View",
+    // Other-token wrapped/dotted forms — asserted so Motion/Transition/Animation
+    // are pinned symmetrically with Animated (Motion.View = @legendapp/motion;
+    // Transition(...) = react-transition-group HOC display name).
+    "Motion.View",
+    "Motion(View)",
+    "Transition(View)",
+    "Transition.View",
+    "Animation.View",
+    "Animation(View)",
   ];
   const MUST_NOT_MATCH = [
     "PromotionCard",
@@ -176,7 +201,13 @@ describe("ANIMATED_PATTERN matches only real animation segments", () => {
   });
 
   it("excludes wrapped animation names from rank() findings while keeping real slow components", () => {
-    const wrappers = ["Animated(View)", "Animated.View", "Memo(AnimatedComponent(View))"];
+    const wrappers = [
+      "Animated(View)",
+      "Animated.View",
+      "Memo(AnimatedComponent(View))",
+      "Motion.View",
+      "Transition(View)",
+    ];
     const tagged = tag(enrich([...wrappers, "PromotionCard"]));
     const ranked = rank(tagged).map((f) => f.component);
     for (const n of wrappers) {
