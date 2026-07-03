@@ -289,6 +289,35 @@ describe("describe tool", () => {
     expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
   });
 
+  it("keeps the degraded re-boot hint for a com.apple.* app when the ax-service is degraded", async () => {
+    // When the sim was not booted through argent, the ax-service is degraded and
+    // returns an empty tree, so describe reaches the non-injectable branch. Here
+    // the empty tree is a fixable sim-config problem, not proof the system app is
+    // undescribable: a proper `boot-device force=true` may let the ax-service
+    // read this app's full tree. So the terminal "use screenshot" hint must NOT
+    // clobber the re-boot guidance — otherwise the agent never learns its sim is
+    // degraded (which affects every describe call). should_restart still stays
+    // unset, so the restart loop remains broken.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      requiresRestart: true,
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(elementLineCount(result.description)).toBe(0);
+    // The degraded re-boot guidance wins over the terminal screenshot hint.
+    expect(result.hint).toMatch(/boot-device/i);
+    expect(result.hint).not.toContain(NON_INJECTABLE_NATIVE_WARNING);
+  });
+
   it("returns empty AX result when native-devtools is unavailable", async () => {
     const axApi = makeAXServiceApi({
       alertVisible: false,
