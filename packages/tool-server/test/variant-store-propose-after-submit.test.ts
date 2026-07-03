@@ -174,6 +174,124 @@ describe("variant store: propose after a waiter-less submit", () => {
     s.submitSelection({ selections: [{ elementId: a.id, variantId: a.variants[0]!.id }] });
     s.setCliSession(true, [{ id: "x", name: "X" }]);
     const out = await s.awaitSelection({ timeoutMs: 100 });
-    expect(out.status).not.toBe("completed");
+    // The precise property is a clean start: the session reset the round and
+    // dropped the stale queue, so there is nothing to deliver. `not completed`
+    // alone would also pass for a stranded `pending`, which would be a bug.
+    expect(out.status).toBe("no_proposals");
+  });
+
+  it("delivers a submit made DURING a CLI session (consumed, nothing queued) as a clean no_proposals", async () => {
+    // The CLI-session submit branch marks the round consumed and deliberately
+    // queues nothing (the `argent lens` watcher reads the outcome over HTTP; no
+    // await is parked). await_user_selection is hidden during a real CLI session,
+    // but if it is reached it must report the round already done — never a
+    // phantom completion and never a strand. This pins that branch through the
+    // public awaitSelection surface, which no other test exercises.
+    const s = new VariantProposalStore();
+    s.setCliSession(true, [{ id: "x", name: "X" }]);
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals.find((p) => p.element === "Alpha")!;
+    // No await parked → the CLI-session branch runs (consumed = true, no queue).
+    s.submitSelection({ selections: [{ elementId: a.id, variantId: a.variants[0]!.id }] });
+    const out = await s.awaitSelection({ timeoutMs: 100 });
+    expect(out.status).toBe("no_proposals");
+  });
+
+  it("preserves selection/global/annotation comments across the roll on the drain path", async () => {
+    // The queue-drain path freezes the outcome (buildOutcome) BEFORE reset()
+    // clears the live comment/annotation state, then delivers that frozen copy
+    // after an intervening propose_variant rolls the round. Only the element
+    // NAME was pinned before; assert the full comment payload survives the roll,
+    // since the drain depends on that separate frozen object.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals.find((p) => p.element === "Alpha")!;
+    s.submitSelection({
+      selections: [{ elementId: a.id, variantId: a.variants[0]!.id, comment: "make it blue" }],
+      globalComment: "overall: tighten spacing",
+      annotations: [
+        { target: "Save button", match: { by: "label", value: "Save" }, comment: "too small" },
+      ],
+    });
+
+    // Roll the round out from under the frozen outcome.
+    s.proposeVariant({ element: "Beta", variant: variant("B1") });
+
+    const first = await s.awaitSelection({ timeoutMs: 200 });
+    expect(first.status).toBe("completed");
+    if (first.status === "completed") {
+      const alpha = first.selections.find((x) => x.element === "Alpha");
+      expect(alpha?.comment).toBe("make it blue");
+      expect(first.globalComment).toBe("overall: tighten spacing");
+      expect(first.annotations).toHaveLength(1);
+      expect(first.annotations[0]!.comment).toBe("too small");
+      expect(first.annotations[0]!.match.value).toBe("Save");
+    }
+  });
+
+  it("signals morePending when a completed outcome is drained while a fresh round is live", async () => {
+    // A waiter-less submit is queued; a later propose rolls a fresh round. The
+    // drained (old-round) completed outcome must carry morePending=true so the
+    // agent — told to apply-and-stop on completed — awaits again instead of
+    // stranding the freshly-staged round.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals.find((p) => p.element === "Alpha")!;
+    s.submitSelection({ selections: [{ elementId: a.id, variantId: a.variants[0]!.id }] });
+    s.proposeVariant({ element: "Beta", variant: variant("B1") });
+
+    const first = await s.awaitSelection({ timeoutMs: 200 });
+    expect(first.status).toBe("completed");
+    if (first.status === "completed") {
+      expect(first.round).toBe(1);
+      expect(first.morePending).toBe(true);
+    }
+    // The signalled round then surfaces on the next await.
+    const second = await s.awaitSelection({ timeoutMs: 200 });
+    expect(second.status).toBe("pending");
+  });
+
+  it("does not signal morePending on a plain single-round completion", async () => {
+    // The common case (submit with a waiter parked, no roll) must NOT set
+    // morePending — the agent should apply and stop as before.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals.find((p) => p.element === "Alpha")!;
+    const pending = s.awaitSelection({ timeoutMs: 2_000 });
+    s.submitSelection({ selections: [{ elementId: a.id, variantId: a.variants[0]!.id }] });
+    const out = await pending;
+    expect(out.status).toBe("completed");
+    if (out.status === "completed") {
+      expect(out.morePending).toBeUndefined();
+    }
+  });
+
+  it("bounds a queued outcome's size: caps matcher value and annotation count", async () => {
+    // MAX_PENDING_OUTCOMES bounds the COUNT of queued outcomes, but each retained
+    // outcome must also be size-bounded: the submit route is unauthenticated, and
+    // an annotation's match.value was otherwise ingested uncapped and in unbounded
+    // number. Assert both are clamped in the frozen, queued outcome.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals[0]!;
+    // Over-cap on both axes (cap is 200 annotations / 200-char matcher value) —
+    // no need for pathological sizes to prove the clamp.
+    const bigValue = "x".repeat(5_000);
+    const manyAnnotations = Array.from({ length: 1_000 }, () => ({
+      target: "t",
+      match: { by: "text" as const, value: bigValue },
+      comment: "c",
+    }));
+    // Waiter-less submit → the outcome is frozen and queued.
+    s.submitSelection({
+      selections: [{ elementId: a.id, variantId: a.variants[0]!.id }],
+      annotations: manyAnnotations,
+    });
+    const out = await s.awaitSelection({ timeoutMs: 100 });
+    expect(out.status).toBe("completed");
+    if (out.status === "completed") {
+      expect(out.annotations.length).toBeLessThanOrEqual(200);
+      expect(out.annotations[0]!.match.value.length).toBeLessThanOrEqual(200);
+    }
   });
 });

@@ -110,6 +110,15 @@ export type AwaitOutcome =
       annotations: ElementAnnotation[];
       globalComment?: string;
       completedAt: number;
+      /**
+       * True when this completed outcome was delivered from the undelivered-
+       * outcome queue AND more work is already waiting — either another queued
+       * outcome, or a fresh round of live proposals that was rolled while this
+       * one waited. The agent must call `await_user_selection` again (this
+       * outcome alone does not mean the workflow is finished). Absent/false on a
+       * normal single-round completion, so the common case is unaffected.
+       */
+      morePending?: boolean;
     }
   | {
       status: "pending";
@@ -199,6 +208,19 @@ const MAX_COMMENT_LENGTH = 2_000;
  * drains the queue via an await long before a couple of entries accumulate.
  */
 const MAX_PENDING_OUTCOMES = 32;
+
+/**
+ * Max stored length for an annotation's matcher value, and max number of
+ * annotations retained per submit. `MAX_PENDING_OUTCOMES` bounds the COUNT of
+ * queued outcomes but not the SIZE of each, and an annotation's `match.value`
+ * (unlike its comment) was otherwise ingested uncapped and in unbounded number
+ * from the unauthenticated submit route — so a single queued outcome could grow
+ * without limit, defeating the "bound memory regardless of caller" guarantee.
+ * These caps keep each retained outcome bounded. Generous vs any real flow,
+ * where a human pins a handful of short-matcher comments.
+ */
+const MAX_MATCH_VALUE_LENGTH = 200;
+const MAX_ANNOTATIONS = 200;
 
 function slug(s: string): string {
   return s
@@ -552,9 +574,17 @@ export class VariantProposalStore {
   } {
     const cleanAnnotations = (input.annotations ?? [])
       .filter((a) => a && typeof a.comment === "string" && a.comment.trim())
+      // Bound the count (the submit route is unauthenticated) before mapping, so
+      // a runaway caller can't blow up a single retained outcome.
+      .slice(0, MAX_ANNOTATIONS)
       .map((a) => ({
         target: String(a.target ?? "").slice(0, 200) || "(element)",
-        match: a.match,
+        // Cap the matcher value too — it is caller-supplied and, unlike the
+        // comment, was previously ingested uncapped.
+        match: {
+          by: a.match?.by ?? "text",
+          value: String(a.match?.value ?? "").slice(0, MAX_MATCH_VALUE_LENGTH),
+        },
         comment: a.comment.trim().slice(0, MAX_COMMENT_LENGTH),
       }));
     // A round with neither proposals nor any inspector comment has nothing to
@@ -619,11 +649,13 @@ export class VariantProposalStore {
       this.pendingOutcomes = this.pendingOutcomes.filter((o) => o.round !== round);
       this.pendingOutcomes.push(this.lastOutcome);
       // Bound the queue so a caller repeatedly submitting without ever awaiting
-      // cannot grow it without limit (the route is unauthenticated). Drop the
-      // oldest entries — the agent is furthest behind on those — mirroring the
+      // cannot grow it without limit (the route is unauthenticated). This path
+      // adds at most one entry per submit (the dedup filter above removes at
+      // most one first), so a single oldest-drop restores the cap. Drop the
+      // oldest — the agent is furthest behind on it — mirroring the
       // MAX_COMMENT_LENGTH "bound memory regardless of caller" guarantee.
       if (this.pendingOutcomes.length > MAX_PENDING_OUTCOMES) {
-        this.pendingOutcomes.splice(0, this.pendingOutcomes.length - MAX_PENDING_OUTCOMES);
+        this.pendingOutcomes.shift();
       }
     }
     this.events.emit("changed");
@@ -715,7 +747,14 @@ export class VariantProposalStore {
       // nothing left to settle it, would park until timeout and misreport
       // "not completed yet" for a round that's already done.
       if (outcome.round === this.round) this.consumed = true;
-      return Promise.resolve(outcome);
+      // Signal the agent to await again when this drain leaves more to see: a
+      // further queued outcome, or a freshly-rolled round of live proposals
+      // that superseded this one. Without it the agent, told to apply-and-stop
+      // on a `completed` result, would strand that later round unpresented.
+      const morePending =
+        this.pendingOutcomes.length > 0 ||
+        (outcome.round !== this.round && this.proposals.length > 0);
+      return Promise.resolve(morePending ? { ...outcome, morePending: true } : outcome);
     }
 
     // A completed round whose result the agent already consumed is closed.
@@ -789,10 +828,10 @@ export class VariantProposalStore {
       this.events.emit("changed");
       this.events.emit("awaitParked");
 
-      if (opts.signal) {
-        if (opts.signal.aborted) return onAbort();
-        opts.signal.addEventListener("abort", onAbort, { once: true });
-      }
+      // An already-aborted signal was rejected at the top of awaitSelection, and
+      // nothing between there and here awaits, so the signal cannot have flipped
+      // to aborted in the meantime — only register the future-abort listener.
+      if (opts.signal) opts.signal.addEventListener("abort", onAbort, { once: true });
     });
   }
 }
