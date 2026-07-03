@@ -190,4 +190,51 @@ describe("component-tree delivers errors via the binding channel", () => {
     expect(inner.error).toContain("Component-tree script crashed");
     expect(inner.error).toContain("boom");
   });
+
+  it("delivers a crash that happens AFTER the measurement await through the still-installed binding", async () => {
+    // Distinct from the synchronous crash above (getFiberRoots throws before any
+    // await): here every guard passes and the throw happens in the post-await
+    // continuation, after `await Promise.all(...)` on the host measurements. That
+    // is the path closest to the production hang this change fixes — the failure
+    // has to travel through the binding that is still installed across the await,
+    // not be `return`ed. The fiber/module setup is the known-good success case,
+    // except the kept component carries a BigInt accessibilityLabel (read without
+    // a typeof guard), which the post-await `JSON.stringify(result)` cannot
+    // serialize, forcing a genuine async throw into the top-level catch.
+    //
+    // Mutation-checked: ending the try before the await, or dropping the async
+    // delivery, leaves the async IIFE to reject with the binding never firing —
+    // `runToSuccess` then times out with zero payloads and this test fails, while
+    // the synchronous crash test above (captured by the sync `run()` helper) stays
+    // green. That is exactly the ~15s binding-timeout regression this guards.
+    const hostFiber = {
+      type: "RCTView",
+      stateNode: { _nativeTag: 42 },
+      child: null,
+      sibling: null,
+    };
+    const buttonFiber = {
+      type: { displayName: "MyButton" },
+      memoizedProps: { testID: "btn", accessibilityLabel: BigInt(1) },
+      child: hostFiber,
+      sibling: null,
+    };
+    const root = { current: { child: buttonFiber, sibling: null } };
+    const hook = { renderers: new Map([[1, {}]]), getFiberRoots: () => new Set([root]) };
+    const moduleObj = {
+      UIManager: {
+        measureInWindow: (_tag: number, cb: (x: number, y: number, w: number, h: number) => void) =>
+          cb(10, 20, 100, 50),
+      },
+      Dimensions: { get: () => ({ width: 390, height: 844 }) },
+    };
+    const r = (i: number) => (i === 0 ? moduleObj : undefined);
+
+    const payloads = await runToSuccess({ hook, r });
+    expect(payloads.length).toBeGreaterThan(0);
+    const outer = JSON.parse(payloads[0]!) as { requestId: string; result: string };
+    expect(outer.requestId).toBe("t");
+    const inner = JSON.parse(outer.result) as { error?: string };
+    expect(inner.error).toContain("Component-tree script crashed");
+  });
 });
