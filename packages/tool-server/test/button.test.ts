@@ -27,6 +27,7 @@ import { buttonTool } from "../src/tools/button";
 import { UnsupportedOperationError } from "../src/utils/capability";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../src/utils/android-input";
 import { DependencyMissingError, ensureDep } from "../src/utils/check-deps";
+import { sendCommand } from "../src/utils/simulator-client";
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const androidUdid = "emulator-5554";
@@ -70,7 +71,7 @@ describe("button tool — per-platform validation", () => {
     expect(injectAndroidKeycode).not.toHaveBeenCalled();
   });
 
-  it("accepts every iOS-valid button", async () => {
+  it("accepts every iOS-valid button and drives it over the sim-server as Down then Up (not adb)", async () => {
     for (const button of [
       "home",
       "power",
@@ -79,9 +80,20 @@ describe("button tool — per-platform validation", () => {
       "appSwitch",
       "actionButton",
     ] as const) {
+      vi.mocked(sendCommand).mockClear();
+      vi.mocked(injectAndroidKeycode).mockClear();
       await expect(buttonTool.execute(services, { udid: iosUdid, button })).resolves.toEqual({
         pressed: button,
       });
+      // iOS presses go over the simulator-server HID transport as an ordered
+      // Down→Up pair. Assert the exact pair (not just `{ pressed }`) so dropping
+      // or reordering an event — or misrouting an iOS press into the Android adb
+      // branch — turns this red instead of passing on the result alone.
+      expect(vi.mocked(sendCommand).mock.calls.map((c) => c[1])).toEqual([
+        { cmd: "button", direction: "Down", button },
+        { cmd: "button", direction: "Up", button },
+      ]);
+      expect(injectAndroidKeycode).not.toHaveBeenCalled();
     }
   });
 });

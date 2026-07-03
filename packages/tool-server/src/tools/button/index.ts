@@ -54,7 +54,7 @@ const capability: ToolCapability = {
 
 export const buttonTool: ToolDefinition<Params, Result> = {
   id: "button",
-  description: `Press a device hardware button (iOS simulator or device, Android emulator or device). Sends Down then Up events automatically.
+  description: `Press a device hardware button (iOS simulator or device, Android emulator or device). iOS sends a Down then Up event automatically; Android injects a single \`adb\` key event.
 Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.

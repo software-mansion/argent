@@ -722,6 +722,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // text, an unknown named key) is a client input error, not an internal
         // fault — surface it as 400, matching the zod-validation path, instead
         // of a misleading 500.
+        //
+        // Ordering invariant: this check runs AFTER `findDependencyMissing`
+        // above, which walks the entire cause chain. That is unambiguous only
+        // because `InvalidToolInputError` is always thrown as a leaf (no
+        // `.cause`) — if a throw site ever nested a `DependencyMissingError` as
+        // the cause of an `InvalidToolInputError`, the earlier whole-chain scan
+        // would surface the dependency error and map the response to 424 first.
+        // Keep `InvalidToolInputError` causeless, or reorder these two checks.
         const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
         if (invalidInputErr) {
           res.status(400).json({ error: invalidInputErr.message });

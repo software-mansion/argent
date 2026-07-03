@@ -22,11 +22,11 @@ async function typeAndroidPhone(
   }
   if (params.text) {
     await injectAndroidText(device.id, params.text);
-    // Count by codepoint (not UTF-16 units) to match the tv / simulator-server
-    // backends. `injectAndroidText` has already rejected any non-ASCII (so this
-    // equals `params.text.length` here), but keep the codepoint-safe count so the
-    // result stays correct if the printable-ASCII guard is ever relaxed.
-    keysPressed += [...params.text].length;
+    // `injectAndroidText` (via `assertTypeableAndroidText`) has already rejected
+    // any non-ASCII, so every character here is a single codepoint and a single
+    // UTF-16 unit — `.length` is the codepoint count (matching the tv /
+    // simulator-server backends) without a spread.
+    keysPressed += params.text.length;
   }
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };
 }

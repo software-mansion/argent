@@ -271,6 +271,17 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(adbShell).not.toHaveBeenCalled();
   });
 
+  it("no-ops on an empty request (neither key nor text): { typed:'', keys:0 }, zero adb", async () => {
+    // The schema leaves both `key` and `text` optional with no refinement, so an
+    // empty request is a silent no-op returning { typed:"", keys:0 } and issuing
+    // no adb call — the same contract every keyboard backend (simulator-server,
+    // tv, vega) follows. Pin it so a future change to that behaviour (e.g. making
+    // it throw) is a deliberate, visible edit rather than an unnoticed drift.
+    const res = await impl.handler({}, { udid: SERIAL } as KeyboardParams, phone);
+    expect(res).toEqual({ typed: "", keys: 0 });
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
   it("counts a named key as 1 and returns it as `typed` when no text is given", async () => {
     const res = await impl.handler({}, { udid: SERIAL, key: "enter" } as KeyboardParams, phone);
     expect(res).toEqual({ typed: "enter", keys: 1 });
