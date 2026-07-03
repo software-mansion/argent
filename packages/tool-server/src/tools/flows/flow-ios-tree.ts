@@ -141,9 +141,10 @@ function projectIosNode(
   const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
 
   let leaf: DescribeNode | null = null;
+  let frame: DescribeFrame | null = null;
   if (!skip && (node.identifier || node.label)) {
     const rect = node.windowFrame ?? node.frame;
-    const frame = rect ? normalizeFrame(rect, screenW, screenH) : null;
+    frame = rect ? normalizeFrame(rect, screenW, screenH) : null;
     if (frame) {
       leaf = {
         role: roleFromClassName(node.className),
@@ -158,7 +159,11 @@ function projectIosNode(
   return {
     skip,
     children: node.children ?? [],
-    ownText: node.label ?? "",
+    // Text hoists only from on-screen nodes (frame is null when the view is
+    // scrolled off or zero-area) — otherwise a text assert against an ancestor
+    // would pass on content the screen doesn't show. Every labelled node is
+    // leaf-eligible, so `frame` was computed for any node with text.
+    ownText: frame ? node.label ?? "" : "",
     leaf,
     shield: Boolean(node.identifier),
   };

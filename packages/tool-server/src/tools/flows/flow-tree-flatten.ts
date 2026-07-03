@@ -17,7 +17,12 @@ export interface FlatNode<T> {
   skip: boolean;
   /** Children to recurse into (already tag-filtered where the source needs it). */
   children: T[];
-  /** The node's own visible text (label plus any distinct value); "" if none. */
+  /**
+   * The node's own visible text (label plus any distinct value); "" if none.
+   * INVARIANT: must be "" when the node has no on-screen frame — hoisted text
+   * feeds `assert`/`text` checks, which guard what the screen shows, so text
+   * from a mounted-but-scrolled-off or zero-area node must never bubble up.
+   */
   ownText: string;
   /**
    * The leaf to emit for this node WITHOUT `subtreeText` — or null when the node

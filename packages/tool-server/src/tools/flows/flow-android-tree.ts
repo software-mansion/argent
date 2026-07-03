@@ -118,12 +118,13 @@ function projectAndroidNode(
   const ownText = [label, hasValue ? rawText : ""].filter(Boolean).join(" ");
 
   let leaf: DescribeNode | null = null;
+  let frame: DescribeFrame | null = null;
   // Keep any view a selector could address: a resource-id (RN testID) or a
   // label. Pure layout scaffolding with neither is dropped — but its children
   // are still walked, so a testID nested under an unlabelled container survives.
   if (!skip && (identifier || label)) {
     const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
-    const frame = rect ? normalizeRect(rect, screenW, screenH) : null;
+    frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
       leaf = { role: deriveUiAutomatorRole(attrs.class ?? ""), frame, children: [] };
       if (label) leaf.label = label;
@@ -142,7 +143,11 @@ function projectAndroidNode(
   return {
     skip,
     children: childNodes(node),
-    ownText,
+    // Text hoists only from on-screen nodes (frame is null when the bounds clip
+    // to zero area) — otherwise a text assert against an ancestor would pass on
+    // content the screen doesn't show. Every text-carrying node is
+    // leaf-eligible (its label is non-empty), so `frame` was computed for it.
+    ownText: frame ? ownText : "",
     leaf,
     // A password node shields its placeholder text like any identified node —
     // even if it somehow lacks an id — so the secret can never bubble upward.

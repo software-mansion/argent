@@ -192,6 +192,49 @@ describe("describe full-hierarchy adapter", () => {
     expect(evaluateCondition("text", "10", counter, "equals")).toBe(true);
   });
 
+  // Visibility: text hoists only from on-screen nodes. A ScrollView keeps all
+  // rows mounted, so a far-below-the-fold row is in the dump with an off-screen
+  // frame — its text must not satisfy a `text` assert against the container.
+  it("does not hoist text from off-screen descendants", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTScrollView",
+              identifier: "feed",
+              windowFrame: SCREEN,
+              children: [
+                {
+                  className: "RCTTextView",
+                  label: "Row 1",
+                  windowFrame: { x: 0, y: 100, width: 400, height: 40 },
+                  children: [],
+                },
+                {
+                  className: "RCTTextView",
+                  label: "Row 50",
+                  windowFrame: { x: 0, y: 5000, width: 400, height: 40 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+    const feed = findAll(tree, { identifier: "feed" });
+
+    // The visible row still hoists; the off-screen one does not.
+    expect(feed[0]!.subtreeText).toBe("Row 1");
+    expect(evaluateCondition("text", "Row 1", feed)).toBe(true);
+    expect(evaluateCondition("text", "Row 50", feed)).toBe(false);
+  });
+
   // Scoping: text belongs to its NEAREST identified ancestor. A self-identified
   // descendant claims its own text, so an outer container does not swallow it —
   // otherwise a screen-root testID would match any text anywhere beneath it.

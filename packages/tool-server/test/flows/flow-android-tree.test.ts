@@ -104,6 +104,28 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     ).toBe(true);
   });
 
+  // Visibility: text hoists only from on-screen nodes. A row dumped with
+  // bounds past the screen edge clips to zero area — its text must not satisfy
+  // a `text` assert against the scroll container.
+  it("does not hoist text from off-screen descendants", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.ScrollView" resource-id="feed" package="com.acme.app" bounds="[0,0][1080,1920]">
+      <node index="0" class="android.widget.TextView" text="Row 1" package="com.acme.app" bounds="[0,100][1080,200]" />
+      <node index="1" class="android.widget.TextView" text="Row 50" package="com.acme.app" bounds="[0,1920][1080,2020]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const feed = findAll(tree, { identifier: "feed" });
+
+    // The visible row still hoists; the off-screen one does not.
+    expect(feed[0]!.subtreeText).toBe("Row 1");
+    expect(evaluateCondition("text", "Row 1", feed)).toBe(true);
+    expect(evaluateCondition("text", "Row 50", feed)).toBe(false);
+  });
+
   it("never hoists a password field's text (placeholder only)", () => {
     const tree = adaptFullAndroidHierarchyToDescribeResult(RN_XML, SCREEN_W, SCREEN_H);
     const [pw] = findAll(tree, { identifier: "password" });
