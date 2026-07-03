@@ -33,10 +33,14 @@ export {
   isTempRunnerPath,
   isGloballyInstalled,
   getGloballyInstalledVersion,
+  getGloballyInstalledPackageRoot,
+  isDeclaredLocally,
   isLocallyInstalled,
   getLocallyInstalledVersion,
   getLocalArgentBinRelPath,
+  probeLocalInstall,
 } from "./topology.js";
+export type { LocalInstallProbe } from "./topology.js";
 export {
   getInstallRecordPath,
   readInstallRecord,

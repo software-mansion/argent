@@ -24,17 +24,48 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
-// Detect the package manager a *project* uses by sniffing its lockfile, falling
-// back to the runner-based detectPackageManager(). The runner heuristic reads
-// npm_config_user_agent, which reflects whoever launched `argent` (often npx /
-// npm), not the host project — wrong for the local-install commands, which must
-// match the project's own lockfile so the right one is updated.
-export function detectProjectPackageManager(projectRoot: string): PackageManager {
-  const has = (file: string): boolean => fs.existsSync(path.join(projectRoot, file));
+// corepack's `packageManager` field ("pnpm@9.1.0") is the project's own
+// declaration — the strongest signal there is.
+function pmFromPackageManagerField(dir: string): PackageManager | null {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as {
+      packageManager?: string;
+    };
+    if (typeof pkg.packageManager !== "string") return null;
+    const name = pkg.packageManager.split("@")[0];
+    return name === "npm" || name === "yarn" || name === "pnpm" || name === "bun" ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+function pmFromLockfile(dir: string): PackageManager | null {
+  const has = (file: string): boolean => fs.existsSync(path.join(dir, file));
   if (has("pnpm-lock.yaml")) return "pnpm";
   if (has("yarn.lock")) return "yarn";
   if (has("bun.lock") || has("bun.lockb")) return "bun";
   if (has("package-lock.json") || has("npm-shrinkwrap.json")) return "npm";
+  return null;
+}
+
+// Detect the package manager a *project* uses: the package.json `packageManager`
+// (corepack) field first, then lockfiles, walking up ancestor directories —
+// workspaces keep the single lockfile at the monorepo root, which may sit above
+// the resolved project root. The walk stops at the repo boundary (.git). Only
+// then fall back to the runner-based detectPackageManager(); that heuristic
+// reads npm_config_user_agent, which reflects whoever launched `argent` (often
+// npx / npm), not the host project — wrong for the local-install commands, which
+// must match the project's own lockfile so the right one is updated.
+export function detectProjectPackageManager(projectRoot: string): PackageManager {
+  let dir = path.resolve(projectRoot);
+  for (;;) {
+    const pm = pmFromPackageManagerField(dir) ?? pmFromLockfile(dir);
+    if (pm) return pm;
+    if (fs.existsSync(path.join(dir, ".git"))) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
   return detectPackageManager();
 }
 

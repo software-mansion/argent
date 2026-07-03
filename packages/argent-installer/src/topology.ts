@@ -1,47 +1,21 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createRequire } from "node:module";
 import { execSync } from "node:child_process";
+import semver from "semver";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { resolvePackageRoot } from "./utils.js";
-import {
-  detectPackageManager,
-  detectProjectPackageManager,
-  globalInstallCommand,
-  globalUninstallCommand,
-  localInstallCommand,
-  localUninstallCommand,
-  type ShellCommand,
-} from "./package-manager.js";
+import { isYarnPnp } from "./preflight.js";
 
 // Argent supports two independent install topologies:
 //   - global: argent is on the user's PATH (the historical default).
-//   - local : argent is a project devDependency under
-//             <projectRoot>/node_modules/@swmansion/argent. This is the
-//             committable "team-share" flow — the MCP config can be committed.
+//   - local : argent is a project dependency resolvable from the project root
+//             (usually a devDependency). This is the committable "team-share"
+//             flow — the MCP config can be committed.
 //
 // They can coexist (a developer can have a global install AND a project
 // devDep). update/uninstall consult the topology so each is probed and handled
 // independently.
-
-export type TopologyId = "global" | "local";
-
-export interface TopologyState {
-  readonly installed: boolean;
-  /** Version reported by the install on disk, NOT the running module. */
-  readonly version: string | null;
-}
-
-export interface Topology {
-  readonly id: TopologyId;
-  /** Short label for UI ("global package" / "local devDependency"). */
-  readonly label: string;
-  /** Probe presence + on-disk version. */
-  probe(projectRoot: string): TopologyState;
-  installCommand(projectRoot: string, pkg: string): ShellCommand;
-  uninstallCommand(projectRoot: string, pkg: string): ShellCommand;
-  /** cwd to spawn the install/uninstall child with (undefined = inherit). */
-  spawnCwd(projectRoot: string): string | undefined;
-}
 
 // ── Paths that `which argent` can return but are NOT a real global install ──
 // Temp package runners (npx / pnpm dlx / bunx / yarn dlx) prepend their cache
@@ -94,21 +68,36 @@ export function isGloballyInstalled(): boolean {
 }
 
 /**
- * Read the version of the globally-installed argent package — distinct from
- * {@link import("./utils.js").getInstalledVersion}, which reads the package.json
- * this code is currently executing from. When invoked via `npx`, the npx cache
- * is always at the latest published version, so reading the running package
- * masks an outdated global install. This resolves the global binary via
- * `which -a` / `where`, follows symlinks to the real entrypoint, and walks up to
- * the owning package.json. Returns null when argent is not on PATH or the layout
- * can't be resolved (e.g. Windows wrapper scripts that aren't symlinks).
+ * Root directory of the globally-installed argent package (the dir holding its
+ * package.json), or null when argent is not on PATH or the layout can't be
+ * resolved. Follows the bin symlink to the real entrypoint and walks up to the
+ * owning package.json. Used both to read the installed version and to scope
+ * tool-server teardown to servers spawned from THIS install.
  */
-export function getGloballyInstalledVersion(): string | null {
+export function getGloballyInstalledPackageRoot(): string | null {
   const binaryPath = getGlobalBinaryPath();
   if (!binaryPath) return null;
   try {
     const realPath = fs.realpathSync(binaryPath);
-    const pkgRoot = resolvePackageRoot(path.dirname(realPath));
+    return resolvePackageRoot(path.dirname(realPath));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the version of the globally-installed argent package — distinct from
+ * {@link import("./utils.js").getInstalledVersion}, which reads the package.json
+ * this code is currently executing from. When invoked via `npx`, the npx cache
+ * is always at the latest published version, so reading the running package
+ * masks an outdated global install. Returns null when argent is not on PATH or
+ * the layout can't be resolved (e.g. Windows wrapper scripts that aren't
+ * symlinks).
+ */
+export function getGloballyInstalledVersion(): string | null {
+  const pkgRoot = getGloballyInstalledPackageRoot();
+  if (!pkgRoot) return null;
+  try {
     const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8")) as {
       version?: string;
     };
@@ -120,30 +109,110 @@ export function getGloballyInstalledVersion(): string | null {
 
 // ── Local install probes ──────────────────────────────────────────────────────
 
-function getLocalArgentDir(projectRoot: string): string {
-  return path.join(projectRoot, "node_modules", PACKAGE_NAME);
+interface ManifestDeps {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
 }
 
-// True iff @swmansion/argent is installed in the project's node_modules. Used to
-// infer local mode when no install record exists, and to decide whether `update`
-// should bump the devDep vs the global binary.
+function readManifestDeclaration(projectRoot: string): string | null {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")
+    ) as ManifestDeps;
+    const spec =
+      pkg.devDependencies?.[PACKAGE_NAME] ??
+      pkg.dependencies?.[PACKAGE_NAME] ??
+      pkg.optionalDependencies?.[PACKAGE_NAME];
+    return typeof spec === "string" ? spec : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True iff the project's own package.json declares @swmansion/argent as a
+ * dependency. This is the intent signal for local mode: a copy that merely
+ * exists in node_modules (hoisted transitive dep, workspace symlink, a
+ * teammate's experiment) is NOT evidence the project opted into the
+ * committable install.
+ */
+export function isDeclaredLocally(projectRoot: string): boolean {
+  return readManifestDeclaration(projectRoot) !== null;
+}
+
+/**
+ * Directory of the project-local @swmansion/argent package, resolved with
+ * Node's module resolution from the project root — handles hoisted workspace
+ * layouts and pnpm symlinks that a hardcoded <root>/node_modules/<pkg> path
+ * misses. Null when the package can't be resolved (not installed, or a Yarn
+ * PnP layout whose resolver isn't loaded in this process).
+ */
+export function resolveLocalArgentDir(projectRoot: string): string | null {
+  try {
+    const req = createRequire(path.join(projectRoot, "package.json"));
+    // The published package has no `exports` map, so the package.json subpath
+    // resolves directly. Fall back to the plain node_modules path in case a
+    // future exports map hides it.
+    return path.dirname(req.resolve(`${PACKAGE_NAME}/package.json`));
+  } catch {
+    const plain = path.join(projectRoot, "node_modules", PACKAGE_NAME);
+    return fs.existsSync(path.join(plain, "package.json")) ? plain : null;
+  }
+}
+
+export interface LocalInstallProbe {
+  /**
+   * True when the package is present for this project: resolvable on disk, or
+   * declared in the manifest under Yarn PnP (which has no node_modules and
+   * whose resolver isn't loaded here).
+   */
+  installed: boolean;
+  /**
+   * Installed version when it can be read. Under PnP this falls back to the
+   * declared specifier when it is an exact semver; null when unknown.
+   */
+  version: string | null;
+  /** Absolute package directory when resolvable on disk; null under PnP. */
+  packageDir: string | null;
+}
+
+export function probeLocalInstall(projectRoot: string): LocalInstallProbe {
+  const packageDir = resolveLocalArgentDir(projectRoot);
+  if (packageDir) {
+    let version: string | null;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")) as {
+        version?: string;
+      };
+      version = pkg.version ?? null;
+    } catch {
+      version = null;
+    }
+    return { installed: true, version, packageDir };
+  }
+  if (isYarnPnp(projectRoot)) {
+    const spec = readManifestDeclaration(projectRoot);
+    if (spec !== null) {
+      return { installed: true, version: semver.valid(spec) ? spec : null, packageDir: null };
+    }
+  }
+  return { installed: false, version: null, packageDir: null };
+}
+
+// True iff @swmansion/argent is installed for this project (resolvable from the
+// project root, or a declared dep under Yarn PnP). Used by `update`/`uninstall`
+// once local mode is resolved, and by init's post-install verification.
 export function isLocallyInstalled(projectRoot: string): boolean {
-  return fs.existsSync(path.join(getLocalArgentDir(projectRoot), "package.json"));
+  return probeLocalInstall(projectRoot).installed;
 }
 
 // Version of the project-local @swmansion/argent. Distinct from
 // getInstalledVersion (the running package) and getGloballyInstalledVersion:
 // under `npx`/local mode the running package is the npx cache, so the project's
-// own node_modules copy is the version `update` must compare against.
+// own resolved copy is the version `update` must compare against.
 export function getLocallyInstalledVersion(projectRoot: string): string | null {
-  try {
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(getLocalArgentDir(projectRoot), "package.json"), "utf8")
-    ) as { version?: string };
-    return pkg.version ?? null;
-  } catch {
-    return null;
-  }
+  return probeLocalInstall(projectRoot).version;
 }
 
 // Project-relative POSIX path to the locally-installed argent CLI entrypoint
@@ -154,7 +223,8 @@ export function getLocallyInstalledVersion(projectRoot: string): string | null {
 // slashes keep the committed command valid on every OS (Node accepts them on
 // Windows too).
 export function getLocalArgentBinRelPath(projectRoot: string): string | null {
-  const pkgDir = getLocalArgentDir(projectRoot);
+  const pkgDir = resolveLocalArgentDir(projectRoot);
+  if (!pkgDir) return null;
   let binSub: string | undefined;
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as {
@@ -169,35 +239,14 @@ export function getLocalArgentBinRelPath(projectRoot: string): string | null {
   if (!binSub) return null;
   const abs = path.join(pkgDir, binSub);
   if (!fs.existsSync(abs)) return null;
-  return path.relative(projectRoot, abs).split(path.sep).join("/");
-}
-
-// ── Topology objects ──────────────────────────────────────────────────────────
-
-export const GLOBAL: Topology = {
-  id: "global",
-  label: "global package",
-  probe: () => ({ installed: isGloballyInstalled(), version: getGloballyInstalledVersion() }),
-  installCommand: (_root, pkg) => globalInstallCommand(detectPackageManager(), pkg),
-  uninstallCommand: (_root, pkg) => globalUninstallCommand(detectPackageManager(), pkg),
-  // Global install doesn't depend on the project tree — inherit the cwd.
-  spawnCwd: () => undefined,
-};
-
-export const LOCAL: Topology = {
-  id: "local",
-  label: "local devDependency",
-  probe: (root) => ({
-    installed: isLocallyInstalled(root),
-    version: getLocallyInstalledVersion(root),
-  }),
-  installCommand: (root, pkg) => localInstallCommand(detectProjectPackageManager(root), pkg),
-  uninstallCommand: (root, pkg) => localUninstallCommand(detectProjectPackageManager(root), pkg),
-  spawnCwd: (root) => root,
-};
-
-export const TOPOLOGIES: ReadonlyArray<Topology> = [GLOBAL, LOCAL];
-
-export function topologyById(id: TopologyId): Topology {
-  return id === "global" ? GLOBAL : LOCAL;
+  // Module resolution returns real paths; realpath the root too so a symlinked
+  // project dir (e.g. macOS /var → /private/var) doesn't derail the relative
+  // path with spurious ".." segments.
+  let root = projectRoot;
+  try {
+    root = fs.realpathSync(projectRoot);
+  } catch {
+    // keep the caller's path
+  }
+  return path.relative(root, abs).split(path.sep).join("/");
 }

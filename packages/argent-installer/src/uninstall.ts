@@ -17,10 +17,11 @@ import {
   detectPackageManager,
   detectProjectPackageManager,
   formatShellCommand,
+  getGloballyInstalledPackageRoot,
   globalUninstallCommand,
   localUninstallCommand,
   isGloballyInstalled,
-  isLocallyInstalled,
+  probeLocalInstall,
   resolveInstallMode,
   removeInstallRecord,
   resolveProjectRoot,
@@ -30,7 +31,7 @@ import {
   type ShellCommand,
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
-import { killToolServer } from "@argent/tools-client";
+import { killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 
 type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
@@ -540,17 +541,25 @@ export async function uninstall(args: string[]): Promise<void> {
       // uninstall in is likely meant to go; a global install is shared, so
       // default off (preserves the prior global-mode behavior).
       defaultRemove: boolean;
+      // Install dir the package manager is about to delete — the scope for the
+      // tool-server teardown below. Null when unresolvable (Yarn PnP), which
+      // simply skips the kill.
+      installDir: string | null;
     }
 
     let removable: RemovableInstall | null = null;
     if (installMode === "local") {
-      if (isLocallyInstalled(projectRoot)) {
+      // PnP-aware probe: a Yarn PnP project has no node_modules but the local
+      // devDependency is still there to remove.
+      const localProbe = probeLocalInstall(projectRoot);
+      if (localProbe.installed) {
         removable = {
           kind: "local",
           cmd: localUninstallCommand(detectProjectPackageManager(projectRoot), PACKAGE_NAME),
           cwd: projectRoot,
           prompt: `Remove the local ${PACKAGE_NAME} devDependency from this project?`,
           defaultRemove: true,
+          installDir: localProbe.packageDir,
         };
       }
     } else if (isGloballyInstalled()) {
@@ -559,6 +568,7 @@ export async function uninstall(args: string[]): Promise<void> {
         cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
+        installDir: getGloballyInstalledPackageRoot(),
       };
     }
 
@@ -585,10 +595,14 @@ export async function uninstall(args: string[]): Promise<void> {
     }
 
     if (shouldRemove && removable) {
-      // Stop the tool-server before touching the install so no binary is held
-      // open during removal.
+      // Stop the tool-server(s) spawned from the install being removed so no
+      // binary is held open during removal — and ONLY that install's servers. A
+      // server belonging to a different install (the global binary during a
+      // local-mode uninstall, or vice versa) may be serving another editor
+      // session and must be left alone — same invariant as the postinstall kill
+      // and the launcher's reuse gate.
       try {
-        await killToolServer();
+        if (removable.installDir) await killToolServerForInstallDir(removable.installDir);
       } catch (err) {
         p.log.error(`Could not stop the running tool server: ${err}`);
         await finalizeUninstallTelemetry(hasPrunedContent, false, UNINSTALL_TOOLSERVER_STOP_FAILED);
@@ -603,6 +617,14 @@ export async function uninstall(args: string[]): Promise<void> {
         });
         p.log.success(`Removed ${removable.kind} package.`);
         hasUninstalledPackage = true;
+
+        // The local install is gone — the committed mode marker must go with it
+        // even when the user declined the content-pruning step above, or a
+        // stale mode:"local" record would keep `update`/`uninstall` targeting a
+        // devDependency that no longer exists.
+        if (removable.kind === "local" && removeInstallRecord(projectRoot)) {
+          p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
+        }
       } catch (err) {
         p.log.error(`${removable.kind} uninstall failed: ${err}`);
         await finalizeUninstallTelemetry(

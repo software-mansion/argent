@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isLocallyInstalled } from "./topology.js";
+import { isDeclaredLocally } from "./topology.js";
 
 // Committed marker recording that a project uses local (devDependency) mode, so
 // `update`/`uninstall` and teammates act on the repo-local install rather than a
@@ -54,12 +54,15 @@ export function removeInstallRecord(projectRoot: string): boolean {
 }
 
 // Effective install mode for a project: the committed record wins; otherwise
-// infer from an on-disk local install; default global (every pre-record install
-// predates this feature and was global).
+// infer local only from a dependency the project's own package.json declares —
+// a copy that merely exists in node_modules (hoisted transitive dep, workspace
+// symlink) is not intent, and acting on it would rewrite a manifest the user
+// never opted into. Default global (every pre-record install predates this
+// feature and was global).
 export function resolveInstallMode(projectRoot: string): InstallMode {
   const record = readInstallRecord(projectRoot);
   if (record) return record.mode;
-  return isLocallyInstalled(projectRoot) ? "local" : "global";
+  return isDeclaredLocally(projectRoot) ? "local" : "global";
 }
 
 export class InstallModeFlagError extends Error {}

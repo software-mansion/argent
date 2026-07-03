@@ -33,6 +33,7 @@ const childProcessMock = vi.hoisted(() => ({
 
 const toolsClientMock = vi.hoisted(() => ({
   killToolServer: vi.fn().mockResolvedValue(undefined),
+  killToolServerForInstallDir: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("@argent/telemetry", () => telemetryMock);
@@ -166,9 +167,23 @@ describe("uninstall — telemetry consent preservation", () => {
 
   it("drains uninstall telemetry when package shutdown throws before uninstalling", async () => {
     process.chdir(tmpDir);
-    toolsClientMock.killToolServer.mockRejectedValueOnce(new Error("tool server busy"));
+    // Stage a resolvable fake global install so the kill (scoped to the install
+    // dir being removed) is actually attempted.
+    const globalPkg = path.join(tmpDir, "global-argent");
+    writeFile(path.join(globalPkg, "package.json"), JSON.stringify({ name: "@swmansion/argent" }));
+    writeFile(path.join(globalPkg, "bin", "argent"), "#!/usr/bin/env node\n");
+    childProcessMock.execSync.mockImplementation(
+      () => path.join(globalPkg, "bin", "argent") + "\n"
+    );
+    toolsClientMock.killToolServerForInstallDir.mockRejectedValueOnce(
+      new Error("tool server busy")
+    );
 
     await expect(uninstall(["--yes"])).rejects.toThrow("tool server busy");
+    // The probe follows symlinks (macOS /var → /private/var), so compare realpaths.
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(
+      fs.realpathSync(globalPkg)
+    );
 
     expect(telemetryMock.track).toHaveBeenCalledWith(
       "installation:cli_uninstall_complete",

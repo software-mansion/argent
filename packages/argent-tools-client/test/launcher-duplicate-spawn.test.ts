@@ -47,11 +47,9 @@ afterEach(async () => {
       /* already dead */
     }
   }
-  await launcher.clearToolsServerState();
-  // The lock is released in ensureToolsServer's finally, but clear it defensively
-  // so one test's leftover can never stall the next on lock contention.
-  const lockFile = launcher.STATE_PATHS.LOCK_FILE;
-  if (lockFile) rmSync(lockFile, { force: true });
+  // Per-bundle registry: wipe every record (FAKE_BUNDLE, the foreign-bundle
+  // slot some tests create, and the legacy file) so no test leaks into the next.
+  rmSync(launcher.STATE_PATHS.STATE_DIR, { recursive: true, force: true });
 });
 
 async function waitForDeath(pid: number, timeoutMs = 12_000): Promise<void> {
@@ -78,7 +76,7 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
         delete process.env.FAKE_TTL_MS;
       }
 
-      const state = await launcher.readToolsServerState();
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
       expect(state).not.toBeNull();
       spawnedPids.push(state!.pid);
 
@@ -130,7 +128,7 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
       expect(launcher.isToolsServerProcessAlive(wedged.pid)).toBe(false);
 
       // A fresh, healthy server has taken its place and is the one tracked.
-      const state = await launcher.readToolsServerState();
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
       expect(state).not.toBeNull();
       expect(state!.pid).not.toBe(wedged.pid);
       spawnedPids.push(state!.pid);
@@ -168,7 +166,7 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
       expect(launcher.isToolsServerProcessAlive(bystanderPid)).toBe(true);
 
       // A fresh healthy server exists and is tracked.
-      const state = await launcher.readToolsServerState();
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
       expect(state).not.toBeNull();
       expect(state!.pid).not.toBe(bystanderPid);
       spawnedPids.push(state!.pid);
@@ -209,7 +207,7 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
       expect(launcher.isToolsServerProcessAlive(cli.pid)).toBe(true);
 
       // A separate auto-spawned server now backs the returned handle and is tracked.
-      const state = await launcher.readToolsServerState();
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
       expect(state).not.toBeNull();
       expect(state!.pid).not.toBe(cli.pid);
       expect(state!.managed).toBe("autospawn");
@@ -282,13 +280,53 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
       expect(launcher.isToolsServerProcessAlive(other.pid)).toBe(true);
 
       // We spawned our OWN server, tracked under OUR bundlePath, on a new port.
-      const state = await launcher.readToolsServerState();
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
       expect(state).not.toBeNull();
       expect(state!.pid).not.toBe(other.pid);
       expect(state!.bundlePath).toBe(FAKE_BUNDLE);
       spawnedPids.push(state!.pid);
       expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", state!.port));
       expect(handle.url).not.toBe(launcher.formatToolsServerUrl("127.0.0.1", other.port));
+
+      // And the other install's record SURVIVES — before the per-bundle
+      // registry, our spawn overwrote the single-slot state file, leaving the
+      // other server running but untracked (unreachable by `argent server
+      // stop`, killToolServer, or the postinstall kill).
+      const otherState = await launcher.readToolsServerState(
+        "/some/OTHER/install/dist/tool-server.cjs"
+      );
+      expect(otherState).not.toBeNull();
+      expect(otherState!.pid).toBe(other.pid);
+    }
+  );
+
+  it(
+    "reuses a healthy same-bundle server recorded in the LEGACY single-slot file (pre-registry compat)",
+    { timeout: 30_000 },
+    async () => {
+      const existing = await launcher.spawnToolsServer(fakePaths(), await launcher.findFreePort(), {
+        token: "legacy-token",
+      });
+      spawnedPids.push(existing.pid);
+      // Simulate a record written by an older argent version: the legacy
+      // tool-server.json, not a per-bundle file.
+      const legacy = {
+        port: existing.port,
+        pid: existing.pid,
+        startedAt: new Date().toISOString(),
+        bundlePath: FAKE_BUNDLE,
+        host: "127.0.0.1",
+        token: "legacy-token",
+        managed: "autospawn",
+      };
+      const { mkdirSync, writeFileSync } = await import("node:fs");
+      mkdirSync(launcher.STATE_PATHS.STATE_DIR, { recursive: true });
+      writeFileSync(launcher.STATE_PATHS.STATE_FILE, JSON.stringify(legacy));
+
+      const handle = await launcher.ensureToolsServer(fakePaths());
+
+      expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", existing.port));
+      expect(launcher.isToolsServerProcessAlive(existing.pid)).toBe(true);
     }
   );
 
@@ -314,7 +352,7 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
 
       // Same server reused — no new pid, same URL.
       expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", existing.port));
-      const state = await launcher.readToolsServerState();
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
       expect(state!.pid).toBe(existing.pid);
     }
   );
@@ -347,7 +385,7 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
       // Old-version server retired; a fresh one tracked under the new version.
       await waitForDeath(old.pid);
       expect(launcher.isToolsServerProcessAlive(old.pid)).toBe(false);
-      const state = await launcher.readToolsServerState();
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
       expect(state).not.toBeNull();
       expect(state!.pid).not.toBe(old.pid);
       expect(state!.version).toBe("2.0.0");

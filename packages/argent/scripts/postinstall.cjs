@@ -13,7 +13,11 @@ const path = require("path");
 // A repo-local devDependency install of argent must not tear down a tool-server
 // spawned by a *different* install (another project's local copy, or the global
 // binary) that an unrelated editor session is actively using.
-const stateFile = path.join(os.homedir(), ".argent", "tool-server.json");
+//
+// State records are per-install files (tool-server-<hash>.json) plus the legacy
+// single-slot tool-server.json written by older versions — scan them all rather
+// than reproducing the launcher's hash.
+const stateDir = path.join(os.homedir(), ".argent");
 const ownBundlePath = path.resolve(__dirname, "..", "dist", "tool-server.cjs");
 
 function sameBundle(recorded) {
@@ -29,17 +33,25 @@ function sameBundle(recorded) {
 }
 
 try {
-  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  if (state && state.pid && sameBundle(state.bundlePath)) {
+  for (const name of fs.readdirSync(stateDir)) {
+    if (!/^tool-server(-[0-9a-f]{12})?\.json$/.test(name)) continue;
+    const stateFile = path.join(stateDir, name);
     try {
-      process.kill(state.pid, "SIGTERM");
+      const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+      if (state && state.pid && sameBundle(state.bundlePath)) {
+        try {
+          process.kill(state.pid, "SIGTERM");
+        } catch {
+          /* process already gone — nothing to kill */
+        }
+        fs.unlinkSync(stateFile);
+      }
     } catch {
-      /* process already gone — nothing to kill */
+      /* unreadable record — leave it alone */
     }
-    fs.unlinkSync(stateFile);
   }
 } catch {
-  /* no state file or unreadable — nothing to clean up */
+  /* no state dir — nothing to clean up */
 }
 
 if (process.env.ARGENT_SKIP_POSTINSTALL === "1") {

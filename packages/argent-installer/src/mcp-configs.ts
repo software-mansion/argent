@@ -120,6 +120,20 @@ export function resolveLocalCommandMode(root: string): McpCommandMode {
   return { kind: "local-npx" };
 }
 
+// Single owner of the mode-and-scope → MCP command decision, shared by `init`
+// and `update` so both always write the same command shape for a project: only
+// a local-mode PROJECT-scope entry runs the repo-local copy; global scope (and
+// global install mode) keeps the bare `argent` command.
+export function getMcpEntryForScope(
+  installMode: "global" | "local",
+  configScope: "local" | "global",
+  localCmdMode: McpCommandMode | null
+): McpServerEntry {
+  return installMode === "local" && configScope === "local" && localCmdMode
+    ? getMcpEntry(localCmdMode)
+    : getMcpEntry({ kind: "global" });
+}
+
 function hasEnv(entry: McpServerEntry): entry is McpServerEntry & { env: Record<string, string> } {
   return entry.env != null && Object.keys(entry.env).length > 0;
 }

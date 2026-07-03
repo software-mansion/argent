@@ -7,7 +7,7 @@ import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
   findConfiguredAdapterScopes,
-  getMcpEntry,
+  getMcpEntryForScope,
   resolveLocalCommandMode,
   copyRulesAndAgents,
   type McpConfigAdapter,
@@ -15,13 +15,14 @@ import {
 } from "./mcp-configs.js";
 import {
   getGloballyInstalledVersion,
+  getGloballyInstalledPackageRoot,
   isGloballyInstalled,
   isNewerVersion,
   detectPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   localInstallCommand,
-  getLocallyInstalledVersion,
+  probeLocalInstall,
   resolveInstallMode,
   formatShellCommand,
   resolveProjectRoot,
@@ -36,7 +37,7 @@ import {
 } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
-import { killToolServer } from "@argent/tools-client";
+import { killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
 
@@ -187,12 +188,15 @@ export async function update(args: string[]): Promise<void> {
     // When invoked via `npx @swmansion/argent update`, the running package is the
     // npx cache and always at the latest published version. Reading PACKAGE_ROOT
     // would falsely report "already on the latest". We resolve the *real* install
-    // the user has: the project's node_modules copy in local mode, or the global
-    // binary's package.json in global mode.
+    // the user has: the project's resolved copy in local mode (PnP-aware — a
+    // Yarn PnP project has no node_modules but is still installed), or the
+    // global binary's package.json in global mode.
+    const localProbe = installMode === "local" ? probeLocalInstall(projectRoot) : null;
     const globallyInstalled = installMode === "global" && isGloballyInstalled();
+    const isInstalledForMode = installMode === "local" ? localProbe!.installed : globallyInstalled;
     const installed =
       installMode === "local"
-        ? getLocallyInstalledVersion(projectRoot)
+        ? localProbe!.version
         : globallyInstalled
           ? getGloballyInstalledVersion()
           : null;
@@ -271,6 +275,11 @@ export async function update(args: string[]): Promise<void> {
 
     if (installed) {
       p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
+    } else if (isInstalledForMode) {
+      // Installed but the version can't be read — a Yarn PnP layout whose
+      // manifest declares a range. Don't report "not installed" (and don't
+      // reinstall on every run below).
+      p.log.info(`Installed: ${pc.cyan("version unknown")} ${pc.dim("(Yarn PnP)")}`);
     } else {
       p.log.warn(
         installMode === "local"
@@ -287,7 +296,14 @@ export async function update(args: string[]): Promise<void> {
       p.log.info(`${label}${pc.cyan(`v${target}`)}${suffix}`);
     }
 
-    const needsInstall = target !== null && (!installed || isNewerVersion(target, installed));
+    // Installed-with-unknown-version (PnP + range specifier) must not read as
+    // "not installed" — under --yes that would rewrite the manifest/lockfile on
+    // EVERY run. Act on it only when the user explicitly requested a version.
+    const versionUnknown = isInstalledForMode && installed === null;
+    const needsInstall =
+      target !== null &&
+      (!isInstalledForMode ||
+        (versionUnknown ? requestedVersion !== null : !installed || isNewerVersion(target, installed)));
     const latestIsNewer = latest !== null && (!installed || isNewerVersion(latest, installed));
 
     if (needsInstall && target !== null) {
@@ -305,7 +321,7 @@ export async function update(args: string[]): Promise<void> {
         p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
         const proceed = await p.confirm({
-          message: installed
+          message: isInstalledForMode
             ? `Update to v${target}?`
             : installMode === "local"
               ? `Add ${PACKAGE_NAME}@${target} to this project's devDependencies?`
@@ -323,8 +339,18 @@ export async function update(args: string[]): Promise<void> {
 
       p.log.info(`Running: ${pc.dim(cmdStr)}`);
 
+      // Stop only the tool-server(s) spawned from the install we are about to
+      // replace. Whatever the shared state tracks for a DIFFERENT install (the
+      // global binary while updating a repo-local dep, or vice versa) may be
+      // serving another editor session and must be left alone — same invariant
+      // as the postinstall kill and the launcher's reuse gate. When the install
+      // dir can't be resolved (fresh install, Yarn PnP) there is nothing of ours
+      // to stop; the launcher's version-aware reuse gate retires a stale server
+      // on the next call.
+      const installDirToStop =
+        installMode === "local" ? localProbe!.packageDir : getGloballyInstalledPackageRoot();
       try {
-        await killToolServer();
+        if (installDirToStop) await killToolServerForInstallDir(installDirToStop);
       } catch (err) {
         await trackPackageAction(
           "update_failed",
@@ -337,7 +363,10 @@ export async function update(args: string[]): Promise<void> {
         process.exit(1);
       }
 
-      const packageAction = resolveUpdatePackageAction(trigger, installed);
+      const packageAction = resolveUpdatePackageAction(
+        trigger,
+        isInstalledForMode ? (installed ?? "unknown") : null
+      );
       const packageActionStartedAt = performance.now();
       try {
         execFileSync(cmd.bin, cmd.args, {
@@ -360,7 +389,12 @@ export async function update(args: string[]): Promise<void> {
       await trackPackageAction(packageAction, packageActionStartedAt, true);
     } else {
       await trackPackageAction("no_update", updateStartTime, true);
-      if (latest && target === null && latestIsNewer && minReleaseAgeMs > 0) {
+      if (versionUnknown) {
+        p.log.warn(
+          `Could not determine the installed version (Yarn PnP). ` +
+            `Pass ${pc.cyan("--version <x.y.z>")} to update to a specific version.`
+        );
+      } else if (latest && target === null && latestIsNewer && minReleaseAgeMs > 0) {
         p.log.warn(
           `Latest version ${pc.cyan(`v${latest}`)} is still held by your minimum-release-age policy.`
         );
@@ -382,9 +416,7 @@ export async function update(args: string[]): Promise<void> {
     // mode keep the bare `argent` command.
     const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
     const entryFor = (scope: "local" | "global"): McpServerEntry =>
-      installMode === "local" && scope === "local" && localCmdMode
-        ? getMcpEntry(localCmdMode)
-        : getMcpEntry({ kind: "global" });
+      getMcpEntryForScope(installMode, scope, localCmdMode);
 
     // Only refresh adapter scopes that already contain an argent entry. A
     // present editor dir (`.gemini`, `.cursor`, ...) is not consent — issue

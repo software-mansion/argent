@@ -4,10 +4,14 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { homedir } from "node:os";
 import { spawn, execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdir, writeFile, readFile, unlink, rename, chmod } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdir, writeFile, readFile, readdir, unlink, rename, chmod } from "node:fs/promises";
 
 const STATE_DIR = path.join(homedir(), ".argent");
+// Legacy single-slot state file. Still read (and cleared when it records the
+// caller's own bundle) so servers tracked by older argent versions are found,
+// but never written: each install now tracks its server in its own per-bundle
+// file — see stateFileForBundle.
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
 // Cross-process mutex guarding the "decide whether to spawn, then spawn" critical
@@ -313,31 +317,59 @@ export function spawnToolsServer(
   });
 }
 
-export async function readToolsServerState(): Promise<ToolsServerState | null> {
+/**
+ * Per-bundle state file for a given tool-server bundle. Each argent install
+ * (global binary, a repo-local devDependency, two repos pinning different
+ * versions) has a distinct bundlePath and therefore its own slot — so one
+ * install spawning its server never clobbers another install's record and
+ * orphans a server nothing can find or stop (the single-slot failure mode).
+ */
+export function stateFileForBundle(bundlePath: string): string {
+  const key = createHash("sha256").update(bundlePath).digest("hex").slice(0, 12);
+  return path.join(STATE_DIR, `tool-server-${key}.json`);
+}
+
+async function readStateFile(file: string): Promise<ToolsServerState | null> {
   try {
-    const raw = await readFile(STATE_FILE, "utf8");
+    const raw = await readFile(file, "utf8");
     return JSON.parse(raw) as ToolsServerState;
   } catch {
     return null;
   }
 }
 
+/**
+ * Read the tracked tool-server state. With `bundlePath`, resolve the record for
+ * THAT install: its per-bundle file first, then the legacy single-slot file
+ * (written by older argent versions) when it records the same bundle. Without
+ * `bundlePath`, read the legacy file only — a backward-compat shape for callers
+ * that predate per-bundle tracking.
+ */
+export async function readToolsServerState(bundlePath?: string): Promise<ToolsServerState | null> {
+  if (bundlePath === undefined) return readStateFile(STATE_FILE);
+  const own = await readStateFile(stateFileForBundle(bundlePath));
+  if (own) return own;
+  const legacy = await readStateFile(STATE_FILE);
+  return legacy && legacy.bundlePath === bundlePath ? legacy : null;
+}
+
 export async function writeToolsServerState(state: ToolsServerState): Promise<void> {
+  const target = stateFileForBundle(state.bundlePath);
   await mkdir(STATE_DIR, { recursive: true });
   // Atomic publish: write a per-process temp file, force 0600 (writeFile's
   // `mode` only applies on create, so chmod also covers a stale temp), then
-  // rename over STATE_FILE. rename(2) within the same dir is atomic, so a
+  // rename over the state file. rename(2) within the same dir is atomic, so a
   // concurrent reader (another launcher, `argent server status`, the running
   // global MCP) never observes a missing / half-written / looser-perm state
   // file, and the auth token is never published at a world-readable mode.
-  const tmp = `${STATE_FILE}.${process.pid}.tmp`;
+  const tmp = `${target}.${process.pid}.tmp`;
   try {
     await writeFile(tmp, JSON.stringify(state, null, 2) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     });
     await chmod(tmp, 0o600);
-    await rename(tmp, STATE_FILE);
+    await rename(tmp, target);
   } catch (err) {
     await unlink(tmp).catch(() => {});
     throw err;
@@ -352,25 +384,74 @@ export async function writeToolsServerState(state: ToolsServerState): Promise<vo
  * async path (the state file may hold an auth token).
  */
 export function writeToolsServerStateSync(state: ToolsServerState): void {
+  const target = stateFileForBundle(state.bundlePath);
   fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + "\n", {
+  fs.writeFileSync(target, JSON.stringify(state, null, 2) + "\n", {
     encoding: "utf8",
     mode: 0o600,
   });
-  fs.chmodSync(STATE_FILE, 0o600);
+  fs.chmodSync(target, 0o600);
 }
 
-export async function clearToolsServerState(): Promise<void> {
+/**
+ * Remove the tracked state. With `bundlePath`, remove that install's per-bundle
+ * file plus the legacy file when it records the same bundle; without, remove
+ * the legacy file only.
+ */
+export async function clearToolsServerState(bundlePath?: string): Promise<void> {
+  const files = [STATE_FILE];
+  if (bundlePath !== undefined) {
+    files[0] = stateFileForBundle(bundlePath);
+    const legacy = await readStateFile(STATE_FILE);
+    if (legacy && legacy.bundlePath === bundlePath) files.push(STATE_FILE);
+  }
+  for (const file of files) {
+    try {
+      await unlink(file);
+    } catch {
+      // already gone
+    }
+  }
+}
+
+const STATE_FILE_RE = /^tool-server(-[0-9a-f]{12})?\.json$/;
+
+/**
+ * Every tracked tool-server record: the legacy single-slot file plus all
+ * per-bundle files. Dead-pid records are included — callers decide what a
+ * stale entry means for them.
+ */
+export async function readAllToolsServerStates(): Promise<
+  Array<{ file: string; state: ToolsServerState }>
+> {
+  let names: string[];
   try {
-    await unlink(STATE_FILE);
+    names = await readdir(STATE_DIR);
   } catch {
-    // already gone
+    return [];
+  }
+  const out: Array<{ file: string; state: ToolsServerState }> = [];
+  for (const name of names) {
+    if (!STATE_FILE_RE.test(name)) continue;
+    const file = path.join(STATE_DIR, name);
+    const state = await readStateFile(file);
+    if (state) out.push({ file, state });
+  }
+  return out;
+}
+
+// Per-bundle files for installs that no longer run anything are junk left on
+// disk (bundle paths change across versions under pnpm's store layout). Swept
+// opportunistically from ensureToolsServer's slow path.
+async function sweepDeadStateFiles(): Promise<void> {
+  for (const { file, state } of await readAllToolsServerStates()) {
+    if (file === STATE_FILE) continue; // legacy slot is handled by its owners
+    if (!isProcessAlive(state.pid)) await unlink(file).catch(() => {});
   }
 }
 
 const readState = readToolsServerState;
 const writeState = writeToolsServerState;
-const clearState = clearToolsServerState;
 
 // SIGTERM grace matches tool-server's own PROCESS_TIMEOUT_MS (5 s) plus a small
 // buffer so we let the server's graceful shutdown (HTTP drain + registry
@@ -421,11 +502,54 @@ async function terminatePid(pid: number, stillOurs?: () => boolean): Promise<voi
   await waitForExit(pid, SIGKILL_GRACE_MS);
 }
 
-export async function killToolServer(): Promise<void> {
-  const state = await readState();
+/**
+ * Terminate the tracked tool-server and drop its record. With `bundlePath`,
+ * scoped to THAT install's server (per-bundle file, plus the legacy file when
+ * it records the same bundle); without, operates on the legacy single-slot
+ * record only — the backward-compat shape.
+ */
+export async function killToolServer(bundlePath?: string): Promise<void> {
+  const state = await readState(bundlePath);
   if (!state) return;
   await terminatePid(state.pid);
-  await clearState();
+  await clearToolsServerState(bundlePath ?? state.bundlePath);
+}
+
+function isPathWithin(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function tryRealpath(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
+ * Terminate every tracked tool-server whose bundle lives inside `packageDir`,
+ * and drop their records. This is the teardown installers need: `argent update`
+ * / `argent uninstall` are about to replace or delete ONE install's files, so
+ * only servers spawned from that install may be killed — a server belonging to
+ * a different install (the global binary vs a repo-local devDependency) may be
+ * actively serving another editor session and must be left alone. Symlinked
+ * layouts (pnpm store, npm global prefix) are compared via realpath. Returns
+ * the number of servers terminated.
+ */
+export async function killToolServerForInstallDir(packageDir: string): Promise<number> {
+  const parents = new Set([path.resolve(packageDir), tryRealpath(packageDir)]);
+  let killed = 0;
+  for (const { file, state } of await readAllToolsServerStates()) {
+    const bundles = new Set([path.resolve(state.bundlePath), tryRealpath(state.bundlePath)]);
+    const matches = [...bundles].some((b) => [...parents].some((p) => isPathWithin(b, p)));
+    if (!matches) continue;
+    await terminatePid(state.pid);
+    await unlink(file).catch(() => {});
+    killed += 1;
+  }
+  return killed;
 }
 
 /**
@@ -599,9 +723,10 @@ async function reusableHandle(
 export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsServerHandle> {
   // Fast path: a healthy server running OUR bundle is already tracked — reuse it
   // without paying the cost (or contention) of the spawn lock. This is the
-  // overwhelmingly common case. A server from a different bundle (version) is not
-  // reused — see reusableHandle.
-  const fast = await reusableHandle(await readState(), paths.bundlePath, paths.version);
+  // overwhelmingly common case. Records are kept per bundle, so another
+  // install's server is neither considered nor disturbed — see
+  // stateFileForBundle and reusableHandle.
+  const fast = await reusableHandle(await readState(paths.bundlePath), paths.bundlePath, paths.version);
   if (fast) return fast;
 
   // Slow path: a spawn is likely needed. Serialize it across processes so the
@@ -611,7 +736,7 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
   try {
     // Double-checked: a peer may have spawned a healthy server (of our bundle)
     // while we waited for the lock. Reuse it rather than spawning a second one.
-    const state = await readState();
+    const state = await readState(paths.bundlePath);
     const reuse = await reusableHandle(state, paths.bundlePath, paths.version);
     if (reuse) return reuse;
 
@@ -634,7 +759,12 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     ) {
       await terminatePid(state.pid, () => processCommandMatches(state.pid, state.bundlePath));
     }
-    await clearState();
+    // Retire only OUR OWN record (per-bundle file, plus a legacy-format record
+    // for our bundle) — another install's record must survive so its server
+    // stays reachable by its owner. Also sweep per-bundle files whose pid is
+    // gone, so retired installs don't accumulate junk in ~/.argent.
+    await clearToolsServerState(paths.bundlePath);
+    await sweepDeadStateFiles();
 
     // Spawn a new server with a fresh token. Auto-spawned servers always
     // authenticate (the token is local to this user and persisted 0600).

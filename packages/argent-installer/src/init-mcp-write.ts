@@ -1,7 +1,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import {
-  getMcpEntry,
+  getMcpEntryForScope,
   resolveLocalCommandMode,
   type McpConfigAdapter,
   type McpCommandMode,
@@ -39,6 +39,8 @@ export function writeMcpConfigs(args: {
   let localCmdMode: McpCommandMode | null = null;
   if (installMode === "local") {
     localCmdMode = resolveLocalCommandMode(effectiveRoot);
+    // Backstop for the eligibility filter in chooseAdapters (a custom root can
+    // change which adapters have a project path).
     const unsupported = adapters.filter((a) => a.projectPath(effectiveRoot) == null);
     if (unsupported.length > 0) {
       p.log.warn(
@@ -46,6 +48,17 @@ export function writeMcpConfigs(args: {
           `no project-level config file (local mode commits project files only).`
       );
       adapters = adapters.filter((a) => a.projectPath(effectiveRoot) != null);
+    }
+    if (adapters.length === 0) {
+      // Without this, init would report success while no editor was wired up
+      // anywhere — the committed devDependency would do nothing.
+      p.log.warn(
+        pc.yellow(
+          `No MCP config was written: none of the selected editors supports a ` +
+            `project-level config. Re-run ${pc.cyan("argent init")} and select a ` +
+            `different editor, or use ${pc.cyan("argent init --global")}.`
+        )
+      );
     }
     if (localCmdMode.kind === "local-npx") {
       p.log.warn(
@@ -55,12 +68,8 @@ export function writeMcpConfigs(args: {
     }
   }
 
-  // Global scope (and global install mode) always gets the bare `argent`
-  // command; only a local-mode project-scope entry runs the repo-local copy.
   const entryFor = (configScope: "local" | "global"): McpServerEntry =>
-    installMode === "local" && configScope === "local" && localCmdMode
-      ? getMcpEntry(localCmdMode)
-      : getMcpEntry({ kind: "global" });
+    getMcpEntryForScope(installMode, configScope, localCmdMode);
 
   const lines: string[] = [];
 

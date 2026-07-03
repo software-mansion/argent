@@ -59,6 +59,8 @@ import {
   isLocallyInstalled,
   getLocallyInstalledVersion,
   getLocalArgentBinRelPath,
+  probeLocalInstall,
+  isDeclaredLocally,
   getInstallRecordPath,
   readInstallRecord,
   writeInstallRecord,
@@ -663,6 +665,30 @@ describe("detectProjectPackageManager", () => {
   it("falls back to a valid PM when no lockfile is present", () => {
     expect(["npm", "yarn", "pnpm", "bun"]).toContain(detectProjectPackageManager(tmpDir));
   });
+  it("honors the corepack packageManager field over lockfiles", () => {
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ packageManager: "pnpm@9.1.0" })
+    );
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("walks up to a workspace-root lockfile (monorepo sub-package)", () => {
+    // pnpm/yarn workspaces keep the single lockfile at the monorepo root.
+    fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
+    const sub = path.join(tmpDir, "packages", "app");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "package.json"), "{}");
+    expect(detectProjectPackageManager(sub)).toBe("pnpm");
+  });
+  it("stops the upward walk at a repo boundary (.git)", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
+    const repo = path.join(tmpDir, "other-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    // The sibling repo has no lockfile of its own; the outer pnpm lockfile
+    // must NOT bleed through the .git boundary.
+    expect(["npm", "yarn", "bun"]).toContain(detectProjectPackageManager(repo));
+  });
 });
 
 // ── Local install detection ──────────────────────────────────────────────────
@@ -721,6 +747,55 @@ describe("getLocalArgentBinRelPath", () => {
   });
 });
 
+describe("probeLocalInstall / isDeclaredLocally", () => {
+  it("resolves a hoisted install from a sub-package (workspace layout)", () => {
+    // The package lives in the workspace-root node_modules; the project root
+    // is a sub-package. A hardcoded <root>/node_modules probe misses this.
+    stageLocalArgent(tmpDir, { version: "3.2.1" });
+    const sub = path.join(tmpDir, "packages", "app");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "package.json"), "{}");
+    const probe = probeLocalInstall(sub);
+    expect(probe.installed).toBe(true);
+    expect(probe.version).toBe("3.2.1");
+    expect(probe.packageDir).toBeTruthy();
+  });
+  it("treats a declared dep under Yarn PnP as installed (no node_modules)", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devDependencies: { [PACKAGE_NAME]: "1.4.0" } })
+    );
+    const probe = probeLocalInstall(tmpDir);
+    expect(probe.installed).toBe(true);
+    expect(probe.version).toBe("1.4.0"); // exact specifier doubles as the version
+    expect(probe.packageDir).toBeNull();
+  });
+  it("PnP with a range specifier is installed but version-unknown", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devDependencies: { [PACKAGE_NAME]: "^1.4.0" } })
+    );
+    const probe = probeLocalInstall(tmpDir);
+    expect(probe.installed).toBe(true);
+    expect(probe.version).toBeNull();
+  });
+  it("PnP without a declaration is not installed", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    fs.writeFileSync(path.join(tmpDir, "package.json"), "{}");
+    expect(probeLocalInstall(tmpDir).installed).toBe(false);
+  });
+  it("isDeclaredLocally reads dependencies and devDependencies", () => {
+    expect(isDeclaredLocally(tmpDir)).toBe(false);
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ dependencies: { [PACKAGE_NAME]: "*" } })
+    );
+    expect(isDeclaredLocally(tmpDir)).toBe(true);
+  });
+});
+
 // ── Install-mode record (.argent/install.json) ───────────────────────────────
 
 describe("install record", () => {
@@ -762,11 +837,23 @@ describe("install record", () => {
 });
 
 describe("resolveInstallMode", () => {
+  const declareLocalArgent = (root: string) =>
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "host", devDependencies: { [PACKAGE_NAME]: "^1.2.3" } })
+    );
   it("defaults to global with no record and no local install", () => {
     expect(resolveInstallMode(tmpDir)).toBe("global");
   });
-  it("infers local from an on-disk node_modules install (no record)", () => {
+  it("does NOT infer local from mere node_modules presence (hoisted / transitive copy)", () => {
+    // A copy that merely exists in node_modules is not intent — acting on it
+    // would rewrite a manifest the user never opted into.
     stageLocalArgent(tmpDir);
+    expect(resolveInstallMode(tmpDir)).toBe("global");
+  });
+  it("infers local from a dependency the project manifest declares (no record)", () => {
+    stageLocalArgent(tmpDir);
+    declareLocalArgent(tmpDir);
     expect(resolveInstallMode(tmpDir)).toBe("local");
   });
   it("the committed record wins over inference", () => {

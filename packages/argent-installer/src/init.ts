@@ -11,6 +11,7 @@ import {
   resolveInstallModeFromFlags,
   InstallModeFlagError,
   writeInstallRecord,
+  removeInstallRecord,
   type InstallMode,
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
@@ -103,6 +104,7 @@ export async function init(args: string[]): Promise<void> {
 
     const { selected: selectedAdapters, detected } = await chooseAdapters({
       nonInteractive: parsed.nonInteractive,
+      installMode: tel.installMode,
     });
     tel.editorsConfiguredCount = selectedAdapters.length;
     p.log.info(`Editors: ${selectedAdapters.map((a) => pc.cyan(a.name)).join(", ")}`);
@@ -134,7 +136,10 @@ export async function init(args: string[]): Promise<void> {
     p.note(mcpLines.join("\n"), "MCP Configuration");
 
     // Record local mode so `update`/`uninstall` and teammates act on the
-    // repo-local install. Global mode stays zero-footprint (writes nothing).
+    // repo-local install. Global mode stays zero-footprint (writes nothing) —
+    // and clears a leftover local-mode record, which would otherwise win in
+    // resolveInstallMode forever and keep `update`/`uninstall` targeting a
+    // devDependency the user just switched away from.
     if (tel.installMode === "local") {
       try {
         writeInstallRecord(effectiveRoot, {
@@ -145,6 +150,8 @@ export async function init(args: string[]): Promise<void> {
       } catch (err) {
         p.log.warn(`Could not write .argent/install.json: ${err}`);
       }
+    } else if (removeInstallRecord(effectiveRoot)) {
+      p.log.info(pc.dim("Removed stale .argent/install.json (previous local-mode marker)."));
     }
 
     // ── Tool Auto-Approval ────────────────────────────────────────────────────
@@ -265,7 +272,9 @@ function printSummary({
 }: SummaryArgs): void {
   const summaryLines = [
     `${pc.green("Install mode")} ${installMode === "local" ? "local (devDependency)" : "global"}`,
-    `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scope})`,
+    selectedAdapters.length > 0
+      ? `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scope})`
+      : `${pc.yellow("MCP server")} NOT configured — no editor config was written`,
     `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
     `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
     `${pc.green("Rules & agents")} ${copiedRules ? "copied" : "n/a"}`,
