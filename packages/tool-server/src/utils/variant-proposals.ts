@@ -470,24 +470,37 @@ export class VariantProposalStore {
    */
   setCliSession(active: boolean, agents: Array<{ id: string; name: string }> = []): void {
     const transitioned = this.cliSession !== active;
-    // A CLI session must start from a clean round when there is leftover round
-    // state to clear. `autoRollIfCompleted` (run by propose_variant) only rolls
-    // a *completed* round, so an unsubmitted round with staged proposals would
+    // A CLI session boundary — begin OR end — must start the next flow from a
+    // clean round when there is leftover round state to clear.
+    //
+    // On BEGIN: `autoRollIfCompleted` (run by propose_variant) only rolls a
+    // *completed* round, so an unsubmitted round with staged proposals would
     // otherwise be APPENDED to by the session's first propose_variant instead of
     // opening a fresh one. A completed round left over from a prior (possibly
     // non-CLI) flow — e.g. an await_user_selection that timed out (waiter
     // removed, `consumed` still false) and was then submitted, leaving
     // completed=true/consumed=false — is rolled here too so the session starts
-    // clean. Reset only when such state exists so a clean start isn't needlessly
-    // bumped past round 1. (reset() does not clear cliSession / device /
-    // owned-devices, so it's safe to call here.)
-    if (transitioned && active) {
+    // clean.
+    //
+    // On END: a proposal staged during the session but never submitted (the
+    // human closed the window / the `argent lens` process exited mid-review)
+    // would otherwise persist as a live, uncompleted round. A subsequent NON-CLI
+    // propose_variant (no autoRoll — the round isn't completed) would append to
+    // it, so the dead session's element would bleed into that unrelated round's
+    // delivered outcome. Rolling on end discards the abandoned session round.
+    //
+    // Reset only when such state exists so a clean start isn't needlessly bumped
+    // past round 1. (reset() does not clear cliSession / device / owned-devices,
+    // so it's safe to call here.)
+    if (transitioned) {
       if (this.completed || this.proposals.length > 0) this.reset();
       // A session boundary is a genuine fresh start: also drop any queued-but-
       // undelivered outcome from a prior (possibly non-CLI) flow so it can't
-      // leak into this session's first await. reset() deliberately PRESERVES
-      // pendingOutcomes for the propose→roll case, but that preservation should
-      // not cross a session boundary.
+      // leak across the boundary into the next flow's first await. reset()
+      // deliberately PRESERVES pendingOutcomes for the propose→roll case, but
+      // that preservation should not cross a session boundary. (No outcome is
+      // ever queued DURING a CLI session — submits take the cliSession branch —
+      // so on end this clear is a defensive no-op in every reachable state.)
       this.pendingOutcomes = [];
     }
     this.cliSession = active;
