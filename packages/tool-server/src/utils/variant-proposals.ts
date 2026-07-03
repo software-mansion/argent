@@ -828,9 +828,12 @@ export class VariantProposalStore {
       this.events.emit("changed");
       this.events.emit("awaitParked");
 
-      // An already-aborted signal was rejected at the top of awaitSelection, and
-      // nothing between there and here awaits, so the signal cannot have flipped
-      // to aborted in the meantime — only register the future-abort listener.
+      // A signal already aborted on entry was rejected at the top of
+      // awaitSelection. It cannot reach this line aborted except via a
+      // synchronous abort() from a listener on the emits just above — which no
+      // store listener does (a real client-disconnect abort is async I/O and
+      // cannot preempt this synchronous run) — so registering the future-abort
+      // listener is sufficient; the old pre-registration re-check was dead.
       if (opts.signal) opts.signal.addEventListener("abort", onAbort, { once: true });
     });
   }

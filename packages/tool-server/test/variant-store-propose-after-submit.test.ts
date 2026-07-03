@@ -251,6 +251,38 @@ describe("variant store: propose after a waiter-less submit", () => {
     expect(second.status).toBe("pending");
   });
 
+  it("signals morePending via the queue-non-empty branch with no live round", async () => {
+    // Isolate the `pendingOutcomes.length > 0` disjunct: queue two outcomes
+    // (rounds 1 and 2), then reset() to a round with NO live proposals so the
+    // "fresh live round" disjunct is false. Draining the first must STILL set
+    // morePending — solely because a second decision is queued behind it — so
+    // this assertion fails if that disjunct is dropped.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Alpha", variant: variant("A1") });
+    const a = s.snapshot().proposals.find((p) => p.element === "Alpha")!;
+    s.submitSelection({ selections: [{ elementId: a.id, variantId: a.variants[0]!.id }] });
+    s.proposeVariant({ element: "Beta", variant: variant("B1") }); // rolls to round 2
+    const b = s.snapshot().proposals.find((p) => p.element === "Beta")!;
+    s.submitSelection({ selections: [{ elementId: b.id, variantId: b.variants[0]!.id }] });
+    // Queue now holds rounds 1 and 2. Roll to an empty round: no live proposals,
+    // so only the queue-non-empty disjunct can flag morePending on the drain.
+    s.reset();
+    expect(s.snapshot().proposals).toHaveLength(0);
+
+    const first = await s.awaitSelection({ timeoutMs: 200 });
+    expect(first.status).toBe("completed");
+    if (first.status === "completed") {
+      expect(first.round).toBe(1);
+      expect(first.morePending).toBe(true);
+    }
+    const second = await s.awaitSelection({ timeoutMs: 200 });
+    expect(second.status).toBe("completed");
+    if (second.status === "completed") {
+      expect(second.round).toBe(2);
+      expect(second.morePending).toBeUndefined(); // queue empty, no live round
+    }
+  });
+
   it("does not signal morePending on a plain single-round completion", async () => {
     // The common case (submit with a waiter parked, no roll) must NOT set
     // morePending — the agent should apply and stop as before.
