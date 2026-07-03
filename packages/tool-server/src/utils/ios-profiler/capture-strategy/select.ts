@@ -122,15 +122,26 @@ export function resolveIosCaptureStrategy(): CaptureStrategyDecision {
   return { strategy: deviceStrategy, reason: { kind: "default" }, invalidOverride };
 }
 
-export function selectIosCaptureStrategy(): IosCaptureStrategy {
-  const decision = resolveIosCaptureStrategy();
-
+/**
+ * Warn (once, to stderr) when `ARGENT_IOS_CAPTURE` held an unrecognised value that
+ * was ignored. Shared by the normal record flow ({@link selectIosCaptureStrategy})
+ * and the malloc_stack_logging guard, which resolves the strategy directly via
+ * {@link resolveIosCaptureStrategy} (side-effect-free) and would otherwise swallow a
+ * typo'd override silently — leaving the user with no clue their value was dropped.
+ */
+export function warnIfInvalidCaptureOverride(decision: CaptureStrategyDecision): void {
   if (decision.invalidOverride) {
     process.stderr.write(
       `[native-profiler] ignoring unrecognised ${ENV_OVERRIDE}="${decision.invalidOverride}" ` +
         `(expected "device" or "all-processes"); falling back to auto-detection.\n`
     );
   }
+}
+
+export function selectIosCaptureStrategy(): IosCaptureStrategy {
+  const decision = resolveIosCaptureStrategy();
+
+  warnIfInvalidCaptureOverride(decision);
 
   switch (decision.reason.kind) {
     case "env-override":

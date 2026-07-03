@@ -143,6 +143,35 @@ describe("aggregateLeaks", () => {
     expect(rows[0]?.attributed).toBe(false);
   });
 
+  it("does not collide distinct (type, frame) pairs that share a space-joined key", () => {
+    // The group key joins objectType and responsibleFrame with a NUL delimiter
+    // precisely so it can't collide. These two leaks are distinct sites, but a
+    // space (or any character that can appear in the fields) as the delimiter
+    // would map both to the same key "Malloc 48 Bytes make" and silently merge
+    // them — hiding a real leak. Pin the collision-safety so nobody "simplifies"
+    // the delimiter back to a printable character.
+    const rows = aggregateLeaks([
+      {
+        objectType: "Malloc 48",
+        sizeBytes: 48,
+        responsibleFrame: "Bytes make",
+        responsibleLibrary: "App",
+        count: 1,
+      },
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: "make",
+        responsibleLibrary: "App",
+        count: 1,
+      },
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.objectType))).toEqual(
+      new Set(["Malloc 48", "Malloc 48 Bytes"])
+    );
+  });
+
   it("returns [] for no leaks", () => {
     expect(aggregateLeaks([])).toEqual([]);
   });

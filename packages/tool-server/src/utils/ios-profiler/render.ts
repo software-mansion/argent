@@ -412,13 +412,25 @@ function renderFullReport(
     if (unattributedLeaks.length > 0) {
       const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
       const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+      // When this same capture ALSO produced attributed leaks, the app was launched
+      // under malloc stack logging (the only way a responsible frame is recorded), so
+      // the unattributed remainder is pre-existing / freed-region reuse — telling the
+      // user to "re-run with malloc stack logging" would be advising the thing they
+      // just did. Only when nothing is attributed is the --attach hint apt. The render
+      // layer has no direct capture-mode signal, so it infers it from the attributed count.
+      const hint =
+        attributedLeaks.length > 0
+          ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
+            `groups carry no allocation backtrace (freed-region reuse, or allocations from before ` +
+            `recording started) and are most likely benign system allocations rather than confirmed app leaks.`
+          : `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
+            `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
+            `stack logging enabled at launch.`;
       lines.push(
         ``,
         `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
           `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
-          `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
-          `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
-          `stack logging enabled at launch.`
+          hint
       );
     }
   }

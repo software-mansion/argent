@@ -44,11 +44,14 @@ function fakeApi(): NativeProfilerSessionApi {
   };
 }
 
-// get_app_container and terminate go through execFileSync("xcrun", [...args])
-// (shell-injection-hardened, mirroring the best-effort relaunch), so the mock keys
-// off the argv array rather than a command string.
+// listapps, get_app_container and terminate all go through execFileSync (discrete
+// argv, shell-injection-hardened, mirroring the best-effort relaunch), so the mock
+// keys off the bin/argv rather than a command string. `simctl listapps` returns a
+// plist that `plutil` converts to JSON.
 function makeExecFileSyncFn() {
-  return vi.fn((_bin: string, args: string[] = []) => {
+  return vi.fn((bin: string, args: string[] = []) => {
+    if (bin === "plutil") return LISTAPPS_JSON; // plutil converts the listapps plist to JSON
+    if (args.includes("listapps")) return "<plist/>"; // raw plist, piped into plutil
     if (args.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
     if (args.includes("terminate")) return "";
     return "";
@@ -58,7 +61,6 @@ function makeExecFileSyncFn() {
 function mockChildProcess() {
   const spawnFn = vi.fn(() => new StartFakeChild());
   const execSyncFn = vi.fn((cmd: string) => {
-    if (cmd.includes("listapps")) return LISTAPPS_JSON;
     if (cmd.includes("launchctl list"))
       return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n";
     return "";
@@ -218,7 +220,6 @@ describe("native-profiler-start malloc_stack_logging", () => {
     const spawnFn = vi.fn(() => new StartFakeChild());
     const execSyncFn = vi.fn((cmd: string) => {
       if (cmd.includes("xcodebuild")) return "Xcode 26.5\nBuild version 17F42";
-      if (cmd.includes("listapps")) return LISTAPPS_JSON;
       if (cmd.includes("launchctl list"))
         return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n";
       return "";
@@ -296,6 +297,48 @@ describe("native-profiler-start malloc_stack_logging", () => {
       expect(args).toContain("--launch");
       expect(args).toContain("--env");
     } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("warns about an unrecognised ARGENT_IOS_CAPTURE in malloc mode instead of dropping it silently", async () => {
+    // The malloc guard resolves the strategy via the side-effect-free resolver, so a
+    // typo'd override would previously vanish without a word — unlike the normal record
+    // flow, which warns. On a healthy Xcode the typo is ignored and malloc still runs,
+    // but the user must be told their value was dropped (otherwise a later degraded-Xcode
+    // refusal can even advise "set ARGENT_IOS_CAPTURE=device" while the typo sits ignored).
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    process.env.ARGENT_IOS_CAPTURE = "devise"; // typo for "device"
+    const stderrWrites: string[] = [];
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderrWrites.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+        return true;
+      });
+    try {
+      // Default mock leaves `xcodebuild` unmocked → version undetermined → device
+      // strategy, so the guard proceeds (does not refuse) despite the bad override.
+      const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const result = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      });
+
+      // The typo neither blocks the healthy device path nor passes silently.
+      expect(result.status).toBe("recording");
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+      expect(
+        stderrWrites.some((w) => w.includes('ignoring unrecognised ARGENT_IOS_CAPTURE="devise"'))
+      ).toBe(true);
+    } finally {
+      stderrSpy.mockRestore();
       if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
       else process.env.ARGENT_IOS_CAPTURE = prev;
     }
@@ -526,7 +569,6 @@ describe("native-profiler-start malloc_stack_logging", () => {
       });
       const spawnFn = vi.fn(() => new StartFakeChild());
       const execSyncFn = vi.fn((cmd: string) => {
-        if (cmd.includes("listapps")) return twoApps;
         if (cmd.includes("launchctl list"))
           return (
             "1\t0\tUIKitApplication:com.example.myapp[a][rb]\n" +
@@ -534,7 +576,15 @@ describe("native-profiler-start malloc_stack_logging", () => {
           );
         return "";
       });
-      const execFileSyncFn = makeExecFileSyncFn();
+      // getInstalledApps resolves the installed set via execFileSync(listapps) piped
+      // through plutil, so the two-app plist is delivered by the plutil→JSON mock.
+      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
+        if (bin === "plutil") return twoApps;
+        if (args.includes("listapps")) return "<plist/>";
+        if (args.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
+        if (args.includes("terminate")) return "";
+        return "";
+      });
       applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
 
       const startNativeProfilerIos = await importStart();

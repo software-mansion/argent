@@ -40,6 +40,23 @@ describe("leak attribution rendering", () => {
     expect(res.report).toContain("malloc stack logging enabled at launch");
   });
 
+  it("does not advise re-running with malloc when the capture already attributed some leaks", async () => {
+    // A capture with BOTH attributed and unattributed leaks was clearly run under
+    // malloc stack logging (the only way a frame is recorded). The unattributed note
+    // must NOT tell the user to "capture with malloc stack logging enabled" — the
+    // thing they just did — and should instead frame the remainder as pre-existing.
+    const res = await renderNativeProfilerReport({
+      payload: payload([
+        leak(true, "hermes::vm::JSTypedArrayBase::createBuffer(...)", "hermes"),
+        leak(false, "<Call stack limit reached>"),
+      ]),
+      traceFile: null,
+    });
+    expect(res.report).toContain("unattributed leak group");
+    expect(res.report).not.toContain("capture with malloc stack logging enabled at launch");
+    expect(res.report).toContain("malloc stack logging was active");
+  });
+
   it("does not surface an unattributed leak as an attributed one", async () => {
     // Use a real classifier sentinel ("" → isLeakAttributed === false) so the
     // fixture's attributed:false matches what the pipeline would actually assign;

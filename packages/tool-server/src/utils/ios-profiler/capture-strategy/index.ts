@@ -4,6 +4,7 @@ export { allProcessesStrategy } from "./all-processes";
 export {
   selectIosCaptureStrategy,
   resolveIosCaptureStrategy,
+  warnIfInvalidCaptureOverride,
   type CaptureStrategyDecision,
   type CaptureStrategyReason,
 } from "./select";

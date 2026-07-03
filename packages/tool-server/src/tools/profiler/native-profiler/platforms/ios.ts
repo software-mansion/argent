@@ -17,6 +17,7 @@ import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/
 import {
   selectIosCaptureStrategy,
   resolveIosCaptureStrategy,
+  warnIfInvalidCaptureOverride,
   type IosCaptureStrategy,
   type CaptureStrategyReason,
 } from "../../../../utils/ios-profiler/capture-strategy";
@@ -159,26 +160,39 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
   return runningUserApps;
 }
 
+/**
+ * Both the auto-detect (attach) and the malloc_stack_logging launch paths bail the
+ * same way when several user apps are running and no `app_process` disambiguates
+ * them — only the failure_stage differs. One builder keeps the message and app-list
+ * formatting in a single place.
+ */
+function multipleRunningUserAppsError(
+  runningUserApps: { info: AppInfo }[],
+  failureStage: string
+): FailureError {
+  const appList = runningUserApps
+    .map(
+      ({ info }) =>
+        `  - ${info.CFBundleExecutable} (${info.CFBundleIdentifier}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
+    )
+    .join("\n");
+  return new FailureError(
+    `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable or display name of the app you want to profile.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_MULTIPLE_RUNNING_USER_APPS,
+      failure_stage: failureStage,
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
 /** Auto-detect the single running user app to profile, with its host PID. */
 function detectRunningApp(udid: string): DetectedApp {
   const runningUserApps = enumerateRunningUserApps(udid);
 
   if (runningUserApps.length > 1) {
-    const appList = runningUserApps
-      .map(
-        ({ info }) =>
-          `  - ${info.CFBundleExecutable} (${info.CFBundleIdentifier}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
-      )
-      .join("\n");
-    throw new FailureError(
-      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable or display name of the app you want to profile.`,
-      {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_MULTIPLE_RUNNING_USER_APPS,
-        failure_stage: "native_profiler_detect_running_user_app",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
+    throw multipleRunningUserAppsError(runningUserApps, "native_profiler_detect_running_user_app");
   }
 
   const { info, pid } = runningUserApps[0];
@@ -210,7 +224,16 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
 function getInstalledApps(udid: string): Record<string, AppInfo> {
   let listAppsOutput: string;
   try {
-    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+    // `simctl listapps` emits a plist; plutil converts it to JSON, reading the plist
+    // from stdin (the trailing `-`). Two discrete-argv execFileSync calls instead of a
+    // piped `execSync` shell string — matching getAppBundlePath / terminate / relaunch,
+    // so no value (device_id included) is ever interpolated into a shell.
+    const listAppsPlist = execFileSync("xcrun", ["simctl", "listapps", udid], {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    });
+    listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "-"], {
+      input: listAppsPlist,
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
     });
@@ -300,21 +323,7 @@ function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
   }
   const runningUserApps = enumerateRunningUserApps(udid);
   if (runningUserApps.length > 1) {
-    const appList = runningUserApps
-      .map(
-        ({ info }) =>
-          `  - ${info.CFBundleExecutable} (${info.CFBundleIdentifier}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
-      )
-      .join("\n");
-    throw new FailureError(
-      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable or display name of the app you want to profile.`,
-      {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_MULTIPLE_RUNNING_USER_APPS,
-        failure_stage: "native_profiler_resolve_app_for_launch",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
+    throw multipleRunningUserAppsError(runningUserApps, "native_profiler_resolve_app_for_launch");
   }
   return runningUserApps[0].info;
 }
@@ -400,7 +409,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
     reason.kind === "degraded-xcode" ? `Xcode ${reason.major}.${reason.minor}` : "the active Xcode";
   return new FailureError(
     `malloc_stack_logging needs to cold-launch the app under \`xctrace --device\`, but ` +
-      `${versionNote} has the --device recording-start deadlock (26.4–27.0), so it would ` +
+      `${versionNote} has the --device recording-start deadlock (Xcode 26.4 and later), so it would ` +
       `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging ` +
       `(leaks are still detected, just unattributed), profile on a non-degraded Xcode, or set ` +
       `ARGENT_IOS_CAPTURE=device to force the device path if you know it works on your host.`,
@@ -481,6 +490,11 @@ export async function startNativeProfilerIos(
     // here); the reason it returns also lets the refusal name its actual cause
     // (forced override vs. degraded Xcode) rather than always blaming the Xcode.
     const captureDecision = resolveIosCaptureStrategy();
+    // The side-effect-free resolver above stays silent, so a typo'd override would
+    // be dropped without a word here (unlike the normal record flow). Surface it —
+    // otherwise the degraded-Xcode refusal below can even tell the user to "set
+    // ARGENT_IOS_CAPTURE=device" while their fumbled value sits ignored.
+    warnIfInvalidCaptureOverride(captureDecision);
     if (captureDecision.strategy.name !== "device") {
       throw mallocNonDeviceStrategyError(captureDecision.reason);
     }
