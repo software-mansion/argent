@@ -133,11 +133,11 @@ Teammates then just run `npm install`.
 Pass `--global` to force the default mode in scripts; `--local` and `--global` are
 mutually exclusive, and a non-interactive (`--yes`) run defaults to global.
 
-> Local mode is recommended on mainstream platforms (macOS, Linux x64, Windows x64),
-> which have prebuilt native binaries. On Linux arm64 / Windows arm a C/C++ toolchain
-> is required to build `tree-sitter` during `npm install`. The bare `argent` command
-> is not added to teammates' `PATH` in local mode — the committed MCP config runs the
-> project-local copy.
+> In local mode the committed MCP config runs the project-local copy, so the bare
+> `argent` command is **not** on teammates' `PATH`. Note that `npm install` builds
+> Argent's native deps (`tree-sitter`) on each machine — prebuilt for macOS, Linux
+> x64, and Windows x64; other targets (Linux arm64, Windows arm) compile from source
+> and need a C/C++ toolchain.
 
 ## CLI Reference
 
