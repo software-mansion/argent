@@ -275,52 +275,57 @@ describe("diffPngFiles", () => {
     );
   });
 
-  it("hands OCR the decoded->normalized region scale for each image (diffPngFiles wiring)", async () => {
-    // Same 2:1 aspect, different resolution: normalizeToCommonSize downscales the
-    // larger baseline (480x240) to the current's size (240x120). diffPngFiles must
-    // compute each image's decoded->normalized scale and pass it to the OCR pass,
-    // so text bounds land in the shared pixel-diff coordinate space. Without this
-    // wiring (the pre-fix screenshot-diff.ts) OCR is called with no region scales
-    // and the half-image spurious "moved" change returns.
-    const dir = await makeTempDir();
-    const baselinePath = path.join(dir, "baseline.png");
-    const currentPath = path.join(dir, "current.png");
-    await writePng(baselinePath, 480, 240, { r: 0, g: 0, b: 0 });
-    await writePng(currentPath, 240, 120, { r: 0, g: 0, b: 0 });
+  // diffPngFiles normalizes two same-aspect, different-resolution screenshots to a
+  // common size, then hands the OCR/font pass BOTH the normalized images and each
+  // image's decoded->normalized region scale, so the rescaled text bounds and the
+  // pixels they crop share the pixel-diff coordinate space. normalizeToCommonSize
+  // only ever downscales the LARGER image and returns the smaller one untouched, so
+  // for any one fixture only the downscaled side's wiring is load-bearing: its
+  // normalized image and region scale differ from the raw decoded ones, so reverting
+  // baselineImage/currentImage (or the matching region scale) to the decoded value
+  // would surface the raw size and fail here. The untouched side's assertions hold
+  // for both the decoded and normalized value, so we exercise BOTH directions to pin
+  // both sides. Without this wiring (the pre-fix screenshot-diff.ts) OCR is handed
+  // the raw images and no region scales, and the half-image spurious "moved" change
+  // returns.
+  it.each([
+    {
+      larger: "baseline",
+      baseline: { width: 480, height: 240 },
+      current: { width: 240, height: 120 },
+      baselineRegionScale: { x: 0.5, y: 0.5 },
+      currentRegionScale: { x: 1, y: 1 },
+    },
+    {
+      larger: "current",
+      baseline: { width: 240, height: 120 },
+      current: { width: 480, height: 240 },
+      baselineRegionScale: { x: 1, y: 1 },
+      currentRegionScale: { x: 0.5, y: 0.5 },
+    },
+  ])(
+    "hands OCR the normalized images and decoded->normalized region scales when the $larger image is downscaled (diffPngFiles wiring)",
+    async ({ baseline, current, baselineRegionScale, currentRegionScale }) => {
+      const dir = await makeTempDir();
+      const baselinePath = path.join(dir, "baseline.png");
+      const currentPath = path.join(dir, "current.png");
+      await writePng(baselinePath, baseline.width, baseline.height, { r: 0, g: 0, b: 0 });
+      await writePng(currentPath, current.width, current.height, { r: 0, g: 0, b: 0 });
 
-    await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+      await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
 
-    expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baselineRegionScale: { x: 0.5, y: 0.5 },
-        currentRegionScale: { x: 1, y: 1 },
-      })
-    );
-  });
-
-  it("hands OCR the normalized images, not the raw decoded ones (diffPngFiles wiring)", async () => {
-    // Same 2:1 aspect, different resolution: normalizeToCommonSize downscales the
-    // larger baseline (480x240) to the current's size (240x120). The OCR/font pass
-    // rescales its text bounds into that shared 240x120 space, so it must also be
-    // handed the NORMALIZED images to crop from. Feeding it the raw decoded
-    // baseline (480x240) instead would crop the wrong region while the bounds are
-    // already normalized. Pin that baselineImage/currentImage carry the normalized
-    // dimensions; the raw baseline would surface here as width 480 / height 240.
-    const dir = await makeTempDir();
-    const baselinePath = path.join(dir, "baseline.png");
-    const currentPath = path.join(dir, "current.png");
-    await writePng(baselinePath, 480, 240, { r: 0, g: 0, b: 0 });
-    await writePng(currentPath, 240, 120, { r: 0, g: 0, b: 0 });
-
-    await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
-
-    expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baselineImage: expect.objectContaining({ width: 240, height: 120 }),
-        currentImage: expect.objectContaining({ width: 240, height: 120 }),
-      })
-    );
-  });
+      // Both images are normalized to the common 240x120 size; each region scale
+      // maps that image's OCR bounds from its decoded size into the shared space.
+      expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baselineImage: expect.objectContaining({ width: 240, height: 120 }),
+          currentImage: expect.objectContaining({ width: 240, height: 120 }),
+          baselineRegionScale,
+          currentRegionScale,
+        })
+      );
+    }
+  );
 });
 
 async function makeTempDir(): Promise<string> {
