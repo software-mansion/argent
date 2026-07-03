@@ -285,9 +285,8 @@ describe("diffPngFiles", () => {
   // baselineImage/currentImage (or the matching region scale) to the decoded value
   // would surface the raw size and fail here. The untouched side's assertions hold
   // for both the decoded and normalized value, so we exercise BOTH directions to pin
-  // both sides. Without this wiring (the pre-fix screenshot-diff.ts) OCR is handed
-  // the raw images and no region scales, and the half-image spurious "moved" change
-  // returns.
+  // both sides. Without this wiring the OCR pass would be handed the raw images and
+  // no region scales -- the mismatch #442 fixed.
   it.each([
     {
       larger: "baseline",
@@ -323,6 +322,38 @@ describe("diffPngFiles", () => {
           baselineRegionScale,
           currentRegionScale,
         })
+      );
+    }
+  );
+
+  // diffPngFiles always calls the OCR/font pass, but tells it whether the pixel diff
+  // found any changes via hasPixelDiff; the pass uses that to skip text analysis when
+  // nothing moved. Pin the wiring in both directions -- identical images -> false, a
+  // real pixel change -> true -- so hardcoding the source (e.g. to false, which would
+  // silently disable text analysis for every real diff) fails here instead of staying
+  // green.
+  it.each([
+    { name: "no pixel diff", changePixel: false, expected: false },
+    { name: "a pixel diff", changePixel: true, expected: true },
+  ])(
+    "tells OCR whether the pixel diff found changes ($name -> hasPixelDiff=$expected)",
+    async ({ changePixel, expected }) => {
+      const dir = await makeTempDir();
+      const baselinePath = path.join(dir, "baseline.png");
+      const currentPath = path.join(dir, "current.png");
+      await writePng(baselinePath, 2, 20, { r: 0, g: 0, b: 0 });
+      await writePng(
+        currentPath,
+        2,
+        20,
+        { r: 0, g: 0, b: 0 },
+        changePixel ? [{ x: 1, y: 10, rgb: { r: 255, g: 0, b: 0 } }] : []
+      );
+
+      await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+      expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hasPixelDiff: expected })
       );
     }
   );
