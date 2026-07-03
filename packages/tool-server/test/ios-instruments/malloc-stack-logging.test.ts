@@ -48,8 +48,14 @@ function fakeApi(): NativeProfilerSessionApi {
 // argv, shell-injection-hardened, mirroring the best-effort relaunch), so the mock
 // keys off the bin/argv rather than a command string. `simctl listapps` returns a
 // plist that `plutil` converts to JSON.
+interface ExecFileSyncOpts {
+  maxBuffer?: number;
+  input?: string;
+  encoding?: string;
+  timeout?: number;
+}
 function makeExecFileSyncFn() {
-  return vi.fn((bin: string, args: string[] = []) => {
+  return vi.fn((bin: string, args: string[] = [], _opts?: ExecFileSyncOpts) => {
     if (bin === "plutil") return LISTAPPS_JSON; // plutil converts the listapps plist to JSON
     if (args.includes("listapps")) return "<plist/>"; // raw plist, piped into plutil
     if (args.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
@@ -168,11 +174,10 @@ describe("native-profiler-start malloc_stack_logging", () => {
     });
 
     const listappsCall = execFileSyncFn.mock.calls.find(
-      (c) => Array.isArray(c[1]) && (c[1] as string[]).includes("listapps")
+      (c) => Array.isArray(c[1]) && c[1].includes("listapps")
     );
     expect(listappsCall).toBeTruthy();
-    const opts = listappsCall![2] as { maxBuffer?: number };
-    expect(opts?.maxBuffer).toBeGreaterThan(8 * 1024 * 1024);
+    expect(listappsCall?.[2]?.maxBuffer).toBeGreaterThan(8 * 1024 * 1024);
   });
 
   it("does not terminate the app if the debug dir can't be created (malloc mode)", async () => {
