@@ -148,13 +148,23 @@ function selectorAlternatives(sel: FlowSelector): Selector[] {
     : [sel];
 }
 
-/** Resolve a selector's matches honoring the bare-string `loose` fallback. */
+/**
+ * Resolve a selector's matches honoring the bare-string `loose` fallback. A
+ * pass only wins outright when it has a *visible* match — the same criterion
+ * {@link flowSelectorToFrame} uses to fall through — so `await`/`assert` and
+ * `tap`/`type` resolve a bare string to the same element. A pass whose matches
+ * are all zero-area is kept only as a last resort (so `exists`, which
+ * deliberately accepts zero-area nodes, still sees them) instead of blocking
+ * the text pass from finding the visible element.
+ */
 function flowFindAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
+  let fallback: DescribeNode[] = [];
   for (const s of selectorAlternatives(sel)) {
     const matches = findAll(tree, s);
-    if (matches.length > 0) return matches;
+    if (matches.some(isVisible)) return matches;
+    if (fallback.length === 0) fallback = matches;
   }
-  return [];
+  return fallback;
 }
 
 /** Identifier-first-then-text frame resolution for a (possibly loose) selector. */

@@ -171,6 +171,62 @@ describe("loose (bare-string) selector resolution", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("await `visible` falls through a zero-area identifier match to the visible text, like tap", async () => {
+    // A dead (zero-area) node's testID exactly matches the bare string, while
+    // the element the user means is exposed as visible text. `tap: Checkout`
+    // skips the dead identifier match (selectorToFrame filters to visible), so
+    // `await: { visible: Checkout }` must resolve the same element rather than
+    // stalling on the identifier pass until timeout.
+    currentTree = () =>
+      screen([
+        n({ identifier: "checkout", frame: { x: 0.5, y: 0.5, width: 0, height: 0 } }),
+        n({ label: "Checkout", frame: { x: 0.2, y: 0.7, width: 0.6, height: 0.1 } }),
+      ]);
+
+    await writeFlow("zeroawait", {
+      executionPrerequisite: "",
+      steps: [{ kind: "await", condition: "visible", selector: { text: "Checkout", loose: true } }],
+    });
+
+    const result = await run("zeroawait");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["await:pass"]);
+  });
+
+  it("`hidden` does not false-pass on a zero-area identifier match while the text is visible", async () => {
+    // Same screen: the identifier pass alone would satisfy `hidden` (its only
+    // match is zero-area), yet a tap of the same bare string would land on the
+    // visible "Checkout" text — so the element is NOT hidden.
+    currentTree = () =>
+      screen([
+        n({ identifier: "checkout", frame: { x: 0.5, y: 0.5, width: 0, height: 0 } }),
+        n({ label: "Checkout", frame: { x: 0.2, y: 0.7, width: 0.6, height: 0.1 } }),
+      ]);
+
+    await writeFlow("zerohidden", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "hidden", selector: { text: "Checkout", loose: true } }],
+    });
+
+    const result = await run("zerohidden");
+    expect(result.steps[0].status).toBe("fail");
+  });
+
+  it("`exists` still accepts a zero-area identifier match when nothing else matches", async () => {
+    // `exists` deliberately counts zero-area nodes; the visible-first fallback
+    // must keep the identifier pass's matches when no alternative has a visible
+    // match.
+    currentTree = () =>
+      screen([n({ identifier: "checkout", frame: { x: 0.5, y: 0.5, width: 0, height: 0 } })]);
+
+    await writeFlow("zeroexists", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "exists", selector: { text: "Checkout", loose: true } }],
+    });
+
+    const result = await run("zeroexists");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:pass"]);
+  });
+
   it("assert `text` reads the element the loose selector resolved to", async () => {
     currentTree = () =>
       screen([
