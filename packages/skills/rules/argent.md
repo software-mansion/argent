@@ -37,7 +37,7 @@ If argent is ABSENT, treat it as an expected state, not an error to retry. Do no
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from a screenshot</important>
-Before **every** tap, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are, in order:
+Before **every** coordinate tap, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are, in order:
 
 - `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
 - `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
@@ -45,9 +45,12 @@ Before **every** tap, you MUST call a discovery tool and extract coordinates fro
 
 `native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point (iOS only).
 
-Alternatively, for the common "locate this element and tap/type into it" case, use `find` — it matches the same accessibility/DOM tree by text/label/value/role/id and performs the action in one call, so you never derive coordinates yourself. It still uses a discovery tool internally, so it satisfies this rule; fall back to `describe` when you need the whole screen or `find` reports an ambiguous `matchCount`.
+Choose exactly one tap path for a target:
 
-Whenever something changed YOU MUST first call `describe`, `find`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
+- Unknown screen/layout or ambiguous target: `describe` / `native-describe-screen` / `debugger-component-tree` -> `gesture-tap` using the returned frame or tap point.
+- Known visible target by text/label/value/role/id and no current coordinates for it: `find` can locate and act in one call.
+- Recent discovery already exposed the same target frame/tap point: do **not** call `find` for that target; use `gesture-tap`.
+- UI changed after discovery (navigation, modal, list update, keyboard, animation, reload): the old coordinates are stale. Re-discover, or use `find` if the next target is known by text/label/id.
 
 If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
 

@@ -7,7 +7,7 @@ description: Compare saved or live app screenshots with the argent screenshot-di
 
 Use `screenshot-diff` as supporting visual evidence for UI QA and visual regression checks. It highlights pixel-visible change or stability; it does not replace visual inspection, accessibility/component-tree state, frame/attribute checks, logs, network evidence, or app behavior.
 
-Do not use screenshot diffing for tap-coordinate discovery. Use `find` for direct locate-and-act targets, or `describe`, `debugger-component-tree`, or `native-describe-screen` when you need coordinates or full-screen context.
+Do not use screenshot diffing for tap-coordinate discovery. Use `describe`, `debugger-component-tree`, or `native-describe-screen` when you need coordinates or full-screen context, then tap returned coordinates with `gesture-tap`. Use `find` directly only for named locate-and-act targets whose current coordinates you do not already have.
 
 ## 2. When To Use
 
