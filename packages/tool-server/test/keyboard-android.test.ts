@@ -237,6 +237,19 @@ describe("android-input — rejects text `adb input text` can't type", () => {
       assertTypeableAndroidText("hello WORLD 123 !@#$%^&*()_+-=[]{};:'\",.<>/?`~|\\")
     ).not.toThrow();
   });
+
+  it("rejects the exact control-char edges just outside printable ASCII (DEL, low controls)", () => {
+    // The printable window is [0x20, 0x7e]. Pin BOTH boundaries with the chars one
+    // step past each edge, so widening the bound (e.g. `> 0x7e` → `> 0x7f`, letting
+    // DEL through, or `< 0x20` → `< 0x10`, letting low controls through) fails here
+    // — the accept/reject tests otherwise only use codepoints far from the edges.
+    expect(() => assertTypeableAndroidText("\x7f")).toThrow(InvalidToolInputError); // DEL, one past `~`
+    expect(() => assertTypeableAndroidText("\x1f")).toThrow(InvalidToolInputError); // unit-separator, one below space
+    expect(() => assertTypeableAndroidText("\x00")).toThrow(InvalidToolInputError); // NUL
+    // ...and the two printable edges themselves stay accepted.
+    expect(() => assertTypeableAndroidText(" ")).not.toThrow(); // 0x20 (space)
+    expect(() => assertTypeableAndroidText("~")).not.toThrow(); // 0x7e (tilde)
+  });
 });
 
 // Exercises `makeAndroidImpl().handler` end-to-end (the piece the low-level
@@ -295,11 +308,12 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
       phone
     );
     expect(res).toEqual({ typed: "abc", keys: 4 });
-    // Assert both side effects fired: an impl that dropped the keyevent when
-    // text co-occurs would still return { typed:"abc", keys:4 } — pin the adb
-    // calls so that regression is caught.
+    // Assert the exact ordered sequence, not just presence: the key fires BEFORE
+    // the text (source contract — press the named key, then type, matching the
+    // simulator-server / vega backends). `toEqual` catches both a dropped keyevent
+    // when text co-occurs AND a silent reorder to text-before-key; a `toContain`
+    // pair would miss the reorder.
     const cmds = adbShell.mock.calls.map((c) => c[1]);
-    expect(cmds).toContain("input keyevent 66"); // KEYCODE_ENTER
-    expect(cmds).toContain("input text 'abc'");
+    expect(cmds).toEqual(["input keyevent 66", "input text 'abc'"]); // KEYCODE_ENTER, then text
   });
 });

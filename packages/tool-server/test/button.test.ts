@@ -23,7 +23,7 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
   ensureDep: vi.fn(async () => {}),
 }));
 
-import { buttonTool } from "../src/tools/button";
+import { buttonTool, BUTTONS_BY_PLATFORM } from "../src/tools/button";
 import { UnsupportedOperationError } from "../src/utils/capability";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../src/utils/android-input";
 import { DependencyMissingError, ensureDep } from "../src/utils/check-deps";
@@ -57,6 +57,23 @@ describe("button tool — per-platform validation", () => {
     // adb is preflighted so a missing binary fails with a 424 install hint
     // rather than a generic 500 from deeper in the adb path.
     expect(ensureDep).toHaveBeenCalledWith("adb");
+  });
+
+  it("injects the matching keycode for EVERY Android button, not a hardcoded one", async () => {
+    // The `back` case above only proves one button. Drive every button the tool
+    // accepts on Android and assert each maps to its OWN keycode — a hardcoded
+    // index (e.g. always ANDROID_BUTTON_KEYCODES.back) would pass a single-button
+    // test while silently misfiring home / power / volume / appSwitch.
+    for (const button of BUTTONS_BY_PLATFORM.android) {
+      vi.mocked(injectAndroidKeycode).mockClear();
+      await expect(buttonTool.execute(services, { udid: androidUdid, button })).resolves.toEqual({
+        pressed: button,
+      });
+      expect(injectAndroidKeycode).toHaveBeenCalledWith(
+        androidUdid,
+        ANDROID_BUTTON_KEYCODES[button]
+      );
+    }
   });
 
   it("preflights adb before injecting so a missing binary surfaces as 424, not 500", async () => {
