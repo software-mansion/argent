@@ -12,6 +12,7 @@ import { createSourceResolver, type SourceResolver } from "../utils/debugger/sou
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import { DISABLE_LOGBOX_SCRIPT } from "../utils/debugger/scripts/disable-logbox";
 import { LogFileWriter } from "../utils/debugger/log-file-writer";
+import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 
@@ -218,7 +219,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       };
       logWriter.write({
         id: entry.id,
-        timestamp: new Date(entry.timestamp * 1000).toISOString(),
+        timestamp: consoleTimestampToIso(entry.timestamp),
         level: entry.level,
         message: entry.message,
         stackTrace: entry.stackTrace,
