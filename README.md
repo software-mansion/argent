@@ -51,7 +51,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 #### Prerequisites
 
 - **Node.js 20.11** or later
-- For iOS / tvOS: macOS with **Xcode** installed (Apple TV uses the bundled tvOS simulators)
+- For iOS / tvOS: macOS with **Xcode** installed (Apple TV uses tvOS simulators — Xcode downloads the tvOS runtime on demand)
 - For Android / Android TV: **Android SDK Platform Tools** (`adb`) on `PATH`, and the **Android Emulator** package if you want to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
 - For Fire TV (Vega): the **Vega SDK** (`vega` CLI) on `PATH`
 - For Electron / Chromium: nothing extra to control an already-running app - just launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you
@@ -116,24 +116,24 @@ argent init
 
 ## CLI Reference
 
-| Command            | Description                                                                                                                     |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `argent init`      | Install globally and configure MCP in the current workspace                                                                     |
-| `argent install`   | Alias for `init` command                                                                                                        |
-| `argent update`    | Pull the latest version and refresh workspace configuration                                                                     |
-| `argent remove`    | Unregister the MCP server and uninstall the package                                                                             |
-| `argent uninstall` | Alias for `remove` command                                                                                                      |
-| `argent mcp`       | Start MCP server instance, used internally by agent                                                                             |
-| `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)                                                           |
-| `argent run`       | Invoke a tool by name                                                                                                           |
-| `argent server`    | Manage the shared tool-server: `start` / `status` / `stop` / `logs`                                                             |
-| `argent lens`      | Open Argent Lens bound to a fresh Claude session (macOS; behind the `argent-lens` flag — run `argent enable argent-lens` first) |
-| `argent link`      | Route client requests to a remote tool-server                                                                                   |
-| `argent unlink`    | Remove the persisted remote tool-server link                                                                                    |
-| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                                          |
-| `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                                    |
-| `argent flags`     | List available feature flags and their state                                                                                    |
-| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`                                                                     |
+| Command            | Description                                                                                                                                                                                               |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `argent init`      | Install globally and configure MCP in the current workspace                                                                                                                                               |
+| `argent install`   | Alias for `init` command                                                                                                                                                                                  |
+| `argent update`    | Pull the latest version and refresh workspace configuration                                                                                                                                               |
+| `argent remove`    | Unregister the MCP server and uninstall the package                                                                                                                                                       |
+| `argent uninstall` | Alias for `remove` command                                                                                                                                                                                |
+| `argent mcp`       | Start MCP server instance, used internally by agent                                                                                                                                                       |
+| `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)                                                                                                                                     |
+| `argent run`       | Invoke a tool by name                                                                                                                                                                                     |
+| `argent server`    | Manage the shared tool-server: `start` / `status` / `stop` / `logs`                                                                                                                                       |
+| `argent lens`      | Open Argent Lens bound to a fresh coding-agent session — Claude by default, `--agent` selects codex/gemini/opencode/cursor (macOS; behind the `argent-lens` flag — run `argent enable argent-lens` first) |
+| `argent link`      | Route client requests to a remote tool-server                                                                                                                                                             |
+| `argent unlink`    | Remove the persisted remote tool-server link                                                                                                                                                              |
+| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                                                                                                                    |
+| `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                                                                                                              |
+| `argent flags`     | List available feature flags and their state                                                                                                                                                              |
+| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`                                                                                                                                               |
 
 ## Supported Editors
 
