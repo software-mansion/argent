@@ -605,13 +605,31 @@ export class VariantProposalStore {
     if (this.proposals.length === 0 && cleanAnnotations.length === 0) {
       throw new Error("Nothing to submit — no proposals and no comments.");
     }
-    // Cap each selection's comment on ingestion (the route is unauthenticated),
-    // mirroring the annotation-comment cap above.
+    // Bound `this.submitted` regardless of caller (the route is unauthenticated),
+    // mirroring the annotation caps above: keep only selections for real
+    // proposals, at most ONE per element, and cap the caller-supplied variantId.
+    // `buildOutcome` reads the FIRST match per proposal, so a later duplicate is
+    // dead weight — deduping to the first is behavior-preserving while collapsing
+    // a flood of duplicate selections (all passing `.some` for one real element)
+    // from unbounded down to `proposals.length`. The comment is capped as before.
+    const seenElementIds = new Set<string>();
     this.submitted = input.selections
       .filter((s) => this.proposals.some((p) => p.id === s.elementId))
-      .map((s) =>
-        s.comment === undefined ? s : { ...s, comment: s.comment.slice(0, MAX_COMMENT_LENGTH) }
-      );
+      .filter((s) => {
+        if (seenElementIds.has(s.elementId)) return false;
+        seenElementIds.add(s.elementId);
+        return true;
+      })
+      .map((s) => {
+        const capped =
+          s.comment === undefined ? s : { ...s, comment: s.comment.slice(0, MAX_COMMENT_LENGTH) };
+        // variantId is caller-supplied and, unlike a real id (a short slug), was
+        // otherwise retained uncapped. A value longer than any real variant id
+        // can never resolve anyway, so clamping it is behavior-preserving.
+        return capped.variantId == null
+          ? capped
+          : { ...capped, variantId: capped.variantId.slice(0, MAX_MATCH_VALUE_LENGTH) };
+      });
     this.submittedAnnotations = cleanAnnotations;
     this.globalComment = (input.globalComment ?? "").trim().slice(0, MAX_COMMENT_LENGTH);
     // The submit route is unauthenticated and the preview UI re-enables its
