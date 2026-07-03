@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { adbShell, shellQuote } from "../adb";
 
 const DETECT_TIMEOUT_MS = 10_000;
@@ -47,10 +48,16 @@ export async function validateAndroidAppProcess(serial: string, appProcess: stri
   }
   if (pidOut.trim().length > 0) return;
 
-  throw new Error(
+  throw new FailureError(
     `app_process \`${appProcess}\` was not found on ${serial}: no installed package and no running ` +
       `process matches that name. Pass an installed package (see \`adb shell pm list packages\`), ` +
-      `or omit app_process to auto-detect the foreground app.`
+      `or omit app_process to auto-detect the foreground app.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_NOT_FOUND,
+      failure_stage: "android_app_process_validate",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    }
   );
 }
 
@@ -82,9 +89,15 @@ export async function detectAndroidRunningApp(serial: string): Promise<string> {
 
   const candidates = extractResumedPackages(activitiesOut);
   if (candidates.size === 0) {
-    throw new Error(
+    throw new FailureError(
       "No foreground app detected via `dumpsys activity activities`. " +
-        "Launch the app first using `launch-app`, then retry."
+        "Launch the app first using `launch-app`, then retry.",
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_NO_RUNNING_APPS,
+        failure_stage: "android_detect_foreground",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
 
@@ -106,15 +119,27 @@ export async function detectAndroidRunningApp(serial: string): Promise<string> {
   const userResumed = [...candidates].filter((pkg) => userPackages.has(pkg));
 
   if (userResumed.length === 0) {
-    throw new Error(
+    throw new FailureError(
       `Foreground activity belongs to a system package, not a user app. Resumed candidates were: [${[...candidates].join(", ")}]. ` +
-        `Launch your app via \`launch-app\`, then retry.`
+        `Launch your app via \`launch-app\`, then retry.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_NO_RUNNING_USER_APPS,
+        failure_stage: "android_detect_user_app",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
   if (userResumed.length > 1) {
-    throw new Error(
+    throw new FailureError(
       `Multiple user apps are in the foreground:\n  - ${userResumed.join("\n  - ")}\n` +
-        `Specify \`app_process\` with the package name you want to profile.`
+        `Specify \`app_process\` with the package name you want to profile.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_MULTIPLE_RUNNING_USER_APPS,
+        failure_stage: "android_detect_multiple",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
   return userResumed[0]!;

@@ -46,7 +46,7 @@ export function setActiveProjectRoot(root: string): void {
         `Pass the absolute path to the project root directory — the same cwd ` +
         `the calling agent is working in.`,
       {
-        error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_REQUIRED,
+        error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID,
         failure_stage: "flow_project_root_set",
         failure_area: "tool_server",
         error_kind: "validation",
@@ -58,7 +58,12 @@ export function setActiveProjectRoot(root: string): void {
   // "/a/../../../etc" would relocate the flows dir (and the validated flow
   // file) outside the intended project.
   if (root.split(/[\\/]+/).includes("..")) {
-    throw new Error(`project_root must not contain ".." segments (got "${root}").`);
+    throw new FailureError(`project_root must not contain ".." segments (got "${root}").`, {
+      error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID,
+      failure_stage: "flow_project_root_dotdot",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   activeProjectRoot = root;
 }
@@ -90,9 +95,15 @@ const FLOW_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export function assertSafeFlowName(name: string): void {
   if (!FLOW_NAME_PATTERN.test(name)) {
-    throw new Error(
+    throw new FailureError(
       `Invalid flow name "${name}". Flow names must match ${FLOW_NAME_PATTERN} ` +
-        `(letters, digits, underscore, hyphen — no path separators, no "..", no spaces).`
+        `(letters, digits, underscore, hyphen — no path separators, no "..", no spaces).`,
+      {
+        error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+        failure_stage: "flow_name_pattern",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
 }
@@ -104,7 +115,12 @@ export function getFlowPath(name: string): string {
   // directory even if the regex above is ever weakened.
   const rel = path.relative(getFlowsDir(), filePath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(`Invalid flow name "${name}": resolves outside the flows directory.`);
+    throw new FailureError(`Invalid flow name "${name}": resolves outside the flows directory.`, {
+      error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+      failure_stage: "flow_name_traversal",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   return filePath;
 }
@@ -125,7 +141,12 @@ export function getRecordingSession(): RecordingSession | null {
 
 function requireRecordingSession(): RecordingSession {
   if (!activeFlowName || !recordingSession) {
-    throw new Error("No active flow. Call flow-start-recording first.");
+    throw new FailureError("No active flow. Call flow-start-recording first.", {
+      error_code: FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING,
+      failure_stage: "flow_require_recording",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   return recordingSession;
 }

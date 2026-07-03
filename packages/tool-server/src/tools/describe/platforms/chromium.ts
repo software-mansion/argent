@@ -1,5 +1,15 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ChromiumCdpApi } from "../../../blueprints/chromium-cdp";
 import type { DescribeNode, DescribeTreeData } from "../contract";
+
+// `unknown` across the whole family: the failures here stem from uncontrolled
+// renderer output (eval threw, no value, unparseable payload), which we can't
+// validate. `validation` stays reserved for schemas we own.
+const DESCRIBE_FAILURE = {
+  error_code: FAILURE_CODES.CHROMIUM_DESCRIBE_FAILED,
+  failure_area: "tool_server",
+  error_kind: "unknown",
+} as const;
 
 /**
  * In-page script that returns a JSON UI tree mirroring `DescribeNode`. We
@@ -440,28 +450,39 @@ export async function describeChromium(api: ChromiumCdpApi): Promise<DescribeTre
     exceptionDetails?: { text?: string };
   };
   if (raw.exceptionDetails) {
-    throw new Error(
-      `Chromium describe failed: ${raw.exceptionDetails.text ?? "renderer evaluation threw"}`
+    throw new FailureError(
+      `Chromium describe failed: ${raw.exceptionDetails.text ?? "renderer evaluation threw"}`,
+      { ...DESCRIBE_FAILURE, failure_stage: "chromium_describe_eval" }
     );
   }
   const payload = raw.result?.value;
   if (typeof payload !== "string") {
-    throw new Error("Chromium describe: renderer returned no value");
+    throw new FailureError("Chromium describe: renderer returned no value", {
+      ...DESCRIBE_FAILURE,
+      failure_stage: "chromium_describe_no_value",
+    });
   }
   let parsed: { tree?: DescribeNode | null; truncated?: boolean; error?: string };
   try {
     parsed = JSON.parse(payload);
   } catch (err) {
-    throw new Error(
+    throw new FailureError(
       `Chromium describe: could not parse renderer payload: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err }
+      { ...DESCRIBE_FAILURE, failure_stage: "chromium_describe_parse" },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   }
   if (parsed.error) {
-    throw new Error(`Chromium describe: ${parsed.error}`);
+    throw new FailureError(`Chromium describe: ${parsed.error}`, {
+      ...DESCRIBE_FAILURE,
+      failure_stage: "chromium_describe_renderer_error",
+    });
   }
   if (!parsed.tree) {
-    throw new Error("Chromium describe: empty tree");
+    throw new FailureError("Chromium describe: empty tree", {
+      ...DESCRIBE_FAILURE,
+      failure_stage: "chromium_describe_empty",
+    });
   }
   const data: DescribeTreeData = { tree: parsed.tree, source: "cdp-dom" };
   if (parsed.truncated) {
