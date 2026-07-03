@@ -351,21 +351,13 @@ async function scrollToVisible(
   };
 }
 
-/**
- * Resolve a selector to a frame, auto-scrolling it into view if it isn't in the
- * current viewport. The fast path is the plain wait (the element is already on
- * screen, possibly after a transition); only on a miss does it fall back to a
- * default vertical scroll. Explicit `scroll-to` steps cover other
- * directions/containers.
- */
-async function resolveOrScroll(
-  env: ActionEnv,
-  selector: FlowSelector
-): Promise<DescribeFrame | undefined> {
-  const frame = await waitForFrame(env, selector);
-  if (frame) return frame;
-  const scrolled = await scrollToVisible(env, selector, "down", undefined);
-  return scrolled.frame;
+// `tap`/`type` auto-wait but deliberately do NOT auto-scroll: an implicit
+// scroll would widen a loose selector's match scope from the viewport to the
+// whole page, mutate scroll state even when the step fails, and stretch a
+// failure to the scroll search's worst case. Off-screen targets take an
+// explicit `scroll-to` step — the failure reason points there.
+function offscreenHint(sel: FlowSelector): string {
+  return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
 }
 
 /** Execute one selector-acting directive (`tap` / `type` / `await` / `assert` / `scroll-to`). */
@@ -397,12 +389,9 @@ async function runTap(
 ): Promise<DirectiveOutcome> {
   let point: { x: number; y: number };
   if (target.selector) {
-    const frame = await resolveOrScroll(env, target.selector);
+    const frame = await waitForFrame(env, target.selector);
     if (!frame) {
-      return {
-        ok: false,
-        reason: `no visible element matched selector ${describeSelector(target.selector)}`,
-      };
+      return { ok: false, reason: offscreenHint(target.selector) };
     }
     point = getDescribeTapPoint(frame);
   } else if (typeof target.x === "number" && typeof target.y === "number") {
@@ -424,12 +413,9 @@ async function runType(
   env: ActionEnv,
   step: { into: FlowSelector; text: string; submit?: boolean }
 ): Promise<DirectiveOutcome> {
-  const frame = await resolveOrScroll(env, step.into);
+  const frame = await waitForFrame(env, step.into);
   if (!frame) {
-    return {
-      ok: false,
-      reason: `no visible field matched selector ${describeSelector(step.into)}`,
-    };
+    return { ok: false, reason: offscreenHint(step.into) };
   }
   await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
   await invokeOnDevice(env, "keyboard", { text: step.text });
