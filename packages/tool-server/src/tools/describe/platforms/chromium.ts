@@ -181,8 +181,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return el instanceof HTMLInputElement && el.type === "password";
   }
 
-  function isScrollable(el) {
-    const style = window.getComputedStyle(el);
+  function isScrollable(el, style) {
     const oy = style.overflowY;
     const ox = style.overflowX;
     if (oy === "auto" || oy === "scroll" || ox === "auto" || ox === "scroll") {
@@ -415,8 +414,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       selfFrame = frame(el);
     }
 
-    // Prune structural wrappers with no info that just add a layer.
-    // Keep them if they're roots/clickable/named/identified/have text.
+    const scrollable = isScrollable(el, style);
+    // Prune structural wrappers with no info that just add a layer. Keep them
+    // if they're roots/clickable/named/identified/have text — or scroll their
+    // content: an RN-web ScrollView renders as exactly this shape (a scroller
+    // div wrapping a single content-container div), and pruning it would drop
+    // the node scroll gestures and flow 'within' selectors anchor to.
     if (
       depth > 0 &&
       childResults.length === 1 &&
@@ -424,6 +427,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       !name &&
       !text &&
       !id &&
+      !scrollable &&
       role === "div"
     ) {
       return childResults[0];
@@ -440,7 +444,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (isDisabled(el)) node.disabled = true;
     if (isChecked(el)) node.checked = true;
     if (isPassword(el)) node.password = true;
-    if (isScrollable(el)) node.scrollable = true;
+    if (scrollable) node.scrollable = true;
     return node;
   }
 
