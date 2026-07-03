@@ -303,7 +303,9 @@ export async function update(args: string[]): Promise<void> {
     const needsInstall =
       target !== null &&
       (!isInstalledForMode ||
-        (versionUnknown ? requestedVersion !== null : !installed || isNewerVersion(target, installed)));
+        (versionUnknown
+          ? requestedVersion !== null
+          : !installed || isNewerVersion(target, installed)));
     const latestIsNewer = latest !== null && (!installed || isNewerVersion(latest, installed));
 
     if (needsInstall && target !== null) {

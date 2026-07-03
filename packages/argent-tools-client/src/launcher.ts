@@ -726,7 +726,11 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
   // overwhelmingly common case. Records are kept per bundle, so another
   // install's server is neither considered nor disturbed — see
   // stateFileForBundle and reusableHandle.
-  const fast = await reusableHandle(await readState(paths.bundlePath), paths.bundlePath, paths.version);
+  const fast = await reusableHandle(
+    await readState(paths.bundlePath),
+    paths.bundlePath,
+    paths.version
+  );
   if (fast) return fast;
 
   // Slow path: a spawn is likely needed. Serialize it across processes so the

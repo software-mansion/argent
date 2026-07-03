@@ -33,9 +33,7 @@ async function describeForeignServers(ownBundlePath?: string): Promise<string | 
     ({ state }) => state.bundlePath !== ownBundlePath && isToolsServerProcessAlive(state.pid)
   );
   if (others.length === 0) return null;
-  const list = others
-    .map(({ state }) => `pid ${state.pid} (${state.bundlePath})`)
-    .join(", ");
+  const list = others.map(({ state }) => `pid ${state.pid} (${state.bundlePath})`).join(", ");
   return `Note: ${others.length} tool-server(s) from other argent installs: ${list}`;
 }
 
