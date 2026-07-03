@@ -8,10 +8,8 @@ import {
   isArtifactHandle,
   getDeviceIdFromArgs,
   artifactDir,
-  ARTIFACT_MARKER,
-  type ArtifactKind,
-  type ArtifactHandle,
 } from "../src/artifacts.js";
+import { ARTIFACT_MARKER, type ArtifactHandle, type ArtifactKind } from "@argent/artifacts";
 
 function artifactKind(filename: string, mimeType: string): ArtifactKind {
   if (mimeType.startsWith("image/")) return "screenshot";

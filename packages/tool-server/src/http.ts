@@ -9,6 +9,7 @@ import {
   type Registry,
   type ResolvedFileInput,
 } from "@argent/registry";
+import type { ArtifactOutputSpec } from "@argent/artifacts";
 import { AI_CLIENTS, type AiTelemetryProps } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
@@ -442,6 +443,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           description: string;
           inputSchema: Record<string, unknown>;
           outputHint?: string;
+          artifacts?: Record<string, ArtifactOutputSpec>;
           fileInputs?: FileInputSpec[];
           alwaysLoad?: boolean;
           searchHint?: string;
@@ -452,6 +454,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           inputSchema: def.inputSchema ?? { type: "object", properties: {} },
         };
         if (def.outputHint) entry.outputHint = def.outputHint;
+        if (def.artifacts && Object.keys(def.artifacts).length > 0) entry.artifacts = def.artifacts;
         if (def.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
         if (def.alwaysLoad) entry.alwaysLoad = true;
         if (def.searchHint) entry.searchHint = def.searchHint;

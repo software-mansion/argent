@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry, ToolContext } from "@argent/registry";
-import { ArtifactStore, CLIENT_FILE_MARKER } from "@argent/registry";
+import { ArtifactStore, CLIENT_FILE_MARKER, createArtifactRegistrar } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -30,7 +30,7 @@ const CLIENT_FLOW_PATH = path.join(CLIENT_ROOT, ".argent", "flows", "remote-flow
 
 function remoteCtx(): ToolContext {
   return {
-    artifacts: new ArtifactStore(),
+    artifacts: createArtifactRegistrar(new ArtifactStore(), {}, "test"),
     fileInputs: {
       project_root: { clientPath: CLIENT_ROOT, presentOnHost: false, viaUpload: false },
     },

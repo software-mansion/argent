@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
+import type { ArtifactOutputMap } from "@argent/artifacts";
 import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
@@ -33,9 +34,17 @@ type NativeProfilerAnalyzeToolResult = Omit<NativeProfilerAnalyzeResult, "report
   reportFile: ArtifactHandle | null;
 };
 
+const artifacts = {
+  report: {
+    kind: "native-profile-report",
+    mimeTypes: ["text/markdown"],
+  },
+} satisfies ArtifactOutputMap;
+
 export const nativeProfilerAnalyzeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  NativeProfilerAnalyzeToolResult
+  NativeProfilerAnalyzeToolResult,
+  typeof artifacts
 > = {
   id: "native-profiler-analyze",
   capability,
@@ -49,6 +58,7 @@ Call native-profiler-stop first to export the trace data.
 Use when you need to interpret a completed native profiling recording.
 Fails if native-profiler-stop has not been called first to export trace data.`,
   zodSchema,
+  artifacts,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
@@ -69,9 +79,8 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
     return {
       ...result,
       reportFile: result.reportFile
-        ? await requireArtifacts(ctx).register({
+        ? await requireArtifacts(ctx).register("report", {
             hostPath: result.reportFile,
-            kind: "native-profile-report",
           })
         : null,
     };

@@ -3,7 +3,13 @@ import { promisify } from "node:util";
 import * as os from "node:os";
 import * as path from "node:path";
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import type {
+  Registry,
+  ToolCapability,
+  ToolContext,
+  ToolDefinition,
+} from "@argent/registry";
+import type { ArtifactOutputMap } from "@argent/artifacts";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
@@ -70,6 +76,16 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
+const artifacts = {
+  image: {
+    kind: "screenshot",
+    mimeTypes: ["image/png"],
+  },
+} satisfies ArtifactOutputMap;
+
+type ArtifactOutputName = Extract<keyof typeof artifacts, string>;
+type ScreenshotToolContext = ToolContext<ArtifactOutputName>;
+
 /**
  * tvOS screenshot path. The simulator-server backend does not support tvOS, so
  * capture via `xcrun simctl io <udid> screenshot` instead and (optionally)
@@ -117,7 +133,9 @@ export async function tvTargetLongSide(file: string, scale: number): Promise<num
   return Math.round(longSide * scale);
 }
 
-export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {
+export function createScreenshotTool(
+  registry: Registry
+): ToolDefinition<Params, Result, typeof artifacts> {
   return {
     id: "screenshot",
     description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
@@ -127,12 +145,13 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
     searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
     zodSchema,
     outputHint: "image",
+    artifacts,
     capability,
     // No eager service: a tvOS udid classifies as iOS by shape, and declaring
     // simulator-server here would spawn it for the tvOS device (which it cannot
     // drive) and hang on the ready timeout. Resolve the backend lazily instead.
     services: () => ({}),
-    async execute(_services, params, ctx) {
+    async execute(_services, params, ctx?: ScreenshotToolContext) {
       const signal = ctx?.signal ?? AbortSignal.timeout(16_000);
       const scale = params.scale ?? getScreenshotScale();
       const device = resolveDevice(params.udid);
@@ -146,9 +165,8 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
           scale: params.scale,
           downscaler: params.downscaler,
         });
-        const image = await requireArtifacts(ctx).register({
+        const image = await requireArtifacts(ctx).register("image", {
           hostPath: capturedPath,
-          kind: "screenshot",
           mimeType: "image/png",
         });
         return { image };
@@ -158,9 +176,8 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // tvOS has no simulator-server backend, so capture via xcrun instead.
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
         const pngPath = await tvScreenshot(params.udid, scale, signal);
-        const image = await requireArtifacts(ctx).register({
+        const image = await requireArtifacts(ctx).register("image", {
           hostPath: pngPath,
-          kind: "screenshot",
           mimeType: "image/png",
         });
         return { image };
@@ -171,9 +188,8 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // Vega device would throw), so capture directly here.
       if (device.platform === "vega") {
         const pngPath = await captureVegaScreenshotPng({ scale: params.scale });
-        const image = await requireArtifacts(ctx).register({
+        const image = await requireArtifacts(ctx).register("image", {
           hostPath: pngPath,
-          kind: "screenshot",
           mimeType: "image/png",
         });
         return { image };
@@ -187,9 +203,8 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         signal,
         params.scale
       );
-      const image = await requireArtifacts(ctx).register({
+      const image = await requireArtifacts(ctx).register("image", {
         hostPath: capturedPath,
-        kind: "screenshot",
         mimeType: "image/png",
       });
       return { image };

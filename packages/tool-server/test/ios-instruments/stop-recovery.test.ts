@@ -25,10 +25,10 @@ import {
   type IosStopArtifacts,
 } from "../../src/tools/profiler/native-profiler/native-profiler-stop";
 import { handleXctraceExit } from "../../src/tools/profiler/native-profiler/native-profiler-start";
-import { ArtifactStore } from "@argent/registry";
+import { artifactContext } from "../artifact-context";
 
 // Tool context the registry would inject; stop registers its trace/exports here.
-const STOP_CTX = { artifacts: new ArtifactStore() };
+const STOP_CTX = artifactContext(nativeProfilerStopTool);
 
 const mockedExport = vi.mocked(exportIosTraceData);
 

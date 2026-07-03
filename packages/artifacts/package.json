@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "name": "@argent/artifacts",
+  "version": "0.14.0",
+  "description": "Shared artifact wire contract for Argent tools",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

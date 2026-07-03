@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
+import type { ArtifactOutputMap } from "@argent/artifacts";
 import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
@@ -11,7 +12,7 @@ import { stopNativeProfilerIos, type IosStopResult } from "./platforms/ios";
 import { stopNativeProfilerAndroid, type AndroidStopResult } from "./platforms/android";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
-import type { ArtifactKind, ArtifactStore } from "@argent/registry";
+import type { ArtifactRegistrar } from "@argent/registry";
 
 const zodSchema = z.object({
   device_id: z
@@ -55,24 +56,43 @@ const capability = {
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
-const EXPORTED_FILE_KIND_BY_KEY: Record<string, ArtifactKind> = {
-  cpu: "native-profile-cpu",
-  hangs: "native-profile-hangs",
-  leaks: "native-profile-leaks",
-  pftrace: "native-profile-trace",
+const artifacts = {
+  trace: {
+    kind: "native-profile-trace",
+  },
+  pftrace: {
+    kind: "native-profile-trace",
+  },
+  cpu: {
+    kind: "native-profile-cpu",
+  },
+  hangs: {
+    kind: "native-profile-hangs",
+  },
+  leaks: {
+    kind: "native-profile-leaks",
+  },
+} satisfies ArtifactOutputMap;
+
+type ArtifactOutputName = Extract<keyof typeof artifacts, string>;
+
+const EXPORTED_FILE_OUTPUT_BY_KEY: Record<string, ArtifactOutputName> = {
+  cpu: "cpu",
+  hangs: "hangs",
+  leaks: "leaks",
+  pftrace: "pftrace",
 };
 
 /** Register each non-null exported file path as a downloadable artifact. */
 async function exportedFilesToArtifacts(
-  store: ArtifactStore,
+  artifacts: ArtifactRegistrar<ArtifactOutputName>,
   files: Record<string, string | null>
 ): Promise<Record<string, ArtifactHandle | null>> {
   const out: Record<string, ArtifactHandle | null> = {};
   for (const [key, filePath] of Object.entries(files)) {
     out[key] = filePath
-      ? await store.register({
+      ? await artifacts.register(EXPORTED_FILE_OUTPUT_BY_KEY[key] ?? "trace", {
           hostPath: filePath,
-          kind: EXPORTED_FILE_KIND_BY_KEY[key] ?? "native-profile-trace",
         })
       : null;
   }
@@ -84,11 +104,18 @@ async function exportedFilesToArtifacts(
  * works even when the path is a directory (iOS `.trace`), and even if it can't
  * be stat'd at registration (e.g. a recovered session).
  */
-function registerTrace(store: ArtifactStore, traceFile: string): Promise<ArtifactHandle> {
-  return store.register({ hostPath: traceFile, kind: "native-profile-trace", archive: "tar.gz" });
+function registerTrace(
+  artifacts: ArtifactRegistrar<ArtifactOutputName>,
+  traceFile: string
+): Promise<ArtifactHandle> {
+  return artifacts.register("trace", { hostPath: traceFile, archive: "tar.gz" });
 }
 
-export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
+export const nativeProfilerStopTool: ToolDefinition<
+  z.infer<typeof zodSchema>,
+  StopResult,
+  typeof artifacts
+> = {
   id: "native-profiler-stop",
   capability,
   description: `Stop native profiling and export trace data.
@@ -99,6 +126,7 @@ Use when the user has finished the interaction to profile and you need to export
 Returns { traceFile, exportedFiles, exportDiagnostics? }; traceFile is the raw trace bundle and exportedFiles the exports, all downloadable artifacts materialized to local paths.
 Fails if no active native-profiler-start session exists for the given device_id.`,
   zodSchema,
+  artifacts,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),

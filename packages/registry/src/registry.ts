@@ -11,7 +11,7 @@ import {
   InvokeToolOptions,
   ToolContext,
 } from "./types";
-import { ArtifactStore } from "./artifacts";
+import { ArtifactStore, createArtifactRegistrar } from "./artifacts";
 import {
   ServiceNotFoundError,
   ServiceInitializationError,
@@ -134,10 +134,13 @@ export class Registry {
         options: typeof ref === "string" ? undefined : ref.options,
       }));
 
-      // Build the per-invocation context: caller options (e.g. signal) plus the
-      // registry-owned artifact store, so any tool can register host files via
-      // `ctx.artifacts` without declaring a per-tool service.
-      const ctx: ToolContext = { ...options, artifacts: this.artifacts };
+      // Build the per-invocation context: caller options (e.g. signal) plus a
+      // tool-aware artifact registrar. The registrar writes into the
+      // registry-owned store but only accepts outputs declared by this tool.
+      const ctx: ToolContext = {
+        ...options,
+        artifacts: createArtifactRegistrar(this.artifacts, definition.artifacts, definition.id),
+      };
 
       const runOnce = async (): Promise<TResult> => {
         const resolvedServices: Record<string, unknown> = {};

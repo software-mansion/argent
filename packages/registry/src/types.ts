@@ -1,6 +1,7 @@
 import { TypedEventEmitter } from "./event-emitter";
 import { z } from "zod";
-import type { ArtifactStore } from "./artifacts";
+import type { ArtifactOutputMap, ArtifactOutputSpec } from "@argent/artifacts";
+import type { ArtifactRegistrar } from "./artifacts";
 import type { FileInputSpec, ResolvedFileInput } from "./file-inputs";
 
 // ── Service Types ──
@@ -122,15 +123,15 @@ export interface InvokeToolOptions {
 /**
  * What a tool's `execute` receives as its third argument. The registry builds
  * this for every invocation: it carries the caller's {@link InvokeToolOptions}
- * (e.g. `signal`) plus cross-cutting context the registry owns — currently the
- * {@link ArtifactStore}, so any tool that produces a host file can register it
- * (`ctx.artifacts.register({ hostPath, kind })`) without declaring a per-tool
- * service. The registry always populates `artifacts`; it is only ever absent
- * when `execute` is called directly (bypassing `invokeTool`), e.g. in a unit
- * test.
+ * (e.g. `signal`) plus cross-cutting context the registry owns. Tools register
+ * produced files by declared output name (`ctx.artifacts.register("report",
+ * { hostPath })`); the registry maps that name through the tool's
+ * {@link ToolDefinition.artifacts} contract to the concrete artifact kind.
+ * The registry always populates `artifacts`; it is only ever absent when
+ * `execute` is called directly (bypassing `invokeTool`), e.g. in a unit test.
  */
-export interface ToolContext extends InvokeToolOptions {
-  artifacts: ArtifactStore;
+export interface ToolContext<TArtifactOutputName extends string = string> extends InvokeToolOptions {
+  artifacts: ArtifactRegistrar<TArtifactOutputName>;
 }
 
 // ── Device + Capability Types ──
@@ -212,7 +213,11 @@ export type ToolDependency = "adb" | "xcrun" | "emulator" | "sim-remote" | "vega
 
 // ── Tool Types ──
 
-export interface ToolDefinition<TParams = void, TResult = unknown> {
+export interface ToolDefinition<
+  TParams = void,
+  TResult = unknown,
+  TArtifacts extends ArtifactOutputMap = ArtifactOutputMap,
+> {
   id: string;
   description?: string;
   /** Zod schema for tool input; used for runtime validation. When provided, inputSchema is auto-derived at registration time. */
@@ -221,6 +226,12 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   inputSchema?: Record<string, unknown>;
   /** Optional hint for adapters (e.g. "image" for MCP to return base64 image content). */
   outputHint?: string;
+  /**
+   * Declares named artifact outputs this tool may return. Tool code registers
+   * concrete files by these names, keeping artifact kinds in the tool contract
+   * instead of scattered through producer call sites.
+   */
+  artifacts?: TArtifacts;
   /**
    * When true, the MCP adapter marks the tool with `_meta["anthropic/alwaysLoad"] = true`
    * so Claude Code opts it out of progressive tool loading (ToolSearch). Use for the
@@ -283,7 +294,11 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   fileInputs?: FileInputSpec[];
   /** Returns alias → URN or { urn, options }; registry resolves each and passes alias → API into execute. */
   services: (params: TParams) => Record<string, ServiceRef>;
-  execute(services: Record<string, unknown>, params: TParams, ctx?: ToolContext): Promise<TResult>;
+  execute(
+    services: Record<string, unknown>,
+    params: TParams,
+    ctx?: ToolContext<Extract<keyof TArtifacts, string>>
+  ): Promise<TResult>;
 }
 
 export interface ToolRecord {

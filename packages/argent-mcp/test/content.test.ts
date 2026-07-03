@@ -12,7 +12,7 @@ import {
   flowRunToMcpContent,
   type FlowExecuteResult,
 } from "../src/content.js";
-import { ARTIFACT_MARKER, type ArtifactHandle, type ArtifactKind } from "@argent/tools-client";
+import { ARTIFACT_MARKER, type ArtifactHandle, type ArtifactKind } from "@argent/artifacts";
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 

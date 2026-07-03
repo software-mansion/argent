@@ -11,6 +11,7 @@ import type {
   ToolCapability,
   ToolDefinition,
 } from "@argent/registry";
+import type { ArtifactOutputMap } from "@argent/artifacts";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
@@ -92,7 +93,21 @@ const fileInputs: FileInputSpec[] = [
   { target: "outputDir", path: "${outputDir}", kind: "probe", optional: true },
 ];
 
-export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = {
+const artifacts = {
+  diff: {
+    kind: "screenshot-diff",
+    mimeTypes: ["image/png"],
+  },
+  contextDiff: {
+    kind: "screenshot-diff-context",
+    mimeTypes: ["image/png"],
+  },
+} satisfies ArtifactOutputMap;
+
+type ArtifactOutputName = Extract<keyof typeof artifacts, string>;
+type ScreenshotDiffToolContext = ToolContext<ArtifactOutputName>;
+
+export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult, typeof artifacts> = {
   id: "screenshot-diff",
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
 Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the simulator-server dependency can be resolved.
@@ -105,6 +120,7 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
     "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture",
   zodSchema,
   capability,
+  artifacts,
   fileInputs,
   services: (params): Record<string, ServiceRef> => {
     // Only request the SimulatorServer when a live capture is actually needed.
@@ -124,7 +140,7 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
 export async function executeScreenshotDiffTool(
   services: Record<string, unknown>,
   params: Params,
-  options?: Partial<ToolContext>,
+  options?: Partial<ScreenshotDiffToolContext>,
   captureScreenshot: CaptureScreenshot = httpScreenshot
 ): Promise<ScreenshotDiffResult> {
   const outputDir = await resolveOutputDir(params, options);
@@ -148,18 +164,16 @@ export async function executeScreenshotDiffTool(
     summary: result.summary,
     ...(result.diffPath
       ? {
-          diffPath: await artifacts.register({
+          diffPath: await artifacts.register("diff", {
             hostPath: result.diffPath,
-            kind: "screenshot-diff",
             mimeType: "image/png",
           }),
         }
       : {}),
     ...(result.contextDiffPath
       ? {
-          contextDiffPath: await artifacts.register({
+          contextDiffPath: await artifacts.register("contextDiff", {
             hostPath: result.contextDiffPath,
-            kind: "screenshot-diff-context",
             mimeType: "image/png",
           }),
         }
@@ -174,7 +188,10 @@ export async function executeScreenshotDiffTool(
  * Everything else gets a per-call temp dir; the diff images travel back as
  * artifacts, so the directory's location no longer matters to the agent.
  */
-async function resolveOutputDir(params: Params, options?: Partial<ToolContext>): Promise<string> {
+async function resolveOutputDir(
+  params: Params,
+  options?: Partial<ScreenshotDiffToolContext>
+): Promise<string> {
   const probe = options?.fileInputs?.outputDir;
   if (params.outputDir && (probe === undefined || probe.presentOnHost)) {
     return params.outputDir;
@@ -192,7 +209,7 @@ async function resolveInputPaths(
   services: Record<string, unknown>,
   params: Params,
   outputDir: string,
-  options: Partial<ToolContext> | undefined,
+  options: Partial<ScreenshotDiffToolContext> | undefined,
   captureScreenshot: CaptureScreenshot
 ): Promise<{ baselinePath: string; currentPath: string }> {
   validateInputSources(params);

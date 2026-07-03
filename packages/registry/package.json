@@ -12,6 +12,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@argent/artifacts": "file:../artifacts",
     "zod": "^4.0.0"
   },
   "devDependencies": {
