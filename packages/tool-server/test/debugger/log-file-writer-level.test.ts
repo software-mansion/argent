@@ -56,14 +56,17 @@ describe("LogFileWriter round-trips levels of any length", () => {
     expect(entries).toHaveLength(1);
   });
 
-  it("still preserves short levels", () => {
+  it("still preserves short levels that hit the padEnd fallback", () => {
+    // "trace" is a real CDP level (console.trace) that is NOT in LEVEL_DISPLAY, so
+    // it exercises the changed `.toUpperCase().padEnd(5)` fallback — unlike "warn",
+    // which the map short-circuits. A <=5-char level must still round-trip exactly.
     w = new LogFileWriter(59233);
     w.write({
       id: 0,
       timestamp: new Date(1710000000000).toISOString(),
-      level: "warn",
+      level: "trace",
       message: "z",
     });
-    expect(w.readAll()[0]!.level).toBe("warn");
+    expect(w.readAll()[0]!.level).toBe("trace");
   });
 });

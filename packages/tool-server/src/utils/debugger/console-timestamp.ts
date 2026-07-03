@@ -11,12 +11,16 @@
  * UNMULTIPLIED — an earlier `* 1000` on the RN path assumed seconds and stamped
  * every log line with a year-58473 date.
  *
- * A non-finite value (a CDP-server bug or a future protocol revision could hand
- * us one) is coerced to now: `new Date(NaN).toISOString()` throws RangeError, and
- * this runs inside a typed-emitter listener that try/catches its listeners, so an
- * uncaught throw would silently drop the log entry.
+ * A value `new Date(...).toISOString()` cannot represent is coerced to now so the
+ * helper never throws: that call throws RangeError both for a non-finite value
+ * and for a finite one outside Date's ±8.64e15 ms range (a CDP-server bug or a
+ * future protocol revision could hand us either), and it runs inside a
+ * typed-emitter listener that try/catches its listeners, so an uncaught throw
+ * would silently drop the log entry.
  */
+const MAX_TIMESTAMP_MS = 8.64e15; // Date's representable range is ±8.64e15 ms from the epoch.
+
 export function consoleTimestampToIso(rawTimestampMs: number): string {
-  const ms = Number.isFinite(rawTimestampMs) ? rawTimestampMs : Date.now();
-  return new Date(ms).toISOString();
+  const usable = Number.isFinite(rawTimestampMs) && Math.abs(rawTimestampMs) <= MAX_TIMESTAMP_MS;
+  return new Date(usable ? rawTimestampMs : Date.now()).toISOString();
 }
