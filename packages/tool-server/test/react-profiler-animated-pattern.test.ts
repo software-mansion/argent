@@ -1,0 +1,218 @@
+import { describe, it, expect } from "vitest";
+import { tag } from "../src/utils/react-profiler/pipeline/03-tag";
+import { rank } from "../src/utils/react-profiler/pipeline/04-rank";
+import type {
+  EnrichOutput,
+  EnrichedComponent,
+  SessionContext,
+} from "../src/utils/react-profiler/types/pipeline";
+const sessionContext: SessionContext = {
+  reactCompilerEnabled: false,
+  strictModeEnabled: false,
+  buildMode: "dev",
+  rnArchitecture: "bridge",
+  projectRoot: "/proj",
+  platform: "ios",
+};
+function slow(name: string): EnrichedComponent {
+  return {
+    name,
+    n: 10,
+    normalizedRenderCount: 10,
+    mean: 20,
+    min: 5,
+    max: 40,
+    totalRenderMs: 200,
+    dominantReason: "props",
+    topChangedProps: ["data"],
+    topChangedHooks: [],
+    isCompilerOptimized: false,
+    firstCommitTs: 0,
+    lastCommitTs: 100,
+  };
+}
+function enrich(names: string[]): EnrichOutput {
+  const components = new Map<string, EnrichedComponent>();
+  for (const n of names) components.set(n, slow(n));
+  return {
+    components,
+    sessionContext,
+    reactCommits: 50,
+    fiberRenders: 100,
+    anyRuntimeCompilerDetected: false,
+    totalFirstMounts: 0,
+    firstMountOnlyComponents: [],
+    recordingMs: 10_000,
+  };
+}
+describe("ANIMATED_PATTERN matches only real animation segments", () => {
+  it("does NOT tag non-animation names containing 'motion' as a substring", () => {
+    const tagged = tag(
+      enrich(["PromotionCard", "EmotionThemeCard", "CommotionList", "ProductCard"])
+    );
+    for (const n of ["PromotionCard", "EmotionThemeCard", "CommotionList", "ProductCard"]) {
+      expect(tagged.components.get(n)!.isAnimated).toBe(false);
+    }
+    const ranked = rank(tagged).map((f) => f.component);
+    expect(ranked).toContain("PromotionCard");
+  });
+  it("DOES still tag real animation components", () => {
+    const tagged = tag(enrich(["Animated", "AnimatedView", "MotionView", "FadeTransition"]));
+    for (const n of ["Animated", "AnimatedView", "MotionView", "FadeTransition"]) {
+      expect(tagged.components.get(n)!.isAnimated).toBe(true);
+    }
+  });
+  it("does NOT tag a capitalized token that merely trails into lowercase letters", () => {
+    // Case-sensitivity alone isn't a boundary: without one, "MotionlessIndicator"
+    // still matches "Motion" as a bare substring, same bug class as the
+    // original lowercase false positives. One case per token so each token's
+    // trailing boundary is pinned independently — otherwise a regression that
+    // reopened this bug for a single token (Transition especially: it is a heavy
+    // non-animation word — state machines, `TransitionalScreen`) would hide
+    // behind the other tokens sharing the same regex and leave the suite green.
+    const names = [
+      "MotionlessIndicator", // Motion
+      "AnimationsDisabledBanner", // Animation
+      "TransitionalScreen", // Transition
+      "TransitionerRow", // Transition
+      "AnimatedlyBanner", // Animated ("animatedly" adverb) trailing into lowercase
+    ];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated, n).toBe(false);
+    }
+  });
+  it("DOES still tag real animation components with a digit/underscore suffix", () => {
+    // A digit/underscore right after the token is a legitimate PascalCase
+    // continuation (numbered/keyed variants) and must still be recognized.
+    const names = ["Animated2", "Animated_View", "Motion360Player"];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated).toBe(true);
+    }
+  });
+  it("does NOT tag a real, non-animation acronym-prefixed name", () => {
+    // Without a leading-boundary requirement, an acronym immediately followed
+    // by the token (no lowercase-to-uppercase transition) reads as a match
+    // with nothing to reject it. CMMotionManager/CMMotionActivity are real
+    // Apple CoreMotion SDK class names with nothing to do with animation —
+    // a React Native wrapper/bridge component plausibly named after them must
+    // not be silently excluded from profiler findings.
+    const names = [
+      "CMMotionManager",
+      "CMMotionActivity",
+      "IOMotionSensor",
+      "RNMotionDetector",
+      "GPSMotionTracker",
+    ];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated).toBe(false);
+    }
+  });
+  it("DOES tag a bare Motion-prefixed device name (accepted collateral of matching MotionView)", () => {
+    // KNOWN LIMITATION: a bare `Motion` word-start (no acronym/digit prefix) is
+    // structurally indistinguishable from a real animation name of the same
+    // shape (MotionView, legend-motion's Motion.View), which we DO tag — so
+    // these CoreMotion-style device names are over-tagged as animated. Only the
+    // acronym/digit-GLUED forms (above) are rejected. Pinned here so any future
+    // change to this behavior is a deliberate one, not an accident.
+    const names = ["MotionSensor", "MotionManager", "MotionDetector", "MotionTracker"];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated, n).toBe(true);
+    }
+  });
+  it("does NOT tag a digit-suffixed acronym prefix either", () => {
+    // The leading boundary must reject digits too, not just uppercase — a
+    // digit immediately before the token is the tail of an acronym/model
+    // number (G2, IMU2, BLE4, L3), not a real PascalCase word start. Allowing
+    // digits here (matching the trailing side's digit allowance) reopened the
+    // same CMMotionManager-class false positive with a different acronym shape.
+    const names = ["G2MotionSensor", "IMU2MotionTracker", "BLE4MotionBeacon", "L3MotionFilter"];
+    const tagged = tag(enrich(names));
+    for (const n of names) {
+      expect(tagged.components.get(n)!.isAnimated).toBe(false);
+    }
+  });
+
+  // Full match/no-match matrix, covering every token's wrapped/dotted forms —
+  // not just Animated* — so a token-specific boundary regression in Motion,
+  // Transition, or Animation can't ride on the Animated cases staying green.
+  // The paren/dot/HOC-wrapped forms are the display names React DevTools produces
+  // for animated subtrees. Only the parenthesized `Animated(...)` /
+  // `AnimatedComponent(...)` forms are what skip-rules.ts / component-tree.ts
+  // hard-code as skips; the dotted (`Animated.View`, `Motion.View`), other-token,
+  // and nested-HOC (`Memo(AnimatedComponent(View))`) forms go beyond those two
+  // prefixes. An intermediate, over-tightened version of this regex failed to
+  // match the wrapped forms, leaking them back into findings.
+  const MUST_MATCH = [
+    "Animated",
+    "AnimatedView",
+    "Animated(View)",
+    "Animated.View",
+    "AnimatedComponent(View)",
+    "Memo(AnimatedComponent(View))",
+    "ForwardRef(AnimatedComponent(View))",
+    "Forget(AnimatedComponent(View))",
+    "Animated(ScrollView)",
+    "MotionView",
+    "FadeTransition",
+    "SlideTransition",
+    "FadeInAnimation",
+    "Animation",
+    "Transition",
+    "Animated2",
+    "Animated_View",
+    // Other-token wrapped/dotted forms — asserted so Motion/Transition/Animation
+    // are pinned symmetrically with Animated (Motion.View = @legendapp/motion;
+    // Transition(...) = react-transition-group HOC display name).
+    "Motion.View",
+    "Motion(View)",
+    "Transition(View)",
+    "Transition.View",
+    "Animation.View",
+    "Animation(View)",
+  ];
+  const MUST_NOT_MATCH = [
+    "PromotionCard",
+    "Promotion",
+    "EmotionThemeCard",
+    "Emotion",
+    "CommotionList",
+    "Locomotion",
+    "LocomotionView",
+    "SVGAnimatedPath",
+    "RNAnimatedView",
+  ];
+
+  it("tags every animation name in the match matrix (incl. paren/dot/HOC-wrapped)", () => {
+    const tagged = tag(enrich(MUST_MATCH));
+    for (const n of MUST_MATCH) {
+      expect(tagged.components.get(n)!.isAnimated, n).toBe(true);
+    }
+  });
+
+  it("does NOT tag any name in the no-match matrix (incl. acronym-glued Animated)", () => {
+    const tagged = tag(enrich(MUST_NOT_MATCH));
+    for (const n of MUST_NOT_MATCH) {
+      expect(tagged.components.get(n)!.isAnimated, n).toBe(false);
+    }
+  });
+
+  it("excludes wrapped animation names from rank() findings while keeping real slow components", () => {
+    const wrappers = [
+      "Animated(View)",
+      "Animated.View",
+      "Memo(AnimatedComponent(View))",
+      "Motion.View",
+      "Transition(View)",
+    ];
+    const tagged = tag(enrich([...wrappers, "PromotionCard"]));
+    const ranked = rank(tagged).map((f) => f.component);
+    for (const n of wrappers) {
+      expect(ranked, n).not.toContain(n);
+    }
+    expect(ranked).toContain("PromotionCard");
+  });
+});

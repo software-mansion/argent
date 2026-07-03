@@ -39,6 +39,24 @@
         font-family: var(--font-sans);
         font-size: var(--fs-body);
       }
+      /* This is an app chrome, not a document: dragging across labels/buttons
+         shouldn't leave a stuck text highlight. Kill selection globally, then
+         re-enable it where copying is the point — form fields and code/comment
+         text the user may want to lift out. */
+      body {
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      input,
+      textarea,
+      code,
+      pre,
+      [contenteditable="true"],
+      /* read-only comment text the user may want to re-read or copy */
+      .ann-pop .txt {
+        user-select: text;
+        -webkit-user-select: text;
+      }
       #root {
         display: flex;
         flex-direction: column;
@@ -64,6 +82,7 @@
       .stage,
       .vcard,
       .float-controls,
+      .float-toolbelt,
       .float-status,
       .footbar,
       .comment-pop,
@@ -83,6 +102,13 @@
         gap: var(--gap-list);
         z-index: var(--z-overlay);
       }
+      /* macOS traffic lights (native window controls) occupy the top-left in
+         Electron. Shift the status pill clear of them so a "Connecting…" or
+         error message never lands under the buttons. A browser tab has no
+         buttons, so .native-frame is absent and the pill keeps its corner. */
+      .native-frame .float-status {
+        left: var(--traffic-light-gutter);
+      }
       .status {
         background: var(--color-surface);
         border: var(--border-hairline) solid var(--color-border);
@@ -101,6 +127,131 @@
         margin-right: var(--gap-inline);
         vertical-align: middle;
         background: var(--color-error);
+      }
+      /* Persistent "which device am I looking at" pill, shown while a stream is
+         live. Clicking it drops a menu to switch devices. A green live-dot
+         mirrors the device-list rows; a caret hints at the dropdown. */
+      .device-switch {
+        position: relative;
+        -webkit-app-region: no-drag;
+      }
+      .device-pill {
+        display: inline-flex;
+        align-items: center;
+        max-width: var(--picker-max-width);
+        overflow: hidden;
+        font: inherit;
+        color: var(--color-fg);
+        cursor: pointer;
+        transition: border-color var(--dur-hover) ease;
+      }
+      .device-pill:hover {
+        border-color: var(--color-accent);
+      }
+      .device-pill::before {
+        content: "";
+        flex: none;
+        width: var(--dot-size);
+        height: var(--dot-size);
+        border-radius: var(--radius-round);
+        margin-right: var(--gap-inline);
+        background: var(--color-ok);
+        box-shadow: var(--dot-glow);
+      }
+      .device-pill > .nm {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .device-pill::after {
+        content: "▾";
+        flex: none;
+        margin-left: var(--gap-inline);
+        color: var(--color-muted);
+        font-size: var(--fs-label);
+        line-height: 1;
+      }
+      /* Dropdown of selectable devices, anchored under the pill. */
+      .dev-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        min-width: 220px;
+        max-width: 320px;
+        max-height: 60vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
+        padding: var(--pad-footbar);
+        z-index: var(--z-pop);
+        -webkit-app-region: no-drag;
+      }
+      .dev-menu[hidden] {
+        display: none;
+      }
+      .dev-menu-label {
+        font-size: var(--fs-label);
+        color: var(--color-muted);
+        padding: 0 var(--gap-inline);
+      }
+      .dev-menu-note {
+        font-size: var(--fs-note);
+        color: var(--color-muted);
+        padding: var(--pad-code);
+        text-align: center;
+      }
+      .dev-item.current {
+        border-color: var(--color-accent);
+      }
+      /* Right-click context menu (device rows → "Shut down"). Fixed to the
+         cursor, above every popover so it's never clipped by the dropdown. */
+      .ctx-menu {
+        position: fixed;
+        min-width: 160px;
+        max-width: 260px;
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
+        padding: var(--pad-footbar);
+        z-index: var(--z-ctx);
+        -webkit-app-region: no-drag;
+      }
+      .ctx-menu[hidden] {
+        display: none;
+      }
+      .ctx-menu button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        color: var(--color-fg);
+        border: var(--border-hairline) solid transparent;
+        border-radius: var(--radius-control);
+        padding: var(--pad-refresh);
+        font: inherit;
+        cursor: pointer;
+      }
+      .ctx-menu button:hover {
+        border-color: var(--color-border);
+        background: var(--color-bg);
+      }
+      .ctx-menu button.danger {
+        color: var(--color-error);
+      }
+      .ctx-menu button.danger:hover {
+        background: var(--color-danger-bg);
+        color: var(--color-danger-fg);
+        border-color: var(--color-danger-bg);
       }
       .viewport {
         flex: 1;
@@ -133,7 +284,10 @@
         -webkit-user-select: none;
         touch-action: none;
         pointer-events: auto;
-        cursor: crosshair;
+        /* Normal arrow over a usable device (matches Radon IDE, which only shows
+           crosshair while inspecting). Comment/inspect mode swaps in the
+           speech-bubble cursor below; multi-touch shows the .touch-dot rings. */
+        cursor: default;
       }
       /* Multi-touch indicators overlay on the image, positioned via CSS vars. */
       .touch-dot {
@@ -174,6 +328,13 @@
         width: 100%;
         max-width: var(--picker-max-width);
         padding: var(--pad-picker);
+        /* The viewport centers this picker with no overflow of its own, so a
+           device list taller than the window used to spill off the top with no
+           way to reach it. Cap the picker to the viewport and let it scroll
+           internally — it still centers when it fits. */
+        max-height: 100%;
+        overflow-y: auto;
+        overscroll-behavior: contain;
       }
       .dev-picker h2 {
         margin: 0;
@@ -249,11 +410,13 @@
         color: var(--color-muted);
         font-size: var(--fs-label);
       }
-      .dev-picker .refresh-row {
+      .dev-picker .refresh-row,
+      .dev-menu .refresh-row {
         display: flex;
         justify-content: center;
       }
-      .dev-picker .refresh-row button {
+      .dev-picker .refresh-row button,
+      .dev-menu .refresh-row button {
         background: var(--color-bg);
         color: var(--color-muted);
         border: var(--border-hairline) solid var(--color-border);
@@ -262,7 +425,8 @@
         font-size: var(--fs-note);
         cursor: pointer;
       }
-      .dev-picker .refresh-row button:hover {
+      .dev-picker .refresh-row button:hover,
+      .dev-menu .refresh-row button:hover {
         color: var(--color-fg);
         border-color: var(--color-accent);
       }
@@ -297,12 +461,26 @@
         font-weight: var(--fw-semibold);
         box-shadow: var(--shadow-card);
       }
-      /* Floating top-right controls (theme, comment, close): a row of square
-         icon buttons that sit over the stream, away from the slim drag toolbar. */
+      /* Floating top-right controls (just the theme toggle now — comment moved
+         to the bottom toolbelt, close is a native traffic light): square icon
+         buttons that sit over the stream, away from the slim drag toolbar. */
       .float-controls {
         position: absolute;
         top: var(--footbar-bottom);
         right: var(--footbar-right);
+        display: flex;
+        gap: var(--gap-list);
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+      }
+      /* Bottom-centre toolbelt — floats below the stream. Today it carries the
+         comment toggle; it's shaped to grow into a Figma-style bottom tool tab,
+         so it's a horizontal row centred on the window. */
+      .float-toolbelt {
+        position: absolute;
+        bottom: var(--footbar-bottom);
+        left: 50%;
+        transform: translateX(-50%);
         display: flex;
         gap: var(--gap-list);
         z-index: var(--z-overlay);
@@ -726,14 +904,14 @@
       }
       .spot-hit {
         position: absolute;
-        cursor: crosshair;
+        cursor: var(--cursor-comment);
         z-index: var(--z-spot-hit);
         /* The spotlight root sets pointer-events:none; this capture layer must
            opt back in or hover/click never reaches it and nothing un-blurs. */
         pointer-events: auto;
       }
       .inspecting .stage img {
-        cursor: crosshair;
+        cursor: var(--cursor-comment);
       }
 
       /* Comment box bubble anchored next to the inspected element. */
@@ -1045,6 +1223,106 @@
       .offscreen-prompt:not(.collapsed) .op-pill {
         display: none;
       }
+      /* Agent picker — a centred modal the `argent lens` bridge shows when more
+         than one agent CLI is installed: a list of choices, click one to bind. */
+      .agent-picker {
+        position: absolute;
+        inset: 0;
+        z-index: var(--z-overlay);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: color-mix(in srgb, var(--color-bg) 60%, transparent);
+        backdrop-filter: blur(3px);
+        -webkit-app-region: no-drag;
+      }
+      .agent-picker[hidden] {
+        display: none;
+      }
+      .ap-card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        min-width: 220px;
+        max-width: 320px;
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        padding: var(--pad-footbar);
+        box-shadow: var(--shadow-card);
+      }
+      .ap-title {
+        margin: 0;
+        color: var(--color-fg);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-bold);
+      }
+      .ap-sub {
+        margin: 0;
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+        line-height: var(--lh-snug);
+      }
+      /* gap-0 connected list: one bordered container, rows divided by hairlines
+         and clipped to the container's radius. */
+      .ap-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        margin-top: var(--gap-inline);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-button);
+        overflow: hidden;
+      }
+      .ap-item {
+        display: flex;
+        align-items: center;
+        gap: var(--gap-inline);
+        text-align: left;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: 0;
+        border-top: var(--border-hairline) solid var(--color-border);
+        border-radius: 0;
+        padding: var(--pad-complete);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-semibold);
+        cursor: pointer;
+      }
+      .ap-item:first-child {
+        border-top: 0;
+      }
+      .ap-item:hover {
+        background: var(--color-surface);
+      }
+      /* Square placeholder for the agent's icon/logo (filled in later). */
+      .ap-icon {
+        flex: none;
+        width: 22px;
+        height: 22px;
+        border-radius: var(--radius-input);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+      }
+      .ap-item .ap-bin {
+        margin-left: auto;
+        color: var(--color-muted);
+        font-weight: 400;
+        font-size: var(--fs-note);
+      }
+      .ap-remember {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: var(--gap-list);
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+        cursor: pointer;
+        user-select: none;
+      }
+      .ap-remember input {
+        cursor: pointer;
+      }
       .footbar textarea {
         background: var(--color-bg);
         color: var(--color-fg);
@@ -1204,10 +1482,32 @@
         <div class="comment-pop" id="comment-pop" hidden></div>
         <div class="ann-pop" id="ann-pop" hidden></div>
         <div class="float-status" id="float-status">
+          <div class="device-switch" id="device-switch" hidden>
+            <button
+              id="device-name"
+              class="status device-pill"
+              type="button"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+              title="Switch device"></button>
+            <div id="device-menu" class="dev-menu" role="listbox" hidden></div>
+          </div>
           <span id="status" class="status" hidden></span>
           <span id="hidden-badge" class="hidden-badge" hidden></span>
         </div>
         <div class="float-controls" id="float-controls">
+          <button
+            id="theme-btn"
+            class="float-btn"
+            type="button"
+            aria-label="Theme"
+            title="Theme"></button>
+        </div>
+        <!-- Bottom-centre toolbelt that floats below the stream. Holds the
+             comment toggle for now; this is the seed of a Figma-style bottom
+             tool tab we'll grow later. Window close/minimise live in the native
+             traffic lights, not a handcrafted button. -->
+        <div class="float-toolbelt" id="float-toolbelt">
           <button
             id="comment-btn"
             class="float-btn"
@@ -1225,28 +1525,6 @@
               aria-hidden="true">
               <path
                 d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-            </svg>
-          </button>
-          <button
-            id="theme-btn"
-            class="float-btn"
-            type="button"
-            aria-label="Theme"
-            title="Theme"></button>
-          <button
-            id="close-btn"
-            class="float-btn"
-            type="button"
-            aria-label="Close preview window"
-            title="Close preview window">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              aria-hidden="true">
-              <path d="M6 6 18 18M18 6 6 18" />
             </svg>
           </button>
         </div>
@@ -1285,6 +1563,19 @@
             </svg>
             <span><b id="op-pill-count">0</b> hidden — show</span>
           </button>
+        </div>
+        <!-- Agent picker: the `argent lens` bridge populates this when more than
+             one agent CLI is installed; clicking a row binds Lens to that agent. -->
+        <div class="agent-picker" id="agent-picker" hidden>
+          <div class="ap-card">
+            <p class="ap-title">Bind Argent Lens to an agent</p>
+            <p class="ap-sub">Pick the coding agent to drive this session.</p>
+            <div class="ap-list" id="ap-list"></div>
+            <label class="ap-remember">
+              <input type="checkbox" id="ap-remember" />
+              <span>Remember this choice</span>
+            </label>
+          </div>
         </div>
         <div class="footbar" id="footbar" hidden>
           <div class="ready-label">
@@ -1485,7 +1776,196 @@
 
       // ── DOM ─────────────────────────────────────────────────────────────
       const status = document.getElementById("status");
+      const deviceNameEl = document.getElementById("device-name");
+      const deviceSwitchEl = document.getElementById("device-switch");
+      const deviceMenuEl = document.getElementById("device-menu");
       const viewport = document.getElementById("viewport");
+      // udid → human device name, learned from /preview/simulators. Backs the
+      // persistent device-name pill shown while a stream is live.
+      const deviceNameByUdid = new Map();
+      /** Show/refresh (or hide, with a falsy udid) the live device-name pill. */
+      function setDeviceIndicator(udid) {
+        if (!deviceSwitchEl) return;
+        if (!udid) {
+          deviceSwitchEl.hidden = true;
+          closeDeviceMenu();
+          return;
+        }
+        const name = deviceNameByUdid.get(udid) || `Device ${udid.slice(0, 8)}`;
+        deviceNameEl.textContent = "";
+        const nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = name;
+        deviceNameEl.appendChild(nm);
+        deviceSwitchEl.hidden = false;
+      }
+      /** Learn the device's name if we don't already know it (the ?udid boot path
+       * never passes through the picker, so the map can be empty). Best-effort;
+       * the pill keeps its short-udid fallback if this fails. */
+      async function ensureDeviceName(udid) {
+        if (!udid || deviceNameByUdid.has(udid)) return;
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/simulators`);
+          if (!res.ok) return;
+          const { simulators } = await res.json();
+          for (const s of simulators || []) deviceNameByUdid.set(s.udid, s.name);
+          if (currentUdid === udid) setDeviceIndicator(udid);
+        } catch {
+          /* best-effort — keep the fallback label */
+        }
+      }
+
+      // ── Device switcher dropdown (click the pill to change device) ────────
+      let deviceMenuOpen = false;
+      function closeDeviceMenu() {
+        deviceMenuOpen = false;
+        if (deviceNameEl) deviceNameEl.setAttribute("aria-expanded", "false");
+        if (deviceMenuEl) deviceMenuEl.hidden = true;
+        hideContextMenu();
+      }
+      function openDeviceMenu() {
+        if (!deviceMenuEl) return;
+        deviceMenuOpen = true;
+        deviceNameEl.setAttribute("aria-expanded", "true");
+        deviceMenuEl.hidden = false;
+        deviceMenuEl.innerHTML = '<div class="dev-menu-note">Loading devices…</div>';
+        fetch(`${TOOL_SERVER}/preview/simulators`)
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+          .then(({ simulators }) => {
+            const all = simulators || [];
+            for (const s of all) deviceNameByUdid.set(s.udid, s.name);
+            if (deviceMenuOpen) buildDeviceMenu(all);
+          })
+          .catch((err) => {
+            if (deviceMenuOpen)
+              deviceMenuEl.innerHTML = `<div class="dev-menu-note">Failed: ${escapeHtml(String(err.message || err))}</div>`;
+          });
+      }
+      function toggleDeviceMenu() {
+        if (deviceMenuOpen) closeDeviceMenu();
+        else openDeviceMenu();
+      }
+      /** Fill the dropdown with selectable devices, grouped like the full picker
+       * (booted → switch, stopped iOS → boot, everything else → disabled). */
+      function buildDeviceMenu(all) {
+        if (!deviceMenuEl) return;
+        deviceMenuEl.innerHTML = "";
+        const { booted, bootableIos, unbootable } = categorizeDevices(all);
+        if (!booted.length && !bootableIos.length && !unbootable.length) {
+          deviceMenuEl.innerHTML = '<div class="dev-menu-note">No devices found.</div>';
+          return;
+        }
+        const addSection = (items, kind, label) => {
+          if (!items.length) return;
+          if (label) {
+            const h = document.createElement("div");
+            h.className = "dev-menu-label";
+            h.textContent = label;
+            deviceMenuEl.appendChild(h);
+          }
+          const list = document.createElement("div");
+          list.className = "dev-list";
+          for (const s of items) list.appendChild(makeDeviceItem(s, kind, closeDeviceMenu));
+          deviceMenuEl.appendChild(list);
+        };
+        addSection(booted, "connect", null);
+        addSection(bootableIos, "boot", booted.length ? "Boot a simulator" : null);
+        addSection(unbootable, "disabled", "Not running");
+
+        const row = document.createElement("div");
+        row.className = "refresh-row";
+        const rb = document.createElement("button");
+        rb.type = "button";
+        rb.textContent = "⟳ Refresh";
+        rb.addEventListener("click", (e) => {
+          e.stopPropagation();
+          rb.blur();
+          openDeviceMenu();
+        });
+        row.appendChild(rb);
+        deviceMenuEl.appendChild(row);
+      }
+      if (deviceNameEl) {
+        deviceNameEl.addEventListener("click", (e) => {
+          e.stopPropagation();
+          toggleDeviceMenu();
+        });
+      }
+      // ── Right-click context menu (device rows → "Shut down") ───────────
+      // One reusable floating menu, positioned at the cursor and clamped into
+      // the viewport. Built on demand so it can carry per-device actions.
+      let ctxMenuEl = null;
+      function hideContextMenu() {
+        if (ctxMenuEl) ctxMenuEl.hidden = true;
+      }
+      function showContextMenu(x, y, items) {
+        if (!ctxMenuEl) {
+          ctxMenuEl = document.createElement("div");
+          ctxMenuEl.className = "ctx-menu";
+          ctxMenuEl.setAttribute("role", "menu");
+          document.body.appendChild(ctxMenuEl);
+        }
+        ctxMenuEl.innerHTML = "";
+        for (const it of items) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = it.label;
+          if (it.danger) b.className = "danger";
+          b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            hideContextMenu();
+            it.onClick();
+          });
+          ctxMenuEl.appendChild(b);
+        }
+        // Reveal at the origin to measure, then clamp so it never spills off-screen.
+        ctxMenuEl.hidden = false;
+        ctxMenuEl.style.left = "0px";
+        ctxMenuEl.style.top = "0px";
+        const r = ctxMenuEl.getBoundingClientRect();
+        const px = Math.min(x, window.innerWidth - r.width - 8);
+        const py = Math.min(y, window.innerHeight - r.height - 8);
+        ctxMenuEl.style.left = Math.max(8, px) + "px";
+        ctxMenuEl.style.top = Math.max(8, py) + "px";
+      }
+
+      // Shut down a device via the backend, then recover the UI: if it was the
+      // streamed device, tear the stream down and fall back to the picker;
+      // otherwise refresh whichever list is on screen.
+      async function shutdownDeviceAction(s) {
+        const wasCurrent = s.udid === currentUdid;
+        setStatus(`shutting down ${s.name}…`);
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/shutdown/${encodeURIComponent(s.udid)}`, {
+            method: "POST",
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          deviceNameByUdid.delete(s.udid);
+          if (wasCurrent) {
+            teardownStream();
+            refreshSimulators();
+          } else if (deviceMenuOpen) {
+            openDeviceMenu();
+          } else {
+            refreshSimulators();
+          }
+        } catch (err) {
+          setStatus(`couldn't shut down ${s.name}: ${err.message || err}`, "error");
+        }
+      }
+
+      // Dismiss the dropdown / context menu on outside-click or Escape.
+      document.addEventListener("click", (e) => {
+        if (ctxMenuEl && !ctxMenuEl.hidden && !ctxMenuEl.contains(e.target)) hideContextMenu();
+        if (deviceMenuOpen && deviceSwitchEl && !deviceSwitchEl.contains(e.target))
+          closeDeviceMenu();
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        if (ctxMenuEl && !ctxMenuEl.hidden) hideContextMenu();
+        else if (deviceMenuOpen) closeDeviceMenu();
+      });
       // Device the window was opened for (?udid=…), set by the tool-server from
       // the agent's propose_variant. When present we connect straight to it and
       // never show a simulator chooser.
@@ -1641,9 +2121,96 @@
       // booted simulators (or none) and nothing is connected yet. Replaces the
       // old static "Connecting…" placeholder, which looked stuck because the
       // only way to pick was a small toolbar dropdown that was easy to miss.
-      function renderDevicePicker(sims) {
+      // Split a simulators list into the three actionable buckets shared by the
+      // full picker and the switcher dropdown. Stopped iOS sims boot by udid;
+      // anything else non-booted can't be started from the preview.
+      function categorizeDevices(sims) {
         const booted = sims.filter((s) => s.state === "Booted");
         const others = sims.filter((s) => s.state !== "Booted");
+        return {
+          booted,
+          bootableIos: others.filter((s) => s.platform === "ios"),
+          unbootable: others.filter((s) => s.platform !== "ios"),
+        };
+      }
+
+      // Turn a raw runtime id into a short label so the row shows the device
+      // name, not "com.apple.CoreSimulator.SimRuntime.iOS-26-4". Android runtimes
+      // (e.g. "Android API 34") are already friendly, so leave them untouched.
+      function humanizeRuntime(rt) {
+        if (!rt) return "";
+        const m = /SimRuntime\.([A-Za-z]+)-([\d-]+)$/.exec(rt);
+        return m ? `${m[1]} ${m[2].replace(/-/g, ".")}` : rt;
+      }
+
+      // Build one .dev-item row. kind: "connect" (booted → switch/connect),
+      // "boot" (stopped iOS → boot then connect), "disabled" (not actionable).
+      // onAct, if given, runs on a successful click (e.g. to close the dropdown).
+      function makeDeviceItem(s, kind, onAct) {
+        const disabled = kind === "disabled";
+        const isCurrent = kind === "connect" && s.udid === currentUdid;
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "dev-item" + (isCurrent ? " current" : "");
+        b.disabled = disabled;
+        if (disabled) b.title = "Not booted — start the emulator first";
+        else if (kind === "boot") b.title = "Boot this simulator";
+        else if (isCurrent) b.title = "Current device";
+        else b.title = "Switch to this device";
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        const nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = s.name;
+        const rt = document.createElement("span");
+        rt.className = "rt";
+        rt.textContent = isCurrent
+          ? "Current"
+          : kind === "connect"
+            ? humanizeRuntime(s.runtime)
+            : kind === "boot"
+              ? "Boot"
+              : s.state || "";
+        b.append(dot, nm, rt);
+        if (kind === "connect") {
+          b.addEventListener("click", () => {
+            b.blur();
+            if (onAct) onAct();
+            if (s.udid === currentUdid) return; // already streaming this one
+            connect(s.udid).catch((err) => setStatus(String(err.message || err), "error"));
+          });
+          // Right-click a booted device to shut it down (it's already running,
+          // so there's a real device to kill).
+          b.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showContextMenu(e.clientX, e.clientY, [
+              {
+                label: `Shut down ${s.name}`,
+                danger: true,
+                onClick: () => shutdownDeviceAction(s),
+              },
+            ]);
+          });
+        } else if (kind === "boot") {
+          b.addEventListener("click", () => {
+            b.blur();
+            // Keep the row visible during boot so its in-row "Booting…" progress
+            // shows (closing the menu first would hide the very button
+            // bootDevice updates). Dismiss only once boot+connect succeeds; on
+            // failure the row stays so the reset button + error are visible.
+            bootDevice(s.udid, b)
+              .then(() => {
+                if (onAct) onAct();
+              })
+              .catch((err) => setStatus(String(err.message || err), "error"));
+          });
+        }
+        return b;
+      }
+
+      function renderDevicePicker(sims) {
+        const { booted, bootableIos, unbootable } = categorizeDevices(sims);
 
         const wrap = document.createElement("div");
         wrap.className = "dev-picker";
@@ -1659,37 +2226,16 @@
           : "Boot a simulator, then refresh.";
         wrap.appendChild(sub);
 
-        const addList = (items, disabled) => {
+        const addList = (items, kind) => {
           if (!items.length) return;
           const list = document.createElement("div");
           list.className = "dev-list";
-          for (const s of items) {
-            const b = document.createElement("button");
-            b.type = "button";
-            b.className = "dev-item";
-            b.disabled = disabled;
-            if (disabled) b.title = "Not booted — boot it first";
-            const dot = document.createElement("span");
-            dot.className = "dot";
-            const nm = document.createElement("span");
-            nm.className = "nm";
-            nm.textContent = s.name;
-            const rt = document.createElement("span");
-            rt.className = "rt";
-            rt.textContent = disabled ? s.state || "" : s.runtime || "";
-            b.append(dot, nm, rt);
-            if (!disabled) {
-              b.addEventListener("click", () => {
-                b.blur();
-                connect(s.udid).catch((err) => setStatus(String(err.message || err), "error"));
-              });
-            }
-            list.appendChild(b);
-          }
+          for (const s of items) list.appendChild(makeDeviceItem(s, kind));
           wrap.appendChild(list);
         };
-        addList(booted, false);
-        addList(others, true);
+        addList(booted, "connect");
+        addList(bootableIos, "boot");
+        addList(unbootable, "disabled");
 
         const row = document.createElement("div");
         row.className = "refresh-row";
@@ -1714,6 +2260,7 @@
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const { simulators } = await res.json();
           const all = simulators || [];
+          for (const s of all) deviceNameByUdid.set(s.udid, s.name);
           const booted = all.filter((s) => s.state === "Booted");
 
           // Exactly one usable simulator → connect to it directly.
@@ -1759,8 +2306,10 @@
           ws = null;
         }
         wsOpen = false;
-        // No live stream → no current device. Prevents the describe loop from
-        // firing one stale GET /preview/describe/<oldUdid> after teardown.
+        // No live stream → hide the device-name pill and drop the current device.
+        // The latter prevents the describe loop from firing one stale GET
+        // /preview/describe/<oldUdid> after teardown.
+        setDeviceIndicator(null);
         currentUdid = null;
         describeWarmupPending = false;
         // Explicitly clear the img src — otherwise the browser keeps the MJPEG
@@ -1800,6 +2349,37 @@
             connect(udid, true).catch((err) => setStatus(String(err.message || err), "error"));
           }
         }, delay);
+      }
+
+      // Boot a stopped iOS simulator from the picker, then connect to it. The
+      // tool-server boots it headless (no Simulator.app window) and tracks it as
+      // Lens-owned so it's shut down when the session ends.
+      async function bootDevice(udid, btn) {
+        if (btn) {
+          btn.disabled = true;
+          const rt = btn.querySelector(".rt");
+          if (rt) rt.textContent = "Booting…";
+        }
+        setStatus("booting simulator…");
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/boot`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ udid }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `HTTP ${res.status}`);
+          }
+          await connect(udid);
+        } catch (err) {
+          if (btn) {
+            btn.disabled = false;
+            const rt = btn.querySelector(".rt");
+            if (rt) rt.textContent = "Boot";
+          }
+          throw err;
+        }
       }
 
       async function connect(udid, isReconnect = false) {
@@ -1856,6 +2436,11 @@
         stage.appendChild(img);
         viewport.innerHTML = "";
         viewport.appendChild(stage);
+
+        // Surface which device is on screen, resolving its name if this was a
+        // direct ?udid connect that skipped the picker.
+        setDeviceIndicator(udid);
+        void ensureDeviceName(udid);
 
         attachInputHandlers(img);
 
@@ -2023,15 +2608,15 @@
       }
 
       // ── Events ──────────────────────────────────────────────────────────
-      // Close button: ask the tool-server to dismiss the Electron window (it
-      // owns the window lifecycle over stdin, so it plays the close animation
-      // and quits the host cleanly — more reliable than renderer window.close()
-      // under the sandboxed BrowserWindow).
-      const closeBtn = document.getElementById("close-btn");
-      closeBtn.addEventListener("click", () => {
-        closeBtn.blur();
-        fetch(`${TOOL_SERVER}/preview/close`, { method: "POST" }).catch(() => {});
-      });
+      // Window close/minimise are the native macOS traffic lights now (the host
+      // window uses titleBarStyle:"hidden"), so there's no handcrafted close
+      // button to wire up. Closing the native window quits the host; the
+      // tool-server re-opens it on the next round, exactly as the old button's
+      // dismiss did. In Electron, flag the document so the top-left chrome can
+      // sidestep the traffic lights (a browser tab has none).
+      if (/Electron/i.test(navigator.userAgent)) {
+        document.documentElement.classList.add("native-frame");
+      }
 
       // ── Theme (light / dark) ────────────────────────────────────────────
       // Colours are light-dark(LIGHT, DARK) tokens in theme.css; forcing
@@ -2371,6 +2956,10 @@
         dragging: false,
         cardDragging: false,
         justCompletedRound: -1,
+        // CLI Lens only: the round whose feedback we've already sent to the agent.
+        // While the server still reports this round (the agent hasn't opened a new
+        // one yet) we hide its proposals/comments so "Request changes" feels final.
+        sentRound: -1,
         inspect: false,
         focus: null, // describe node currently spotlighted
         commentFor: null, // describe node a comment-pop is open for
@@ -2553,18 +3142,33 @@
           );
         let best = null,
           bestScore = Infinity;
+        // The size gate is a PREFERENCE for the first match, never an eliminator.
+        // `fallback` keeps the nearest candidate even when the gate rejects it, so
+        // a clearly on-screen element is never reported off-screen just because the
+        // propose-time frame is a poor size hint: that frame is a thumbnail CROP
+        // region (often a whole component) while `match` can anchor on a small
+        // sub-element inside it — e.g. crop the header band, anchor on its tiny
+        // "Export" button — so the seed size legitimately dwarfs the real match.
+        let fallback = null,
+          fbScore = Infinity;
         for (const n of pool) {
           const f = n.frame;
           const score = anchor ? dist(f) : f.width * f.height;
+          if (score < fbScore) {
+            fbScore = score;
+            fallback = n;
+          }
           if (anchor && !hasDesc && !sizeMatches(f)) continue; // size gate only bootstraps identity
           if (score < bestScore) {
             bestScore = score;
             best = n;
           }
         }
-        // A locked identity must never be dropped over a size wobble: if the size
-        // gate isn't in play (hasDesc) `best` is simply the nearest identity match.
-        return best;
+        // A locked identity must never be dropped over a size wobble (hasDesc →
+        // `best` is the nearest identity match). When the size gate rejects every
+        // candidate (an unreliable propose-time frame), fall back to the nearest
+        // match rather than reporting a visible element off-screen.
+        return best || fallback;
       }
 
       // Topmost on-screen node whose frame contains a normalized point
@@ -2649,6 +3253,7 @@
                   (globalCommentEl && globalCommentEl.value);
                 const prev = vp.round;
                 vp.round = snap.round;
+                vp.sentRound = -1; // a fresh round supersedes any "already sent" hold
                 vp.staged = {};
                 vp.comments = {};
                 vp.annotations = [];
@@ -2664,12 +3269,82 @@
                 } else setNote("");
               }
             }
-            vp.proposals = Array.isArray(snap.proposals) ? snap.proposals : [];
+            // Hold the overlay empty after a CLI "Request changes" until the agent
+            // opens a NEW round — otherwise this poll would immediately re-show the
+            // very proposals the user just sent (the server keeps them live until
+            // the agent re-proposes, which rolls the round number).
+            const sentThisRound = vp.cliSession && vp.sentRound === snap.round;
+            vp.proposals = sentThisRound || !Array.isArray(snap.proposals) ? [] : snap.proposals;
+            // In a CLI-driven Lens session (`argent lens`) the window stays open
+            // and submissions are piped to the bound agent terminal rather than
+            // resolving an await — so the action reads "Request changes".
+            vp.cliSession = !!snap.cliSession;
+            const label = vp.cliSession ? "Request changes" : "Complete";
+            if (completeBtn && completeBtn.textContent !== label) completeBtn.textContent = label;
+            renderAgentPicker(
+              Array.isArray(snap.lensAgents) ? snap.lensAgents : [],
+              snap.lensAgentChoice || null
+            );
           }
         } catch {
           /* keep last state */
         }
         vpRender();
+      }
+
+      // ── Agent picker (CLI Lens session) ─────────────────────────────────
+      // The `argent lens` bridge offers a list of installed agents when more
+      // than one is present; the human clicks one and the bridge spawns it.
+      const agentPickerEl = document.getElementById("agent-picker");
+      const apListEl = document.getElementById("ap-list");
+      let apRenderedKey = "";
+      let apPicked = null; // optimistic: the id we POSTed, to hide before the snapshot catches up
+      function renderAgentPicker(agents, choice) {
+        // Show only while a choice is still pending (offered, not yet picked).
+        const show = agents.length > 0 && !choice && apPicked == null;
+        if (!show) {
+          if (!agentPickerEl.hidden) agentPickerEl.hidden = true;
+          if (choice) apPicked = null; // server confirmed — reset for any future session
+          return;
+        }
+        const key = agents.map((a) => a.id).join(",");
+        if (key !== apRenderedKey) {
+          apRenderedKey = key;
+          apListEl.innerHTML = "";
+          for (const a of agents) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "ap-item";
+            btn.innerHTML =
+              `<span class="ap-icon" aria-hidden="true"></span>` +
+              `<span class="ap-name">${escapeHtml(a.name)}</span>` +
+              `<span class="ap-bin">${escapeHtml(a.id)}</span>`;
+            btn.addEventListener("click", () => {
+              apPicked = a.id;
+              const rememberEl = document.getElementById("ap-remember");
+              const remember = !!(rememberEl && rememberEl.checked);
+              agentPickerEl.hidden = true;
+              fetch(`${TOOL_SERVER}/preview/cli-agent`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: a.id, remember }),
+              })
+                .then((res) => {
+                  // fetch only rejects on a network error, not a non-2xx status
+                  // (e.g. the flag was toggled off mid-session → 404). Reset so
+                  // the picker re-shows and the user can retry, rather than
+                  // staying hidden forever with no agent bound.
+                  if (!res.ok) apPicked = null;
+                })
+                .catch(() => {
+                  // Network failure — let the user retry.
+                  apPicked = null;
+                });
+            });
+            apListEl.appendChild(btn);
+          }
+        }
+        agentPickerEl.hidden = false;
       }
 
       // Element geometry changes continuously as the user scrolls the device,
@@ -2683,7 +3358,11 @@
       let describeWarmupPending = false;
       async function describeOnce() {
         const need =
-          currentUdid && (vp.proposals.length > 0 || vp.inspect || describeWarmupPending);
+          currentUdid &&
+          (vp.proposals.length > 0 ||
+            vp.annotations.length > 0 ||
+            vp.inspect ||
+            describeWarmupPending);
         if (need && !describeInFlight) {
           describeInFlight = true;
           // Bound each request — describe is polled ~3×/s now, so a single
@@ -2763,20 +3442,52 @@
           }, floor);
         });
       }
-      // Single loop (started once, never twice). Background cadence ~300ms
-      // while work is on screen; a kick from sendCmd() collapses the wait to
-      // the floor so connectors chase live drags/scrolls, then it idles at
-      // 900ms when there is nothing to track.
+      // Cheap order-sensitive hash of the describe tree's JSON — used only to
+      // tell whether the on-screen layout changed since the last poll (FNV-1a).
+      function treeSignature(tree) {
+        const s = JSON.stringify(tree);
+        let h = 2166136261;
+        for (let i = 0; i < s.length; i++) {
+          h ^= s.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+        }
+        return (h >>> 0).toString(36) + ":" + s.length;
+      }
+      // Single loop (started once, never twice). Cadence tracks on-screen motion
+      // instead of a fixed interval: the sim-server only emits frames (so the
+      // describe tree only changes) while the screen moves, so we poll fast while
+      // the tree is changing — navigation, animation, a live drag — and ramp
+      // toward idle once it's been static, mirroring the stream's own FPS rather
+      // than re-describing a frozen screen. A kick from sendCmd() still collapses
+      // the wait to the floor so connectors chase live input immediately; the
+      // resulting tree change resets the ramp. Comment pins keep the loop alive
+      // (need), so they reposition within one poll of a navigation instead of
+      // floating on a stale tree until it expires.
       let describeLoopArmed = false;
+      const DESCRIBE_FAST_MS = 300; // tracking motion
+      const DESCRIBE_IDLE_MS = 1500; // static screen, work still on it
       async function pollDescribe() {
         if (describeLoopArmed) return;
         describeLoopArmed = true;
+        let lastSig = "";
+        let staticPolls = 0;
         for (;;) {
           const t0 = Date.now();
           await describeOnce();
-          const need = currentUdid && (vp.proposals.length > 0 || vp.inspect);
-          const base = need ? Math.max(160, 300 - (Date.now() - t0)) : 900;
-          await describeDelay(base, need ? 130 : 0);
+          const need =
+            currentUdid && (vp.proposals.length > 0 || vp.annotations.length > 0 || vp.inspect);
+          const sig = vp.tree ? treeSignature(vp.tree) : "";
+          if (sig !== lastSig) {
+            lastSig = sig;
+            staticPolls = 0; // motion → describe again promptly
+          } else if (need) {
+            staticPolls++;
+          }
+          let base;
+          if (!need) base = DESCRIBE_IDLE_MS;
+          else if (staticPolls === 0) base = Math.max(160, DESCRIBE_FAST_MS - (Date.now() - t0));
+          else base = Math.min(DESCRIBE_IDLE_MS, DESCRIBE_FAST_MS + staticPolls * 250);
+          await describeDelay(base, need && staticPolls === 0 ? 130 : 0);
         }
       }
 
@@ -3192,6 +3903,37 @@
         else return home;
         return { x: nx, y: home.y };
       }
+      // Deterministic de-overlap of the spring HOMES (targets), run once per
+      // layoutCards pass — i.e. per describe poll, NOT per animation frame. That
+      // is the whole point: the damped bubble springs then glide to homes that
+      // already don't overlap, so there is no live correction force and thus
+      // none of the micro-jitter / wedge-wiggle a per-frame position fix causes.
+      // Stable top-down sweep: walking cards in y order, each one is dropped to
+      // sit just below every card above it that shares its vertical lane. Moving
+      // only ever downward makes it monotonic — it cannot oscillate. Pinned
+      // (user-dropped) cards are fixed anchors the others flow past.
+      function deOverlapHomes(items, cardW, gap, top, bottom) {
+        const sorted = items.slice().sort((a, b) => a.rec.home.y - b.rec.home.y);
+        for (let i = 1; i < sorted.length; i++) {
+          const cur = sorted[i];
+          if (cur.rec.pinned) continue;
+          let floor = top;
+          for (let j = 0; j < i; j++) {
+            const prev = sorted[j];
+            // Same vertical lane? (cards in different columns never constrain.)
+            const oX =
+              Math.min(cur.rec.home.x, prev.rec.home.x) +
+              cardW -
+              Math.max(cur.rec.home.x, prev.rec.home.x);
+            if (oX <= 0) continue;
+            const prevBottom = prev.rec.home.y + prev.ch + gap;
+            if (prevBottom > floor) floor = prevBottom;
+          }
+          // Drop to clear the cards above; clamp so it can't leave the window
+          // (true overflow piles at the bottom rather than vanishing off-screen).
+          if (cur.rec.home.y < floor) cur.rec.home.y = Math.min(floor, bottom - cur.ch);
+        }
+      }
       function layoutCards() {
         const now = Date.now();
         const mr = mainEl.getBoundingClientRect();
@@ -3305,7 +4047,7 @@
         //        • The final maxHeight write is diffed against the inline
         //          value so unchanged frames are no-ops — keeps scrollTop.
         const COL_PAD = 8;
-        const GAP = 12;
+        const GAP = 8;
         const want = vis.map((rec, i) => {
           const body = rec.el.querySelector(".vcard-body");
           if (body && rec.chromeH == null) {
@@ -3371,11 +4113,19 @@
         // the "ready" pop. offsetTop ignores the transform (offsetParent is the
         // position:relative #main), keeping the column height stable.
         const footTop = footEl && !footEl.hidden ? footEl.offsetTop - COL_PAD : mh;
-        const colBottom = Math.min(mh - COL_PAD, footTop);
-        const colH = colBottom - colTop;
+        // The footbar is anchored bottom-RIGHT, so only the column(s) that
+        // actually sit above it should surrender height for it. A column clear
+        // of the footbar's x-range gets the full window height — otherwise the
+        // left column was needlessly squeezed (and its cards clipped) by a
+        // footbar that only overlaps the right column.
+        const footLeft = footEl && !footEl.hidden ? footEl.offsetLeft : mw;
         for (const col of ["L", "R"]) {
           const cwant = want.filter((w) => w.side === col);
           if (cwant.length === 0) continue;
+          const colX = col === "L" ? leftX : rightX;
+          const colBottom =
+            colX + cardW > footLeft ? Math.min(mh - COL_PAD, footTop) : mh - COL_PAD;
+          const colH = colBottom - colTop;
           const naturalSum = cwant.reduce((s, w) => s + w.natural, 0) + (cwant.length - 1) * GAP;
           if (naturalSum <= colH) {
             cwant.sort((a, b) => a.anchor - b.anchor);
@@ -3468,6 +4218,9 @@
             w.rec.vel.y += Math.random() * 18 - 9;
           }
         }
+        // Guarantee no two resting homes overlap. Deterministic + once per pass,
+        // so the springs simply glide to clear targets (no live force, no jitter).
+        deOverlapHomes(want, cardW, GAP, COL_PAD, mh - COL_PAD);
       }
 
       // Reuses SVG nodes (no per-frame teardown) and draws to the *eased*
@@ -4296,24 +5049,14 @@
         const allChosen = vp.proposals.length > 0 && vp.proposals.every((p) => vp.staged[p.id]);
         footEl.classList.toggle("ready", allChosen && !vp.submitting);
 
-        // Off-screen proposals stay folded away (the "N hidden" badge) until the
-        // user opts in. Once every ON-screen choice is staged, offer to reveal
-        // the rest via a prompt above the footbar. Dismissing it collapses to a
-        // persistent pill — the hidden choices are always one click from visible.
+        // Whenever ANY proposal's element is off-screen, surface the reveal
+        // prompt above the footbar so the user can always bring the hidden
+        // choices into view. (Previously this was gated on every on-screen
+        // choice already being staged, which stranded the user with a "N hidden"
+        // count and no affordance to act on it.) `offscreenPromptCollapsed` only
+        // selects between the full card and the collapsed pill (see below).
         const offScreenCount = vp.proposals.filter((p) => !p._node).length;
-        // Every currently-on-screen choice is staged. `every` is vacuously true
-        // when NONE are on screen (e.g. all proposals target another screen), so
-        // the reveal prompt still appears in that case instead of stranding the
-        // user with inert "N hidden" cards and no way to surface them.
-        const onScreenStaged = vp.proposals.every((p) => !p._node || vp.staged[p.id]);
-        // Latch on `offscreenPromptCollapsed`: once dismissed to the pill, keep it
-        // shown even if an on-screen pick is later un-staged — the hidden choices
-        // must ALWAYS stay one click from visible (the pill never disappears).
-        const showPrompt =
-          offScreenCount > 0 &&
-          !vp.revealOffscreen &&
-          !vp.submitting &&
-          (onScreenStaged || vp.offscreenPromptCollapsed);
+        const showPrompt = offScreenCount > 0 && !vp.revealOffscreen && !vp.submitting;
         offscreenPrompt.hidden = !showPrompt;
         if (showPrompt) {
           offscreenPrompt.classList.toggle("collapsed", !!vp.offscreenPromptCollapsed);
@@ -4490,12 +5233,27 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
           const picked = selections.filter((s) => s.variantId).length;
+          const annCount = vp.annotations.length;
           vp.justCompletedRound = vp.round;
-          setNote(
-            `Sent ${picked} pick(s) + ${vp.annotations.length} comment(s) to the agent.`,
-            "ok"
-          );
-          showSuccessToast(picked, vp.annotations.length);
+          setNote(`Sent ${picked} pick(s) + ${annCount} comment(s) to the agent.`, "ok");
+          showSuccessToast(picked, annCount);
+          // CLI Lens: the round stays open server-side until the agent proposes
+          // anew, but the user has "sent" this batch — clear it from the overlay
+          // now (and keep it cleared via vp.sentRound in pollVariants, since the
+          // server still returns these proposals until the agent re-proposes) so
+          // the submit feels final instead of leaving the same cards sitting there.
+          if (vp.cliSession) {
+            vp.sentRound = vp.round;
+            vp.proposals = [];
+            vp.staged = {};
+            vp.comments = {};
+            vp.annotations = [];
+            vp.revealOffscreen = false;
+            vp.offscreenPromptCollapsed = false;
+            if (globalCommentEl) globalCommentEl.value = "";
+            closeAnnPop();
+            vpRender();
+          }
         } catch (err) {
           setNote(`Failed: ${err.message || err}`, "err");
         } finally {

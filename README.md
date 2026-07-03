@@ -9,18 +9,32 @@
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-2?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-2&n=1)
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-3?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-3&n=1)
 
-**[Argent](https://argent.swmansion.com)** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators and Android Emulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
+**[Argent](https://argent.swmansion.com)** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators, Android emulators and physical devices, TVs (Apple TV, Android TV, Fire TV) and Electron/Chromium desktop and web apps. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
 npx @swmansion/argent init
 ```
 
+## Supported platforms
+
+Argent drives a growing set of targets through a single toolkit, each with the right interaction model - touch, remote or mouse:
+
+| Platform          | Targets                                                                 | Interaction      |
+| ----------------- | ----------------------------------------------------------------------- | ---------------- |
+| **iOS**           | Simulators                                                              | Touch / gesture  |
+| **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
+| **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
+| **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
+
 ## Capabilities
 
-- **Autonomous iOS and Android development** - Allow your agent to work with iOS and Android apps on its own - let it build, open, interact with the app and debug it. Ask for reproducing issues, testing features manually, profiling your app and much more, without ever interrupting your work.
-- **UI interaction** - Give your agent full control toolkit - tapping, swiping, pinching, typing, gestures, hardware buttons and all other gears included. Let it navigate your app exactly as a user would, without lifting a finger.
-- **Profiling with batteries included** - Argent can perform and analyze both React-Native and Xcode Instruments profiling sessions. Get comprehensive summaries and ask to optimise your app where you find fit.
-- **Debugging and diagnostics** - Let your agent inspect logs, capture crash reports, and reproduce failing states on the simulator, so you can jump straight to the fix.
+- **Autonomous mobile, TV and desktop development** - Allow your agent to work with iOS, Android, TV and Electron/web apps on its own - let it build, open, interact with the app and debug it. Ask for reproducing issues, testing features manually, profiling your app and much more, without ever interrupting your work.
+- **UI interaction** - Give your agent the full control toolkit - tapping, swiping, pinching, typing, gestures and hardware buttons on mobile; the directional remote on TV; mouse, scroll and drag on desktop/web. Let it navigate your app exactly as a user would, without lifting a finger.
+- **Record & replay flows** - Capture a sequence of interactions once and let your agent replay it deterministically, so manual repros and smoke tests become repeatable.
+- **Visual regression** - Diff two screenshots (or a saved baseline against a live capture) with OCR- and font-aware comparison to catch unintended UI changes.
+- **Profiling with batteries included** - Argent can perform and analyze React Native (Hermes), React DevTools and native (Xcode Instruments / Android Perfetto) profiling sessions - down to fiber renders, CPU hotspots and cross-correlated commit-vs-hang reports. Get comprehensive summaries and ask to optimise your app where you find fit.
+- **Debugging and diagnostics** - Let your agent inspect logs, capture network traffic (JS `fetch` and native), evaluate JS in the running app, walk the native UIKit and React component trees, and reproduce failing states - so you can jump straight to the fix.
+- **Desktop & web control** - For Electron and Chromium apps your agent can drive tabs, read and write cookies and storage, walk the DOM and inspect network over the Chrome DevTools Protocol.
 - **React Native out of the box** - Argent works with React Native apps natively, so your agent can build, launch, and iterate on your RN project the same way it would any native app - no extra setup required.
 
 > **Tip:** Once installed, ask your assistant _"What can Argent do?"_ - it will walk you through all capabilities available.
@@ -37,8 +51,10 @@ npx @swmansion/argent init
 #### Prerequisites
 
 - **Node.js 20.11** or later
-- For iOS: macOS with **Xcode** installed
-- For Android: **Android SDK Platform Tools** (`adb`) on `PATH`, and the **Android Emulator** package if you want to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
+- For iOS / tvOS: macOS with **Xcode** installed (Apple TV uses tvOS simulators — Xcode downloads the tvOS runtime on demand)
+- For Android / Android TV: **Android SDK Platform Tools** (`adb`) on `PATH`, and the **Android Emulator** package if you want to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
+- For Fire TV (Vega): the **Vega SDK** (`vega` CLI) on `PATH`
+- For Electron / Chromium: nothing extra to control an already-running app - just launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you
 
 ##### Linux host: extra prerequisites for Android emulators
 
@@ -100,34 +116,41 @@ argent init
 
 ## CLI Reference
 
-| Command            | Description                                                            |
-| ------------------ | ---------------------------------------------------------------------- |
-| `argent init`      | Install globally and configure MCP in the current workspace            |
-| `argent install`   | Alias for `init` command                                               |
-| `argent update`    | Pull the latest version and refresh workspace configuration            |
-| `argent remove`    | Unregister the MCP server and uninstall the package                    |
-| `argent uninstall` | Alias for `remove` command                                             |
-| `argent mcp`       | Start MCP server instance, used internally by agent                    |
-| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local) |
-| `argent disable`   | Disable a feature flag (`--scope project` for project-local)           |
-| `argent flags`     | List available feature flags and their state                           |
-| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`            |
+| Command            | Description                                                                                                                                                                                               |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `argent init`      | Install globally and configure MCP in the current workspace                                                                                                                                               |
+| `argent install`   | Alias for `init` command                                                                                                                                                                                  |
+| `argent update`    | Pull the latest version and refresh workspace configuration                                                                                                                                               |
+| `argent remove`    | Unregister the MCP server and uninstall the package                                                                                                                                                       |
+| `argent uninstall` | Alias for `remove` command                                                                                                                                                                                |
+| `argent mcp`       | Start MCP server instance, used internally by agent                                                                                                                                                       |
+| `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)                                                                                                                                     |
+| `argent run`       | Invoke a tool by name                                                                                                                                                                                     |
+| `argent server`    | Manage the shared tool-server: `start` / `status` / `stop` / `logs`                                                                                                                                       |
+| `argent lens`      | Open Argent Lens bound to a fresh coding-agent session — Claude by default, `--agent` selects codex/gemini/opencode/cursor (macOS; behind the `argent-lens` flag — run `argent enable argent-lens` first) |
+| `argent link`      | Route client requests to a remote tool-server                                                                                                                                                             |
+| `argent unlink`    | Remove the persisted remote tool-server link                                                                                                                                                              |
+| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                                                                                                                    |
+| `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                                                                                                              |
+| `argent flags`     | List available feature flags and their state                                                                                                                                                              |
+| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`                                                                                                                                               |
 
 ## Supported Editors
 
 `argent init` auto-detects and configures MCP for:
 
-| Editor      | Config location                                                          |
-| ----------- | ------------------------------------------------------------------------ |
-| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                       |
-| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)            |
-| VS Code     | `.vscode/mcp.json`                                                       |
-| Windsurf    | `~/.codeium/windsurf/mcp_config.json` (global)                           |
-| Zed         | `.zed/settings.json`                                                     |
-| Gemini CLI  | `.gemini/settings.json`                                                  |
-| Codex CLI   | `.codex/config.toml` (project) or `~/.codex/config.toml` (global)        |
-| Hermes      | `~/.hermes/config.yaml` (global)                                         |
-| opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global) |
+| Editor      | Config location                                                             |
+| ----------- | --------------------------------------------------------------------------- |
+| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                          |
+| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)               |
+| VS Code     | `.vscode/mcp.json`                                                          |
+| Windsurf    | `~/.codeium/windsurf/mcp_config.json` (global)                              |
+| Zed         | `.zed/settings.json` (project) or `~/.config/zed/settings.json` (global)    |
+| Gemini CLI  | `.gemini/settings.json`                                                     |
+| Codex CLI   | `.codex/config.toml` (project) or `~/.codex/config.toml` (global)           |
+| Hermes      | `~/.hermes/config.yaml` (global)                                            |
+| opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global)    |
+| Kiro        | `.kiro/settings/mcp.json` (project) or `~/.kiro/settings/mcp.json` (global) |
 
 ## Privacy
 

@@ -24,6 +24,7 @@ describe("base-props", () => {
           "$process_person_profile",
           "$session_id",
           "arch",
+          "cloud_agent",
           "cli_version",
           "is_ci",
           "is_tty",
@@ -54,6 +55,18 @@ describe("base-props", () => {
     try {
       process.env.CI = "1";
       expect(getBaseProps("cli").is_ci).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("sets cloud_agent when a cloud/remote agent runtime is detected", () => {
+    // REPLIT_AGENT is an env-only signal (no filesystem check) and is not the
+    // ambient env of this test process, so it resolves deterministically.
+    const restore = snapshotEnv(["REPLIT_AGENT"]);
+    try {
+      process.env.REPLIT_AGENT = "1";
+      expect(getBaseProps("cli").cloud_agent).toBe("replit");
     } finally {
       restore();
     }

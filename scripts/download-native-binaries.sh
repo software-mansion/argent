@@ -63,6 +63,56 @@ gh release download "${TAG}" \
   --clobber
 chmod +x "${IOS_BIN_DIR}/ax-service"
 
+# tvOS binaries (Apple TV support). The three tvOS injection dylibs share their
+# filenames with the iOS dylibs, so the release ships them as a tarball
+# (native-devtools-ios-tvos-dylibs.tar.gz) that we extract into dylibs/tvos/ —
+# the directory bootstrapDylibPathTvos() reads from. The two daemons
+# (tvos-ax-service spawned in-sim, tvos-hid-daemon on the host) have unique
+# names and download flat into bin/darwin/.
+#
+# These assets only exist on releases built with TV support. A pre-TV-support
+# tag (the optional [release-tag] arg lets you pull older releases) simply has
+# no tvOS artifacts, so a missing asset is skipped with a warning rather than
+# aborting the whole download (`gh release download` exits non-zero on no match,
+# which under `set -e` would otherwise leave a half-populated tree).
+TVOS_DYLIBS_DIR="${DYLIBS_DIR}/tvos"
+mkdir -p "${TVOS_DYLIBS_DIR}"
+
+echo "  Downloading tvOS dylibs..."
+TMP_TVOS_DYLIBS="$(mktemp -t native-devtools-ios-tvos-dylibs.XXXXXX.tar.gz)"
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "native-devtools-ios-tvos-dylibs.tar.gz" \
+  --output "${TMP_TVOS_DYLIBS}" \
+  --clobber; then
+  tar -xzf "${TMP_TVOS_DYLIBS}" -C "${TVOS_DYLIBS_DIR}"
+else
+  echo "  Skipping tvOS dylibs: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
+fi
+rm -f "${TMP_TVOS_DYLIBS}"
+
+echo "  Downloading tvos-ax-service..."
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "tvos-ax-service" \
+  --dir "${IOS_BIN_DIR}" \
+  --clobber; then
+  chmod +x "${IOS_BIN_DIR}/tvos-ax-service"
+else
+  echo "  Skipping tvos-ax-service: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
+fi
+
+echo "  Downloading tvos-hid-daemon..."
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "tvos-hid-daemon" \
+  --dir "${IOS_BIN_DIR}" \
+  --clobber; then
+  chmod +x "${IOS_BIN_DIR}/tvos-hid-daemon"
+else
+  echo "  Skipping tvos-hid-daemon: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
+fi
+
 echo "  Downloading argent-android-devtools.apk..."
 # The release publishes the APK under a stable name (no versioning in the
 # filename) so this script doesn't have to know the version ahead of time;
@@ -84,8 +134,48 @@ trap - EXIT
 
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
+# Verify the downloaded injection dylibs carry the expected Mach-O platform.
+# This is the exact failure a mis-built release can reintroduce: a tvOS-built
+# libArgentInjectionBootstrap.dylib landing in the flat iOS slot. dyld silently
+# skips a DYLD_INSERT_LIBRARIES library whose LC_BUILD_VERSION platform does not
+# match the process, so native-devtools never injects on an iOS simulator and
+# every native-* tool returns restart_required — with no error at download,
+# sign, or pack time. Fail loudly here rather than bundle a dead dylib.
+# vtool is macOS-only; on hosts without it (non-macOS) the check is skipped.
+if command -v vtool &>/dev/null; then
+  echo "Verifying dylib platforms..."
+  dylib_verify_failed=0
+  assert_dylib_platform() { # <file> <expected-platform>
+    local f="$1" want="$2" arch got
+    [ -f "$f" ] || return 0  # tvOS dylibs are absent on pre-Apple-TV tags
+    for arch in arm64 x86_64; do
+      got="$(vtool -arch "$arch" -show-build "$f" 2>/dev/null | awk '/platform/{print $2}')"
+      if [ "$got" != "$want" ]; then
+        echo "  ERROR: ${f} (${arch}) is '${got:-<none>}', expected ${want}" >&2
+        dylib_verify_failed=1
+      fi
+    done
+  }
+  for d in libNativeDevtoolsIos libKeyboardPatch libArgentInjectionBootstrap; do
+    assert_dylib_platform "${DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
+    assert_dylib_platform "${TVOS_DYLIBS_DIR}/${d}.dylib" TVOSSIMULATOR
+  done
+  if [ "${dylib_verify_failed}" -ne 0 ]; then
+    echo "Dylib platform verification failed for release '${TAG}'. The release" >&2
+    echo "shipped a mis-platformed dylib (see above) — refusing to use it. Fix" >&2
+    echo "the build-native-binaries workflow / re-publish the release, then retry." >&2
+    exit 1
+  fi
+  echo "Dylib platforms OK (iOS=IOSSIMULATOR, tvOS=TVOSSIMULATOR where present)."
+fi
+
 if command -v codesign &>/dev/null; then
-  for f in "${DYLIBS_DIR}"/*.dylib "${IOS_BIN_DIR}/ax-service"; do
+  for f in \
+    "${DYLIBS_DIR}"/*.dylib \
+    "${TVOS_DYLIBS_DIR}"/*.dylib \
+    "${IOS_BIN_DIR}/ax-service" \
+    "${IOS_BIN_DIR}/tvos-ax-service" \
+    "${IOS_BIN_DIR}/tvos-hid-daemon"; do
     codesign -dvv "$f" 2>&1 || echo "Warning: signature verification failed for $f"
   done
 fi

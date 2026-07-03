@@ -44,20 +44,25 @@ function fakeApi(): NativeProfilerSessionApi {
   };
 }
 
-// listapps, get_app_container and terminate all go through execFileSync (discrete
-// argv, shell-injection-hardened, mirroring the best-effort relaunch), so the mock
-// keys off the bin/argv rather than a command string. `simctl listapps` returns a
-// plist that `plutil` converts to JSON.
+// Every simctl/xcode subprocess the profiler runs goes through execFileSync (discrete
+// argv, shell-injection-hardened) — launchctl and `xcodebuild -version` included, since
+// the capture-strategy selector reads the Xcode version the same hardened way. So the
+// mock keys off the bin/argv rather than a command string. `simctl listapps` returns a
+// plist that `plutil` converts to JSON; `xcodebuild` defaults to unmocked ("") so the
+// version reads as undetermined unless a caller opts in via the `xcodebuild` option.
 interface ExecFileSyncOpts {
   maxBuffer?: number;
   input?: string;
   encoding?: string;
   timeout?: number;
 }
-function makeExecFileSyncFn() {
+function makeExecFileSyncFn(opts?: { xcodebuild?: string }) {
   return vi.fn((bin: string, args: string[] = [], _opts?: ExecFileSyncOpts) => {
+    if (bin === "xcodebuild") return opts?.xcodebuild ?? ""; // capture-strategy reads `xcodebuild -version`
     if (bin === "plutil") return LISTAPPS_JSON; // plutil converts the listapps plist to JSON
     if (args.includes("listapps")) return "<plist/>"; // raw plist, piped into plutil
+    if (args.includes("launchctl"))
+      return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n"; // `simctl spawn <udid> launchctl list`
     if (args.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
     if (args.includes("terminate")) return "";
     return "";
@@ -66,11 +71,9 @@ function makeExecFileSyncFn() {
 
 function mockChildProcess() {
   const spawnFn = vi.fn(() => new StartFakeChild());
-  const execSyncFn = vi.fn((cmd: string) => {
-    if (cmd.includes("launchctl list"))
-      return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n";
-    return "";
-  });
+  // Nothing routes through execSync anymore (launchctl/xcodebuild are hardened to
+  // execFileSync); keep a stub so a stray call no-ops rather than crashing.
+  const execSyncFn = vi.fn(() => "");
   const execFileSyncFn = makeExecFileSyncFn();
   return { spawnFn, execSyncFn, execFileSyncFn };
 }
@@ -247,13 +250,12 @@ describe("native-profiler-start malloc_stack_logging", () => {
   // before the running app is terminated and before any xctrace spawn.
   function mockChildProcessDegraded() {
     const spawnFn = vi.fn(() => new StartFakeChild());
-    const execSyncFn = vi.fn((cmd: string) => {
-      if (cmd.includes("xcodebuild")) return "Xcode 26.5\nBuild version 17F42";
-      if (cmd.includes("launchctl list"))
-        return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n";
-      return "";
+    const execSyncFn = vi.fn(() => "");
+    // A degraded Xcode (26.4–27.0) as reported by the hardened `xcodebuild -version`
+    // read (execFileSync) that the capture-strategy selector performs.
+    const execFileSyncFn = makeExecFileSyncFn({
+      xcodebuild: "Xcode 26.5\nBuild version 17F42",
     });
-    const execFileSyncFn = makeExecFileSyncFn();
     return { spawnFn, execSyncFn, execFileSyncFn };
   }
 
@@ -597,19 +599,18 @@ describe("native-profiler-start malloc_stack_logging", () => {
         },
       });
       const spawnFn = vi.fn(() => new StartFakeChild());
-      const execSyncFn = vi.fn((cmd: string) => {
-        if (cmd.includes("launchctl list"))
+      const execSyncFn = vi.fn(() => "");
+      // getInstalledApps resolves the installed set via execFileSync(listapps) piped
+      // through plutil; the running set comes from execFileSync(launchctl list). Both the
+      // two-app plist and the two running PIDs are delivered through the execFileSync mock.
+      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
+        if (bin === "plutil") return twoApps;
+        if (args.includes("listapps")) return "<plist/>";
+        if (args.includes("launchctl"))
           return (
             "1\t0\tUIKitApplication:com.example.myapp[a][rb]\n" +
             "2\t0\tUIKitApplication:com.example.other[b][rb]\n"
           );
-        return "";
-      });
-      // getInstalledApps resolves the installed set via execFileSync(listapps) piped
-      // through plutil, so the two-app plist is delivered by the plutil→JSON mock.
-      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
-        if (bin === "plutil") return twoApps;
-        if (args.includes("listapps")) return "<plist/>";
         if (args.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
         if (args.includes("terminate")) return "";
         return "";

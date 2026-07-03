@@ -7,7 +7,7 @@ import type { AiTelemetryProps } from "./ai-identity.js";
 // Single source of truth for the device platform enum: the TS union below and
 // sanitize.ts's runtime allowlist both derive from this tuple, so adding a
 // platform can't silently drift the two apart.
-export const PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+export const PLATFORMS = ["ios", "ios-remote", "android", "chromium", "vega"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 // Installation events
@@ -142,10 +142,6 @@ export interface ToolserverStopProps extends FailureTelemetryProps {
   total_tool_calls: number;
 }
 
-// Consent transition events
-
-export type TelemetryOptOutProps = Record<string, never>;
-
 // Discriminated union for typed-track()
 
 export interface EventPropertyMap {
@@ -170,7 +166,6 @@ export interface EventPropertyMap {
   "cli:run_fail": CliRunFailProps;
   "toolserver:start": ToolserverStartProps;
   "toolserver:stop": ToolserverStopProps;
-  "telemetry:opt_out": TelemetryOptOutProps;
 }
 
 export type EventName = keyof EventPropertyMap;
@@ -198,5 +193,4 @@ export const EVENT_NAMES: readonly EventName[] = [
   "cli:run_fail",
   "toolserver:start",
   "toolserver:stop",
-  "telemetry:opt_out",
 ];

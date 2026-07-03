@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package datachannel;
+
+enum TouchAction {
+  TOUCH_DOWN = 0;
+  TOUCH_UP = 1;
+  TOUCH_MOVE = 2;
+}
+
+enum KeyAction {
+  KEY_DOWN = 0;
+  KEY_UP = 1;
+}
+
+enum ButtonType {
+  BUTTON_HOME = 0;
+  BUTTON_BACK = 1;
+  BUTTON_POWER = 2;
+  BUTTON_VOLUME_UP = 3;
+  BUTTON_VOLUME_DOWN = 4;
+  BUTTON_APP_SWITCH = 5;
+  BUTTON_ACTION = 6;
+}
+
+enum RotateDirection {
+  ROTATE_PORTRAIT = 0;
+  ROTATE_PORTRAIT_UPSIDE_DOWN = 1;
+  ROTATE_LANDSCAPE_LEFT = 2;
+  ROTATE_LANDSCAPE_RIGHT = 3;
+}
+
+message TouchCommand {
+  TouchAction action = 1;
+  double x = 2;
+  double y = 3;
+  optional double second_x = 4;
+  optional double second_y = 5;
+}
+
+message KeyCommand {
+  KeyAction action = 1;
+  int32 code = 2;
+}
+
+message ButtonCommand {
+  KeyAction action = 1;
+  ButtonType button = 2;
+}
+
+message RotateCommand {
+  RotateDirection direction = 1;
+}
+
+message WheelCommand {
+  double x = 1;
+  double y = 2;
+  double dx = 3;
+  double dy = 4;
+}
+
+enum DownscalerType {
+  DOWNSCALER_LANCZOS3 = 0;
+  DOWNSCALER_BOX = 1;
+  DOWNSCALER_BILINEAR = 2;
+  DOWNSCALER_NEAREST = 3;
+}
+
+message ScreenshotCommand {
+  optional string id = 1;
+  optional RotateDirection rotation = 2;
+  optional float scale = 3;
+  optional DownscalerType downscaler = 4;
+}
+
+message DataChannelCommand {
+  oneof command {
+    TouchCommand touch = 1;
+    KeyCommand key = 2;
+    ButtonCommand button = 3;
+    RotateCommand rotate = 4;
+    WheelCommand wheel = 5;
+    ScreenshotCommand screenshot = 6;
+  }
+}

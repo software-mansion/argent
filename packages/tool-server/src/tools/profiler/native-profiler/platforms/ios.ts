@@ -1,4 +1,4 @@
-import { spawn, execSync, execFileSync, type ChildProcess } from "child_process";
+import { spawn, execFileSync, type ChildProcess } from "child_process";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
@@ -10,6 +10,7 @@ import {
   type NotifyHandle,
 } from "../../../../utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
+import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
@@ -55,12 +56,6 @@ function resolveDefaultTemplatePath(): string {
 const STARTUP_TIMEOUT_MS = 10_000;
 const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
 const NOTIFY_REGISTER_TIMEOUT_MS = 2_000;
-// `simctl listapps` emits a verbose plist for every installed app (entitlements,
-// group containers, ...); on a well-populated simulator it can run into several MB,
-// larger than Node's 1 MiB default execFileSync buffer (which throws ENOBUFS, not
-// truncates). Capture it generously so listing can't spuriously fail. 64 MiB is far
-// above any realistic listapps output.
-const LISTAPPS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_START_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 1_200;
 const COLD_START_SIGNATURE = "Cannot find process matching name:";
@@ -96,12 +91,14 @@ interface DetectedApp {
  * its host PID. The PID is the leading column of `launchctl list`; apps that are
  * registered but not running carry `-` there and are skipped.
  */
-function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
+// Exported for the shell-injection regression test (native-profiler-ios-shell-injection.test.ts).
+export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
   let launchctlOutput: string;
   try {
-    launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
+    launchctlOutput = execFileSync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -231,19 +228,22 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
   let listAppsOutput: string;
   try {
     // `simctl listapps` emits a plist; plutil converts it to JSON, reading the plist
-    // from stdin (the trailing `-`). Two discrete-argv execFileSync calls instead of a
-    // piped `execSync` shell string — matching getAppBundlePath / terminate / relaunch,
-    // so no value (device_id included) is ever interpolated into a shell.
+    // from stdin (the trailing `-`, guarded by `--` so it can never be taken for a flag).
+    // Two discrete-argv execFileSync calls instead of a piped `execSync` shell string —
+    // matching getAppBundlePath / terminate / relaunch, so no value (device_id included)
+    // is ever interpolated into a shell. Each stage buffers its full stdout in Node
+    // rather than the OS pipe, so both raise maxBuffer to run-with-timeout.ts's 256 MiB;
+    // Node's 1 MiB default would throw ENOBUFS on a well-populated simulator.
     const listAppsPlist = execFileSync("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-      maxBuffer: LISTAPPS_MAX_BUFFER_BYTES,
+      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
-    listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "-"], {
+    listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
       input: listAppsPlist,
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-      maxBuffer: LISTAPPS_MAX_BUFFER_BYTES,
+      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

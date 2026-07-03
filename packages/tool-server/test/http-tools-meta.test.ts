@@ -187,6 +187,90 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(seenMeta).toEqual({ platform: "ios", ai_client: "codex" });
   });
 
+  it("forwards a child-invocation recorder bound to the request's attribution", async () => {
+    const release = vi.fn();
+    const recordInvocation = vi.fn((_id: string, _meta: Record<string, unknown>) => release);
+    const registry = stubRegistry();
+    handle.dispose();
+    handle = createHttpApp(registry, { recordInvocation });
+
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .set("X-Argent-AI-Client", "codex")
+      .send({ udid: "11111111-1111-1111-1111-111111111111" })
+      .expect(200);
+
+    // The parent invocation is recorded with the resolved attribution.
+    expect(recordInvocation).toHaveBeenCalledTimes(1);
+    expect(recordInvocation.mock.calls[0]![1]).toEqual({ platform: "ios", ai_client: "codex" });
+
+    // A recorder is threaded into the tool context so orchestrator tools can
+    // attribute the sub-tools they dispatch. The AI client is inherited; a child
+    // with no device arg of its own falls back to the request's platform.
+    const opts = vi.mocked(registry.invokeTool).mock.calls[0]![2] as {
+      recordChildInvocation?: (id: string, childArgs?: unknown) => () => void;
+    };
+    expect(opts.recordChildInvocation).toBeTypeOf("function");
+
+    const childRelease = opts.recordChildInvocation!("child-id");
+    expect(recordInvocation).toHaveBeenCalledWith("child-id", {
+      platform: "ios",
+      ai_client: "codex",
+    });
+    expect(childRelease).toBe(release);
+  });
+
+  it("re-derives each child's platform from its own device arg", async () => {
+    const recordInvocation = vi.fn((_id: string, _meta: Record<string, unknown>) => vi.fn());
+    const registry = stubRegistry();
+    handle.dispose();
+    handle = createHttpApp(registry, { recordInvocation });
+
+    // Parent request targets iOS.
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .set("X-Argent-AI-Client", "codex")
+      .send({ udid: "11111111-1111-1111-1111-111111111111" })
+      .expect(200);
+
+    const { recordChildInvocation } = vi.mocked(registry.invokeTool).mock.calls[0]![2] as {
+      recordChildInvocation: (id: string, childArgs?: unknown) => () => void;
+    };
+
+    // A sub-tool that targets an Android device keeps the inherited ai_client but
+    // is attributed to ITS OWN platform — not the parent's iOS. This is what lets
+    // a flow-execute (no platform of its own) attribute each gesture correctly.
+    recordChildInvocation("android-child", { udid: "emulator-5554" });
+    expect(recordInvocation).toHaveBeenCalledWith("android-child", {
+      ai_client: "codex",
+      platform: "android",
+    });
+
+    // A child with no device arg falls back to the parent's platform.
+    recordChildInvocation("no-device-child", { message: "hi" });
+    expect(recordInvocation).toHaveBeenCalledWith("no-device-child", {
+      ai_client: "codex",
+      platform: "ios",
+    });
+  });
+
+  it("does not forward a child recorder when there is no attribution to propagate", async () => {
+    const recordInvocation = vi.fn(() => vi.fn());
+    const registry = stubRegistry();
+    handle.dispose();
+    handle = createHttpApp(registry, { recordInvocation });
+
+    // plain-tool has no capability and no AI-client header → no metadata at all,
+    // so nothing is recorded and no child recorder is handed downstream.
+    await request(handle.app).post("/tools/plain-tool").send({}).expect(200);
+
+    expect(recordInvocation).not.toHaveBeenCalled();
+    const opts = vi.mocked(registry.invokeTool).mock.calls[0]![2] as {
+      recordChildInvocation?: unknown;
+    };
+    expect(opts.recordChildInvocation).toBeUndefined();
+  });
+
   it("records the coarse `other` bucket for an unknown tool, never its name", async () => {
     let seenMeta: Record<string, unknown> | undefined;
     const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {

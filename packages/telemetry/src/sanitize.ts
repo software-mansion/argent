@@ -211,7 +211,6 @@ export const ALLOWED: ValidatorMap = {
     total_tool_calls: COUNT,
     ...FAILURE_SIGNAL,
   },
-  "telemetry:opt_out": {},
 };
 
 /** Strip keys and values that are not allowed for this event. */
