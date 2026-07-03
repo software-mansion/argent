@@ -44,10 +44,15 @@ export async function execFileAsyncWithTimeout(
   // import this module — matching the original lazy `execSync` usage.
   const execFileAsync = promisify(nodeExecFile);
   const { stdout, stderr } = await execFileAsync(file, args as string[], {
-    timeout: DEFAULT_EXEC_TIMEOUT_MS,
-    maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     encoding: "utf-8",
     ...options,
+    // The timeout and maxBuffer are this wrapper's whole purpose (the
+    // event-loop-freeze and ENOBUFS guards documented above), so they are
+    // applied AFTER ...options — a caller can never silently weaken them by
+    // passing its own. maxBuffer stays a floor: a caller may raise it for an
+    // even larger capture, but never drop below the 256 MiB guard.
+    timeout: DEFAULT_EXEC_TIMEOUT_MS,
+    maxBuffer: Math.max(options.maxBuffer ?? 0, DEFAULT_EXEC_MAX_BUFFER),
   });
   return { stdout: stdout as string, stderr: stderr as string };
 }
