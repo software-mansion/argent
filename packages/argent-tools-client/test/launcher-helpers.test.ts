@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as net from "node:net";
 import {
   buildToolsServerEnv,
@@ -108,5 +108,21 @@ describe("isToolsServerHealthy", () => {
     // The healthCheckHost shim must rewrite 0.0.0.0 → 127.0.0.1 so the fetch
     // returns a connection-refused error rather than hanging until the timeout.
     expect(healthy).toBe(false);
+  });
+
+  it("drains the response body so the keep-alive socket is freed immediately", async () => {
+    // Regression cover for the ~6s CLI linger: /tools is a large keep-alive payload,
+    // and leaving its body unread kept undici's socket ref'd until the server's idle
+    // timeout. The fix cancels the body before returning — assert that cancel runs.
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, body: { cancel } });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const healthy = await isToolsServerHealthy(3001, "127.0.0.1", 1000);
+      expect(healthy).toBe(true);
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

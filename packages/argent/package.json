@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "MCP server for iOS Simulator and Android Emulator control",
   "license": "Apache-2.0",
   "repository": {
@@ -41,12 +41,15 @@
     "scripts/postinstall.cjs"
   ],
   "dependencies": {
+    "@fails-components/webtransport": "^1.6.3",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
     "@modelcontextprotocol/sdk": "^1.20.0",
     "tree-sitter": "^0.21.1",
     "tree-sitter-typescript": "^0.23.2"
   },
   "optionalDependencies": {
-    "electron": "^42.5.0"
+    "electron": "^42.5.0",
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",

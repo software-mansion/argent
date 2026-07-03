@@ -6,6 +6,7 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
+  "references": [{ "path": "../configuration-core" }, { "path": "../registry" }],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

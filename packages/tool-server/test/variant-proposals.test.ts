@@ -355,3 +355,158 @@ describe("VariantProposalStore — preview-window lifecycle events", () => {
     expect(submitted).toBe(2);
   });
 });
+
+describe("VariantProposalStore — CLI Lens session (`argent lens`)", () => {
+  it("toggles snapshot.cliSession and emits cliSessionChanged with the state", () => {
+    const s = new VariantProposalStore();
+    const seen: boolean[] = [];
+    s.events.on("cliSessionChanged", (active) => seen.push(active));
+
+    expect(s.snapshot().cliSession).toBe(false);
+    s.setCliSession(true);
+    expect(s.snapshot().cliSession).toBe(true);
+    expect(s.isCliSession()).toBe(true);
+    s.setCliSession(true); // idempotent — no event
+    s.setCliSession(false);
+    expect(s.snapshot().cliSession).toBe(false);
+    expect(seen).toEqual([true, false]);
+  });
+
+  it("carries the agent picker choices and records the human's pick", () => {
+    const s = new VariantProposalStore();
+    expect(s.snapshot().lensAgents).toEqual([]);
+    expect(s.snapshot().lensAgentChoice).toBeNull();
+
+    s.setCliSession(true, [
+      { id: "claude", name: "Claude Code" },
+      { id: "codex", name: "Codex CLI" },
+    ]);
+    expect(s.snapshot().lensAgents.map((a) => a.id)).toEqual(["claude", "codex"]);
+    expect(s.snapshot().lensAgentChoice).toBeNull();
+
+    s.setLensAgentChoice("codex");
+    expect(s.snapshot().lensAgentChoice).toBe("codex");
+    expect(s.getLensAgentChoice()).toBe("codex");
+    expect(s.getLensAgentRemember()).toBe(false);
+
+    // Ending the session clears the picker state.
+    s.setCliSession(false);
+    expect(s.snapshot().lensAgents).toEqual([]);
+    expect(s.snapshot().lensAgentChoice).toBeNull();
+  });
+
+  it("records the remember flag with the pick and clears it on session end", () => {
+    const s = new VariantProposalStore();
+    s.setCliSession(true, [{ id: "claude", name: "Claude Code" }]);
+    s.setLensAgentChoice("claude", true);
+    expect(s.getLensAgentChoice()).toBe("claude");
+    expect(s.getLensAgentRemember()).toBe(true);
+
+    s.setCliSession(false);
+    expect(s.getLensAgentChoice()).toBeNull();
+    expect(s.getLensAgentRemember()).toBe(false);
+  });
+
+  it("a re-begin replaces stale choices and clears a prior pick", () => {
+    const s = new VariantProposalStore();
+    s.setCliSession(true, [{ id: "claude", name: "Claude Code" }]);
+    s.setLensAgentChoice("claude");
+    // Same active state, but a fresh begin must refresh the offered agents.
+    s.setCliSession(true, [{ id: "gemini", name: "Gemini CLI" }]);
+    expect(s.snapshot().lensAgents.map((a) => a.id)).toEqual(["gemini"]);
+    expect(s.snapshot().lensAgentChoice).toBeNull();
+  });
+
+  it("exposes the last submitted outcome via getLastOutcome (null until submit)", () => {
+    const s = new VariantProposalStore();
+    expect(s.getLastOutcome()).toBeNull();
+
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    s.submitSelection({
+      selections: [],
+      annotations: [{ target: "Foo", match: { by: "text", value: "Foo" }, comment: "make it pop" }],
+      globalComment: "overall: tighter",
+    });
+
+    const out = s.getLastOutcome();
+    expect(out?.status).toBe("completed");
+    expect(out?.annotations[0]!.comment).toBe("make it pop");
+    expect(out?.globalComment).toBe("overall: tighter");
+  });
+
+  it("rolls to a fresh round on the next propose after a CLI-session submit", () => {
+    const s = new VariantProposalStore();
+    s.setCliSession(true);
+    expect(s.proposeVariant({ element: "Foo", variant: variant("Bold") }).round).toBe(1);
+    s.submitSelection({ selections: [] });
+    // No await consumes a CLI-session round, but the next propose must still open
+    // a NEW round (not append to the submitted one) and clear the stale outcome.
+    const r = s.proposeVariant({ element: "Bar", variant: variant("Tall") });
+    expect(r.round).toBe(2);
+    expect(r.totalElements).toBe(1);
+    expect(s.getLastOutcome()).toBeNull();
+  });
+
+  it("without a CLI session, a submitted-but-unconsumed round rolls on the next propose", () => {
+    const s = new VariantProposalStore();
+    expect(s.proposeVariant({ element: "Foo", variant: variant("Bold") }).round).toBe(1);
+    s.submitSelection({ selections: [] }); // no waiter parked → completed && !consumed
+    // The next propose opens a FRESH round rather than appending behind the
+    // frozen outcome (appending would silently drop the new element). The
+    // earlier submitted outcome is not lost — it is queued in `pendingOutcomes`
+    // and delivered on the next await, so rolling here is safe.
+    const r = s.proposeVariant({ element: "Bar", variant: variant("Tall") });
+    expect(r.round).toBe(2);
+    expect(r.totalElements).toBe(1);
+  });
+
+  it("beginning a CLI session clears a leftover submitted round from a prior flow", () => {
+    const s = new VariantProposalStore();
+    // Simulate a prior NON-CLI flow that left completed=true/consumed=false: a
+    // parked await timed out (waiter removed) and the user then submitted.
+    s.proposeVariant({ element: "Old", variant: variant("Bold") });
+    s.submitSelection({ selections: [] }); // completed, but nothing consumed it
+    expect(s.getLastOutcome()).not.toBeNull();
+
+    s.setCliSession(true); // begin → must reset the stale round
+
+    // The session's first propose opens a FRESH round with only its own element,
+    // not appended to the leftover "Old" round, and the stale outcome is gone.
+    const r = s.proposeVariant({ element: "New", variant: variant("Tall") });
+    expect(r.totalElements).toBe(1);
+    expect(s.snapshot().proposals.map((p) => p.element)).toEqual(["New"]);
+    expect(s.getLastOutcome()).toBeNull();
+  });
+
+  it("beginning a CLI session on a clean store does not bump the round past 1", () => {
+    const s = new VariantProposalStore();
+    s.setCliSession(true); // nothing to clear → no needless reset
+    expect(s.proposeVariant({ element: "Foo", variant: variant("Bold") }).round).toBe(1);
+  });
+});
+
+describe("VariantProposalStore — Lens-owned devices", () => {
+  it("tracks owned devices and drains them once", () => {
+    const s = new VariantProposalStore();
+    expect(s.isDeviceOwned("udid-1")).toBe(false);
+
+    s.markDeviceOwned("udid-1");
+    s.markDeviceOwned("udid-2");
+    s.markDeviceOwned("udid-1"); // dedup
+    expect(s.isDeviceOwned("udid-1")).toBe(true);
+
+    const drained = s.takeOwnedDevices();
+    expect(drained.sort()).toEqual(["udid-1", "udid-2"]);
+    // Drained: a second take is empty, and ownership is cleared.
+    expect(s.takeOwnedDevices()).toEqual([]);
+    expect(s.isDeviceOwned("udid-1")).toBe(false);
+  });
+
+  it("ignores blank ids and trims", () => {
+    const s = new VariantProposalStore();
+    s.markDeviceOwned("   ");
+    s.markDeviceOwned(" udid-3 ");
+    expect(s.isDeviceOwned("udid-3")).toBe(true);
+    expect(s.takeOwnedDevices()).toEqual(["udid-3"]);
+  });
+});

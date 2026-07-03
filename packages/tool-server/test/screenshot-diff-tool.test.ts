@@ -22,7 +22,7 @@ describe("screenshotDiffTool", () => {
     expect(result.success).toBe(false);
   });
 
-  it("requires udid and always declares the simulator-server service", () => {
+  it("requires udid and only declares the simulator-server service for live captures", () => {
     expect(
       screenshotDiffTool.zodSchema!.safeParse({
         baselinePath: "/tmp/baseline.png",
@@ -31,15 +31,26 @@ describe("screenshotDiffTool", () => {
       }).success
     ).toBe(false);
 
-    const params = {
+    // A pure static-PNG diff needs no SimulatorServer — requesting it
+    // unconditionally would fail on tvOS sims that have no such backend.
+    const staticParams = {
       baselinePath: "/tmp/baseline.png",
       currentPath: "/tmp/current.png",
       udid: "ABC",
       outputDir: "/tmp",
     };
+    expect(screenshotDiffTool.zodSchema!.safeParse(staticParams).success).toBe(true);
+    expect(screenshotDiffTool.services(staticParams)).toEqual({});
 
-    expect(screenshotDiffTool.zodSchema!.safeParse(params).success).toBe(true);
-    expect(screenshotDiffTool.services(params)).toEqual({
+    // A live capture resolves and starts the SimulatorServer for the device.
+    const liveParams = {
+      baselinePath: "/tmp/baseline.png",
+      captureCurrent: true,
+      udid: "ABC",
+      outputDir: "/tmp",
+    };
+    expect(screenshotDiffTool.zodSchema!.safeParse(liveParams).success).toBe(true);
+    expect(screenshotDiffTool.services(liveParams)).toEqual({
       simulatorServer: {
         urn: "SimulatorServer:ABC",
         options: {

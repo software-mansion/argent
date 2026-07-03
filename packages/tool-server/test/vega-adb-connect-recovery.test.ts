@@ -1,4 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { FailureError, FAILURE_CODES } from "@argent/registry";
+
+// Build a `runVega` rejection shaped like the real one: runVega wraps failures in a
+// FailureError whose signal.error_kind distinguishes a `timeout` (wedged agent) from
+// an ordinary `subprocess` failure. listVegaDevices keys its no-recovery decision off
+// that, so the tests must reject with the right kind rather than a bare Error.
+function vegaFailure(kind: "timeout" | "subprocess"): FailureError {
+  return new FailureError(`vega device list ${kind}`, {
+    error_code: FAILURE_CODES.VEGA_CLI_COMMAND_FAILED,
+    failure_stage: "vega_cli_command",
+    failure_area: "tool_server",
+    error_kind: kind,
+  });
+}
 
 // Regression cover for the "adb-connected VVD" bug: once a 2nd adb transport is
 // added (`adb connect 127.0.0.1:<port+1>`), `vega device list` switches to adb-form
@@ -92,5 +106,34 @@ describe("listVegaDevices() recovers the running VVD when adb-connected", () => 
     const devices = await listVegaDevices();
     expect(devices.filter((d) => d.state === "running")).toHaveLength(0);
     expect(devices.some((d) => d.state === "stopped" && d.vvdImage === "tv")).toBe(true);
+  });
+
+  it("no stacking: a *timed-out* `device list` does not trigger a second `device info` call", async () => {
+    // The root cause of the `list-devices` "hang": against a wedged device agent
+    // `device list` times out, and the old code fell through to the `device info`
+    // recovery — a second 20s hang back-to-back (~40s total). The recovery is now
+    // skipped specifically on a timeout, so a wedged agent does NOT pay for a second
+    // hanging call even though a VVD is running.
+    runVega.mockRejectedValue(vegaFailure("timeout"));
+    listRunningVvdConsolePorts.mockResolvedValue(new Set([5554])); // a VVD IS running
+    const devices = await listVegaDevices();
+    expect(runVegaDevice).not.toHaveBeenCalled();
+    // It still degrades gracefully to the installed image rather than hanging.
+    expect(devices.some((d) => d.state === "stopped" && d.vvdImage === "tv")).toBe(true);
+  });
+
+  it("a *fast* (non-timeout) `device list` failure still recovers a running VVD", async () => {
+    // A transient CLI error is NOT a wedged agent: `device info` would still answer,
+    // so recovery must run — otherwise a genuinely-running VVD is mis-reported as
+    // stopped. This is the case the timeout-only gate preserves (a blanket
+    // "any failure → no recovery" gate would regress it).
+    runVega.mockRejectedValue(vegaFailure("subprocess"));
+    listRunningVvdConsolePorts.mockResolvedValue(new Set([5554])); // a VVD IS running
+    const devices = await listVegaDevices();
+    expect(runVegaDevice).toHaveBeenCalled(); // recovery via `device info` fired
+    const running = devices.filter((d) => d.kind === "vvd" && d.state === "running");
+    expect(running).toHaveLength(1);
+    expect(running[0]!.serial).toBe("amazon-3ef2badfb9a39e0b");
+    expect(devices.some((d) => d.state === "stopped" && d.vvdImage === "tv")).toBe(false);
   });
 });
