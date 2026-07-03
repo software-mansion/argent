@@ -10,6 +10,7 @@ import {
   type NotifyHandle,
 } from "../../../../utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
+import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
@@ -90,6 +91,7 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
     launchctlOutput = execFileSync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -134,14 +136,21 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
     // Two stages, piped in code rather than by /bin/sh, so the udid is never
     // interpreted by a shell. Stage 1: ask simctl for the OpenStep plist of
     // installed apps. Stage 2: feed it to plutil over stdin to get JSON.
+    //
+    // A shell pipe streamed the intermediate plist at the OS level; capturing
+    // each stage's stdout in-process instead means both inherit Node's 1 MiB
+    // default maxBuffer, so a large `listapps` (many installed apps) would throw
+    // ENOBUFS where the pipe succeeded. Match run-with-timeout.ts's 256 MiB.
     const rawPlist = execFileSync("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
     listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
       encoding: "utf-8",
       input: rawPlist,
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
