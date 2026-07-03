@@ -254,10 +254,12 @@ async function renderHangStacksAndroid(
   }
   const hang = hangRows[opts.hangIndex]!;
   // ts_ns is absolute CLOCK_MONOTONIC ns and can decode as bigint on long-uptime
-  // devices (> 2^53; see readCell). Coerce before arithmetic so adding dur_ns
-  // (a Number) doesn't throw "Cannot mix BigInt and other types".
+  // devices (> 2^53; see readCell). dur_ns is a bounded duration, but readCell
+  // still hands back any > 2^53 cell as bigint, so coerce both once here before
+  // the arithmetic to avoid "Cannot mix BigInt and other types".
   const startNs = Number(hang.ts_ns);
-  const endNs = startNs + Number(hang.dur_ns);
+  const durNs = Number(hang.dur_ns);
+  const endNs = startNs + durNs;
 
   const [stateRows, sampleRows] = await Promise.all([
     runTpQuery<AndroidHangStateRow>({
@@ -280,25 +282,32 @@ async function renderHangStacksAndroid(
     }).catch(() => [] as AndroidHangMainThreadSampleRow[]),
   ]);
 
-  const durationMs = Math.round(Number(hang.dur_ns) / 1_000_000);
+  const durationMs = Math.round(durNs / 1_000_000);
+
+  // Coerce total_dur_ns once here (readCell keeps a > 2^53 cell as bigint, and
+  // mixing it with the Number divisor throws) and reuse the derived breakdown
+  // for both the rendered table and the summarizeHangBlocking fallback below —
+  // a single guarded coercion site instead of two. total_dur_ns is a
+  // hang-window-clipped SUM that stays well under 2^53 in practice; coercing is
+  // defensive and keeps every duration read in this file uniform.
+  const stateBreakdown = stateRows.map((r) => ({
+    state: r.state,
+    blockedFunction: r.blocked_function,
+    durationMs: Math.round(Number(r.total_dur_ns) / 1_000_000),
+  }));
+
   const lines: string[] = [
     `## Hang #${opts.hangIndex} — ${hang.kind} (${durationMs}ms)` +
       (hang.reason ? ` — reason: \`${hang.reason}\`` : ""),
     "",
   ];
 
-  if (stateRows.length > 0) {
+  if (stateBreakdown.length > 0) {
     lines.push("### Main-thread State Breakdown", "");
     lines.push("| State | Blocked on | Duration |", "|---|---|---|");
-    for (const row of stateRows) {
-      // Coerce like every other trace-processor duration column: readCell keeps
-      // a value as bigint above 2^53, and mixing bigint with the Number divisor
-      // throws. total_dur_ns is a clipped per-hang SUM so it stays well under
-      // 2^53 in practice, but coerce anyway to keep every duration read here
-      // uniform and robust to a future unclipped/aggregate query.
-      const ms = Math.round(Number(row.total_dur_ns) / 1_000_000);
+    for (const entry of stateBreakdown) {
       lines.push(
-        `| ${row.state} | ${row.blocked_function ? `\`${row.blocked_function}\`` : "—"} | ${ms}ms |`
+        `| ${entry.state} | ${entry.blockedFunction ? `\`${entry.blockedFunction}\`` : "—"} | ${entry.durationMs}ms |`
       );
     }
     lines.push("");
@@ -329,13 +338,7 @@ async function renderHangStacksAndroid(
     // CPU call stack to show, and the hang is a *wait*, not CPU-bound work.
     // Spell that out so the empty result doesn't read as a tool failure, and
     // point the reader at the state breakdown above (which says what it waited on).
-    const blocking = summarizeHangBlocking(
-      stateRows.map((r) => ({
-        state: r.state,
-        blockedFunction: r.blocked_function,
-        durationMs: Math.round(Number(r.total_dur_ns) / 1_000_000),
-      }))
-    );
+    const blocking = summarizeHangBlocking(stateBreakdown);
     lines.push("### Main-thread Samples During Hang", "");
     if (blocking && blocking.kind === "blocked") {
       lines.push(
@@ -351,7 +354,7 @@ async function renderHangStacksAndroid(
           `sampler could not unwind a call stack (commonly stripped or missing frame symbols). This is ` +
           `genuine main-thread CPU work, not a wait; see the state breakdown above._`
       );
-    } else if (stateRows.length > 0) {
+    } else if (stateBreakdown.length > 0) {
       lines.push(
         `_No on-CPU stack samples were captured during this hang. The main thread spent the window ` +
           `off-CPU or runnable-but-not-scheduled, so there is no CPU call stack to show; see the state ` +
@@ -556,17 +559,17 @@ function hangRowsToBottlenecks(rows: AndroidJankRow[], traceStartNs: number): Ui
   return rows.map((row) => {
     // ts_ns is an absolute CLOCK_MONOTONIC ns value that can arrive as bigint on a
     // long-uptime device (> 2^53 ns ≈ 104 days; see readCell). traceStartNs is a
-    // plain Number, so coerce both ts_ns and dur_ns before the arithmetic.
-    const durationMs = Math.round(Number(row.dur_ns) / 1_000_000);
+    // plain Number, so coerce ts_ns and dur_ns once before the arithmetic.
+    const durNs = Number(row.dur_ns);
     const startNs = Number(row.ts_ns) - traceStartNs;
     return {
       type: "ui_hang",
       platform: "android",
       hangType: row.kind,
-      durationMs,
+      durationMs: Math.round(durNs / 1_000_000),
       startTimeFormatted: formatTraceTime(startNs),
       startNs,
-      endNs: startNs + Number(row.dur_ns),
+      endNs: startNs + durNs,
       suspectedFunctions: [],
       appCallChains: [],
       severity: classifyAndroidHangSeverity(row),

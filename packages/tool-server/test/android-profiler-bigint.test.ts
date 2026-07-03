@@ -83,7 +83,10 @@ describe("android profiler pipeline handles bigint native-ns columns", () => {
           {
             kind: "jank",
             ts_ns: TRACE_START_NS + 1_000_000_000n,
-            dur_ns: TRACE_START_NS, // bigint — same magnitude source as ts_ns
+            // Forced > 2^53 bigint (mechanical guard). dur_ns is a bounded
+            // duration, not uptime-scaled — TRACE_START_NS is reused here only
+            // as a convenient > 2^53 value to exercise the coercion.
+            dur_ns: TRACE_START_NS,
             process_name: "com.example.app",
             reason: "Prediction Error, App Deadline Missed",
             error_id: null,
@@ -107,16 +110,21 @@ describe("android stack drill-down handles bigint native-ns columns", () => {
   it("renders the hang-stacks drill-down for a bigint ts_ns/dur_ns hang without throwing", async () => {
     // renderHangStacksAndroid reads the hang's own ts_ns/dur_ns and does
     // `startNs + dur_ns` and `dur_ns / 1_000_000`. ts_ns is an absolute
-    // CLOCK_MONOTONIC value and dur_ns can likewise decode as bigint once it
-    // exceeds 2^53 (see readCell) — so both arrive as bigint here, exactly as
-    // the WASM engine hands them back on a long-uptime device. Without the
-    // Number() coercions the arithmetic throws "Cannot mix BigInt and other
-    // types". state total_dur_ns is a hang-window-clipped duration sum
+    // CLOCK_MONOTONIC value that crosses 2^53 after ~104 days of uptime, so it
+    // decodes as bigint on a long-uptime device (see readCell). dur_ns is a
+    // bounded duration (the ANR length or longest janky-frame slice), NOT
+    // uptime-scaled — it would exceed 2^53 only if a single hang lasted ~104
+    // days, so the bigint dur_ns forced below is a mechanical guard, not a
+    // realistic value. readCell keeps any > 2^53 cell as bigint regardless, so
+    // without the Number() coercions the arithmetic throws "Cannot mix BigInt
+    // and other types". state total_dur_ns is a hang-window-clipped duration sum
     // (hang-state-breakdown.sql) that stays well under 2^53 in practice, but is
     // now coerced defensively too — the second state row below forces a bigint
     // to prove that read is robust.
     const HANG_TS_NS = TRACE_START_NS + 1_000_000_000n; // absolute, > 2^53
-    const HANG_DUR_NS = 9_500_000_000_000_000n; // > 2^53 → decodes as bigint
+    // Mechanical guard: forced > 2^53 so it decodes as bigint. A real hang dur
+    // is ms-scale; this value is not physically realistic.
+    const HANG_DUR_NS = 9_500_000_000_000_000n;
     expect(Number.isSafeInteger(Number(HANG_TS_NS))).toBe(false);
     expect(Number.isSafeInteger(Number(HANG_DUR_NS))).toBe(false);
     const expectedDurationMs = Math.round(Number(HANG_DUR_NS) / 1_000_000);
@@ -180,5 +188,65 @@ describe("android stack drill-down handles bigint native-ns columns", () => {
     );
     expect(out).toContain("### Main-thread Samples During Hang");
     expect(out).toContain("main <- onDraw <- inflate");
+  });
+
+  it("renders the no-samples blocking fallback with a bigint state total_dur_ns without throwing", async () => {
+    // The `uniqueStacks.size === 0` fallback (main thread off-CPU: no on-CPU
+    // stack samples) reuses the same coerced stateBreakdown as the table, and
+    // summarizeHangBlocking sorts it by durationMs. With no samples, the
+    // hang-main-thread-samples.sql result is empty, so the fallback branch runs
+    // — the one previously uncovered by the drill-down test above, which always
+    // supplied a sample. Force a bigint state total_dur_ns to prove the fallback
+    // path coerces it instead of throwing "Cannot mix BigInt and other types".
+    const HANG_TS_NS = TRACE_START_NS + 1_000_000_000n; // absolute, > 2^53
+    const STATE_DUR_NS = 9_600_000_000_000_000n; // mechanical > 2^53 guard
+    expect(Number.isSafeInteger(Number(STATE_DUR_NS))).toBe(false);
+    const expectedStateMs = Math.round(Number(STATE_DUR_NS) / 1_000_000);
+
+    queryResponses.push(
+      {
+        name: "ui-hangs.sql",
+        rows: [
+          {
+            kind: "jank",
+            ts_ns: HANG_TS_NS,
+            dur_ns: 500_000_000, // realistic ms-scale hang duration
+            process_name: "com.example.app",
+            reason: "App Deadline Missed",
+            error_id: null,
+          },
+        ],
+      },
+      {
+        name: "hang-state-breakdown.sql",
+        rows: [
+          {
+            state: "Uninterruptible Sleep",
+            blocked_function: "do_page_fault",
+            total_dur_ns: STATE_DUR_NS,
+            occurrences: 3,
+          },
+        ],
+      },
+      // No usable main-thread samples → uniqueStacks stays empty → the off-CPU
+      // "blocked" fallback branch runs.
+      { name: "hang-main-thread-samples.sql", rows: [] }
+    );
+
+    const out = await runAndroidStackQuery({
+      tracePath: "/fake.pftrace",
+      mode: "hang_stacks",
+      appPackage: "com.example.app",
+      hangIndex: 0,
+      topN: 15,
+    });
+
+    // The state table rendered the bigint total_dur_ns (coerced), and the
+    // off-CPU fallback message names the dominant blocking state that
+    // summarizeHangBlocking derived from the same coerced breakdown.
+    expect(out).toContain(`| Uninterruptible Sleep | \`do_page_fault\` | ${expectedStateMs}ms |`);
+    expect(out).toContain("(state `Uninterruptible Sleep`, sleeping/blocked)");
+    // Fallback path, not the sample-stacks path: no folded stack blocks.
+    expect(out).not.toContain("main <- onDraw <- inflate");
   });
 });
