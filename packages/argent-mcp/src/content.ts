@@ -5,7 +5,11 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { materializeArtifacts, type MaterializeContext } from "@argent/tools-client";
+import {
+  materializeArtifacts,
+  isArtifactHandle,
+  type MaterializeContext,
+} from "@argent/tools-client";
 
 export type ContentBlock =
   | { type: "text"; text: string }
@@ -213,7 +217,12 @@ export type FlowStepResult = {
   outputHint?: string;
   args?: unknown;
   flow?: string;
-  artifacts?: string[];
+  /**
+   * Snapshot-step artifacts keyed by role (baseline/current/diff). Values are
+   * artifact handles on current tool-servers; treated as untrusted wire data
+   * here, so anything else renders as text or is skipped.
+   */
+  artifacts?: Record<string, unknown>;
   /** Legacy field from pre-report flow-execute results. */
   error?: string;
 };
@@ -283,6 +292,12 @@ export async function flowRunToMcpContent(
     if (step.result !== undefined) {
       blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
     }
+
+    // Snapshot steps carry artifacts instead of a result — list their paths,
+    // and inline the annotated diff image when the assertion failed.
+    if (isRecord(step.artifacts)) {
+      blocks.push(...(await stepArtifactBlocks(step.artifacts, step.status, ctx)));
+    }
   }
 
   if (result.ok !== undefined) {
@@ -292,6 +307,53 @@ export async function flowRunToMcpContent(
     });
   } else {
     blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
+  }
+  return blocks;
+}
+
+/**
+ * Render a step's artifacts (snapshot baseline/current/diff): one text block
+ * listing each artifact's materialized local path, plus the annotated diff
+ * image inline when the step failed — otherwise the agent has no way to see
+ * WHAT differed. Handles resolve through materializeArtifacts, so this works
+ * against a remote tool-server; without a context, the handle's hostPath is
+ * shown as-is (only meaningful co-located). A legacy string[] (pre-handle
+ * tool-servers) renders its paths as plain text.
+ */
+async function stepArtifactBlocks(
+  artifacts: Record<string, unknown>,
+  status: string | undefined,
+  ctx?: ContentContext
+): Promise<ContentBlock[]> {
+  const asLines = (entries: [string, string][]): ContentBlock[] =>
+    entries.length > 0
+      ? [{ type: "text", text: entries.map(([k, v]) => `  ${k}: ${v}`).join("\n") }]
+      : [];
+
+  if (!ctx) {
+    const entries: [string, string][] = [];
+    for (const [k, v] of Object.entries(artifacts)) {
+      if (isArtifactHandle(v)) entries.push([k, v.hostPath ?? v.filename]);
+      else if (typeof v === "string") entries.push([k, v]);
+    }
+    return asLines(entries);
+  }
+
+  const { result, images } = await materializeArtifacts(artifacts, ctx);
+  const resolved = result as Record<string, unknown>;
+  const entries: [string, string][] = [];
+  for (const k of Object.keys(artifacts)) {
+    const v = resolved[k];
+    // A null means the handle couldn't be fetched; say so rather than
+    // rendering a dangling reference.
+    entries.push([k, typeof v === "string" ? v : "(unavailable)"]);
+  }
+  const blocks = asLines(entries);
+
+  const failed = status === "fail" || status === "error";
+  if (failed && typeof resolved.diff === "string") {
+    const img = images.find((i) => i.localPath === resolved.diff);
+    if (img) blocks.push(imageBlock(img.data, img.mimeType));
   }
   return blocks;
 }

@@ -26,7 +26,7 @@ import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-dev
 import { runDirective, invokeOnDevice, type ActionEnv } from "./flow-actions";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
-import { runSnapshot, DEFAULT_MAX_MISMATCH } from "./flow-visual";
+import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
 const zodSchema = z.object({
@@ -94,7 +94,8 @@ export interface StepReport {
   message?: string;
   /** The fragment a step belongs to (set on `run` and the steps it expands). */
   flow?: string;
-  artifacts?: string[];
+  /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
+  artifacts?: SnapshotArtifacts;
 }
 
 export interface FlowRunResult {
@@ -120,7 +121,7 @@ const MAX_RUN_DEPTH = 20;
 /**
  * Grace period to let a freshly (re)launched app settle before the first step
  * runs. A cold start can outlast the first directive's default auto-wait (e.g. a
- * one-shot `assert`, or a `tap` whose 5s budget is eaten by the launch), so we
+ * short-grace `assert`, or a `tap` whose budget is eaten by the launch), so we
  * give the app a head start here rather than inflating every step's timeout.
  */
 const POST_LAUNCH_SETTLE_MS = 1500;

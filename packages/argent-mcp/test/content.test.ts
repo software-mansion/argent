@@ -369,6 +369,121 @@ describe("flowRunToMcpContent", () => {
     });
   });
 
+  it("materializes snapshot artifacts and inlines the diff image on failure", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x02];
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 3.10% > 0.5% (home)",
+          artifacts: {
+            baseline: artifactHandle("b1", "home-baseline.png", "image/png"),
+            current: artifactHandle("c1", "home-current.png", "image/png"),
+            diff: artifactHandle("d1", "home-diff.png", "image/png"),
+          },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      fetchImpl: fetchReturning(pngBytes),
+    });
+
+    const artifactText = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("baseline:")
+    );
+    expect(artifactText?.text).toContain("home-baseline.png");
+    expect(artifactText?.text).toContain("home-current.png");
+    expect(artifactText?.text).toMatch(/diff: .*home-diff\.png/);
+
+    // Exactly one inline image — the diff, not the full-res baseline/current.
+    const images = blocks.filter((b) => b.type === "image");
+    expect(images).toHaveLength(1);
+    expect(images[0]).toMatchObject({ data: Buffer.from(pngBytes).toString("base64") });
+  });
+
+  it("lists snapshot artifact paths without inlining images when the step passed", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "pass",
+          reason: "diff 0.00% ≤ 0.5% (home)",
+          artifacts: {
+            baseline: artifactHandle("b1", "home-baseline.png", "image/png"),
+            current: artifactHandle("c1", "home-current.png", "image/png"),
+          },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x03]),
+    });
+
+    expect(blocks.find((b) => b.type === "image")).toBeUndefined();
+    const artifactText = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("baseline:")
+    );
+    expect(artifactText?.text).toContain("home-baseline.png");
+  });
+
+  it("falls back to artifact host paths when no materialize context is given", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 3.10% > 0.5% (home)",
+          artifacts: {
+            baseline: { ...artifactHandle("b1", "base.png", "image/png"), hostPath: "/srv/base.png" },
+            diff: { ...artifactHandle("d1", "diff.png", "image/png"), hostPath: "/srv/diff.png" },
+          },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    expect(blocks.find((b) => b.type === "image")).toBeUndefined();
+    const artifactText = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("baseline:")
+    );
+    expect(artifactText?.text).toContain("baseline: /srv/base.png");
+    expect(artifactText?.text).toContain("diff: /srv/diff.png");
+  });
+
+  it("renders legacy string[] artifacts as plain path lines", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 3.10% > 0.5% (home)",
+          artifacts: ["/srv/baseline.png", "/srv/current.png"] as unknown as Record<
+            string,
+            unknown
+          >,
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    const artifactText = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("/srv/baseline.png")
+    );
+    expect(artifactText).toBeDefined();
+    expect(blocks.find((b) => b.type === "image")).toBeUndefined();
+  });
+
   it("renders tool success as JSON text", async () => {
     const input: FlowExecuteResult = {
       flow: "f",

@@ -3,10 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
+import { ArtifactStore } from "../../src/artifacts";
 import type { ActionEnv } from "../../src/tools/flows/flow-actions";
 
 // Stub settle + capture so the tests exercise only the baseline write/diff decision.
-const h = vi.hoisted(() => ({ shotPath: "", mismatchPercentage: 0 }));
+const h = vi.hoisted(() => ({ shotPath: "", mismatchPercentage: 0, contextDiffPath: "" }));
 
 vi.mock("../../src/tools/flows/flow-actions", () => ({
   settleTree: vi.fn(async () => ({})),
@@ -14,10 +15,17 @@ vi.mock("../../src/tools/flows/flow-actions", () => ({
 }));
 
 vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
-  diffPngFiles: vi.fn(async () => ({ mismatchPercentage: h.mismatchPercentage })),
+  diffPngFiles: vi.fn(async () => ({
+    mismatchPercentage: h.mismatchPercentage,
+    contextDiffPath: h.contextDiffPath || undefined,
+  })),
 }));
 
-const env = { device: { platform: "ios", id: "SIM" }, signal: undefined } as unknown as ActionEnv;
+const env = {
+  device: { platform: "ios", id: "SIM" },
+  signal: undefined,
+  ctx: { artifacts: new ArtifactStore() },
+} as unknown as ActionEnv;
 
 let tmpDir: string;
 
@@ -46,6 +54,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-visual-"));
   h.shotPath = path.join(tmpDir, "shot.png");
   h.mismatchPercentage = 0;
+  h.contextDiffPath = "";
   await writeFakePng(h.shotPath);
 });
 afterEach(async () => {
@@ -61,6 +70,12 @@ describe("runSnapshot baselines", () => {
     expect(r.warning).toContain('no baseline existed for "home"');
     expect(r.warning).toContain("nothing was compared");
     await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+    // The baseline travels as an artifact handle, not a raw host path.
+    expect(r.artifacts?.baseline).toMatchObject({
+      __argentArtifact: true,
+      hostPath: baselinePath(),
+      mimeType: "image/png",
+    });
   });
 
   it("writes a missing baseline without a warning under updateBaselines", async () => {
@@ -91,16 +106,29 @@ describe("runSnapshot baselines", () => {
     expect(r.status).toBe("pass");
     expect(r.reason).toContain("diff 0.00%");
     expect(r.warning).toBeUndefined();
+    // A passing diff carries baseline + current but no diff image.
+    expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    expect(r.artifacts?.diff).toBeUndefined();
   });
 
-  it("fails an over-threshold diff", async () => {
+  it("fails an over-threshold diff and exposes the context diff as an artifact", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
     h.mismatchPercentage = 3.1;
+    h.contextDiffPath = path.join(tmpDir, "context-diff.png");
+    await writeFakePng(h.contextDiffPath);
 
     const r = await runSnapshot(env, opts());
 
     expect(r.status).toBe("fail");
     expect(r.reason).toContain("diff 3.10% > 0.5%");
+    expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    expect(r.artifacts?.diff).toMatchObject({
+      __argentArtifact: true,
+      hostPath: h.contextDiffPath,
+      filename: "home__ios-390x844-diff.png",
+    });
   });
 });

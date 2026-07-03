@@ -18,6 +18,12 @@ interface StepReport {
   tool?: string;
   flow?: string;
   message?: string;
+  /**
+   * Snapshot-step artifacts keyed by role (baseline/current/diff). The wire
+   * value is an artifact handle; materializeArtifacts has already rewritten
+   * each to a local path string (or null when unfetchable) by render time.
+   */
+  artifacts?: Record<string, unknown>;
 }
 
 interface FlowReport {
@@ -107,6 +113,11 @@ function renderReport(report: FlowReport): string {
     const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
     lines.push(`  ${glyph} ${String(n).padStart(2)} ${label}${where}${reason}`);
     if (s.warning) lines.push(`       ⚠ ${s.warning}`);
+    if (s.artifacts && typeof s.artifacts === "object") {
+      for (const [k, v] of Object.entries(s.artifacts)) {
+        if (typeof v === "string") lines.push(`       ${k}: ${v}`);
+      }
+    }
   }
   const warnings = report.steps.filter((s) => s.warning).length;
   const warningsNote = warnings
