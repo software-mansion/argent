@@ -10,6 +10,8 @@ export const DEFAULT_MAX_MISMATCH = 0.5;
 export interface VisualOutcome {
   status: "pass" | "fail" | "skip";
   reason?: string;
+  /** Non-fatal caveat on a passed step. */
+  warning?: string;
   artifacts?: string[];
 }
 
@@ -31,9 +33,9 @@ function baselineDir(flowsDir: string, flowName: string): string {
 
 /**
  * Capture the current screen and compare it to a stored baseline keyed by
- * platform + resolution. Writes (and passes) when the baseline is missing under
- * `updateBaselines`; otherwise a missing baseline is a `skip` with a warning so
- * a portable flow doesn't hard-fail on an un-baselined device class.
+ * platform + resolution. A missing baseline is written and the step passes:
+ * silently under `updateBaselines`, with a `warning` otherwise (nothing was
+ * compared).
  */
 export async function runSnapshot(
   env: ActionEnv,
@@ -73,9 +75,20 @@ export async function runSnapshot(
   if (!exists || opts.updateBaselines) {
     await fs.mkdir(dir, { recursive: true });
     await fs.copyFile(currentPath, baselinePath);
+    if (opts.updateBaselines) {
+      return {
+        status: "pass",
+        reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
+        artifacts: [baselinePath],
+      };
+    }
     return {
       status: "pass",
-      reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
+      reason: `baseline created (${key})`,
+      warning:
+        `no baseline existed for "${opts.name}" on this device class — the current screen was ` +
+        `saved as the new baseline and nothing was compared; review ${baselinePath} before ` +
+        `trusting future runs`,
       artifacts: [baselinePath],
     };
   }

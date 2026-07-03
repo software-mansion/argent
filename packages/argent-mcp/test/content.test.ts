@@ -348,6 +348,27 @@ describe("flowRunToMcpContent", () => {
     expect(blocks.every((b) => b.type !== "text" || typeof b.text === "string")).toBe(true);
   });
 
+  it("surfaces a passed step's warning on its status line", async () => {
+    const input: FlowExecuteResult = {
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "pass",
+          reason: "baseline created (home__ios-390x844.png)",
+          warning: 'no baseline existed for "home" — nothing was compared',
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    expect(blocks[1]).toEqual({
+      type: "text",
+      text: '[1] ✓ snapshot — baseline created (home__ios-390x844.png) ⚠ no baseline existed for "home" — nothing was compared',
+    });
+  });
+
   it("renders tool success as JSON text", async () => {
     const input: FlowExecuteResult = {
       flow: "f",

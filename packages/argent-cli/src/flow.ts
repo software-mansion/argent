@@ -14,6 +14,7 @@ interface StepReport {
   kind: string;
   status: "pass" | "fail" | "skip" | "error";
   reason?: string;
+  warning?: string;
   tool?: string;
   flow?: string;
   message?: string;
@@ -103,10 +104,16 @@ function renderReport(report: FlowReport): string {
     const where = s.flow && s.flow !== report.flow ? ` [${s.flow}]` : "";
     const label = s.tool ? `${s.kind} ${s.tool}` : s.kind;
     const reason = s.reason ? ` — ${s.reason}` : "";
-    lines.push(`  ${STATUS_GLYPH[s.status]} ${String(n).padStart(2)} ${label}${where}${reason}`);
+    const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
+    lines.push(`  ${glyph} ${String(n).padStart(2)} ${label}${where}${reason}`);
+    if (s.warning) lines.push(`       ⚠ ${s.warning}`);
   }
+  const warnings = report.steps.filter((s) => s.warning).length;
+  const warningsNote = warnings
+    ? `, ${warnings} warning${warnings === 1 ? "" : "s"}`
+    : "";
   lines.push(
-    `\n${report.ok ? "PASS" : "FAIL"} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped`
+    `\n${report.ok ? "PASS" : "FAIL"} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped${warningsNote}`
   );
   return lines.join("\n");
 }

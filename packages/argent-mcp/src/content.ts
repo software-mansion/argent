@@ -206,6 +206,7 @@ export type FlowStepResult = {
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";
   reason?: string;
+  warning?: string;
   tool?: string;
   message?: string;
   result?: unknown;
@@ -274,7 +275,8 @@ export async function flowRunToMcpContent(
     // `reason` is the new field; `error` is the legacy one.
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
-    blocks.push({ type: "text", text: `[${num}] ${glyph}${stepLabel(step)}${suffix}` });
+    const warning = step.warning ? ` ⚠ ${step.warning}` : "";
+    blocks.push({ type: "text", text: `[${num}] ${glyph}${stepLabel(step)}${suffix}${warning}` });
 
     // Surface a step's own content (e.g. a screenshot) only when it actually
     // returned one.

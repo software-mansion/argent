@@ -80,6 +80,8 @@ export interface StepReport {
   status: StepStatus;
   /** Machine-readable explanation when the step did not pass. */
   reason?: string;
+  /** Non-fatal caveat on a passed step (e.g. a snapshot baseline was created, not compared). */
+  warning?: string;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
   /** Tool result for `tool` steps. */
@@ -485,7 +487,7 @@ async function execLeafStep(
           maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
           updateBaselines: state.updateBaselines,
         });
-        return { ...base, status: r.status, reason: r.reason, artifacts: r.artifacts };
+        return { ...base, status: r.status, reason: r.reason, warning: r.warning, artifacts: r.artifacts };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
       }
