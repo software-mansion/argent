@@ -745,6 +745,38 @@ describe("getLocalArgentBinRelPath", () => {
     stageLocalArgent(tmpDir);
     expect(getLocalArgentBinRelPath(tmpDir)).not.toContain("\\");
   });
+  it.skipIf(process.platform === "win32")(
+    "commits the stable node_modules path, not the pnpm version-pinned store dir",
+    () => {
+      // Mimic pnpm: the real package lives in a version-suffixed .pnpm store dir
+      // and node_modules/<pkg> is a symlink to it. Node's module resolution
+      // returns the realpath (the store dir); committing that would bake the
+      // version into the MCP command and break on the next bump. The committed
+      // path must be the stable symlink path instead.
+      const storeDir = path.join(
+        tmpDir,
+        "node_modules",
+        ".pnpm",
+        "@swmansion+argent@0.13.0",
+        "node_modules",
+        PACKAGE_NAME
+      );
+      fs.mkdirSync(path.join(storeDir, "dist"), { recursive: true });
+      fs.writeFileSync(
+        path.join(storeDir, "package.json"),
+        JSON.stringify({ name: PACKAGE_NAME, version: "0.13.0", bin: { argent: "dist/cli.js" } })
+      );
+      fs.writeFileSync(path.join(storeDir, "dist", "cli.js"), "#!/usr/bin/env node\n");
+      const linkPath = path.join(tmpDir, "node_modules", PACKAGE_NAME);
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      fs.symlinkSync(storeDir, linkPath);
+
+      const rel = getLocalArgentBinRelPath(tmpDir);
+      expect(rel).toBe(`node_modules/${PACKAGE_NAME}/dist/cli.js`);
+      expect(rel).not.toContain(".pnpm");
+      expect(rel).not.toContain("0.13.0");
+    }
+  );
 });
 
 describe("probeLocalInstall / isDeclaredLocally", () => {
@@ -882,6 +914,26 @@ describe("resolveInstallModeFromFlags", () => {
     expect(resolveInstallModeFromFlags({ local: false, global: false, nonInteractive: true })).toBe(
       "global"
     );
+  });
+  it("non-interactive honors a committed local record (no silent revert to global)", () => {
+    expect(
+      resolveInstallModeFromFlags({
+        local: false,
+        global: false,
+        nonInteractive: true,
+        recordedMode: "local",
+      })
+    ).toBe("local");
+  });
+  it("an explicit --global still overrides a committed local record", () => {
+    expect(
+      resolveInstallModeFromFlags({
+        local: false,
+        global: true,
+        nonInteractive: true,
+        recordedMode: "local",
+      })
+    ).toBe("global");
   });
   it("returns null (prompt) when interactive with no flag", () => {
     expect(

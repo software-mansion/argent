@@ -1,6 +1,22 @@
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ToolDefinition } from "@argent/registry";
 import { getUpdateState } from "../../utils/update-checker";
+
+// The CLI entrypoint shipped alongside this tool-server bundle (dist/cli.js next
+// to dist/tool-server.cjs). Spawning it directly — rather than a bare `argent`
+// on PATH — updates the SAME install that is serving this session and works in
+// local (committable) mode, where `argent` is not on PATH at all. Null when it
+// can't be located (unbundled dev layout); the caller falls back to `argent`.
+function resolveCliEntry(): string | null {
+  try {
+    const entry = path.join(__dirname, "cli.js");
+    return fs.existsSync(entry) ? entry : null;
+  } catch {
+    return null;
+  }
+}
 
 let updateScheduled = false;
 
@@ -46,10 +62,22 @@ export const updateArgentTool: ToolDefinition<void> = {
     // The update process calls killToolServer() which sends SIGTERM — we need
     // the response to reach the MCP server before that happens.
     setTimeout(() => {
-      const child = spawn("argent", ["update", "--yes", "--version", installableVersion], {
+      const cliEntry = resolveCliEntry();
+      const updateArgs = ["update", "--yes", "--version", installableVersion];
+      const cmd = cliEntry ? process.execPath : "argent";
+      const args = cliEntry ? [cliEntry, ...updateArgs] : updateArgs;
+      const child = spawn(cmd, args, {
         detached: true,
         stdio: "ignore",
         env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
+      });
+      // A detached child with no error listener turns a spawn failure (ENOENT
+      // when `argent` isn't on PATH — the norm in local mode) into an
+      // unhandled 'error' event that crashes the whole tool-server. Swallow it:
+      // the update simply doesn't happen and the next notification re-offers it.
+      child.on("error", (err) => {
+        console.error(`[update-argent] failed to spawn updater: ${err}`);
+        updateScheduled = false;
       });
       child.unref();
     }, 2000);

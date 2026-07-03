@@ -150,6 +150,24 @@ export function findFreePort(): Promise<number> {
   });
 }
 
+/**
+ * True iff semver-ish `a` is strictly newer than `b` (compares the numeric
+ * major.minor.patch; ignores prerelease tags). Anything unparseable compares as
+ * "not newer" so the caller reuses rather than kills — the conservative choice.
+ */
+function isVersionNewer(a: string, b: string): boolean {
+  const parse = (v: string) => v.split(".").map((n) => Number.parseInt(n, 10));
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (Number.isNaN(x) || Number.isNaN(y)) return false;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -444,9 +462,16 @@ export async function readAllToolsServerStates(): Promise<
 // disk (bundle paths change across versions under pnpm's store layout). Swept
 // opportunistically from ensureToolsServer's slow path.
 async function sweepDeadStateFiles(): Promise<void> {
-  for (const { file, state } of await readAllToolsServerStates()) {
+  for (const { file } of await readAllToolsServerStates()) {
     if (file === STATE_FILE) continue; // legacy slot is handled by its owners
-    if (!isProcessAlive(state.pid)) await unlink(file).catch(() => {});
+    // Re-read immediately before unlinking. readAllToolsServerStates snapshotted
+    // every file up front, and `argent server start --detach` writes its record
+    // without taking the spawn lock — so between the snapshot and here it may
+    // have rename()'d a fresh LIVE record over this (previously dead) slot.
+    // Deleting that would orphan a running server, so decide on the current
+    // contents, not the stale snapshot.
+    const fresh = await readStateFile(file);
+    if (fresh && !isProcessAlive(fresh.pid)) await unlink(file).catch(() => {});
   }
 }
 
@@ -707,11 +732,20 @@ async function reusableHandle(
   if (!state || !isProcessAlive(state.pid)) return null;
   if (wantBundlePath !== undefined && state.bundlePath !== wantBundlePath) return null;
   // Same path, different version → an in-place bump (e.g. a local devDependency
-  // update) rewrote the bundle; the running server still holds the old code.
-  // Refuse reuse so the caller respawns the new version. Only when BOTH versions
-  // are known — a legacy server with no recorded version is reused rather than
-  // forced to respawn on the upgrade boundary.
-  if (wantVersion !== undefined && state.version !== undefined && state.version !== wantVersion) {
+  // update) rewrote the bundle. Refuse reuse — forcing the caller to respawn —
+  // ONLY when WE are the newer install self-healing over a server that still
+  // holds older code. If the tracked server is NEWER than us, it is already
+  // running the bumped bundle: reuse it instead of killing and downgrading.
+  // Killing on any mismatch is what makes two long-lived sessions of different
+  // versions ping-pong SIGTERMs — each frozen at its own startup version, each
+  // tearing down the other's healthy server on every call. Only compare when
+  // BOTH versions are known; a legacy server with no recorded version is reused.
+  if (
+    wantVersion !== undefined &&
+    state.version !== undefined &&
+    state.version !== wantVersion &&
+    isVersionNewer(wantVersion, state.version)
+  ) {
     return null;
   }
   const host = state.host ?? "127.0.0.1";

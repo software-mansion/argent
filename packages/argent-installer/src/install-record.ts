@@ -70,16 +70,23 @@ export class InstallModeFlagError extends Error {}
 // Resolve the install mode from `argent init` flags. Returns "global"/"local"
 // when fixed by a flag or the non-interactive default; null means "ask the user
 // interactively". Throws InstallModeFlagError on conflicting flags.
+//
+// `recordedMode` is the mode a committed .argent/install.json declares (null
+// when none). A non-interactive run honors it so `argent init -y` in a repo the
+// team already set up as local doesn't silently convert it back to global
+// (deleting the committed marker and rewriting the project MCP entry to the bare
+// `argent` command). Explicit flags still win.
 export function resolveInstallModeFromFlags(opts: {
   local: boolean;
   global: boolean;
   nonInteractive: boolean;
+  recordedMode?: InstallMode | null;
 }): InstallMode | null {
   if (opts.local && opts.global) {
     throw new InstallModeFlagError("--local and --global are mutually exclusive.");
   }
   if (opts.local) return "local";
   if (opts.global) return "global";
-  if (opts.nonInteractive) return "global";
+  if (opts.nonInteractive) return opts.recordedMode ?? "global";
   return null;
 }

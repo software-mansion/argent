@@ -10,6 +10,7 @@ import {
   resolveProjectRoot,
   resolveInstallModeFromFlags,
   InstallModeFlagError,
+  readInstallRecord,
   writeInstallRecord,
   removeInstallRecord,
   type InstallMode,
@@ -19,7 +20,7 @@ import { resolveTelemetryConsent } from "./first-run-notice.js";
 import { parseInitArgs, InitCancelled } from "./init-args.js";
 import {
   InitTelemetry,
-  INSTALL_LOCAL_PRECONDITION_FAILED,
+  INSTALL_MODE_FLAG_CONFLICT,
   INSTALL_UNCLASSIFIED_FAILED,
 } from "./init-telemetry.js";
 import { promptInstallMode } from "./init-mode-prompt.js";
@@ -69,23 +70,29 @@ export async function init(args: string[]): Promise<void> {
 
     // ── Install mode: global (default) vs local (committable devDependency) ──────
 
+    // A committed .argent/install.json records the mode the project opted into.
+    // Seed both the non-interactive default and the interactive prompt from it so
+    // re-running init in a local-mode repo doesn't silently revert it to global.
+    const recordedMode = readInstallRecord(resolveProjectRoot(process.cwd()))?.mode ?? null;
+
     let modeFromFlags: InstallMode | null;
     try {
       modeFromFlags = resolveInstallModeFromFlags({
         local: parsed.wantsLocal,
         global: parsed.wantsGlobal,
         nonInteractive: parsed.nonInteractive,
+        recordedMode,
       });
     } catch (err) {
       if (err instanceof InstallModeFlagError) {
         p.log.error(err.message);
-        await tel.finalize(INSTALL_LOCAL_PRECONDITION_FAILED);
+        await tel.finalize(INSTALL_MODE_FLAG_CONFLICT);
         process.exit(2);
       }
       throw err;
     }
 
-    tel.installMode = modeFromFlags ?? (await promptInstallMode());
+    tel.installMode = modeFromFlags ?? (await promptInstallMode(recordedMode ?? "global"));
     track("installation:install_mode_decision", { install_mode: tel.installMode });
 
     // ── Step 0: Install / Update Check ──────────────────────────────────────────

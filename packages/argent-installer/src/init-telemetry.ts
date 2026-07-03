@@ -30,6 +30,17 @@ export const INSTALL_LOCAL_PRECONDITION_FAILED: InstallerFailureSignal = {
   error_kind: "validation",
 };
 
+// `--local` and `--global` passed together — an argument-parse error, distinct
+// from a failed local-install precondition. Kept separate so the local-install
+// failure funnel isn't polluted with flag-usage mistakes (which never attempted
+// an install and carry no meaningful install_mode).
+export const INSTALL_MODE_FLAG_CONFLICT: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_MODE_FLAG_CONFLICT,
+  failure_stage: "installer_install_mode_flag_conflict",
+  failure_area: "installer",
+  error_kind: "validation",
+};
+
 export const INSTALL_FROM_TAR_PACKAGE_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_FROM_TAR_PACKAGE_FAILED,
   failure_stage: "installer_from_tar_package_install",

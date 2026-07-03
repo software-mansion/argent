@@ -284,7 +284,14 @@ async function ensureNoExistingServer(force: boolean, paths: ToolsServerPaths): 
   const state = await readToolsServerState(paths.bundlePath);
   if (!state) return;
   const alive = isToolsServerProcessAlive(state.pid);
-  const healthy = alive ? await isToolsServerHealthy(state.port, state.host ?? "127.0.0.1") : false;
+  // Pass the recorded token: auto-spawned servers (and CLI-started ones without
+  // --no-auth) require `Authorization: Bearer <token>`, so a tokenless probe of
+  // a live server returns 401 → reads as unhealthy → its state gets cleared and
+  // the running server is orphaned instead of triggering the "already running"
+  // guard below.
+  const healthy = alive
+    ? await isToolsServerHealthy(state.port, state.host ?? "127.0.0.1", 2000, state.token)
+    : false;
   if (alive && healthy && !force) {
     const url = formatToolsServerUrl(state.host ?? "127.0.0.1", state.port);
     throw new StartFlagError(

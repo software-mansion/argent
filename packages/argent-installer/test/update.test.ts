@@ -127,18 +127,19 @@ describe.skipIf(process.platform === "win32")(
 
     // Mimics the layout npm/pnpm/yarn produce for a global install — a bin
     // entry that is a symlink into <prefix>/lib/node_modules/<pkg>/dist/.
-    // Returns the dir to put on PATH. The package name is irrelevant: the
-    // helper resolves the symlink and walks up to the first package.json,
-    // which is what matters for the bug we're guarding against.
+    // Returns the dir to put on PATH. The package.json name must be the real
+    // PACKAGE_NAME: getGloballyInstalledPackageRoot validates it so an
+    // unexpected layout (a bin wrapper whose walk-up lands on a stray
+    // package.json) can't scope tool-server teardown to an unrelated install.
     function stageInstall(root: string, version: string): string {
-      const pkgRoot = path.join(root, "lib", "node_modules", "fake-argent");
+      const pkgRoot = path.join(root, "lib", "node_modules", PACKAGE_NAME);
       const distDir = path.join(pkgRoot, "dist");
       const binDir = path.join(root, "bin");
       fs.mkdirSync(distDir, { recursive: true });
       fs.mkdirSync(binDir, { recursive: true });
       fs.writeFileSync(
         path.join(pkgRoot, "package.json"),
-        JSON.stringify({ name: "fake-argent", version, bin: { argent: "dist/cli.js" } })
+        JSON.stringify({ name: PACKAGE_NAME, version, bin: { argent: "dist/cli.js" } })
       );
       const cliPath = path.join(distDir, "cli.js");
       fs.writeFileSync(cliPath, "#!/usr/bin/env node\n");
@@ -183,6 +184,28 @@ describe.skipIf(process.platform === "win32")(
       // must NOT fall back to reporting the transient version.
       const transientBin = stageInstall(path.join(tmpDir, "cache", "_npx", "xyz"), "1.2.3");
       process.env.PATH = `${transientBin}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBeNull();
+    });
+
+    it("returns null when the walked-up package.json is NOT argent's", () => {
+      // A bin whose parent tree's first package.json belongs to something else
+      // (e.g. a wrapper script sitting under a stray ~/package.json). Trusting
+      // that root would scope tool-server teardown to an unrelated install, so
+      // the name-validated probe must reject it rather than report a version.
+      const binDir = path.join(tmpDir, "stray", "bin");
+      const distDir = path.join(tmpDir, "stray", "lib", "node_modules", "not-argent", "dist");
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.mkdirSync(distDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(distDir, "..", "package.json"),
+        JSON.stringify({ name: "not-argent", version: "9.9.9", bin: { argent: "dist/cli.js" } })
+      );
+      const cliPath = path.join(distDir, "cli.js");
+      fs.writeFileSync(cliPath, "#!/usr/bin/env node\n");
+      fs.chmodSync(cliPath, 0o755);
+      fs.symlinkSync(cliPath, path.join(binDir, "argent"));
+      process.env.PATH = `${binDir}${path.delimiter}${SYSTEM_PATH}`;
 
       expect(getGloballyInstalledVersion()).toBeNull();
     });

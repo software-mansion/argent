@@ -23,6 +23,7 @@ import {
   globalInstallCommand,
   localInstallCommand,
   probeLocalInstall,
+  hasProjectPackageJson,
   resolveInstallMode,
   formatShellCommand,
   resolveProjectRoot,
@@ -185,6 +186,19 @@ export async function update(args: string[]): Promise<void> {
     const projectRoot = resolveProjectRoot(process.cwd());
     installMode = resolveInstallMode(projectRoot);
 
+    // Disclose which install we're about to act on. The mode is inferred (a
+    // committed .argent/install.json, else a manifest declaration), so a user
+    // who has both a global install and a project devDependency can see which
+    // one `update` targets before it mutates anything.
+    if (installMode === "local") {
+      p.log.info(
+        `Target: ${pc.cyan("local install")} — this project's ${PACKAGE_NAME} ` +
+          `devDependency ${pc.dim(`(${projectRoot})`)}.`
+      );
+    } else {
+      p.log.info(`Target: ${pc.cyan("global install")} — the argent command on your PATH.`);
+    }
+
     // When invoked via `npx @swmansion/argent update`, the running package is the
     // npx cache and always at the latest published version. Reading PACKAGE_ROOT
     // would falsely report "already on the latest". We resolve the *real* install
@@ -211,6 +225,31 @@ export async function update(args: string[]): Promise<void> {
       await failUpdateTelemetry(UPDATE_INSTALLED_VERSION_DETECT_FAILED);
       p.log.error("Could not determine installed version.");
       process.exit(1);
+    }
+
+    // Local mode, but nothing is in node_modules — a fresh clone before the
+    // package manager ran, or the marker sits at a root without a manifest.
+    // Running the package-manager add here is wrong either way: it rewrites the
+    // team's committed version pin to @latest, and from a dir with no
+    // package.json the package manager walks up and mutates an unrelated
+    // ancestor project. Never auto-mutate; tell the user to materialize the
+    // install themselves.
+    if (installMode === "local" && localProbe && !localProbe.installed) {
+      p.log.warn(`${PACKAGE_NAME} is not installed in this project yet.`);
+      if (hasProjectPackageJson(projectRoot)) {
+        p.log.info(
+          `It is declared in package.json — run your package manager's install ` +
+            `(e.g. ${pc.cyan("npm install")}), then re-run ${pc.cyan("argent update")}.`
+        );
+      } else {
+        p.log.info(
+          `No package.json at ${pc.cyan(projectRoot)}. Run ${pc.cyan("argent init")} in the ` +
+            `project directory, or remove ${pc.cyan(".argent/install.json")}.`
+        );
+      }
+      await trackPackageAction("no_update", updateStartTime, true);
+      await completeUpdateTelemetry();
+      process.exit(0);
     }
 
     const spinner = p.spinner();

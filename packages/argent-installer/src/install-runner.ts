@@ -13,6 +13,7 @@ import {
   resolveProjectRoot,
   hasProjectPackageJson,
   isGloballyInstalled,
+  isDeclaredLocally,
   isLocallyInstalled,
   getLocallyInstalledVersion,
   isYarnPnp,
@@ -80,8 +81,13 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
     process.exit(1);
   }
 
-  // Already a devDependency and not a developer `--from` reinstall → reuse it.
-  if (isLocallyInstalled(projectRoot) && !fromTar) {
+  // Reuse only when the project's OWN package.json declares the dep AND it is
+  // present on disk. Gating on mere resolvability (isLocallyInstalled) would
+  // treat a hoisted workspace copy or a transitive dep as "already set up" and
+  // skip the add — committing a local-mode config the manifest never backs, so
+  // teammates' `npm install` wouldn't reliably get argent. If declared but not
+  // yet materialized, fall through and install so node_modules is populated.
+  if (isDeclaredLocally(projectRoot) && isLocallyInstalled(projectRoot) && !fromTar) {
     const startedAt = performance.now();
     p.log.info(`${PACKAGE_NAME} is already a devDependency ${pc.dim(`(${projectRoot})`)}.`);
     await tel.trackPackageAction("already_installed", startedAt, true);

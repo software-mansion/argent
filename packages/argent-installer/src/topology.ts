@@ -79,7 +79,19 @@ export function getGloballyInstalledPackageRoot(): string | null {
   if (!binaryPath) return null;
   try {
     const realPath = fs.realpathSync(binaryPath);
-    return resolvePackageRoot(path.dirname(realPath));
+    const root = resolvePackageRoot(path.dirname(realPath));
+    // resolvePackageRoot walks up to the FIRST package.json, which is only
+    // argent's when the bin resolves cleanly into the package dir. If the bin is
+    // a non-symlink wrapper (a Windows `argent.cmd` in the npm prefix, which
+    // realpath leaves unchanged) or the layout is unexpected, the walk can land
+    // on an unrelated manifest — classically a stray `~/package.json`. Callers
+    // feed this root to killToolServerForInstallDir, so an over-broad root would
+    // tear down tool-servers of unrelated installs. Only trust a root whose
+    // package.json is actually ours.
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
+      name?: string;
+    };
+    return pkg.name === PACKAGE_NAME ? root : null;
   } catch {
     return null;
   }
@@ -237,16 +249,30 @@ export function getLocalArgentBinRelPath(projectRoot: string): string | null {
     return null;
   }
   if (!binSub) return null;
-  const abs = path.join(pkgDir, binSub);
-  if (!fs.existsSync(abs)) return null;
-  // Module resolution returns real paths; realpath the root too so a symlinked
-  // project dir (e.g. macOS /var → /private/var) doesn't derail the relative
-  // path with spurious ".." segments.
+  // Realpath the root so a symlinked project dir (e.g. macOS /var → /private/var)
+  // doesn't derail the relative path with spurious ".." segments.
   let root = projectRoot;
   try {
     root = fs.realpathSync(projectRoot);
   } catch {
     // keep the caller's path
   }
+  // Prefer the STABLE, version-independent node_modules path over the resolved
+  // real path. resolveLocalArgentDir uses Node's module resolution, which
+  // returns the symlink TARGET — under pnpm that is the version-pinned
+  // node_modules/.pnpm/@swmansion+argent@<version>/... store dir. Committing
+  // that bakes the current version into the MCP command, so it breaks the moment
+  // the dependency is bumped outside `argent update` (a plain `pnpm update`
+  // prunes the old store dir). The conventional <root>/node_modules/<pkg> path
+  // is a symlink to the same file yet stays valid across version bumps.
+  const stableRel = path.join("node_modules", PACKAGE_NAME, binSub);
+  if (fs.existsSync(path.join(root, stableRel))) {
+    return stableRel.split(path.sep).join("/");
+  }
+  // Fallback for layouts where the package isn't under the project's own
+  // node_modules (hoisted workspace root): use the resolved path. Still
+  // committable, just less resilient to an in-place version bump.
+  const abs = path.join(pkgDir, binSub);
+  if (!fs.existsSync(abs)) return null;
   return path.relative(root, abs).split(path.sep).join("/");
 }

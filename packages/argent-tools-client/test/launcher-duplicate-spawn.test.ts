@@ -393,4 +393,41 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
       expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", state!.port));
     }
   );
+
+  it(
+    "reuses a NEWER same-bundle server instead of killing it (no version ping-pong across live sessions)",
+    { timeout: 30_000 },
+    async () => {
+      // The inverse of the self-heal case: a server is already running the bumped
+      // bundle, recorded under a NEWER version, while THIS caller is still frozen
+      // at the old version — a second long-lived MCP session that started before
+      // the bump. It must REUSE the newer healthy server, not tear it down.
+      // Killing on any mismatch is what makes two sessions ping-pong SIGTERMs,
+      // each frozen at its own startup version.
+      const newer = await launcher.spawnToolsServer(fakePaths(), await launcher.findFreePort(), {
+        token: "newer-token",
+      });
+      spawnedPids.push(newer.pid);
+      await launcher.writeToolsServerState({
+        port: newer.port,
+        pid: newer.pid,
+        startedAt: new Date().toISOString(),
+        bundlePath: FAKE_BUNDLE,
+        version: "2.0.0",
+        host: "127.0.0.1",
+        token: "newer-token",
+        managed: "autospawn",
+      });
+
+      const handle = await launcher.ensureToolsServer({ ...fakePaths(), version: "1.0.0" });
+
+      // Reused: the newer server is still alive and its record is untouched.
+      expect(launcher.isToolsServerProcessAlive(newer.pid)).toBe(true);
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
+      expect(state!.pid).toBe(newer.pid);
+      expect(state!.version).toBe("2.0.0");
+      expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", newer.port));
+      expect(handle.token).toBe("newer-token");
+    }
+  );
 });
