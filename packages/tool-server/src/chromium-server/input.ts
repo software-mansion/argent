@@ -145,15 +145,14 @@ export async function sendButton(
     }
     return;
   }
-  throw new FailureError(
+  // No FailureError classification here: sendButton is only reached via the
+  // chromium-server WebSocket `button` handler, which catches and reformats the
+  // error into a plain `{ status: "error", message }` before any registry
+  // boundary — and the registered `button` tool is apple+android only. A
+  // classified code would never reach telemetry, so this stays a plain Error.
+  throw new Error(
     `Chromium does not support the "${button}" hardware button. ` +
-      `Use a keyboard shortcut via the keyboard tool, or invoke an app-level handler via the debugger.`,
-    {
-      error_code: FAILURE_CODES.CHROMIUM_BUTTON_UNSUPPORTED,
-      failure_stage: "chromium_input_button",
-      failure_area: "tool_server",
-      error_kind: "unsupported",
-    }
+      `Use a keyboard shortcut via the keyboard tool, or invoke an app-level handler via the debugger.`
   );
 }
 

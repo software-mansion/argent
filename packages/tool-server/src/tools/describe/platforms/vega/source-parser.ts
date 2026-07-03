@@ -1,5 +1,4 @@
 import { XMLParser } from "fast-xml-parser";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { DescribeFrame, DescribeNode } from "../../contract";
 
 /**
@@ -220,13 +219,7 @@ function foregroundScopes(root: VegaXmlNode): VegaXmlNode[] {
  */
 export function parseVegaPageSource(xml: string): DescribeNode {
   const root = parseVegaXml(xml);
-  if (!root)
-    throw new FailureError("Failed to parse Vega page source", {
-      error_code: FAILURE_CODES.VEGA_PAGE_SOURCE_PARSE_FAILED,
-      failure_stage: "vega_page_source_parse",
-      failure_area: "tool_server",
-      error_kind: "unknown",
-    });
+  if (!root) throw new Error("Failed to parse Vega page source");
   const scopes = foregroundScopes(root);
   const children: DescribeNode[] = [];
   for (const scope of scopes) {

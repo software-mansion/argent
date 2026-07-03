@@ -12,7 +12,6 @@
  * removes the host binary without losing any capability.
  */
 import { request } from "node:http";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { runAdb } from "./adb";
 import { emulatorSerial } from "./vega-automation";
 
@@ -42,31 +41,12 @@ export async function fetchVegaPageSource(timeoutMs = 15_000): Promise<string> {
     try {
       parsed = JSON.parse(respText) as { result?: unknown; error?: unknown };
     } catch (e) {
-      // The toolkit answered but its body isn't valid JSON — a parse failure,
-      // not a fetch/transport one. Distinct from VEGA_PAGE_SOURCE_PARSE_FAILED's
-      // XML-structure parse, but the same "got bytes, couldn't decode" class.
-      throw new FailureError(
-        `bad toolkit JSON: ${e instanceof Error ? e.message : String(e)}`,
-        {
-          error_code: FAILURE_CODES.VEGA_PAGE_SOURCE_PARSE_FAILED,
-          failure_stage: "vega_toolkit_response_json",
-          failure_area: "tool_server",
-          error_kind: "unknown",
-        },
-        { cause: e instanceof Error ? e : new Error(String(e)) }
-      );
+      throw new Error(`bad toolkit JSON: ${e instanceof Error ? e.message : String(e)}`, {
+        cause: e,
+      });
     }
     if (parsed.error !== undefined) {
-      // Transport fully succeeded and the toolkit explicitly returned an error
-      // object — a logical RPC failure, not a fetch/network one. Distinct code
-      // so VEGA_PAGE_SOURCE_FETCH_FAILED stays exclusively transport-level
-      // (consistently error_kind "network").
-      throw new FailureError(`toolkit error: ${JSON.stringify(parsed.error)}`, {
-        error_code: FAILURE_CODES.VEGA_PAGE_SOURCE_RPC_ERROR,
-        failure_stage: "vega_toolkit_rpc_error",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      });
+      throw new Error(`toolkit error: ${JSON.stringify(parsed.error)}`);
     }
     const result = parsed.result;
     // getPageSource returns the XML as a JSON string; tolerate a structured
@@ -114,66 +94,17 @@ function postJson(
           // hint then covers it, as for every other toolkit-level failure here.
           const status = res.statusCode ?? 0;
           if (status < 200 || status >= 300) {
-            // Reachable and answered, just a non-2xx status — a malformed
-            // response, not a down endpoint. Distinct code from the connect-
-            // failure path below so it mirrors the chromium CDP split
-            // (UNREACHABLE vs INVALID_RESPONSE): VEGA_PAGE_SOURCE_FETCH_FAILED
-            // stays exclusively for transport/connect failures.
-            reject(
-              new FailureError(`toolkit HTTP ${status}: ${data.slice(0, 200)}`, {
-                error_code: FAILURE_CODES.VEGA_PAGE_SOURCE_HTTP_ERROR,
-                failure_stage: "vega_toolkit_http_status",
-                failure_area: "tool_server",
-                error_kind: "network",
-                network_failure: "invalid_response",
-              })
-            );
+            reject(new Error(`toolkit HTTP ${status}: ${data.slice(0, 200)}`));
             return;
           }
           resolve(data);
         });
       }
     );
-    req.on("error", (err) => {
-      // The common case: nothing is listening on the forwarded toolkit port
-      // (the automation toolkit isn't attached — relaunch the app), so the
-      // connect is refused. Map the well-known socket codes; everything else
-      // is an unclassified transport error.
-      const code = (err as NodeJS.ErrnoException).code;
-      const network_failure =
-        code === "ECONNREFUSED"
-          ? "connection_refused"
-          : code === "ECONNRESET"
-            ? "connection_reset"
-            : "other";
-      reject(
-        new FailureError(
-          `toolkit request failed: ${err instanceof Error ? err.message : String(err)}`,
-          {
-            error_code: FAILURE_CODES.VEGA_PAGE_SOURCE_FETCH_FAILED,
-            failure_stage: "vega_toolkit_request_error",
-            failure_area: "tool_server",
-            error_kind: "network",
-            network_failure,
-          },
-          { cause: err instanceof Error ? err : new Error(String(err)) }
-        )
-      );
-    });
-    req.on("timeout", () => {
-      // Reject with the precise timeout classification first; the subsequent
-      // destroy() carries no error so it won't emit 'error', and Promise reject
-      // is idempotent — the network 'error' path can't override this.
-      reject(
-        new FailureError(`toolkit request timed out after ${timeoutMs}ms`, {
-          error_code: FAILURE_CODES.VEGA_PAGE_SOURCE_TIMEOUT,
-          failure_stage: "vega_toolkit_request_timeout",
-          failure_area: "tool_server",
-          error_kind: "timeout",
-        })
-      );
-      req.destroy();
-    });
+    req.on("error", reject);
+    req.on("timeout", () =>
+      req.destroy(new Error(`toolkit request timed out after ${timeoutMs}ms`))
+    );
     req.write(body);
     req.end();
   });

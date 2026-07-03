@@ -197,14 +197,12 @@ export async function copyScreenshotToClipboard(
   )) as { result?: { value?: { ok?: boolean; error?: string } } };
   const v = out.result?.value;
   if (!v?.ok) {
-    throw new FailureError(
-      `Chromium clipboard image copy failed: ${v?.error ?? "renderer rejected the write"}`,
-      {
-        error_code: FAILURE_CODES.CHROMIUM_CLIPBOARD_FAILED,
-        failure_stage: "chromium_clipboard_image",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      }
+    // Plain Error, not a classified FailureError: copyScreenshotToClipboard has
+    // no production caller (only wired into the chromium-server object / type),
+    // and even the sibling clipboard route reformats errors before any registry
+    // boundary — so a code here could never reach telemetry.
+    throw new Error(
+      `Chromium clipboard image copy failed: ${v?.error ?? "renderer rejected the write"}`
     );
   }
 }

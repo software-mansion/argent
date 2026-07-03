@@ -159,7 +159,30 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
       network_failure: "invalid_response",
     });
   }
-  return (await res.json()) as T;
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    // A caller-driven abort while the body is still streaming is expected
+    // control flow — surface it untouched, like the fetch() catch above.
+    if (err instanceof Error && err.name === "AbortError") throw err;
+    // The port answered 200 but its body isn't valid JSON — a non-CDP service
+    // squatting the debug port, or a truncated/reset body. `res.json()` rejects
+    // with a raw SyntaxError that would otherwise escape unclassified; this is
+    // the same "reached but malformed" class as the !res.ok branch above, so it
+    // gets INVALID_RESPONSE rather than falling through to the generic bucket.
+    throw new FailureError(
+      `Chromium CDP discovery: GET ${url} returned a body that is not valid JSON`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE,
+        failure_stage: "chromium_cdp_discovery_parse",
+        failure_area: "tool_server",
+        error_kind: "network",
+        failure_command: "cdp",
+        network_failure: "invalid_response",
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
+  }
 }
 
 /**
