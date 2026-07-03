@@ -60,12 +60,15 @@ const POLL_INTERVAL_MS = 300;
 const SETTLE_POLL_MS = 250;
 const SETTLE_TIMEOUT_MS = 3000;
 
-// `scroll-to`: a bounded number of momentum-free increments. Each travels half a
-// screen — large enough to register as a scroll (not a tap) and not depend on
-// the container's size, yet < 1 viewport, so a target can never be skipped over
-// between two settle checkpoints (consecutive viewports overlap).
+// `scroll-to`: a bounded number of momentum-free increments. Each travels half
+// the clip window along the scroll axis (half the screen when no `within`
+// container is named) — < 1 viewport, so consecutive viewports overlap and a
+// target can never be skipped over between two settle checkpoints. The floor
+// keeps the gesture in a tiny container large enough to register as a scroll
+// rather than a tap.
 const MAX_SCROLL_ITERATIONS = 25;
 const SCROLL_INCREMENT = 0.5;
+const MIN_SCROLL_INCREMENT = 0.05;
 
 const FULL_SCREEN: DescribeFrame = { x: 0, y: 0, width: 1, height: 1 };
 
@@ -226,10 +229,13 @@ interface ScrollResolve {
  * `region`. The anchor (the touch-down / wheel point) is what selects the scroll
  * container — the OS routes the gesture to the innermost scroller hit-tested
  * there — so anchoring inside a `within` region is how nested scrollers are
- * disambiguated. The travel is a fixed half-screen along the axis (only the end
+ * disambiguated. The travel is half the region along the axis (only the end
  * point is clamped, so the down stays at the anchor and keeps latching to the
- * right container). Touch platforms use a `settle` swipe (no fling); Chromium
- * uses wheel events (already momentum-free).
+ * right container) — sized to the clip window rather than the screen, so
+ * consecutive views of a small container's content still overlap and a target
+ * can't be scrolled fully past between settle checkpoints. Touch platforms use
+ * a `settle` swipe (no fling); Chromium uses wheel events (already
+ * momentum-free).
  */
 async function scrollIncrement(
   env: ActionEnv,
@@ -238,7 +244,8 @@ async function scrollIncrement(
 ): Promise<void> {
   const cx = clamp01(region.x + region.width / 2);
   const cy = clamp01(region.y + region.height / 2);
-  const dist = SCROLL_INCREMENT;
+  const extent = direction === "up" || direction === "down" ? region.height : region.width;
+  const dist = Math.min(SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
 
   if (env.device.platform === "chromium") {
     // Positive deltaY/deltaX reveals content below / to the right (see gesture-scroll).

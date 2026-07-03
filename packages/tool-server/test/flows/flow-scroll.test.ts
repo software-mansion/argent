@@ -34,7 +34,9 @@ function screen(children: DescribeNode[]): DescribeNode {
 }
 
 interface SwipeCall {
+  fromX: number;
   fromY: number;
+  toX: number;
   toY: number;
   settle: unknown;
 }
@@ -44,7 +46,13 @@ function mockRegistry(swipes: SwipeCall[], onSwipe?: () => void): Registry {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
       if (id === "gesture-swipe") {
-        swipes.push({ fromY: args.fromY as number, toY: args.toY as number, settle: args.settle });
+        swipes.push({
+          fromX: args.fromX as number,
+          fromY: args.fromY as number,
+          toX: args.toX as number,
+          toY: args.toY as number,
+          settle: args.settle,
+        });
         onSwipe?.();
         return { swiped: true };
       }
@@ -199,6 +207,102 @@ describe("scroll-to directive", () => {
     expect(result.steps[0].status).toBe("pass");
     // One increment attempted, then the no-progress check accepted it.
     expect(swipes).toHaveLength(1);
+  });
+
+  it("sizes the increment to the within container, not the screen", async () => {
+    // A carousel 0.3 of the screen wide: a half-SCREEN increment would move
+    // ~1.7 container-widths per step, so consecutive container-viewports
+    // wouldn't overlap and a narrow card could be scrolled fully past between
+    // settle checkpoints. The increment must be half the CONTAINER's extent
+    // along the scroll axis (0.15 here) so the views always overlap.
+    const carousel = (children: DescribeNode[]) =>
+      n({
+        identifier: "carousel",
+        frame: { x: 0.1, y: 0.4, width: 0.3, height: 0.2 },
+        children,
+      });
+    const before = screen([
+      carousel([n({ label: "Card 1", frame: { x: 0.12, y: 0.45, width: 0.1, height: 0.1 } })]),
+    ]);
+    const after = screen([
+      carousel([n({ label: "Card 7", frame: { x: 0.15, y: 0.45, width: 0.1, height: 0.1 } })]),
+    ]);
+    let scrolled = false;
+    currentTree = () => (scrolled ? after : before);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+
+    await writeFlow("carousel", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Card 7" },
+          direction: "right",
+          within: { identifier: "carousel" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "carousel", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(swipes).toHaveLength(1);
+    // Anchored at the container's center, travelling left to reveal content on
+    // the right, by half the container's width — not half the screen.
+    expect(swipes[0].fromX).toBeCloseTo(0.25, 5);
+    expect(swipes[0].fromX - swipes[0].toX).toBeCloseTo(0.15, 5);
+  });
+
+  it("floors the increment so a sliver container still registers a scroll", async () => {
+    // Half of a 0.04-tall container would be a 0.02 travel — tap-slop
+    // territory. The floor (0.05) keeps the gesture recognizable as a scroll.
+    const strip = (children: DescribeNode[]) =>
+      n({
+        identifier: "strip",
+        frame: { x: 0, y: 0.5, width: 1, height: 0.04 },
+        children,
+      });
+    const before = screen([
+      strip([n({ label: "Row 1", frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.04 } })]),
+    ]);
+    const after = screen([
+      strip([n({ label: "Row 9", frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.03 } })]),
+    ]);
+    let scrolled = false;
+    currentTree = () => (scrolled ? after : before);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+
+    await writeFlow("sliver", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 9" },
+          direction: "down",
+          within: { identifier: "strip" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "sliver", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.05, 5);
   });
 
   it("fails with a no-progress reason when scrolling reveals nothing new", async () => {
