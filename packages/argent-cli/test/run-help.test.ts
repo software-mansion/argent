@@ -94,8 +94,10 @@ describe("argent run --help — whole-payload --args advertisement", () => {
     const help = capturedHelp();
     expect(help).not.toContain(WHOLE_PAYLOAD_LINE);
     expect(help).not.toContain(STDIN_SENTINEL_LINE);
-    // Its own `args` field is still shown as a per-field flag in the schema block.
-    expect(help).toContain("--args");
+    // Its own `args` field is still shown as a per-field flag in the schema
+    // block (rendered as `--args <value>` by formatSchemaUsage), so suppression
+    // removes the whole-payload hatch without hiding the field itself.
+    expect(help).toContain("--args <value>");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 });
