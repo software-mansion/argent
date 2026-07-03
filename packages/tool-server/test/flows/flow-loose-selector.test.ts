@@ -142,16 +142,13 @@ describe("loose (bare-string) selector resolution", () => {
     currentTree = () =>
       screen([n({ identifier: "tap-box", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]);
 
-    // Hand-authored map form (not via serializeFlow, which would collapse a
-    // text-only selector back to a bare string ⇒ loose). parseFlow keeps the
-    // map strict, so the text locator must NOT fall back to the testID.
-    const dir = path.join(tmpDir, ".argent", "flows");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(
-      path.join(dir, "strict.yaml"),
-      "steps:\n  - tap: { text: tap-box }\n",
-      "utf8"
-    );
+    // serializeFlow keeps a strict { text } in map form (only LOOSE text-only
+    // selectors collapse to a bare string), so writing through it preserves
+    // strictness — the text locator must NOT fall back to the testID.
+    await writeFlow("strict", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "tap-box" } }],
+    });
 
     const result = (await run("strict")) as FlowRunResult & { taps: TapCall[] };
     expect(result.steps[0].status).toBe("fail");

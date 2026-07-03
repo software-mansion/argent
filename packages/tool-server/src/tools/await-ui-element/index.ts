@@ -235,8 +235,10 @@ Conditions:
              elements; only that topmost one is inspected, so if a lower match is the one holding the text the wait
              still reports failure — narrow the selector to target it.
 
-The selector is { text?, identifier?, role? }; every provided field must match (case-insensitive substring).
-text matches the element's label or value. It polls the same accessibility / DOM tree as \`describe\`
+The selector is { text?, identifier?, role? }; every provided field must match. text and role match as
+case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
+also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
+It polls the same accessibility / DOM tree as \`describe\`
 (iOS AXRuntime, Android uiautomator, Chromium CDP) every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms)
 until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
 

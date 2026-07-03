@@ -6,6 +6,7 @@ import {
   deriveSelector,
   evaluateCondition,
   findAll,
+  identifierMatches,
   treeFingerprint,
 } from "../../src/utils/ui-tree-match";
 
@@ -172,5 +173,40 @@ describe("ui-tree-match", () => {
     const a = node({ frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 } });
     const jittered = node({ frame: { x: 0.10001, y: 0.2, width: 0.3, height: 0.4 } });
     expect(treeFingerprint(a)).toBe(treeFingerprint(jittered));
+  });
+});
+
+describe("identifier matching", () => {
+  it("matches exactly, case-insensitively — never as a substring", () => {
+    expect(identifierMatches("login-btn", "login-btn")).toBe(true);
+    expect(identifierMatches("Login-Btn", "login-btn")).toBe(true);
+    // A partial id must not match: an identifier names one element, and a
+    // substring lets a short needle capture an unrelated id.
+    expect(identifierMatches("login-btn", "login")).toBe(false);
+    expect(identifierMatches("autosave-banner", "Save")).toBe(false);
+    expect(identifierMatches(undefined, "login-btn")).toBe(false);
+  });
+
+  it("matches the unqualified name of an Android resource-id", () => {
+    expect(identifierMatches("com.example.app:id/submit", "submit")).toBe(true);
+    expect(identifierMatches("com.example.app:id/submit", "Submit")).toBe(true);
+    expect(identifierMatches("com.example.app:id/submit", "com.example.app:id/submit")).toBe(true);
+    // Only the whole unqualified name — not a substring of it, and not a
+    // partial package path.
+    expect(identifierMatches("com.example.app:id/submit", "sub")).toBe(false);
+    expect(identifierMatches("com.example.app:id/submit", "app:id/submit")).toBe(false);
+  });
+
+  it("findAll with an identifier selector is exact — a loose 'save' cannot hijack 'autosave-banner'", () => {
+    const tree = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ identifier: "autosave-banner", frame: { x: 0, y: 0.1, width: 1, height: 0.1 } }),
+        node({ label: "Save", frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.1 } }),
+      ],
+    });
+    expect(findAll(tree, { identifier: "save" })).toHaveLength(0);
+    expect(findAll(tree, { identifier: "autosave-banner" })).toHaveLength(1);
   });
 });

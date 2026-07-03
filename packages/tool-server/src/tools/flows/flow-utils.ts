@@ -198,9 +198,11 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
  * (`tap: foo`). A loose selector resolves identifier-first, then falls back to
  * text (label/value), so a hand-written `foo` matches `testID="foo"` as well as
  * visible text. The flag is honored only by the flow runner (`flow-actions.ts`)
- * and is never serialized as a field (it is implied by the bare-string spelling)
- * nor forwarded into a tool's input — explicit `{ text }` / `{ identifier }`
- * selectors stay strict everywhere.
+ * and is never serialized as a field — the YAML spelling carries it exactly:
+ * bare string ⇔ loose, map form ⇔ strict (`selectorToYaml`/`parseSelector` are
+ * inverses). It is never forwarded into a tool's input — explicit `{ text }` /
+ * `{ identifier }` selectors stay strict everywhere, including across the
+ * serialize/parse round-trip every recorded step performs.
  */
 export type FlowSelector = Selector & { loose?: boolean };
 
@@ -308,14 +310,23 @@ type YamlFlowFile = {
 // ── Conversions ──────────────────────────────────────────────────────
 
 /**
- * Sugar a selector for YAML output: a text-only selector collapses to a bare
- * string (`{ text: "Login" }` → `"Login"`); an identifier/role selector keeps
- * the map form. The internal `loose` flag is never emitted — a bare string is
- * loose by definition, so the spelling carries it. `parseSelector` is the
- * inverse (a bare string parses back to a loose text selector).
+ * Sugar a selector for YAML output: a LOOSE text-only selector collapses to a
+ * bare string (`{ text: "Login", loose: true }` → `"Login"`); everything else —
+ * including a strict `{ text }` — keeps the map form. The internal `loose` flag
+ * is never emitted as a field; the bare-string spelling carries it, and
+ * `parseSelector` is the exact inverse (bare string ⇒ loose, map ⇒ strict).
+ * Collapsing a strict text selector too would promote it to loose on re-parse,
+ * sending it through the identifier-first fallback it was never verified
+ * against — e.g. a recorder-captured `{ text: "Save" }` hijacked by a
+ * `testID="save"` elsewhere on screen.
  */
 function selectorToYaml(sel: FlowSelector): YamlSelector {
-  if (sel.text !== undefined && sel.identifier === undefined && sel.role === undefined) {
+  if (
+    sel.loose &&
+    sel.text !== undefined &&
+    sel.identifier === undefined &&
+    sel.role === undefined
+  ) {
     return sel.text;
   }
   const { loose: _loose, ...rest } = sel;
@@ -325,7 +336,7 @@ function selectorToYaml(sel: FlowSelector): YamlSelector {
 /** Sugar an await/assert step into the condition-as-key YAML body. */
 function waitToYaml(
   condition: WaitCondition,
-  selector: Selector,
+  selector: FlowSelector,
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
   timeoutMs: number | undefined
@@ -378,11 +389,23 @@ function toYamlStep(step: FlowStep): YamlStep {
     }
     case "await":
       return {
-        await: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch, step.timeout),
+        await: waitToYaml(
+          step.condition,
+          step.selector,
+          step.expectedText,
+          step.textMatch,
+          step.timeout
+        ),
       };
     case "assert":
       return {
-        assert: waitToYaml(step.condition, step.selector, step.expectedText, step.textMatch, undefined),
+        assert: waitToYaml(
+          step.condition,
+          step.selector,
+          step.expectedText,
+          step.textMatch,
+          undefined
+        ),
       };
     case "wait":
       return { wait: step.ms };
@@ -447,7 +470,7 @@ const SCROLL_DIRECTIONS: readonly ScrollDirection[] = ["up", "down", "left", "ri
 
 type WaitFields = {
   condition: WaitCondition;
-  selector: Selector;
+  selector: FlowSelector;
   expectedText?: string;
   textMatch?: TextMatchMode;
   timeout?: number;

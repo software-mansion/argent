@@ -13,8 +13,10 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../blueprints/chromium-cdp"
  */
 
 // A selector locates a node in the tree returned by `describe`. Every provided
-// field must match (logical AND); matching is a case-insensitive substring test
-// so callers don't need the exact label.
+// field must match (logical AND). `text` and `role` match as case-insensitive
+// substrings so callers don't need the exact label; `identifier` matches
+// exactly (or as the unqualified name of an Android resource-id) — see
+// `identifierMatches`.
 export const selectorSchema = z
   .object({
     text: z
@@ -27,7 +29,7 @@ export const selectorSchema = z
       .min(1)
       .optional()
       .describe(
-        "Case-insensitive substring of the element's identifier (accessibilityIdentifier / resource-id / testid)."
+        "The element's identifier (accessibilityIdentifier / resource-id / testid), matched case-insensitively as the exact identifier or the unqualified resource-id name ('submit' matches 'com.example.app:id/submit')."
       ),
     role: z
       .string()
@@ -77,6 +79,19 @@ export function equalsCI(actual: string | undefined, expected: string): boolean 
   return (actual ?? "").toLowerCase() === expected.toLowerCase();
 }
 
+/**
+ * Identifier matching: case-insensitive EXACT match, or the unqualified name of
+ * an Android resource-id — `submit` matches `com.example.app:id/submit` — so a
+ * caller never needs the package prefix. Deliberately NOT a substring test: an
+ * identifier names one element, and substring matching lets a short needle
+ * capture an unrelated id (`save` must not match `autosave-banner`), which is
+ * how a loose flow selector's identifier-first pass could hijack a tap.
+ */
+export function identifierMatches(actual: string | undefined, needle: string): boolean {
+  if (!actual) return false;
+  return equalsCI(actual, needle) || actual.toLowerCase().endsWith(`:id/${needle.toLowerCase()}`);
+}
+
 /** Compare an element's text to the expected string under the chosen mode. */
 export function textMatches(
   actual: string | undefined,
@@ -92,7 +107,10 @@ export function matchNode(node: DescribeNode, selector: Selector): boolean {
       return false;
     }
   }
-  if (selector.identifier !== undefined && !includesCI(node.identifier, selector.identifier)) {
+  if (
+    selector.identifier !== undefined &&
+    !identifierMatches(node.identifier, selector.identifier)
+  ) {
     return false;
   }
   if (selector.role !== undefined && !includesCI(node.role, selector.role)) {

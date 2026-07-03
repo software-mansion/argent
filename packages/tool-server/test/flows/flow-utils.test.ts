@@ -260,7 +260,8 @@ describe("parseFlow", () => {
     const yaml = serializeFlow({
       executionPrerequisite: "",
       steps: [
-        { kind: "assert", condition: "visible", selector: { text: "Welcome" } },
+        // loose ⇒ bare-string sugar; a strict { text } would keep the map form
+        { kind: "assert", condition: "visible", selector: { text: "Welcome", loose: true } },
         {
           kind: "assert",
           condition: "text",
@@ -285,16 +286,19 @@ describe("parseFlow", () => {
   });
 
   it("roundtrips the sugared step kinds through YAML", () => {
-    // A text-only selector serializes to a bare string, which parses back as a
-    // loose selector — so the round-trip representation of any text locator
-    // carries `loose: true`. Identifier selectors keep the map form and stay
-    // strict.
+    // The spelling carries the loose bit exactly both ways: a LOOSE text-only
+    // selector serializes to a bare string (which parses back loose); a strict
+    // `{ text }` keeps the map form (which parses back strict). Identifier
+    // selectors keep the map form and stay strict.
     const flow: FlowFile = {
       executionPrerequisite: "",
       steps: [
         { kind: "tap", selector: { text: "Login", loose: true } },
+        { kind: "tap", selector: { text: "Save" } },
         { kind: "type", into: { text: "email", loose: true }, text: "a@b.com" },
+        { kind: "type", into: { text: "Password" }, text: "hunter2" },
         { kind: "await", condition: "hidden", selector: { identifier: "spinner" } },
+        { kind: "await", condition: "visible", selector: { text: "Welcome" } },
         { kind: "wait", ms: 500 },
         {
           kind: "assert",
@@ -317,9 +321,32 @@ describe("parseFlow", () => {
           direction: "right",
           within: { identifier: "promotions" },
         },
+        {
+          kind: "scroll-to",
+          target: { text: "Checkout" },
+          direction: "down",
+          within: { text: "Cart items" },
+        },
       ],
     };
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
+  });
+
+  it("keeps a strict { text } selector strict across repeated round-trips (never collapsed to a bare loose string)", () => {
+    // The recorder derives strict `{ text }` selectors, and every recorded step
+    // re-reads and re-writes the whole file (appendStep) — so a single lossy
+    // serialization would silently promote them to loose, sending them through
+    // the identifier-first fallback they were never verified against.
+    const flow: FlowFile = {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Save" } }],
+    };
+    const once = serializeFlow(flow);
+    expect(once).toContain("text: Save");
+    expect(once).not.toContain("tap: Save");
+    const reparsed = parseFlow(once);
+    expect(reparsed.steps).toEqual(flow.steps); // no `loose` flag introduced
+    expect(parseFlow(serializeFlow(reparsed)).steps).toEqual(flow.steps);
   });
 
   it("sugars a bare-string scroll-to target and keeps the within map", () => {
