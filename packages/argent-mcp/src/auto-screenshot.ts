@@ -27,8 +27,11 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
 ]);
 
 /**
- * Per-tool delay (ms) before capturing the screenshot.
- * +1 000 ms over baseline research values to cover slow devices/transitions.
+ * Per-tool cap (ms) on how long the auto-screenshot waits for the screen to
+ * settle before capturing (via the `await-screen-idle` tool). The readiness
+ * poll usually returns well under this; the cap only bounds a screen that never
+ * settles. Values sit ~1 000 ms above baseline research figures to stay safe on
+ * slow devices/transitions.
  */
 export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "launch-app": 3000,
