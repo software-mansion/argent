@@ -15,7 +15,18 @@ export interface ForgetResult {
   consentDisabled: boolean;
 }
 
-// Local-only reset: optionally persist opt-out, then delete the anonymous id.
+// Local-only reset: optionally persist opt-out (default), then delete the
+// on-disk anonymous id.
+//
+// Deleting the id file is a LOCAL id-file removal, not a permanent erasure of
+// the machine's identity. Because the distinct_id is now derived deterministically
+// from the host fingerprint, removing the file alone does NOT yield a fresh
+// identity: while consent stays enabled the next tracked event re-derives the
+// identical id. A genuine, lasting reset comes from the opt-out — with
+// disableConsent (the default) persisted, track() short-circuits and the id is
+// never re-created. Callers that want only the file gone (disableConsent: false)
+// must expect it to re-derive on the next event.
+//
 // Errors are debug-only because forget/uninstall should keep moving.
 export async function forget(options: ForgetOptions = {}): Promise<ForgetResult> {
   const disableConsent = options.disableConsent ?? true;

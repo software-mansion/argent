@@ -288,10 +288,11 @@ describe("telemetry public surface", () => {
     expect(isEnabled()).toBe(false);
   });
 
-  it("forget can erase telemetry identity without creating consent config", async () => {
+  it("forget removes the local telemetry id file without creating consent config, but the deterministic id re-derives on the next event while consent stays enabled", async () => {
     fs.unlinkSync(configFilePath());
     _resetConsentCacheForTest();
     track("toolserver:start", {});
+    const derivedId = readId();
 
     const result = await forget({ disableConsent: false });
 
@@ -304,6 +305,14 @@ describe("telemetry public surface", () => {
     expect(status().hasAnonIdOnDisk).toBe(false);
     expect(fs.existsSync(configFilePath())).toBe(false);
     expect(isEnabled()).toBe(true);
+
+    // Deleting the id file with consent still enabled is a LOCAL removal, not a
+    // permanent erasure: the fingerprint-derived id is re-created identically on
+    // the next tracked event. A genuine reset comes from the opt-out path
+    // (forget's default disableConsent / markDisabled), covered above.
+    track("toolserver:start", {});
+    expect(status().hasAnonIdOnDisk).toBe(true);
+    expect(readId()).toBe(derivedId);
   });
 
   it("forget without consent changes preserves an explicit opt-out", async () => {
