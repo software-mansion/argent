@@ -35,6 +35,37 @@ export function isInjectableBundleId(bundleId: string): boolean {
   return !bundleId.startsWith("com.apple.");
 }
 
+/**
+ * The invariant half of the non-injectable recovery guidance: which tools NOT
+ * to fall back to. Shared VERBATIM by every surface that reports this terminal
+ * state (this precheck's throw, the `describe` iOS fallback hint, and the
+ * `native-devtools-status` description) so none of them can drift into
+ * recommending a dead-end. Every native-* tool — notably the two view-at-point
+ * tools, which run this same precheck — re-throws this identical error, so
+ * pointing an agent at any of them just loops it back here.
+ */
+export const NON_INJECTABLE_NATIVE_WARNING =
+  "Do not fall back to the native-* tools — including native-view-at-point and " +
+  "native-user-interactable-view-at-point — they run this same injection precheck and return " +
+  "this same error.";
+
+/**
+ * Full recovery guidance for surfaces reached BEFORE `describe` has been tried
+ * (the precheck throw from a native-* tool, and the `native-devtools-status`
+ * description). `describe` reads these apps via the ax-service without injection
+ * and `screenshot` is always available, so both are safe next steps here.
+ *
+ * The `describe` iOS fallback hint deliberately does NOT reuse this string: it
+ * is reached only after `describe`'s own ax-service path already returned empty,
+ * so re-recommending `describe` there would be circular. That hint leads with
+ * `screenshot` and appends {@link NON_INJECTABLE_NATIVE_WARNING} instead, so the
+ * dead-end warning stays identical across all three surfaces.
+ */
+export const NON_INJECTABLE_RECOVERY =
+  "Use the standard `describe` tool (its accessibility path reads the screen without injection) " +
+  "or `screenshot` (then interact by coordinate). " +
+  NON_INJECTABLE_NATIVE_WARNING;
+
 // Max consecutive init failures per service instance before it stops retrying.
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
 
@@ -106,7 +137,7 @@ export async function precheckNativeDevtools(
   if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
     throw new FailureError(
       `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools can never be injected into it. ` +
-        "The native-* tools are unavailable for this app — use the standard describe / screenshot / view-at-point tools instead.",
+        NON_INJECTABLE_RECOVERY,
       {
         error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
         failure_stage: "native_devtools_precheck",

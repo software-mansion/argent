@@ -2,6 +2,7 @@ import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import {
   isInjectableBundleId,
+  NON_INJECTABLE_NATIVE_WARNING,
   nativeDevtoolsRef,
   NativeDevtoolsApi,
 } from "../../../../blueprints/native-devtools";
@@ -31,13 +32,16 @@ const TVOS_HINT =
 // Apple system apps (`com.apple.*`) can never load argent's injected dylib, so
 // the native-devtools fallback can't read their view hierarchy and restarting
 // them would never help — returning `should_restart` here puts the agent in an
-// unbounded restart-app → describe loop. Surface a terminal hint to use a
-// screenshot instead, mirroring the terminal state `native-devtools-status`
-// reports for these bundle ids.
+// unbounded restart-app → describe loop. This hint is reached only once
+// `describe`'s own ax-service path has already returned empty, so it leads with
+// `screenshot` (re-recommending `describe` would be circular) and shares the
+// `native-*` dead-end warning verbatim with the precheck throw and
+// `native-devtools-status`.
 const NON_INJECTABLE_HINT =
   "This is an Apple system app (com.apple.*), which cannot load argent's native-devtools " +
   "instrumentation — the native view hierarchy is unavailable and restarting the app will NOT " +
-  "help. Use the `screenshot` tool to see the screen and interact by coordinate.";
+  "help. Take a `screenshot` to see the screen and interact by coordinate. " +
+  NON_INJECTABLE_NATIVE_WARNING;
 
 function emptyTree(): DescribeNode {
   return parseDescribeResult({

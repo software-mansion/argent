@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
+import { NON_INJECTABLE_NATIVE_WARNING } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/describe";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
@@ -279,7 +280,13 @@ describe("describe tool", () => {
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBeUndefined();
     expect(elementLineCount(result.description)).toBe(0);
-    expect(result.hint).toMatch(/system app|screenshot/i);
+    expect(result.hint).toMatch(/system app/i);
+    // Reached only after describe's own AX path returned empty, so this hint
+    // leads with `screenshot` rather than re-recommending `describe`. It still
+    // carries the same native-* dead-end warning verbatim as the precheck throw
+    // and the native-devtools-status description (finding #4).
+    expect(result.hint).toMatch(/`screenshot`/);
+    expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
   });
 
   it("returns empty AX result when native-devtools is unavailable", async () => {

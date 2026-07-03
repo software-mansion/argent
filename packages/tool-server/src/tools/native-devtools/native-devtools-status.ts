@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
   isInjectableBundleId,
+  NON_INJECTABLE_RECOVERY,
   nativeDevtoolsRef,
   precheckNativeDevtools,
   type NativeDevtoolsApi,
@@ -42,7 +43,7 @@ Returns { envSetup, appRunning, connected, requiresRestart, nextLaunchWillBeInje
 - injectable: whether native devtools can ever be injected into this app. Apple system apps (bundle ids under com.apple.) are platform binaries with library validation, so the dylib can never load into them.
 
 Call this before using app-scoped native hierarchy tools or native-network-logs.
-If injectable is false: this is a TERMINAL state — the app can never be injected. Do NOT restart/retry; use the standard describe / screenshot / view-at-point tools instead.
+If injectable is false: this is a TERMINAL state — the app can never be injected. Do NOT restart/retry. ${NON_INJECTABLE_RECOVERY}
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app, then proceed with the native feature.
 Fails if the simulator server is not running for the given UDID or the bundleId is not found.`,

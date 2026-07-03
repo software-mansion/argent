@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { FailureError, FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   isInjectableBundleId,
+  NON_INJECTABLE_NATIVE_WARNING,
+  NON_INJECTABLE_RECOVERY,
   precheckNativeDevtools,
   MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
   type NativeDevtoolsApi,
@@ -24,6 +26,11 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => {
 
 import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-devtools-status";
 import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
+import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
+import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
+import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
+import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
 
 function makeNativeApi(options: {
   envSetup?: boolean;
@@ -225,6 +232,114 @@ describe("precheckNativeDevtools — non-injectable terminal error", () => {
 
     await expect(precheckNativeDevtools(api, UDID)).resolves.toBeNull();
   });
+});
+
+describe("non-injectable recovery guidance is consistent and points only at working tools", () => {
+  const UDID = "55555555-5555-5555-5555-555555555555";
+
+  it("recommends describe and screenshot but only warns the agent OFF the native-* tools", () => {
+    // The recovery must send the agent to tools that actually work on a system
+    // app; the view-at-point tools re-run this same precheck and re-throw, so
+    // recommending them dead-ends. describe/screenshot are recommended, and the
+    // view-at-point tools appear only inside the "do not fall back" warning.
+    expect(NON_INJECTABLE_RECOVERY).toMatch(/`describe`/);
+    expect(NON_INJECTABLE_RECOVERY).toMatch(/`screenshot`/);
+    expect(NON_INJECTABLE_RECOVERY).toContain(NON_INJECTABLE_NATIVE_WARNING);
+    expect(NON_INJECTABLE_NATIVE_WARNING).toMatch(/Do not fall back to the native-\* tools/);
+    expect(NON_INJECTABLE_NATIVE_WARNING).toContain("native-view-at-point");
+    // The recommendation clause itself never names a native-* tool outside the
+    // warning, so nothing points the agent back at a dead-end.
+    const recommendationOnly = NON_INJECTABLE_RECOVERY.replace(NON_INJECTABLE_NATIVE_WARNING, "");
+    expect(recommendationOnly).not.toContain("native-");
+  });
+
+  it("all three surfaces carry the same dead-end warning verbatim", async () => {
+    // Finding #4: the precheck throw, the status description, and the describe
+    // fallback hint used to recommend different tool sets. They now share the
+    // dead-end warning verbatim, so no surface can drift into recommending a
+    // native-* tool. (The describe-fallback hint's copy is asserted in
+    // describe-tool.test.ts.) The pre-describe surfaces additionally share the
+    // full describe/screenshot recommendation.
+    expect(nativeDevtoolsStatusTool.description).toContain(NON_INJECTABLE_RECOVERY);
+
+    let message = "";
+    try {
+      await precheckNativeDevtools(makeNativeApi({}).api, UDID, "com.apple.Preferences");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(NON_INJECTABLE_RECOVERY);
+    expect(message).toContain(NON_INJECTABLE_NATIVE_WARNING);
+  });
+});
+
+describe("native-* feature tools — the non-injectable throw propagates out of execute()", () => {
+  // The NATIVE_DEVTOOLS_NOT_INJECTABLE guard lives only in the shared precheck;
+  // every 3-arg feature tool relies on that throw propagating straight out of
+  // its execute() (none wraps the precheck in a try/catch). The precheck-level
+  // unit above proves the precheck throws, but not that each tool surfaces it —
+  // a later refactor that swallowed the throw inside a tool would leave that
+  // unit green while regressing the terminal behavior. Assert it at every tool
+  // boundary so that regression can't slip through.
+  const U = "44444444-4444-4444-4444-444444444444";
+  const SYSTEM_APP = "com.apple.Preferences";
+  const mkApi = () => makeNativeApi({ appRunning: true, connected: false }).api;
+
+  async function expectNotInjectableThrow(run: () => Promise<unknown>): Promise<void> {
+    let caught: unknown;
+    try {
+      await run();
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(FailureError);
+    expect(getFailureSignal(caught)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+  }
+
+  it("native-describe-screen surfaces NATIVE_DEVTOOLS_NOT_INJECTABLE", () =>
+    expectNotInjectableThrow(() =>
+      nativeDescribeScreenTool.execute(
+        { nativeDevtools: mkApi() },
+        { udid: U, bundleId: SYSTEM_APP }
+      )
+    ));
+
+  it("native-find-views surfaces NATIVE_DEVTOOLS_NOT_INJECTABLE", () =>
+    expectNotInjectableThrow(() =>
+      nativeFindViewsTool.execute({ nativeDevtools: mkApi() }, { udid: U, bundleId: SYSTEM_APP })
+    ));
+
+  it("native-full-hierarchy surfaces NATIVE_DEVTOOLS_NOT_INJECTABLE", () =>
+    expectNotInjectableThrow(() =>
+      nativeFullHierarchyTool.execute(
+        { nativeDevtools: mkApi() },
+        { udid: U, bundleId: SYSTEM_APP }
+      )
+    ));
+
+  it("native-network-logs surfaces NATIVE_DEVTOOLS_NOT_INJECTABLE", () =>
+    expectNotInjectableThrow(() =>
+      nativeNetworkLogsTool.execute(
+        { nativeDevtools: mkApi() },
+        { udid: U, bundleId: SYSTEM_APP, limit: 50, clear: false }
+      )
+    ));
+
+  it("native-view-at-point surfaces NATIVE_DEVTOOLS_NOT_INJECTABLE", () =>
+    expectNotInjectableThrow(() =>
+      nativeViewAtPointTool.execute(
+        { nativeDevtools: mkApi() },
+        { udid: U, bundleId: SYSTEM_APP, x: 0, y: 0 }
+      )
+    ));
+
+  it("native-user-interactable-view-at-point surfaces NATIVE_DEVTOOLS_NOT_INJECTABLE", () =>
+    expectNotInjectableThrow(() =>
+      nativeUserInteractableViewAtPointTool.execute(
+        { nativeDevtools: mkApi() },
+        { udid: U, bundleId: SYSTEM_APP, x: 0, y: 0 }
+      )
+    ));
 });
 
 describe("native-devtools tools — init_failed precheck", () => {
