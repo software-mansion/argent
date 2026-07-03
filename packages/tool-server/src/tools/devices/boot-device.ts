@@ -567,13 +567,18 @@ async function bootIos(
     "com.apple.iphonesimulator",
     "CurrentDeviceUDID",
     udid,
-  ]);
+  ]).catch(() => {});
   // `simctl boot` above already booted the device CORE (headless). Opening
   // Simulator.app only attaches the GUI window — surfaces that stream the
   // device through simulator-server (e.g. Argent Lens) don't need it, so
   // `headless` skips it to avoid popping a window the user didn't ask for.
   if (!headless) {
-    await execFileAsync("open", ["-a", "Simulator.app"]);
+    // Xcode 27 drops Simulator.app in favour of Device Hub.app
+    // (com.apple.dt.Devices); fall back to it, and keep the GUI attach
+    // best-effort so a missing app never fails a boot whose core is already up.
+    await execFileAsync("open", ["-a", "Simulator.app"])
+      .catch(() => execFileAsync("open", ["-b", "com.apple.dt.Devices"]))
+      .catch(() => {});
   }
   return { platform: "ios", udid, booted: true };
 }
