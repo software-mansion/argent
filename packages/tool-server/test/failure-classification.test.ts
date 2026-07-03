@@ -8,9 +8,13 @@ import {
   assertSafeFlowName,
   getFlowPath,
 } from "../src/tools/flows/flow-utils";
-import { keyboardTool } from "../src/tools/keyboard/index";
+import type { DeviceInfo, Registry } from "@argent/registry";
+import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
 import { chromiumCdpBlueprint } from "../src/blueprints/chromium-cdp";
 import { ensureCdpReachable, discoverPrimaryPage } from "../src/chromium-server/cdp-session";
+import { readViewport } from "../src/chromium-server/viewport";
+import { captureScreenshot } from "../src/chromium-server/screenshot";
+import type { CDPClient } from "../src/utils/debugger/cdp-client";
 import { injectVegaText, injectVegaNamedKey } from "../src/utils/vega-input";
 import {
   readAndroidNativeProfilerMetadata,
@@ -111,21 +115,28 @@ describe("flow-utils classifications", () => {
 });
 
 describe("keyboard classifications", () => {
-  // The chromium handler validates the key/char before touching the CDP api, so a
-  // bare stub is enough to reach the throw.
-  const chromiumServices = { chromium: {} as never };
-  const udid = "chromium-cdp-9222";
+  // The chromium typing path lives in makeChromiumImpl's handler, which resolves
+  // the CDP service then validates the key/char before touching it. A stub
+  // registry (service resolves to a bare object) reaches the classified throw
+  // without a live browser.
+  const registry = { resolveService: async () => ({}) } as unknown as Registry;
+  const { handler } = makeChromiumImpl(registry);
+  const device = {
+    id: "chromium-cdp-9222",
+    platform: "chromium",
+    kind: "app",
+  } as unknown as DeviceInfo;
 
   it("classifies an unknown named key as KEYBOARD_KEY_UNSUPPORTED", async () => {
     expectCode(
-      await captureError(keyboardTool.execute(chromiumServices, { udid, key: "not-a-key" })),
+      await captureError(handler({}, { udid: device.id, key: "not-a-key" }, device)),
       FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
     );
   });
 
   it("classifies an unmappable character as KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
     expectCode(
-      await captureError(keyboardTool.execute(chromiumServices, { udid, text: "\u{1F600}" })),
+      await captureError(handler({}, { udid: device.id, text: "\u{1F600}" }, device)),
       FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
     );
   });
@@ -202,6 +213,31 @@ describe("chromium CDP discovery classifications", () => {
       await captureError(discoverPrimaryPage(port)),
       FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET
     );
+  });
+});
+
+describe("chromium CDP-command malformed-response classifications", () => {
+  // A CDP command that round-trips but returns a payload missing the expected
+  // field is classified `error_kind: "unknown"` (a malformed response from a
+  // source we don't own), never `network`. These helpers are called
+  // un-swallowed from the chromium tools' execute, so the signal reaches
+  // telemetry. A stub CDPClient whose `send` resolves to `{}` reaches the
+  // classified throw without a live browser. This pins the convention that
+  // CHROMIUM_TAB_OPEN_FAILED (Target.createTarget with no targetId) also follows.
+  const stubCdp = (payload: unknown) => ({ send: async () => payload }) as unknown as CDPClient;
+
+  it("classifies a viewport read with no value as CHROMIUM_VIEWPORT_READ_FAILED (unknown)", async () => {
+    const err = await captureError(readViewport(stubCdp({})));
+    expectCode(err, FAILURE_CODES.CHROMIUM_VIEWPORT_READ_FAILED);
+    expect(getFailureSignal(err)?.error_kind).toBe("unknown");
+  });
+
+  it("classifies a screenshot with no data as CHROMIUM_SCREENSHOT_FAILED (unknown)", async () => {
+    const err = await captureError(
+      captureScreenshot({ cdp: stubCdp({}), deviceId: "chromium-cdp-9222" })
+    );
+    expectCode(err, FAILURE_CODES.CHROMIUM_SCREENSHOT_FAILED);
+    expect(getFailureSignal(err)?.error_kind).toBe("unknown");
   });
 });
 

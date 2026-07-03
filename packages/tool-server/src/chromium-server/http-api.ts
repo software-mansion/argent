@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { IncomingMessage, Server } from "node:http";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ButtonType, ChromiumServer, KeyDirection, Rotation, TouchType } from "./types";
 
 /**
@@ -332,11 +331,12 @@ async function handleWsCommand(
       return {};
     }
     default:
-      throw new FailureError(`Unknown ws cmd: ${msg.cmd}`, {
-        error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
-        failure_stage: "chromium_ws_unknown_cmd",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      });
+      // handleWsCommand's only caller catches this and reformats it to a
+      // `{ status: "error", message }` frame, so a FailureError's structured
+      // signal is dropped before any registry boundary — this WS server isn't
+      // driven through a registered tool. Left a plain Error like the adjacent
+      // sendButton path; CHROMIUM_PARAM_INVALID still buckets via its reachable
+      // tool sites (chromium-cookies / chromium-storage / chromium-tabs).
+      throw new Error(`Unknown ws cmd: ${msg.cmd}`);
   }
 }

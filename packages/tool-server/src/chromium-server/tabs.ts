@@ -172,12 +172,13 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
           error_code: FAILURE_CODES.CHROMIUM_TAB_OPEN_FAILED,
           failure_stage: "chromium_tab_open",
           failure_area: "tool_server",
-          // The CDP call round-tripped but its response was missing the expected
-          // targetId — a "reached but malformed" response, classified the same
-          // way as CHROMIUM_CDP_INVALID_RESPONSE rather than as a generic unknown.
-          error_kind: "network",
-          failure_command: "cdp",
-          network_failure: "invalid_response",
+          // The CDP command round-tripped but its response was missing the
+          // expected targetId — a malformed payload from a source we don't own,
+          // classified `unknown` like the other CDP-command failures in this
+          // server (CHROMIUM_SCREENSHOT_FAILED, the viewport/storage evals).
+          // `network`/`invalid_response` is reserved for the HTTP /json
+          // discovery layer, which has a genuine fetch transport.
+          error_kind: "unknown",
         });
       return out.targetId;
     });
