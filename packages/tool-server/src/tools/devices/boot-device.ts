@@ -1346,7 +1346,7 @@ function bootVega(params: {
   // restart, so it must NOT join an in-flight non-force boot (which would skip
   // the restart and hand back the stale device). Two same-mode boots of the same
   // image still share one promise.
-  const key = `${params.vvdImage} ${params.force ? "force" : "normal"}`;
+  const key = `${params.vvdImage}${params.force ? "force" : "normal"}`;
   const existing = inFlightVegaBoots.get(key);
   if (existing) return existing;
   const promise = bootVegaImpl(params).finally(() => {
