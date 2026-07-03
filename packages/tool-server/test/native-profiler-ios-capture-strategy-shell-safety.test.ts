@@ -30,10 +30,13 @@ describe("iOS capture-strategy: xcodebuild probe is shell-free", () => {
   });
 
   it("reads the Xcode version via execFileSync(argv), never execSync", () => {
-    // Xcode 26.5 is a degraded version → the selector falls through to the
-    // version probe (rather than the env override), exercising the sink.
+    // With no env override, selection falls through to the xcodebuild version
+    // probe, exercising the sink. Assert the probe is shell-free regardless of
+    // which strategy the version policy then picks — decoupled from isDegraded()
+    // so narrowing that bound later (when Apple fixes the deadlock) can't
+    // spuriously break this shell-safety test.
     const strategy = selectIosCaptureStrategy();
-    expect(strategy.name).toBe("all-processes");
+    expect(["device", "all-processes"]).toContain(strategy.name);
 
     expect(rec.calls.every((c) => c.fn === "execFileSync")).toBe(true);
     const probe = rec.calls.find((c) => c.file === "xcodebuild");

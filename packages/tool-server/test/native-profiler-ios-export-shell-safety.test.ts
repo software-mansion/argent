@@ -4,14 +4,22 @@ import { describe, it, expect, vi } from "vitest";
 // can assert how the trace-file path (which feeds the on-disk output path and
 // is interpolated into every `xctrace export` invocation) is passed.
 const rec = vi.hoisted(() => ({
-  calls: [] as { fn: string; file: string; args: string[] }[],
+  calls: [] as {
+    fn: string;
+    file: string;
+    args: string[];
+    options?: { maxBuffer?: number; timeout?: number };
+  }[],
 }));
 
 vi.mock("child_process", () => ({
   // export.ts shells out via promisify(execFile). The callback form is
-  // (file, args, options?, cb) — record the argv and return canned stdout.
+  // (file, args, options?, cb) — record the argv + options and return canned stdout.
   execFile: (file: string, args: string[], ...rest: unknown[]) => {
-    rec.calls.push({ fn: "execFile", file, args });
+    const options = rest.find((r) => typeof r === "object" && r !== null) as
+      | { maxBuffer?: number; timeout?: number }
+      | undefined;
+    rec.calls.push({ fn: "execFile", file, args, options });
     const cb = rest.find((r) => typeof r === "function") as
       | ((e: unknown, r: { stdout: string; stderr: string }) => void)
       | undefined;
@@ -38,6 +46,10 @@ vi.mock("child_process", () => ({
 }));
 
 import { exportIosTraceData } from "../src/utils/ios-profiler/export";
+import {
+  DEFAULT_EXEC_MAX_BUFFER,
+  DEFAULT_EXEC_TIMEOUT_MS,
+} from "../src/utils/ios-profiler/run-with-timeout";
 
 describe("native iOS profiler: trace-export shell-injection guard", () => {
   it("passes a hostile trace path only as discrete argv elements (never via a shell)", async () => {
@@ -69,6 +81,22 @@ describe("native iOS profiler: trace-export shell-injection guard", () => {
       expect(c.args[0]).toBe("export");
       const inputIdx = c.args.indexOf("--input");
       expect(c.args[inputIdx + 1]).toBe(hostileTrace);
+    }
+  });
+
+  it("runs every xctrace export with the raised maxBuffer and a timeout", async () => {
+    // execFileAsyncWithTimeout exists precisely so each xctrace export gets a
+    // 256 MiB maxBuffer (xctrace floods stderr, far past Node's 1 MiB default →
+    // ENOBUFS) and a timeout (so a stuck xctrace can't hang the stop forever).
+    // Guard both here: without this, dropping either from the helper stays green.
+    rec.calls.length = 0;
+    await exportIosTraceData("/tmp/native-profiler-fixture.trace");
+
+    const execFileCalls = rec.calls.filter((c) => c.fn === "execFile");
+    expect(execFileCalls.length).toBeGreaterThan(0);
+    for (const c of execFileCalls) {
+      expect(c.options?.maxBuffer).toBe(DEFAULT_EXEC_MAX_BUFFER);
+      expect(c.options?.timeout).toBe(DEFAULT_EXEC_TIMEOUT_MS);
     }
   });
 });
