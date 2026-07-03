@@ -143,6 +143,18 @@ describe("android-input — injection", () => {
     );
   });
 
+  it("case-folds the named key so uppercase input works (parity with the sim-server path)", async () => {
+    // `keyboard`'s `key` is a free `z.string()` (not a lowercase enum), and the
+    // sim-server backend folds case (`NAMED_KEYS[key.toLowerCase()]`), so
+    // `key: "Enter"` / "ENTER" is supported cross-platform input. The android path
+    // must fold it too — dropping `.toLowerCase()` here would make uppercase keys
+    // 400 as "Unknown key" on android only. Assert the literal keycode so the fold
+    // (ENTER → enter → KEYCODE_ENTER) is what's verified, not the constant itself.
+    adbShell.mockClear();
+    await injectAndroidNamedKey(SERIAL, "ENTER");
+    expect(adbShell).toHaveBeenCalledWith(SERIAL, "input keyevent 66", expect.anything());
+  });
+
   it("rejects an unknown named key as invalid input (→ HTTP 400)", async () => {
     // InvalidToolInputError (not a plain Error) so the HTTP layer maps it to 400
     // — an unknown key is a caller mistake, not an internal server fault.
