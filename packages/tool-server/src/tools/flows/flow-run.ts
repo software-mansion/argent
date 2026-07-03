@@ -26,6 +26,7 @@ import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-dev
 import { runDirective, invokeOnDevice, type ActionEnv } from "./flow-actions";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -318,6 +319,13 @@ returns a notice with the prerequisite instead of running.`,
       // on chromium/vega; restored on teardown.
       const statusBarPinned = await pinStatusBar(device);
 
+      // The chromium equivalent of that normalization: front the page once so
+      // a backgrounded window doesn't throttle rendering for the whole run —
+      // wheel-event acks (scroll steps) stall on a throttled compositor.
+      // Best-effort: bringToFront can focus a page but cannot unhide a
+      // minimized window (gesture-scroll fails fast on that case itself).
+      if (device.platform === "chromium") await frontChromiumPage(registry, device);
+
       const state: ExecState = {
         ...env,
         flowsDir,
@@ -337,6 +345,21 @@ returns a notice with the prerequisite instead of running.`,
       return summarize(params.name, device.id, flow.executionPrerequisite, state.reports);
     },
   };
+}
+
+/**
+ * Focus the chromium page for the run. Best-effort: a flow must never fail
+ * over focus housekeeping, so resolution/CDP errors are swallowed — the run
+ * proceeds and any genuinely blocked step reports its own failure.
+ */
+async function frontChromiumPage(registry: Registry, device: DeviceInfo): Promise<void> {
+  try {
+    const ref = chromiumCdpRef(device);
+    const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
+    await api.cdp.send("Page.bringToFront");
+  } catch {
+    /* focus is best-effort */
+  }
 }
 
 function summarize(

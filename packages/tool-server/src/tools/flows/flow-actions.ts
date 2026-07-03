@@ -15,7 +15,7 @@ import {
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
-import { fetchFlowTree } from "./flow-ios-tree";
+import { fetchFlowTree } from "./flow-tree";
 import type { FlowSelector, FlowStep, ScrollDirection } from "./flow-utils";
 
 /** Everything a directive needs to act on the run's device. */

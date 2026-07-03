@@ -13,10 +13,11 @@ const chromiumDevice = resolveDevice("chromium-cdp-19222");
 const iosDevice = resolveDevice("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA");
 const androidDevice = resolveDevice("emulator-5554");
 
-function fakeChromiumApi() {
+function fakeChromiumApi(visibility = "visible") {
   return {
     getViewport: () => ({ width: 800, height: 600, devicePixelRatio: 2 }),
     server: { sendWheel: vi.fn().mockResolvedValue(undefined) },
+    cdp: { send: vi.fn().mockResolvedValue({ result: { value: visibility } }) },
   };
 }
 
@@ -55,6 +56,19 @@ describe("gesture-scroll", () => {
     const totalDy = calls.reduce((sum, c) => sum + (c[2] as number), 0);
     expect(totalDx).toBeCloseTo(0.1 * 800, 5);
     expect(totalDy).toBeCloseTo(-0.5 * 600, 5);
+  });
+
+  it("fails fast with an actionable error when the window is hidden", async () => {
+    // A hidden window halts the input pipeline: wheel dispatches would stall
+    // past the CDP timeout, so the tool must refuse before dispatching any.
+    const api = fakeChromiumApi("hidden");
+    await expect(
+      gestureScrollTool.execute(
+        { chromium: api } as never,
+        { udid: "chromium-cdp-19222", x: 0.5, y: 0.5, deltaY: 0.25 } as never
+      )
+    ).rejects.toThrow(/hidden/);
+    expect(api.server.sendWheel).not.toHaveBeenCalled();
   });
 
   it("schema rejects a scroll with no delta", () => {

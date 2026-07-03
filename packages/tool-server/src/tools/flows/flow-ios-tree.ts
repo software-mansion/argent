@@ -1,8 +1,6 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
-import { fetchTree } from "../../utils/ui-tree-match";
-import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
@@ -12,9 +10,9 @@ import {
 } from "../describe/contract";
 
 /**
- * Flow-owned tree fetch.
+ * Flow-owned iOS tree source (see `flow-tree.ts` for the per-platform dispatch).
  *
- * Flows resolve selectors against the native iOS UIView hierarchy
+ * On iOS, flows resolve selectors against the native UIView hierarchy
  * (`ViewHierarchy.getFullHierarchy`) rather than the AX tree the agent-facing
  * `describe` uses. Unlike the AX tree and `describeScreen` — both of which walk
  * the *accessibility* tree and collapse an `accessible` container into a single
@@ -228,7 +226,7 @@ const FULL_HIERARCHY_FIELDS = [
  * adapted tree, or `null` when native-devtools is unavailable / not yet
  * connected / errored — in which case the caller falls back to the AX tree.
  */
-async function queryFullHierarchyTree(
+export async function queryFullHierarchyTree(
   registry: Registry,
   device: DeviceInfo
 ): Promise<DescribeTreeData | null> {
@@ -256,28 +254,3 @@ async function queryFullHierarchyTree(
   }
 }
 
-/**
- * Fetch the tree a flow resolves selectors against.
- *
- * On iOS this is the native UIView hierarchy (full testID coverage, no
- * `accessible`-container collapse). On Android it is the full accessibility
- * hierarchy including not-important views (full `resource-id`/testID coverage,
- * no interactables trim) — the Android counterpart to the same idea, since the
- * raw View tree is only reachable in-process there and the a11y tree is the
- * only cross-process source. Both degrade to the shared `fetchTree` (the
- * trimmed AX/uiautomator tree) when their helper is unavailable. Other
- * platforms use `fetchTree` directly — unchanged.
- */
-export async function fetchFlowTree(
-  registry: Registry,
-  device: DeviceInfo
-): Promise<DescribeTreeData> {
-  if (device.platform === "ios") {
-    const native = await queryFullHierarchyTree(registry, device);
-    if (native) return native;
-  } else if (device.platform === "android") {
-    const full = await queryAndroidFullHierarchy(registry, device);
-    if (full) return full;
-  }
-  return fetchTree(registry, device);
-}

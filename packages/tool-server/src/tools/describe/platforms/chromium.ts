@@ -41,13 +41,27 @@ const DESCRIBE_FAILURE = {
  *    (~50MB). Cap depth at 60 purely to bound recursion: modern React DOMs
  *    (React Native Web, navigator/provider stacks) routinely nest 25+ levels
  *    before reaching leaf text, so a shallower cap silently clips real content.
+ *    Callers with a bigger appetite (the flow tree keeps more than the
+ *    agent-facing describe, like Android's FLOW_MAX_NODES) can raise both via
+ *    `limits`.
  */
-// Exported for test/describe-chromium-script.test.ts, which evals it against a mock
-// DOM to lock in the visibility/pruning rules (the script runs in the renderer, so
-// the rest of the suite can only mock its CDP response).
-export const DESCRIBE_DOM_SCRIPT = `(() => {
-  const MAX_DEPTH = 60;
-  const MAX_NODES = 5000;
+export interface ChromiumWalkLimits {
+  maxDepth: number;
+  maxNodes: number;
+}
+
+const DEFAULT_WALK_LIMITS: ChromiumWalkLimits = { maxDepth: 60, maxNodes: 5000 };
+
+// Interpolated into the in-page script: force a plain positive integer literal
+// so no caller can ever smuggle text (or a cap-disabling NaN) into the
+// renderer. Non-finite input falls back to the default.
+function intForScript(value: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
+}
+
+const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `(() => {
+  const MAX_DEPTH = ${intForScript(maxDepth, DEFAULT_WALK_LIMITS.maxDepth)};
+  const MAX_NODES = ${intForScript(maxNodes, DEFAULT_WALK_LIMITS.maxNodes)};
   let nodeBudget = MAX_NODES;
   let truncated = false;
   const w = window.innerWidth;
@@ -438,12 +452,21 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   return JSON.stringify({ tree: root, truncated });
 })()`;
 
-export async function describeChromium(api: ChromiumCdpApi): Promise<DescribeTreeData> {
+// The default-limits build, exported for test/describe-chromium-script.test.ts,
+// which evals it against a mock DOM to lock in the visibility/pruning rules (the
+// script runs in the renderer, so the rest of the suite can only mock its CDP
+// response).
+export const DESCRIBE_DOM_SCRIPT = buildDescribeDomScript(DEFAULT_WALK_LIMITS);
+
+export async function describeChromium(
+  api: ChromiumCdpApi,
+  limits: ChromiumWalkLimits = DEFAULT_WALK_LIMITS
+): Promise<DescribeTreeData> {
   // Make sure the cached viewport is fresh — the script normalizes frames by
   // the live window dimensions, so any rescroll between calls is reflected.
   await api.refreshViewport();
   const raw = (await api.cdp.send("Runtime.evaluate", {
-    expression: DESCRIBE_DOM_SCRIPT,
+    expression: buildDescribeDomScript(limits),
     returnByValue: true,
   })) as {
     result?: { value?: string };
