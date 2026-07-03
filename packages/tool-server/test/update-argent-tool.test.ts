@@ -16,7 +16,10 @@ const mockSpawn = vi.mocked(spawn);
 const mockGetUpdateState = vi.mocked(getUpdateState);
 
 function makeChild() {
-  return { unref: vi.fn() } as unknown as ReturnType<typeof spawn>;
+  // `on` is required: the tool attaches an 'error' listener so a failed spawn
+  // (ENOENT when `argent` isn't on PATH — the norm in local mode) can't crash
+  // the tool-server via an unhandled 'error' event.
+  return { unref: vi.fn(), on: vi.fn() } as unknown as ReturnType<typeof spawn>;
 }
 
 function stateWithUpdate(latestVersion = "99.0.0") {
@@ -108,6 +111,35 @@ describe("update-argent tool", () => {
     vi.advanceTimersByTime(2000);
 
     expect(child.unref).toHaveBeenCalledOnce();
+  });
+
+  it("swallows a spawn error and allows a retry (no tool-server crash in local mode)", async () => {
+    const handlers: Record<string, (err: Error) => void> = {};
+    const child = {
+      unref: vi.fn(),
+      on: vi.fn((event: string, cb: (err: Error) => void) => {
+        handlers[event] = cb;
+        return child;
+      }),
+    } as unknown as ReturnType<typeof spawn>;
+    mockSpawn.mockReturnValue(child);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await updateArgentTool.execute({}, undefined, undefined);
+    vi.advanceTimersByTime(2000);
+
+    // ENOENT (`argent` not on PATH): the 'error' handler must exist and not throw.
+    expect(handlers.error).toBeTypeOf("function");
+    expect(() => handlers.error!(new Error("spawn argent ENOENT"))).not.toThrow();
+
+    // The scheduled flag reset, so a later call re-attempts rather than reporting
+    // "already in progress" forever.
+    const second = await updateArgentTool.execute({}, undefined, undefined);
+    expect((second as { message: string }).message).not.toContain("already in progress");
+    vi.advanceTimersByTime(2000);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+    errSpy.mockRestore();
   });
 
   it("returns 'already up to date' when no update is available", async () => {
