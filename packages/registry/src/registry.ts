@@ -124,19 +124,42 @@ export class Registry {
         effectiveParams = parsed.data;
       }
 
+      // The alias→URN mapping is pure (derived from params), so compute it once
+      // up front — we need the URNs to know which services to recover if the
+      // tool fails against a dead-but-cached instance.
       const aliasToRef = definition.services(effectiveParams);
-      const resolvedServices: Record<string, unknown> = {};
-      for (const [alias, ref] of Object.entries(aliasToRef)) {
-        const urn = typeof ref === "string" ? ref : ref.urn;
-        const resolveOptions = typeof ref === "string" ? undefined : ref.options;
-        resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
-      }
+      const refs = Object.entries(aliasToRef).map(([alias, ref]) => ({
+        alias,
+        urn: typeof ref === "string" ? ref : ref.urn,
+        options: typeof ref === "string" ? undefined : ref.options,
+      }));
 
       // Build the per-invocation context: caller options (e.g. signal) plus the
       // registry-owned artifact store, so any tool can register host files via
       // `ctx.artifacts` without declaring a per-tool service.
       const ctx: ToolContext = { ...options, artifacts: this.artifacts };
-      const result = await definition.execute(resolvedServices, effectiveParams, ctx);
+
+      const runOnce = async (): Promise<TResult> => {
+        const resolvedServices: Record<string, unknown> = {};
+        for (const { alias, urn, options: resolveOptions } of refs) {
+          resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+        }
+        return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+      };
+
+      let result: TResult;
+      try {
+        result = await runOnce();
+      } catch (execError) {
+        // Self-heal a cached-but-dead service: if any service this tool resolved
+        // declares this error recoverable (its underlying process is gone even
+        // though the handle was still cached), dispose it and retry the tool
+        // once against a freshly re-created instance. Bounded to a single retry
+        // so a genuinely broken service can't spin.
+        const recovered = await this._recoverFailedServices(refs, execError);
+        if (!recovered) throw execError;
+        result = await runOnce();
+      }
 
       const duration = performance.now() - startTime;
       this.events.emit("toolCompleted", id, toolInvocationId, duration);
@@ -187,6 +210,35 @@ export class Registry {
       namespaces: [...this.blueprints.keys()],
       tools: [...this.tools.keys()],
     };
+  }
+
+  /**
+   * After a tool failed, ask each service it resolved whether the error means
+   * that service's instance is dead (`blueprint.recoverable(error)`). Dispose
+   * every one that says yes so the next `resolveService` re-creates it, and
+   * report whether anything was disposed (i.e. whether a retry is worthwhile).
+   *
+   * Only currently-RUNNING nodes are considered: a service that already
+   * errored/torn down during resolution needs no recovery here, and a URN this
+   * tool never resolved must not be touched.
+   */
+  private async _recoverFailedServices(
+    refs: ReadonlyArray<{ urn: URN }>,
+    error: unknown
+  ): Promise<boolean> {
+    let recoveredAny = false;
+    for (const { urn } of refs) {
+      const node = this.services.get(urn);
+      if (!node || node.state !== ServiceState.RUNNING) continue;
+      if (node.blueprint.recoverable?.(error) !== true) continue;
+      try {
+        await this.disposeService(urn);
+        recoveredAny = true;
+      } catch {
+        /* best-effort: if teardown fails, fall through and surface the original error */
+      }
+    }
+    return recoveredAny;
   }
 
   /**

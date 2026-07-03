@@ -72,6 +72,26 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(field?.value).toBeUndefined();
   });
 
+  it("does not borrow a password descendant's text into a container label", () => {
+    // A clickable container with no label of its own borrows its descendants'
+    // text via descendantText(). That walk reads the raw XML, so a password
+    // field's secret must be redacted there too — otherwise it rides out as the
+    // container's own (non-password) label and bypasses redaction entirely.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.widget.LinearLayout" clickable="true" bounds="[0,0][100,100]">
+    <node class="android.widget.EditText" focusable="true" password="true" text="hunter2" bounds="[10,10][90,40]"/>
+  </node>
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 100, 100);
+    const strings = flatten(tree).flatMap((n) =>
+      [n.label, n.value].filter((s): s is string => !!s)
+    );
+    expect(strings.join(" | ")).not.toContain("hunter2");
+    // The row still surfaces the redacted marker instead of the plaintext.
+    expect(flatten(tree).map((n) => n.label)).toContain("[password]");
+  });
+
   it("treats WebView as an opaque single leaf", () => {
     const xml = `<?xml version='1.0' encoding='UTF-8'?>
 <hierarchy>

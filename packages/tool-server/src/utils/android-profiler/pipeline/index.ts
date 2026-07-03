@@ -253,8 +253,13 @@ async function renderHangStacksAndroid(
     return `_Invalid hang_index ${opts.hangIndex}. There are ${hangRows.length} hangs (0-indexed)._`;
   }
   const hang = hangRows[opts.hangIndex]!;
-  const startNs = hang.ts_ns;
-  const endNs = hang.ts_ns + hang.dur_ns;
+  // ts_ns is absolute CLOCK_MONOTONIC ns and can decode as bigint on long-uptime
+  // devices (> 2^53; see readCell). dur_ns is a bounded duration, but readCell
+  // still hands back any > 2^53 cell as bigint, so coerce both once here before
+  // the arithmetic to avoid "Cannot mix BigInt and other types".
+  const startNs = Number(hang.ts_ns);
+  const durNs = Number(hang.dur_ns);
+  const endNs = startNs + durNs;
 
   const [stateRows, sampleRows] = await Promise.all([
     runTpQuery<AndroidHangStateRow>({
@@ -277,20 +282,32 @@ async function renderHangStacksAndroid(
     }).catch(() => [] as AndroidHangMainThreadSampleRow[]),
   ]);
 
-  const durationMs = Math.round(hang.dur_ns / 1_000_000);
+  const durationMs = Math.round(durNs / 1_000_000);
+
+  // Coerce total_dur_ns once here (readCell keeps a > 2^53 cell as bigint, and
+  // mixing it with the Number divisor throws) and reuse the derived breakdown
+  // for both the rendered table and the summarizeHangBlocking fallback below —
+  // a single guarded coercion site instead of two. total_dur_ns is a
+  // hang-window-clipped SUM that stays well under 2^53 in practice; coercing is
+  // defensive and keeps every duration read in this file uniform.
+  const stateBreakdown = stateRows.map((r) => ({
+    state: r.state,
+    blockedFunction: r.blocked_function,
+    durationMs: Math.round(Number(r.total_dur_ns) / 1_000_000),
+  }));
+
   const lines: string[] = [
     `## Hang #${opts.hangIndex} — ${hang.kind} (${durationMs}ms)` +
       (hang.reason ? ` — reason: \`${hang.reason}\`` : ""),
     "",
   ];
 
-  if (stateRows.length > 0) {
+  if (stateBreakdown.length > 0) {
     lines.push("### Main-thread State Breakdown", "");
     lines.push("| State | Blocked on | Duration |", "|---|---|---|");
-    for (const row of stateRows) {
-      const ms = Math.round(row.total_dur_ns / 1_000_000);
+    for (const entry of stateBreakdown) {
       lines.push(
-        `| ${row.state} | ${row.blocked_function ? `\`${row.blocked_function}\`` : "—"} | ${ms}ms |`
+        `| ${entry.state} | ${entry.blockedFunction ? `\`${entry.blockedFunction}\`` : "—"} | ${entry.durationMs}ms |`
       );
     }
     lines.push("");
@@ -321,13 +338,7 @@ async function renderHangStacksAndroid(
     // CPU call stack to show, and the hang is a *wait*, not CPU-bound work.
     // Spell that out so the empty result doesn't read as a tool failure, and
     // point the reader at the state breakdown above (which says what it waited on).
-    const blocking = summarizeHangBlocking(
-      stateRows.map((r) => ({
-        state: r.state,
-        blockedFunction: r.blocked_function,
-        durationMs: Math.round(r.total_dur_ns / 1_000_000),
-      }))
-    );
+    const blocking = summarizeHangBlocking(stateBreakdown);
     lines.push("### Main-thread Samples During Hang", "");
     if (blocking && blocking.kind === "blocked") {
       lines.push(
@@ -343,7 +354,7 @@ async function renderHangStacksAndroid(
           `sampler could not unwind a call stack (commonly stripped or missing frame symbols). This is ` +
           `genuine main-thread CPU work, not a wait; see the state breakdown above._`
       );
-    } else if (stateRows.length > 0) {
+    } else if (stateBreakdown.length > 0) {
       lines.push(
         `_No on-CPU stack samples were captured during this hang. The main thread spent the window ` +
           `off-CPU or runnable-but-not-scheduled, so there is no CPU call stack to show; see the state ` +
@@ -532,8 +543,12 @@ function cpuRowsToAggregatorRows(
       timestampsNs: [],
       callChains: [{ chain: [dominant], count: row.sample_count }],
       precomputedBursts: parseBurstWindows(row.burst_windows, traceStartMs),
-      firstMs: Math.round((row.first_ts_ns - traceStartNs) / 1_000_000),
-      lastMs: Math.round((row.last_ts_ns - traceStartNs) / 1_000_000),
+      // first/last_ts_ns are absolute CLOCK_MONOTONIC ns: they exceed 2^53 after
+      // ~104 days of device uptime, so the WASM decoder hands them back as bigint
+      // (see readCell). traceStartNs is already a plain Number, so coerce here to
+      // avoid "Cannot mix BigInt and other types" — values stay integral.
+      firstMs: Math.round((Number(row.first_ts_ns) - traceStartNs) / 1_000_000),
+      lastMs: Math.round((Number(row.last_ts_ns) - traceStartNs) / 1_000_000),
       sampleCount: row.sample_count,
     });
   }
@@ -542,16 +557,19 @@ function cpuRowsToAggregatorRows(
 
 function hangRowsToBottlenecks(rows: AndroidJankRow[], traceStartNs: number): UiHang[] {
   return rows.map((row) => {
-    const durationMs = Math.round(row.dur_ns / 1_000_000);
-    const startNs = row.ts_ns - traceStartNs;
+    // ts_ns is an absolute CLOCK_MONOTONIC ns value that can arrive as bigint on a
+    // long-uptime device (> 2^53 ns ≈ 104 days; see readCell). traceStartNs is a
+    // plain Number, so coerce ts_ns and dur_ns once before the arithmetic.
+    const durNs = Number(row.dur_ns);
+    const startNs = Number(row.ts_ns) - traceStartNs;
     return {
       type: "ui_hang",
       platform: "android",
       hangType: row.kind,
-      durationMs,
+      durationMs: Math.round(durNs / 1_000_000),
       startTimeFormatted: formatTraceTime(startNs),
       startNs,
-      endNs: startNs + row.dur_ns,
+      endNs: startNs + durNs,
       suspectedFunctions: [],
       appCallChains: [],
       severity: classifyAndroidHangSeverity(row),
@@ -630,7 +648,9 @@ function classifyAndroidHangSeverity(row: AndroidJankRow): "RED" | "YELLOW" {
   // enough to be user-perceptible (duration check below). Exact === is
   // deliberate — it isolates the standalone case from the combined ones.
   if (row.reason === "App Deadline Missed") return "RED";
-  const durationMs = row.dur_ns / 1_000_000;
+  // Same bigint risk as the other dur_ns/ts_ns usages in this file (see
+  // readCell) — coerce before dividing.
+  const durationMs = Number(row.dur_ns) / 1_000_000;
   if (durationMs > 500) return "RED";
   return "YELLOW";
 }
