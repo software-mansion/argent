@@ -58,6 +58,25 @@ describe("parseFlags — schema-aware --args", () => {
     expect(result.args.delayMs).toBe(250);
     expect(result.rawArgs).toBeNull();
   });
+
+  it("treats --args - as the literal field value, NOT the stdin sentinel", () => {
+    // For a tool that owns `args`, `-` is just this field's value. The
+    // whole-payload stdin sentinel must not fire, so `rawArgs` stays null and
+    // nothing is read from stdin. This is the inverse of the no-`args` case
+    // below; asserting it here guards against a refactor that moved the `-`
+    // sentinel ahead of the `properties.args === undefined` gate and started
+    // routing flow-add-step's `--args -` to stdin.
+    const result = parseFlags(["--command", "gesture-tap", "--args", "-"], flowAddStepSchema);
+    expect(result.args.command).toBe("gesture-tap");
+    expect(result.args.args).toBe("-");
+    expect(result.rawArgs).toBeNull();
+  });
+
+  it("treats --args=- inline form as the literal field value too", () => {
+    const result = parseFlags(["--command", "gesture-tap", "--args=-"], flowAddStepSchema);
+    expect(result.args.args).toBe("-");
+    expect(result.rawArgs).toBeNull();
+  });
 });
 
 describe("parseFlags — whole-payload --args (no own `args` field)", () => {
