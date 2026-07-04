@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import supertest from "supertest";
 import * as fs from "node:fs/promises";
 import * as http from "node:http";
@@ -78,6 +79,7 @@ describe("POST /upload", () => {
 
   it("round-trips: an uploaded bundle is extracted and handed to the tool", async () => {
     const body = await tarballOf("MyApp.app", "app-bytes");
+    const contentHash = createHash("sha256").update(body).digest("hex");
     const upload = await supertest(handle.app)
       .post("/upload")
       .set("Content-Type", "application/gzip")
@@ -86,7 +88,14 @@ describe("POST /upload", () => {
 
     const call = await supertest(handle.app)
       .post("/tools/install")
-      .send({ appPath: { __argentFileInput: true, path: "/client/MyApp.app", uploadId } });
+      .send({
+        appPath: {
+          __argentFileInput: true,
+          path: "/client/MyApp.app",
+          uploadId,
+          contentHash,
+        },
+      });
 
     expect(call.status).toBe(200);
     expect(path.basename(call.body.data.received)).toBe("MyApp.app");

@@ -171,6 +171,8 @@ describe("prepareFileInputs — tar-upload kind", () => {
     )) as Record<string, FileInputWire>;
 
     expect(out.appPath!.uploadId).toBe("upload-123");
+    expect(out.appPath!.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(out.appPath!.size).toBeTypeOf("number");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://sim.example/upload",
       expect.objectContaining({ method: "POST" })
@@ -242,7 +244,12 @@ describe("prepareFileInputs — tar-upload kind", () => {
       { includeContent: false }
     )) as Record<string, FileInputWire>;
 
-    expect(out.appPath).toEqual({ [FILE_INPUT_MARKER]: true, path: appDir });
+    expect(out.appPath).toMatchObject({
+      [FILE_INPUT_MARKER]: true,
+      path: appDir,
+      size: expect.any(Number),
+      mtimeMs: expect.any(Number),
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

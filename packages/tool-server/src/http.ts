@@ -5,7 +5,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isFlagEnabled } from "@argent/configuration-core";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
   type FailureSignal,
@@ -483,8 +483,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     };
 
     let received = 0;
+    const digest = createHash("sha256");
     req.on("data", (chunk: Buffer) => {
       received += chunk.length;
+      digest.update(chunk);
       if (received > maxUploadBytes) {
         abort(413, `Upload exceeds the ${bytesUtil(maxUploadBytes, { unitSeparator: " " })} limit.`);
       }
@@ -498,7 +500,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     });
     ws.on("finish", () => {
       if (res.headersSent) return;
-      uploads.set(id, { tarPath, expireAt: Date.now() + UPLOAD_TTL_MS, bytes: received });
+      uploads.set(id, {
+        tarPath,
+        sha256: digest.digest("hex"),
+        expireAt: Date.now() + UPLOAD_TTL_MS,
+        bytes: received,
+      });
       res.json({ uploadId: id });
     });
     ws.on("error", (err: Error) => abort(500, err.message));

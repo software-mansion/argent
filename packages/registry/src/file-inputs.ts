@@ -54,13 +54,20 @@ export interface FileInputWire {
    */
   contentOmitted?: "size-limit";
   /**
-   * Upload ID returned by `POST /upload` on the tool-server. Set by the client
-   * for `kind: "tar-upload"` inputs when the tool-server is remote — the client
+   * Upload ID returned by `POST /upload` on the tool-server. Required together with
+   * {@link contentHash} for `kind: "tar-upload"` remote sessions — the client
    * tars the file or directory and streams it to `/upload` before the tool
    * call, avoiding the base64-in-JSON body limit. Absent for co-located
-   * sessions (the server reads the path in place).
+   * sessions (the server reads the path in place). Pair with {@link contentHash}
+   * so the server can verify tarball integrity before extraction.
    */
   uploadId?: string;
+  /**
+   * SHA-256 hex digest of the streamed tarball bytes. Required whenever
+   * {@link uploadId} is set; the server recomputes the digest while receiving
+   * receiving `POST /upload` and rejects a mismatch before extraction.
+   */
+  contentHash?: string;
 }
 
 /**
@@ -79,11 +86,11 @@ export interface FileInputWire {
  *                 temp output dir).
  * - `"tar-upload"` — the tool reads a file or directory that the client owns
  *                 (e.g. an iOS `.app` bundle, an Android `.apk`, a Vega
- *                 `.vpkg`). Co-located: used in place. Remote: the client tars
- *                 the path, streams it to `POST /upload`, and sets `uploadId` on
- *                 the wire. The server extracts the archive to a temp dir and
- *                 passes the extracted path to the tool. Handles bundles too
- *                 big to travel as base64-in-JSON.
+ *                 `.vpkg`). Co-located: used in place when path + stat match.
+ *                 Remote: the client tars the path, streams it to `POST /upload`,
+ *                 sets `uploadId` and `contentHash` on the wire, and the server
+ *                 always extracts from the upload (even if the path also exists
+ *                 locally). Extraction lands in a hash-prefixed temp dir.
  */
 export type FileInputKind = "file" | "directory" | "probe" | "tar-upload";
 

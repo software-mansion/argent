@@ -20,7 +20,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -50,6 +50,8 @@ export interface FileInputWire {
   /** Why readable content was deliberately not inlined ("size-limit" = over MAX_CONTENT_BYTES). */
   contentOmitted?: "size-limit";
   uploadId?: string;
+  /** SHA-256 hex digest of the streamed tarball, for server-side integrity check. */
+  contentHash?: string;
 }
 
 export interface ClientFileDirective {
@@ -118,6 +120,16 @@ async function tarball(sourcePath: string): Promise<string> {
     throw err;
   }
   return tarPath;
+}
+
+function sha256File(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    createReadStream(filePath)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("end", () => resolve(hash.digest("hex")))
+      .on("error", reject);
+  });
 }
 
 async function uploadTar(
@@ -193,17 +205,22 @@ export async function prepareFileInputs(
       }
     }
 
-    if (spec.kind === "tar-upload" && opts.uploadEndpoint) {
-      // Only upload when the path is on this machine; otherwise fall through
-      // path-only so the server can resolve a path that already exists on it.
+    if (spec.kind === "tar-upload") {
       const st = await stat(filePath).catch(() => null);
       if (st) {
+        wire.size = st.size;
+        wire.mtimeMs = st.mtimeMs;
+      }
+
+      if (opts.uploadEndpoint && st) {
         let tarPath: string | null = null;
         try {
-          // Progress on stderr (stdout is the MCP protocol channel) so a slow
-          // upload isn't a silent stall.
-          console.error(`Uploading ${path.basename(filePath)} to the remote tool-server...`);
+          // stderr (not stdout — MCP uses stdout) so a slow upload isn't silent.
+          process.stderr.write(
+            `Uploading ${path.basename(filePath)} to the remote tool-server...\n`
+          );
           tarPath = await tarball(filePath);
+          wire.contentHash = await sha256File(tarPath);
           wire.uploadId = await uploadTar(tarPath, opts.uploadEndpoint);
         } finally {
           if (tarPath) await rm(tarPath, { force: true }).catch(() => {});
