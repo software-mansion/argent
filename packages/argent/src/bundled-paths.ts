@@ -29,12 +29,15 @@ function readPackageVersion(): string | undefined {
 // detached server's own (editor-chosen, possibly `/`) cwd.
 function classifyInstallKind(): "global" | "local" {
   let packageRoot: string;
+  let dir: string;
   try {
     packageRoot = fs.realpathSync(path.join(import.meta.dirname, ".."));
+    // cwd can throw (ENOENT) when the shell's directory was deleted — and this
+    // runs at module import, before any fatal handler is installed.
+    dir = process.cwd();
   } catch {
     return "global";
   }
-  let dir = process.cwd();
   for (;;) {
     try {
       const nmReal = fs.realpathSync(path.join(dir, "node_modules"));
