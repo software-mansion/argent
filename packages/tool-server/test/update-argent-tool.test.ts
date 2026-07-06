@@ -77,7 +77,7 @@ describe("update-argent tool", () => {
   });
 
   it("returns a message with current and latest version on success", async () => {
-    const result = await updateArgentTool.execute({}, undefined, undefined);
+    const result = await updateArgentTool.execute({}, {}, undefined);
     expect((result as { message: string }).message).toContain("1.0.0 -> v99.0.0");
     expect((result as { message: string }).message).toContain("restart");
   });
@@ -122,7 +122,7 @@ describe("update-argent tool", () => {
   });
 
   it("auto (default) pins exactly one target flag and hints at the other install", async () => {
-    const result = await updateArgentTool.execute({}, undefined, undefined);
+    const result = await updateArgentTool.execute({}, {}, undefined);
     vi.advanceTimersByTime(2000);
 
     const args = mockSpawn.mock.calls[0]![1] as string[];
@@ -137,7 +137,7 @@ describe("update-argent tool", () => {
   });
 
   it("does NOT spawn before 2 seconds have elapsed", async () => {
-    await updateArgentTool.execute({}, undefined, undefined);
+    await updateArgentTool.execute({}, {}, undefined);
     vi.advanceTimersByTime(1999);
     expect(mockSpawn).not.toHaveBeenCalled();
   });
@@ -146,7 +146,7 @@ describe("update-argent tool", () => {
     const child = makeChild();
     mockSpawn.mockReturnValue(child);
 
-    await updateArgentTool.execute({}, undefined, undefined);
+    await updateArgentTool.execute({}, {}, undefined);
     vi.advanceTimersByTime(2000);
 
     expect(child.unref).toHaveBeenCalledOnce();
@@ -164,7 +164,7 @@ describe("update-argent tool", () => {
     mockSpawn.mockReturnValue(child);
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await updateArgentTool.execute({}, undefined, undefined);
+    await updateArgentTool.execute({}, {}, undefined);
     vi.advanceTimersByTime(2000);
 
     // ENOENT (`argent` not on PATH): the 'error' handler must exist and not throw.
@@ -173,7 +173,7 @@ describe("update-argent tool", () => {
 
     // The scheduled flag reset, so a later call re-attempts rather than reporting
     // "already in progress" forever.
-    const second = await updateArgentTool.execute({}, undefined, undefined);
+    const second = await updateArgentTool.execute({}, {}, undefined);
     expect((second as { message: string }).message).not.toContain("already in progress");
     vi.advanceTimersByTime(2000);
     expect(mockSpawn).toHaveBeenCalledTimes(2);
@@ -184,7 +184,7 @@ describe("update-argent tool", () => {
   it("returns 'already up to date' when no update is available", async () => {
     mockGetUpdateState.mockReturnValue(stateUpToDate());
 
-    const result = await updateArgentTool.execute({}, undefined, undefined);
+    const result = await updateArgentTool.execute({}, {}, undefined);
     expect((result as { message: string }).message).toContain("already up to date");
     vi.advanceTimersByTime(5000);
     expect(mockSpawn).not.toHaveBeenCalled();
@@ -193,15 +193,15 @@ describe("update-argent tool", () => {
   it("returns a held-by-policy message and does not spawn when the latest update is not installable yet", async () => {
     mockGetUpdateState.mockReturnValue(stateHeldByPolicy());
 
-    const result = await updateArgentTool.execute({}, undefined, undefined);
+    const result = await updateArgentTool.execute({}, {}, undefined);
     expect((result as { message: string }).message).toContain("not installable yet");
     vi.advanceTimersByTime(5000);
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
   it("returns 'already in progress' and does not double-spawn on second call", async () => {
-    await updateArgentTool.execute({}, undefined, undefined);
-    const second = await updateArgentTool.execute({}, undefined, undefined);
+    await updateArgentTool.execute({}, {}, undefined);
+    const second = await updateArgentTool.execute({}, {}, undefined);
 
     expect((second as { message: string }).message).toContain("already in progress");
 
