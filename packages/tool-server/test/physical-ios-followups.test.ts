@@ -254,10 +254,28 @@ describe("tools unsupported on physical iOS reject with UnsupportedOperationErro
     ).rejects.toBeInstanceOf(UnsupportedOperationError);
   });
 
-  it("describe — rejects instead of returning a misleading empty tree", async () => {
-    await expect(describeIos({} as never, device, {})).rejects.toBeInstanceOf(
-      UnsupportedOperationError
-    );
+  // describe is NOT in the unsupported set: on a physical iPhone it returns the
+  // SpringBoard home-screen layout (the only app-free structured screen data;
+  // in-app AX is Apple-gated). It resolves the CoreDevice service for a
+  // homescreen() snapshot, so a stub service stands in for the device here.
+  it("describe — returns the SpringBoard home-screen tree (source springboard), not a rejection", async () => {
+    const registry = {
+      resolveService: async () => ({
+        homescreen: async () => ({
+          iconState: [
+            [{ displayName: "Phone", bundleIdentifier: "com.apple.mobilephone" }],
+            [{ displayName: "Settings", bundleIdentifier: "com.apple.Preferences" }],
+          ],
+          metrics: { homeScreenIconColumns: 4, homeScreenIconRows: 6 },
+        }),
+      }),
+    };
+    const result = await describeIos(registry as never, device, {});
+    expect(result.source).toBe("springboard");
+    const flat = JSON.stringify(result.tree);
+    expect(flat).toContain("Settings");
+    expect(flat).toContain("com.apple.Preferences");
+    expect(result.hint).toContain("screenshot");
   });
 });
 

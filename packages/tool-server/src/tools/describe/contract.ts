@@ -76,7 +76,8 @@ export type DescribeSource =
   | "android-devtools"
   | "cdp-dom"
   | "vega-automation"
-  | "tv-focus";
+  | "tv-focus"
+  | "springboard";
 
 // Internal shape produced by the per-platform adapters. The `tree` is consumed
 // by the formatter in `format-tree.ts` and then dropped before the tool replies

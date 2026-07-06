@@ -2,13 +2,14 @@ import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import { nativeDevtoolsRef, NativeDevtoolsApi } from "../../../../blueprints/native-devtools";
 import { isPhysicalIos } from "../../../../utils/device-info";
-import { UnsupportedOperationError } from "../../../../utils/capability";
+import { coreDeviceRef, type CoreDeviceApi } from "../../../../blueprints/core-device";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
 import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
+import { adaptSpringboardToDescribeResult } from "./ios-springboard-adapter";
 
 const DEGRADED_HINT =
   "This simulator was not booted through argent — system dialogs and native modals may not appear. You MUST call boot-device with force=true now to restart the simulator and apply full accessibility settings before continuing.";
@@ -25,6 +26,17 @@ const TVOS_HINT =
   "Use the `describe` tool to read the focused and focusable elements, `tv-remote` " +
   "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
   "See the argent-tv-interact skill.";
+
+// Physical iPhones expose no app-free in-app accessibility tree (Apple gates the
+// CoreDevice axAuditDaemon to trusted/AppleInternal callers). The one structured
+// screen data we CAN read is SpringBoard's home-screen layout — so describe
+// returns that, with this hint making its scope and precision explicit.
+const PHYSICAL_IOS_SPRINGBOARD_HINT =
+  "This is the SpringBoard home-screen layout — the only app-free structured screen data on a " +
+  "physical iPhone — NOT necessarily the current screen. If an app is open, its content is not " +
+  "here: call screenshot instead. Icon frames are approximate (derived from the home-screen grid, " +
+  "not exact pixels), so confirm with screenshot before a precise tap. In-app accessibility is not " +
+  "reachable on physical iOS (Apple gates the CoreDevice accessibility service to trusted/AppleInternal callers).";
 
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
@@ -58,36 +70,33 @@ export async function describeIos(
   params: DescribeIosParams,
   options: DescribeIosOptions = {}
 ): Promise<DescribeTreeData> {
-  // Physical iPhones are driven over CoreDevice, and there is no app-free
-  // describe (accessibility tree) path on a real device today:
-  //   - The two simulator backends can't run against hardware: ax-service
-  //     shells `simctl spawn` and native-devtools injects a dylib via
-  //     `simctl spawn`, both simulator-only. Their blueprint guards throw for
-  //     kind === "device"; without this early return the fallback chain below
-  //     would swallow those throws and return an empty tree + the "reboot the
-  //     simulator" degraded hint — meaningless for hardware with no simulator.
-  //   - The on-device accessibility tree is served by CoreDevice's
-  //     axAuditDaemon, but Apple gates it to trusted/AppleInternal callers
-  //     (hardware-verified on iOS 27, 2026-07): the DTX service
-  //     `com.apple.accessibility.axAuditDaemon.remoteserver.shim.remote`
-  //     requires the `com.apple.mobile.lockdown.remote.trusted` entitlement —
-  //     over the developer (untrusted) CoreDevice tunnel pymobiledevice3 forms,
-  //     the daemon accepts the socket but terminates it on the first request
-  //     (every audit selector, and even the standard DTX capability handshake).
-  //     The RemoteXPC replacement `…axAuditDaemon.remoteAXService` requires the
-  //     `AppleInternal` entitlement, unreachable by any third party. DTX
-  //     transport itself works over the same tunnel (`developer dvt proclist`
-  //     succeeds), so this is Apple's auth wall, not a transport gap. Screenshot
-  //     (CoreDevice `canViewDeviceDisplay`) is the only app-free screen capture.
-  // Reject explicitly with a clear, 400-mapped error and point at screenshot.
+  // Physical iPhones are driven over CoreDevice. There is no app-free *in-app*
+  // accessibility tree on a real device: the on-device tree is served by
+  // CoreDevice's axAuditDaemon, but Apple gates it to trusted/AppleInternal
+  // callers (hardware-verified on iOS 27, 2026-07). The DTX service
+  // `…axAuditDaemon.remoteserver.shim.remote` opens over the developer
+  // (untrusted) CoreDevice tunnel pymobiledevice3 forms, but the daemon
+  // terminates the connection on the first message (every audit selector, and
+  // even the standard DTX capability handshake); its RemoteXPC replacement
+  // `…axAuditDaemon.remoteAXService` requires the `AppleInternal` entitlement.
+  // (DTX transport itself works over the same tunnel — `dvt proclist` succeeds —
+  // so it's Apple's auth wall, not a transport gap.) The two simulator backends
+  // below can't run against hardware either (they shell `simctl spawn`).
+  //
+  // What we CAN read app-free is SpringBoard's home-screen layout, so `describe`
+  // on a physical device returns the home-screen app grid (icons + dock) via
+  // CoreDevice's springboardservices. Icon frames are derived from the icon-grid
+  // geometry and are approximate; the hint tells the agent this is the home
+  // screen (not necessarily the current app) and to confirm with screenshot.
   if (isPhysicalIos(device)) {
-    throw new UnsupportedOperationError(
-      "describe",
-      device,
-      "Apple restricts the physical device's CoreDevice accessibility service to " +
-        "trusted/AppleInternal callers, so there is no app-free accessibility tree; " +
-        "use screenshot to inspect the screen"
-    );
+    const ref = coreDeviceRef(device);
+    const coreDevice = await registry.resolveService<CoreDeviceApi>(ref.urn, ref.options);
+    const home = await coreDevice.homescreen();
+    return {
+      tree: adaptSpringboardToDescribeResult(home),
+      source: "springboard",
+      hint: PHYSICAL_IOS_SPRINGBOARD_HINT,
+    };
   }
 
   // tvOS short-circuit: the focus-engine accessibility tree is served by the

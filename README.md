@@ -51,8 +51,11 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 Argent can drive a **physical iPhone** — no app installed on the device — over Apple's
 CoreDevice "remote control" services (the same path Xcode's device window uses), via
 [`pymobiledevice3`](https://github.com/doronz88/pymobiledevice3). Supported interactions:
-`screenshot`, `gesture-tap`, `gesture-swipe`, `button`, and `launch-app`. The device shows
-up in `list-devices` with `kind: "device"`.
+`screenshot`, `gesture-tap`, `gesture-swipe`, `button`, `launch-app`, and `describe` (the
+home-screen app grid — see the note below). The device shows up in `list-devices` with
+`kind: "device"`. Interactions run through one persistent `pymobiledevice3` helper per
+device (connected once), so a tap/screenshot costs a socket write rather than a fresh
+Python cold-start.
 
 **Requirements**
 
@@ -83,13 +86,15 @@ and leave it running: `sudo pymobiledevice3 remote tunneld`.
 
 **Limitations / notes**
 
-- `describe` / accessibility inspection is **not available** on a physical device — use
-  `screenshot` instead. This is an Apple restriction, not a missing feature: the on-device
-  accessibility tree is served by CoreDevice's `axAuditDaemon`, which Apple gates to trusted /
-  `AppleInternal` callers. Over the developer (untrusted) CoreDevice tunnel `pymobiledevice3`
-  forms, the daemon accepts the connection but drops it on the first request, and its modern
-  RemoteXPC replacement requires an `AppleInternal` entitlement — so there is no app-free
-  accessibility tree to read (hardware-verified on iOS 27).
+- `describe` returns the **SpringBoard home-screen layout** (app icons + dock, via CoreDevice's
+  `springboardservices`) — the only app-free _structured_ screen data on a physical device.
+  Icon frames are derived from the home-screen grid geometry, so they're approximate: good
+  enough to tap the right icon, but confirm with `screenshot` before a precise tap. It always
+  reflects the home screen, so if an app is open its content is **not** there — use `screenshot`.
+  There is no app-free _in-app_ accessibility tree: that's served by CoreDevice's `axAuditDaemon`,
+  which Apple gates to trusted / `AppleInternal` callers (hardware-verified on iOS 27 — the DTX
+  service drops the connection on the first request over the developer tunnel, and its modern
+  RemoteXPC replacement needs the `AppleInternal` entitlement).
 - Not supported yet (return a clear "not supported" error): keyboard/typing, pinch & rotate
   (multi-touch), `open-url`, `reinstall-app`, `restart-app`, and the native inspection /
   profiling tools (`native-*`, `native-profiler-*`, `screenshot-diff`). `launch-app` (via

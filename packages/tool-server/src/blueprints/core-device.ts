@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -15,6 +16,12 @@ import {
 } from "@argent/registry";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { deviceAuthHelperPath, argentIconPath } from "@argent/native-devtools-ios";
+import {
+  CoreDeviceAgent,
+  CoreDeviceAgentError,
+  materializeAgentScript,
+  resolvePmd3Python,
+} from "./coredevice-agent";
 
 const execFileAsync = promisify(execFile);
 
@@ -63,6 +70,13 @@ type CoreDeviceFactoryOptions = Record<string, unknown> & { device: DeviceInfo }
  * running CoreDevice tunnel (`sudo pymobiledevice3 remote tunneld`, which needs
  * root to create the tunnel interface — every command here then runs unprivileged).
  */
+export interface CoreDeviceHomescreen {
+  /** SpringBoard `getIconState` — the home-screen app/folder/widget layout. */
+  iconState: unknown;
+  /** SpringBoard icon-grid geometry (columns/rows/icon size/screen points). */
+  metrics: Record<string, number>;
+}
+
 export interface CoreDeviceApi {
   /** Capture a PNG to a temp file and return its path. */
   screenshot(): Promise<{ path: string }>;
@@ -72,6 +86,12 @@ export interface CoreDeviceApi {
   swipe(fromX: number, fromY: number, toX: number, toY: number, durationMs: number): Promise<void>;
   /** Press a hardware button by its pymobiledevice3 name (home/lock/volume-up/volume-down/...). */
   button(name: string): Promise<void>;
+  /**
+   * The SpringBoard home-screen layout — the only app-free *structured* screen
+   * data reachable on a physical iPhone (in-app accessibility is Apple-gated;
+   * see describe/platforms/ios). Backs `describe` for the home screen.
+   */
+  homescreen(): Promise<CoreDeviceHomescreen>;
 }
 
 export function coreDeviceRef(device: DeviceInfo): {
@@ -383,31 +403,16 @@ export async function ensureCoreDeviceTunnel(udid: string): Promise<Rsd> {
 }
 
 /**
- * Apple gates host-driven input (the CoreDevice "remote control" services that
- * back tap/swipe/button) to iOS 27+. On iOS 18-26 those services exist but the
- * device rejects the command with `CoreDeviceError 9021`, which `conciseError`
- * would otherwise surface as a raw, unactionable line. `screen-capture` is NOT
- * gated, so screenshots keep working and never hit this path.
- *
- * Detected against pymobiledevice3's own output (stderr/stdout) only — never the
- * execFile `message`, which echoes the argv where a HID coordinate (0..65535)
- * could itself be `9021` and false-positive a bare numeric match.
+ * Map a CoreDevice agent failure to a FailureError. The agent flags Apple's
+ * host-input gate (CoreDeviceError 9021) explicitly via `gated9021`: on iOS
+ * 18-26 the "remote control" services exist but reject touch input, while
+ * `screen-capture` and hardware buttons (`hid button`) keep working — so this
+ * message is scoped to tap/swipe, hardware-verified on an iPhone 15
+ * (iOS 18.7.8 vs 27.0).
  */
-function isRemoteControlGatedError(err: unknown): boolean {
-  const e = err as { stderr?: string; stdout?: string };
-  const output = [e?.stderr, e?.stdout]
-    .filter((v): v is string => typeof v === "string")
-    .join("\n");
-  return /core\s*device\s*error\W*9021/i.test(output) || /\b9021\b/.test(output);
-}
-
-/** Extract a concise, human-readable line from a (possibly huge/binary) pmd3 failure. */
-function conciseError(label: string, err: unknown): FailureError {
+export function agentError(label: string, err: unknown): FailureError {
   const cause = err instanceof Error ? err : new Error(String(err));
-  if (isRemoteControlGatedError(err)) {
-    // Hardware-verified (iPhone 15, iOS 18.7.8 vs 27.0): screenshot and hardware
-    // buttons (`hid button`) work below iOS 27 — only touch (tap/swipe/drag) is
-    // actually gated. Don't overclaim "button" is affected too.
+  if (err instanceof CoreDeviceAgentError && err.gated9021) {
     return new FailureError(
       `CoreDevice ${label} failed: this iPhone is on an iOS below 27; host-driven touch input ` +
         `(tap/swipe) requires iOS 27+. Screenshot and hardware buttons work on earlier iOS ` +
@@ -422,35 +427,8 @@ function conciseError(label: string, err: unknown): FailureError {
       { cause }
     );
   }
-  const e = err as { stderr?: string; stdout?: string; message?: string };
-  // stderr/stdout are pymobiledevice3's own output — the trustworthy source for
-  // the real cause. `message` (execFile's synthesized "Command failed: <argv>")
-  // is deliberately searched LAST, as a fallback only: it's just the invoked
-  // command line, not a real diagnostic, and searching it with equal priority
-  // would let its ever-present "Command failed" text outrank a genuine
-  // stderr/stdout line lower in that output.
-  const outputLines = [e?.stderr, e?.stdout]
-    .filter((v): v is string => typeof v === "string")
-    .join("\n")
-    .split("\n")
-    .map((s) => s.trim())
-    // pymobiledevice3 renders failures via Python's `rich`, which frames source
-    // context in a box (each line starting with a `│`/`┃` rule) — never the
-    // actual exception. A keyword like "not "/"fail" can spuriously match a
-    // highlighted source line (e.g. "if rsd is not None:") before the real
-    // cause appears, so those are never eligible picks.
-    .filter((l) => l.length > 0 && !/^[│┃╭╮╰╯─━]/.test(l));
-  const line =
-    // Prefer a genuine `SomeError: message` / `SomeException: message` line —
-    // the actual raised exception, not just an incidentally keyword-matching
-    // one — and prefer the LAST such line, since that's where Python puts the
-    // real exception in a traceback (rich or plain).
-    outputLines.findLast((l) => /^[\w.]*(?:Error|Exception)\b.*:/.test(l)) ??
-    outputLines.findLast((l) => /requires iOS|error|fail|not |unable|refused|timed out/i.test(l)) ??
-    e?.message ??
-    "unknown error";
   return new FailureError(
-    `CoreDevice ${label} failed: ${line.slice(0, 240)}`,
+    `CoreDevice ${label} failed: ${cause.message.slice(0, 240)}`,
     {
       error_code: FAILURE_CODES.CORE_DEVICE_COMMAND_FAILED,
       failure_stage: "core_device_command",
@@ -461,9 +439,6 @@ function conciseError(label: string, err: unknown): FailureError {
     { cause }
   );
 }
-
-const COREDEVICE = ["developer", "core-device"];
-const HID = [...COREDEVICE, "universal-hid-service"];
 
 /** Normalized 0..1 → the device's 0..65535 HID coordinate space. */
 export function toHid(v: number): number {
@@ -555,17 +530,26 @@ export const coreDeviceBlueprint: ServiceBlueprint<CoreDeviceApi, DeviceInfo> = 
     const rsd = await ensureCoreDeviceTunnel(udid);
     await ensureMounted(pmd3, rsd);
 
-    const run = async (label: string, args: string[], timeout: number): Promise<string> => {
-      const tunnel = await resolveTunnel(udid);
+    // Resolve the interpreter that has pymobiledevice3 importable (the CLI's own
+    // venv python) and materialize the agent program, then start ONE long-lived
+    // process for this device: it connects the RSD tunnel and opens the HID /
+    // screenshot services once, so each interaction is a socket write instead of
+    // a fresh ~0.8s Python cold-start (~0.5s of which is just the pmd3 import).
+    const python = await resolvePmd3Python(await resolvePmd3Absolute());
+    const scriptPath = await materializeAgentScript();
+    const agent = new CoreDeviceAgent(python, scriptPath, udid, tunneldPort());
+    await agent.start();
+
+    const call = async (
+      label: string,
+      op: string,
+      args: Record<string, unknown> = {},
+      timeoutMs = 30_000
+    ): Promise<Record<string, unknown>> => {
       try {
-        const { stdout } = await execFileAsync(
-          pmd3,
-          [...args, "--rsd", tunnel.address, String(tunnel.port)],
-          { timeout, maxBuffer: 16 * 1024 * 1024 }
-        );
-        return stdout;
+        return (await agent.request(op, args, timeoutMs)) as Record<string, unknown>;
       } catch (err) {
-        throw conciseError(label, err);
+        throw agentError(label, err);
       }
     };
 
@@ -573,63 +557,51 @@ export const coreDeviceBlueprint: ServiceBlueprint<CoreDeviceApi, DeviceInfo> = 
 
     const api: CoreDeviceApi = {
       async screenshot() {
+        const res = await call("screenshot", "screenshot", {}, 30_000);
+        const b64 = typeof res.image_b64 === "string" ? res.image_b64 : "";
         const path = join(tmpdir(), `argent-ios-shot-${randomUUID()}.png`);
-        await run("screenshot", [...COREDEVICE, "screen-capture", "screenshot", path], 20_000);
+        await writeFile(path, Buffer.from(b64, "base64"));
         return { path };
       },
       async tap(x, y) {
-        const hx = toHid(x);
-        const hy = toHid(y);
-        // A zero-duration CONTACT+RELEASE (pmd3's `tap`) is dropped by iOS — a
-        // tap must dwell. Emit a short held drag with a tiny (~3px) move, away
-        // from the edge so it never clips, which registers as a real tap.
-        const hy2 = hy <= 65535 - 120 ? hy + 96 : hy - 96;
-        await run(
-          "tap",
-          [
-            ...HID,
-            "drag",
-            String(hx),
-            String(hy),
-            String(hx),
-            String(hy2),
-            "--steps",
-            "3",
-            "--duration",
-            "0.15",
-          ],
-          15_000
-        );
+        // A zero-duration tap is dropped by iOS; the agent emits a short held
+        // dwell-drag. We hand it the 0..65535 HID coordinate.
+        await call("tap", "tap", { x: toHid(x), y: toHid(y) }, 15_000);
       },
       async swipe(fromX, fromY, toX, toY, durationMs) {
         const { steps, seconds, timeoutMs } = swipeDragParams(durationMs);
-        await run(
+        await call(
           "swipe",
-          [
-            ...HID,
-            "drag",
-            String(toHid(fromX)),
-            String(toHid(fromY)),
-            String(toHid(toX)),
-            String(toHid(toY)),
-            "--steps",
-            String(steps),
-            "--duration",
-            seconds,
-          ],
+          "swipe",
+          {
+            x1: toHid(fromX),
+            y1: toHid(fromY),
+            x2: toHid(toX),
+            y2: toHid(toY),
+            steps,
+            duration: Number(seconds),
+          },
           timeoutMs
         );
       },
       async button(name) {
-        await run("button", [...COREDEVICE, "hid", "button", name, "press"], 10_000);
+        await call("button", "button", { name }, 15_000);
+      },
+      async homescreen() {
+        const res = await call("homescreen", "homescreen", {}, 20_000);
+        return {
+          iconState: res.icon_state,
+          metrics: (res.metrics as Record<string, number>) ?? {},
+        };
       },
     };
 
     const instance: ServiceInstance<CoreDeviceApi> = {
       api,
-      // Stateless: each interaction is a fresh pymobiledevice3 invocation, so
-      // there is no long-lived process to tear down.
-      dispose: async () => {},
+      // One persistent pymobiledevice3 process per device — tear it down.
+      dispose: async () => {
+        agent.dispose();
+      },
       events,
     };
     return instance;
