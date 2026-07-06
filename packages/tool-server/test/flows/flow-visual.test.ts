@@ -106,10 +106,9 @@ describe("runSnapshot baselines", () => {
     expect(r.status).toBe("pass");
     expect(r.reason).toContain("diff 0.00%");
     expect(r.warning).toBeUndefined();
-    // A passing diff carries baseline + current but no diff image.
-    expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
-    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
-    expect(r.artifacts?.diff).toBeUndefined();
+    // A clean pass carries no artifacts — there is nothing to look at, and
+    // handles would make renderers fetch two full-res PNGs just to print paths.
+    expect(r.artifacts).toBeUndefined();
   });
 
   it("fails an over-threshold diff and exposes the context diff as an artifact", async () => {
@@ -130,5 +129,18 @@ describe("runSnapshot baselines", () => {
       hostPath: h.contextDiffPath,
       filename: "home__ios-390x844-diff.png",
     });
+  });
+
+  it("fails without a diff artifact when the differ produced no context image", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    h.mismatchPercentage = 100;
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("fail");
+    expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    expect(r.artifacts?.diff).toBeUndefined();
   });
 });

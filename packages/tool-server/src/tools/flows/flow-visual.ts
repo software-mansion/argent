@@ -11,7 +11,10 @@ export const DEFAULT_MAX_MISMATCH = 0.5;
 /**
  * Files a snapshot step produced, keyed by role so a renderer can pick what to
  * surface (e.g. inline only `diff` on failure). Artifact handles — not host
- * paths — so a client on another machine can materialize them.
+ * paths — so a client on another machine can materialize them. Present only
+ * when there is something to look at: a failed comparison (all roles) or a
+ * baseline write (`baseline` only) — a clean pass carries none, so renderers
+ * never fetch full-res PNGs just to print paths nobody needs.
  */
 export interface SnapshotArtifacts {
   baseline?: ArtifactHandle;
@@ -114,22 +117,23 @@ export async function runSnapshot(
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-diff-"));
   const result = await diffPngFiles({ baselinePath, currentPath, outputDir });
   const within = result.mismatchPercentage <= opts.maxMismatch;
+  const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
+  if (within) {
+    return { status: "pass", reason };
+  }
+
   const artifacts: SnapshotArtifacts = {
     baseline: await store.register(baselinePath, { mimeType: "image/png" }),
     current: shot.image,
   };
-  // On failure, also expose the annotated context diff — the image a client
-  // renders inline so the agent can see WHAT differed. (Absent when the diff
-  // bailed early, e.g. on a dimension mismatch.)
-  if (!within && result.contextDiffPath) {
+  // Also expose the annotated context diff — the image a client renders inline
+  // so the agent can see WHAT differed. (Absent when the diff bailed early,
+  // e.g. on a dimension mismatch.)
+  if (result.contextDiffPath) {
     artifacts.diff = await store.register(result.contextDiffPath, {
       mimeType: "image/png",
       filename: `${key.replace(/\.png$/, "")}-diff.png`,
     });
   }
-  return {
-    status: within ? "pass" : "fail",
-    reason: `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`,
-    artifacts,
-  };
+  return { status: "fail", reason, artifacts };
 }
