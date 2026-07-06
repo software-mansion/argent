@@ -18,3 +18,15 @@ export function makeIosImpl(
         : typeSimulatorServer(registry, device, params),
   };
 }
+
+// Remote sims are always iOS (never tvOS), so skip the tvOS probe — which shells
+// out to local `xcrun` and would fail on a non-macOS host anyway — and type
+// straight over the simulator-server, whose blueprint routes an ios-remote
+// device through the sim-remote MoQ transport.
+export function makeIosRemoteImpl(
+  registry: Registry
+): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
+  return {
+    handler: async (_services, params, device) => typeSimulatorServer(registry, device, params),
+  };
+}
