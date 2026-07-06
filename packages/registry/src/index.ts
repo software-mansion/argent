@@ -1,5 +1,5 @@
 export { TypedEventEmitter } from "./event-emitter";
-export { ServiceState } from "./types";
+export { ServiceState, isLiveServiceState } from "./types";
 export type {
   ServiceEvents,
   ServiceInstance,

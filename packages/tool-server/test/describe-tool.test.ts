@@ -3,6 +3,15 @@ import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-serv
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/describe";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import { isTvOsSimulator } from "../src/utils/ios-devices";
+
+// describeIos probes the runtime kind to short-circuit tvOS. Mock it so these
+// unit tests stay hermetic (no real `simctl`) and default to the iOS path; the
+// dedicated tvOS test below overrides it per-call.
+vi.mock("../src/utils/ios-devices", () => ({
+  isTvOsSimulator: vi.fn(async () => false),
+}));
+const mockIsTvOsSimulator = vi.mocked(isTvOsSimulator);
 
 // The describe tool no longer surfaces the JSON tree — `result.description`
 // is the text rendering produced by format-tree.ts. `elementLineCount` counts
@@ -89,6 +98,7 @@ describe("describe tool", () => {
     // cache so neither branch probes — handlers run with mock services.
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb"]);
+    mockIsTvOsSimulator.mockResolvedValue(false);
   });
 
   it("returns elements from ax-service daemon", async () => {
@@ -399,5 +409,38 @@ describe("describe tool", () => {
     );
     expect(result.source).toBe("ax-service");
     expect(elementLineCount(result.description)).toBe(0);
+  });
+
+  it("routes a tvOS target to the focus-driven view instead of the iOS ax-service", async () => {
+    mockIsTvOsSimulator.mockResolvedValue(true);
+    // The TV focus backend answers; the iOS ax-service must never be resolved
+    // for an Apple TV device.
+    const tvApi = {
+      describe: vi.fn().mockResolvedValue({
+        bundleId: "com.example.tv",
+        focused: { label: "Home", isFocused: true },
+        focusable: [{ label: "Home", isFocused: true }, { label: "Search" }],
+      }),
+      recycleAx: vi.fn().mockResolvedValue(undefined),
+    };
+    const registry = {
+      resolveService: vi.fn(async (urn: string) => {
+        if (urn.startsWith("TvControl:")) return tvApi;
+        throw new Error(`ax-service must not be resolved for tvOS: ${urn}`);
+      }),
+    } as any;
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD" });
+
+    expect(result.source).toBe("tv-focus");
+    expect(result.description).toContain("Focused: Home");
+    expect(result.description).toContain("Focusable (2):");
+    expect(result.hint).toBeUndefined();
+    // Resolved the TV control service, never the iOS ax-service.
+    expect(registry.resolveService).toHaveBeenCalledWith(
+      "TvControl:DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD",
+      expect.anything()
+    );
   });
 });

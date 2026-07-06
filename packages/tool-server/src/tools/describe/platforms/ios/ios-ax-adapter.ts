@@ -31,6 +31,7 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
     children: [],
     label: el.label,
     value: el.value,
+    identifier: el.identifier,
   };
 }
 

@@ -4,7 +4,8 @@
     "composite": true,
     "declaration": true,
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "customConditions": ["node"]
   },
   "references": [
     { "path": "../archive" },

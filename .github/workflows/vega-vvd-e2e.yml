@@ -15,11 +15,6 @@ name: Vega VVD E2E (remote + screenshot)
 
 on:
   workflow_dispatch:
-    inputs:
-      host-image:
-        description: "vega-virtual-device-host image to boot the VVD from (override the pinned digest for manual runs)"
-        required: false
-        default: "ghcr.io/finloop/vega-virtual-device-host@sha256:2110746fa9ba579635c6bdeac00c742749776fd135483d72f056cd1f2092d486"
   pull_request:
     branches:
       - main
@@ -40,14 +35,9 @@ concurrency:
   group: vega-vvd-e2e-${{ github.ref }}
   cancel-in-progress: true
 
-# Third-party actions, the host image, and the fixture are pinned to immutable
-# refs (commit SHA / image digest / content checksum) rather than mutable
-# `@main` / `:latest` tags: this job runs on `pull_request` (untrusted), so a
-# floating ref could change under the workflow with no diff. Re-pin deliberately
-# when bumping.
+# Third-party actions and the fixture are pinned to immutable refs (this job runs
+# on untrusted `pull_request`). Re-pin deliberately when bumping.
 env:
-  # Pinned by digest; manual `workflow_dispatch` runs may override via the input.
-  HOST_IMAGE: ${{ github.event.inputs.host-image || 'ghcr.io/finloop/vega-virtual-device-host@sha256:2110746fa9ba579635c6bdeac00c742749776fd135483d72f056cd1f2092d486' }}
   KEPLER_FIXTURE_URL: "https://github.com/finloop/vega-virtual-device-action/releases/download/fixtures-keplervideoapp-0.22.1/keplervideoapp_aarch64.vpkg"
   # Verified against the downloaded fixture below (the release tag is mutable).
   KEPLER_FIXTURE_SHA256: "4ec7e0db348fe53bf3798410b4de1cf4aed5fc1f6935dff0b890d0611559201e"
@@ -60,8 +50,7 @@ jobs:
     # unchanged inside it — same glibc, no cross-version skew.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # The vega-virtual-device-host GHCR package is public, so the image pulls
-    # without auth — no packages: read / login step needed.
+    # The action builds the host image on the runner (no registry pull).
     permissions:
       contents: read
 
@@ -115,10 +104,10 @@ jobs:
 
       - name: Boot VVD; drive remote + screenshot
         id: vvd
-        uses: finloop/vega-virtual-device-action/vega-virtual-device-action@fe151d9a807b64e2838080e16a9ff2ea55ee48f6 # main
+        # No `image:` → the action builds the host image on the runner, with the
+        # SDK version pinned via the action's `.sdk-version`.
+        uses: finloop/vega-virtual-device-action/vega-virtual-device-action@a0f17767abafb27ec9b58974d94643fc46a4a35d # main
         with:
-          image: ${{ env.HOST_IMAGE }}
-          pull: true
           boot-timeout: 420
           screenshot-path: artifacts/vvd-ready.png
           container-options: -e KEPLER_VPKG=fixtures/keplervideoapp_aarch64.vpkg

@@ -1,6 +1,6 @@
 {
   "name": "@argent/preview-window",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "private": true,
   "description": "Electron host for Argent Lens — the variant preview & selection UI.",
   "main": "dist/main.js",

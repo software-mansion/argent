@@ -1,6 +1,7 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeTreeData } from "../../contract";
-import { adbExecOutBinary } from "../../../../utils/adb";
+import { adbExecOutBinary, isAndroidTv } from "../../../../utils/adb";
 import { resolveDevice } from "../../../../utils/device-info";
 import { getAndroidScreenSize } from "../../../../utils/android-screen";
 import { parseUiAutomatorDump } from "./uiautomator-parser";
@@ -10,6 +11,16 @@ import {
 } from "../../../../blueprints/android-devtools";
 
 export const androidRequires: ToolDependency[] = ["adb"];
+
+// Android TV is focus-driven: the uiautomator tree is still readable (so we
+// don't short-circuit describe the way iOS does for tvOS), but the agent
+// shouldn't tap coordinates — it should move the D-pad focus instead. Surface
+// the tv-* tools as a hint rather than blocking the (still-useful) tree.
+const ANDROID_TV_HINT =
+  "This is an Android TV (leanback) device — it is focus-driven and has no touch. " +
+  "Prefer the `describe` tool to read the focused / focusable elements, `tv-remote` " +
+  "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type, " +
+  "rather than coordinate taps.";
 
 /**
  * Try the persistent `android-devtools` helper first; on any error fall back
@@ -21,8 +32,17 @@ export const androidRequires: ToolDependency[] = ["adb"];
 export async function describeAndroid(
   registry: Registry | undefined,
   serial: string,
-  _bundleId?: string
+  _bundleId?: string,
+  // When the caller already resolved the form factor (the `describe` dispatch
+  // and the TV fallback both call `isAndroidTv` before reaching here), thread
+  // that verdict in so we don't re-probe — `getAndroidRuntimeKind` still costs
+  // an `adb devices` + avdName getprop per call even on a cache hit, and
+  // `describe` is an alwaysLoad hot path. `undefined` means "unknown, probe".
+  isTv?: boolean
 ): Promise<DescribeTreeData> {
+  // Attach the TV hint on both the devtools and legacy uiautomator return paths.
+  const hint = (isTv ?? (await isAndroidTv(serial))) ? ANDROID_TV_HINT : undefined;
+
   if (registry) {
     try {
       // The android-devtools helper is driven entirely over adb, so it works the
@@ -36,7 +56,7 @@ export async function describeAndroid(
         devtools.getScreenSize(),
       ]);
       const tree = parseUiAutomatorDump(xml, size.width, size.height);
-      return { tree, source: "android-devtools" };
+      return { tree, source: "android-devtools", hint };
     } catch (serviceErr) {
       // Fall through to the legacy uiautomator path. Every error here is
       // recoverable because the legacy path has independent failure modes.
@@ -77,12 +97,22 @@ export async function describeAndroid(
   const raw = rawBuf.toString("utf-8");
   const trimmed = raw.trim();
   if (/^ERROR:/i.test(trimmed) || (!trimmed.includes("<hierarchy") && /error/i.test(trimmed))) {
-    throw new Error(
+    throw new FailureError(
       `uiautomator could not capture the screen: ${trimmed}. ` +
         `Common causes: device locked / keyguard, DRM or secure overlay, Play Integrity screen. ` +
-        `Unlock the device or take a screenshot as a fallback.`
+        `Unlock the device or take a screenshot as a fallback.`,
+      {
+        // The adb wrapper exits 0, but the uiautomator tool it ran reported an
+        // in-band `ERROR:` line — a functional failure of the uiautomator
+        // subprocess. Classified `subprocess` to match the sibling
+        // ANDROID_UIAUTOMATOR_PARSE_FAILED (also adb-exit-0, unusable output).
+        error_code: FAILURE_CODES.ANDROID_UIAUTOMATOR_CAPTURE_FAILED,
+        failure_stage: "android_uiautomator_capture",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      }
     );
   }
   const tree = parseUiAutomatorDump(raw, size.width, size.height);
-  return { tree, source: "uiautomator" };
+  return { tree, source: "uiautomator", hint };
 }

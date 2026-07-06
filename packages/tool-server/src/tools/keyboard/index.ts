@@ -1,14 +1,11 @@
 import { z } from "zod";
-import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
-import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { injectVegaNamedKey, injectVegaText } from "../../utils/vega-input";
-import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
-import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "./chromium-keys";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import type { KeyboardParams, KeyboardResult } from "./types";
+import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
+import { makeAndroidImpl } from "./platforms/android";
+import { makeChromiumImpl } from "./platforms/chromium";
+import { vegaImpl } from "./platforms/vega";
 
 const zodSchema = z.object({
   udid: z
@@ -24,203 +21,67 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12"
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
     ),
   delayMs: z
     .number()
     .optional()
     .describe(
-      "Delay in ms between key presses (default 50). Ignored on Vega, where text/keys are injected in a single shot."
+      "Delay in ms between key presses (default 50). Ignored on Vega (text/keys injected in a single shot) and on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence)."
     ),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
-  typed: string;
-  keys: number;
-}
-
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
 };
 
-interface SimulatorServerServices {
-  simulatorServer: SimulatorServerApi;
-}
-
-interface ChromiumServices {
-  chromium: ChromiumCdpApi;
-}
-
-async function runChromium(api: ChromiumCdpApi, params: Params): Promise<Result> {
-  const delay = params.delayMs ?? 50;
-  let keysPressed = 0;
-
-  if (params.key) {
-    const named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
-    if (!named) {
-      throw new Error(
-        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`
-      );
-    }
-    await api.dispatchKeyEvent({
-      type: "keyDown",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    await sleep(delay);
-    await api.dispatchKeyEvent({
-      type: "keyUp",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    keysPressed++;
-  }
-
-  if (params.text) {
-    for (const char of params.text) {
-      const desc = charToChromiumKey(char);
-      if (!desc) {
-        throw new Error(`No CDP key descriptor for character "${char}"`);
-      }
-      await api.dispatchKeyEvent({
-        type: "keyDown",
-        key: desc.key,
-        code: desc.code,
-        windowsVirtualKeyCode: desc.windowsVirtualKeyCode,
-      });
-      // `char` delivers the actual codepoint to the focused input; without
-      // this the field receives no value.
-      await api.dispatchKeyEvent({ type: "char", text: desc.text });
-      await api.dispatchKeyEvent({
-        type: "keyUp",
-        key: desc.key,
-        code: desc.code,
-        windowsVirtualKeyCode: desc.windowsVirtualKeyCode,
-      });
-      keysPressed++;
-      await sleep(delay);
-    }
-  }
-
-  return { typed: params.text ?? params.key ?? "", keys: keysPressed };
-}
-
-// Shared iOS / Android path: both drive the bundled simulator-server binary via
-// its `pressKey` command (USB HID keycodes). The blueprint factory that backs
-// `services.simulatorServer` already preflights the platform binary (adb on
-// Android, automation on iOS), so these branches declare no `requires`.
-async function runSimulatorServer(api: SimulatorServerApi, params: Params): Promise<Result> {
-  const delay = params.delayMs ?? 50;
-  let keysPressed = 0;
-
-  const pressKeyCode = async (keyCode: number, withShift = false) => {
-    if (withShift) {
-      api.pressKey("Down", SHIFT_KEYCODE);
-      await sleep(10);
-    }
-    api.pressKey("Down", keyCode);
-    await sleep(delay);
-    api.pressKey("Up", keyCode);
-    if (withShift) {
-      await sleep(10);
-      api.pressKey("Up", SHIFT_KEYCODE);
-    }
-    keysPressed++;
-  };
-
-  if (params.key) {
-    const code = NAMED_KEYS[params.key.toLowerCase()];
-    if (code == null) {
-      throw new Error(
-        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`
-      );
-    }
-    await pressKeyCode(code);
-  }
-
-  if (params.text) {
-    for (const char of params.text) {
-      const press = charToKeyPress(char);
-      if (!press) throw new Error(`No keycode for character "${char}"`);
-      await pressKeyCode(press.keyCode, press.withShift);
-      await sleep(delay);
-    }
-  }
-
-  return { typed: params.text ?? params.key ?? "", keys: keysPressed };
-}
-
-// Vega has no simulator-server: input is injected over `adb` (on-device
-// `inputd-cli`). The `adb` dependency is declared on the vega dispatch branch's
-// `requires` and preflighted by dispatchByPlatform before this runs, so a
-// missing adb fails with a clean 424 install hint rather than a spawn ENOENT.
-async function runVega(params: Params): Promise<Result> {
-  let keysPressed = 0;
-  if (params.key) {
-    await injectVegaNamedKey(params.key);
-    keysPressed++;
-  }
-  if (params.text) {
-    await injectVegaText(params.text);
-    keysPressed += [...params.text].length;
-  }
-  return { typed: params.text ?? params.key ?? "", keys: keysPressed };
-}
-
-export const keyboardTool: ToolDefinition<Params, Result> = {
-  id: "keyboard",
-  description: `Type text or press special keys on the device (iOS simulator, Android emulator, Chromium app, or Vega Virtual Device) using keyboard events.
-Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega, prefer the \`tv-remote\` tool for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the backend is not reachable for the given device.
+// `keyboard` goes through `dispatchByPlatform`. The chromium branch resolves the
+// CDP session and the vega branch injects over `adb` (`inputd-cli`); the
+// ios/android branches runtime-probe their TV kind (TV is a `runtimeKind`, not a
+// `platform`, so a tvOS sim is "ios" and an Android TV "android" by id shape)
+// and route a TV target to the focus-driven backend, otherwise to the
+// simulator-server (see platforms/{ios,android,chromium,vega,tv}.ts). No service
+// is declared eagerly: distinguishing a TV target is async, and declaring
+// simulator-server up front would also spawn it for a tvOS udid it can't drive.
+export function createKeyboardTool(registry: Registry): ToolDefinition<Params, KeyboardResult> {
+  return {
+    id: "keyboard",
+    description: `Type text or press special keys on the device (iOS simulator, Android emulator, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
+Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
+Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator-server / emulator backend / Chromium CDP / Vega adb / TV control daemons are not reachable for the given device.
 - text: types a string character by character (supports uppercase, digits, common punctuation)
-- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)
+- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
+On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
 Provide text, key, or both.`,
-  zodSchema,
-  capability,
-  services: (params): Record<string, ServiceRef> => {
-    const device = resolveDevice(params.udid);
-    if (device.platform === "chromium") {
-      return { chromium: chromiumCdpRef(device) };
-    }
-    if (device.platform === "vega") {
-      // Vega has no simulator-server: the bundled simulator-server binary only
-      // backs iOS/Android, so it can't carry Vega input. Vega instead injects
-      // over `adb` (on-device `inputd-cli`) — a separate transport, not a second
-      // copy of the simulator-server. No blueprint service to resolve here; the
-      // `adb` dependency is declared on the vega dispatch branch's `requires`.
-      return {};
-    }
-    return { simulatorServer: simulatorServerRef(device) };
-  },
-  execute: dispatchByPlatform<
-    SimulatorServerServices,
-    SimulatorServerServices,
-    Params,
-    Result,
-    ChromiumServices,
-    Record<string, unknown>
-  >({
-    toolId: "keyboard",
+    zodSchema,
     capability,
-    ios: {
-      handler: (services, params) => runSimulatorServer(services.simulatorServer, params),
-    },
-    android: {
-      handler: (services, params) => runSimulatorServer(services.simulatorServer, params),
-    },
-    chromium: {
-      handler: (services, params) => runChromium(services.chromium, params),
-    },
-    vega: {
-      requires: ["adb"],
-      handler: (_services, params) => runVega(params),
-    },
-  }),
-};
+    searchHint:
+      "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
+    // No eager service: each branch resolves its backend lazily (TV control,
+    // simulator-server, CDP, or Vega adb), since distinguishing a TV target is
+    // async and a tvOS udid must never resolve simulator-server.
+    services: () => ({}),
+    execute: dispatchByPlatform<
+      Record<string, unknown>,
+      Record<string, unknown>,
+      KeyboardParams,
+      KeyboardResult,
+      Record<string, unknown>,
+      Record<string, unknown>
+    >({
+      toolId: "keyboard",
+      capability,
+      ios: makeIosImpl(registry),
+      iosRemote: makeIosRemoteImpl(registry),
+      android: makeAndroidImpl(registry),
+      chromium: makeChromiumImpl(registry),
+      vega: vegaImpl,
+    }),
+  };
+}
