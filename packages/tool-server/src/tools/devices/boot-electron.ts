@@ -174,9 +174,10 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
       // Strip ELECTRON_RUN_AS_NODE (see electronGuiChildEnv): if the tool-server
-      // inherited it from an Electron-based MCP host, the app would boot as a
-      // headless Node runtime with no CDP endpoint, and the readiness race below
-      // would time out instead of the app coming up.
+      // inherited it from an Electron-based MCP host, the Electron binary would
+      // run in Node mode with no CDP endpoint — so boot-device fails below (the
+      // child exits early, or the readiness probe times out) instead of the app
+      // coming up.
       env: electronGuiChildEnv({ ELECTRON_ENABLE_LOGGING: "1" }),
     });
   } catch (err) {
