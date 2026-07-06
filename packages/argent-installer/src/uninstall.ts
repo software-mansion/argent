@@ -414,6 +414,29 @@ export async function uninstall(args: string[]): Promise<void> {
       removeTargets = targetDecision.targets;
     }
 
+    // Which config scopes the entry/allowlist/content removal may touch.
+    // Historically workspace-wide; an EXPLICIT target choice (--local/--global
+    // or the coexistence prompt) narrows it to the entries that RUN the
+    // install(s) being removed, so the install the user chose to KEEP stays
+    // wired up everywhere:
+    //   local devDep  → project-scope entries (they run the repo-local copy);
+    //   global binary → global-scope entries, plus project-scope entries when
+    //                   the project is in global mode (those run the bare
+    //                   `argent` command being removed).
+    const scopesToClean = new Set<"local" | "global">();
+    if (removePreconfirmed) {
+      for (const t of removeTargets) {
+        if (t === "local" && installMode === "local") scopesToClean.add("local");
+        if (t === "global") {
+          scopesToClean.add("global");
+          if (installMode === "global") scopesToClean.add("local");
+        }
+      }
+    } else {
+      scopesToClean.add("local");
+      scopesToClean.add("global");
+    }
+
     const results: string[] = [];
 
     // ── Remove MCP entries ──────────────────────────────────────────────────────
@@ -421,8 +444,12 @@ export async function uninstall(args: string[]): Promise<void> {
     p.log.step(pc.bold("Removing MCP server entries..."));
 
     for (const adapter of ALL_ADAPTERS) {
-      for (const pathFn of [() => adapter.projectPath(projectRoot), () => adapter.globalPath()]) {
-        const configPath = pathFn();
+      const scopedPaths: Array<["local" | "global", string | null]> = [
+        ["local", adapter.projectPath(projectRoot)],
+        ["global", adapter.globalPath()],
+      ];
+      for (const [scope, configPath] of scopedPaths) {
+        if (!scopesToClean.has(scope)) continue;
         if (!configPath) continue;
         try {
           const removed = adapter.remove(configPath);
@@ -440,6 +467,7 @@ export async function uninstall(args: string[]): Promise<void> {
     for (const adapter of ALL_ADAPTERS) {
       if (!adapter.removeAllowlist) continue;
       for (const s of ["local", "global"] as const) {
+        if (!scopesToClean.has(s)) continue;
         try {
           adapter.removeAllowlist(projectRoot, s);
           results.push(`${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`);
@@ -472,8 +500,21 @@ export async function uninstall(args: string[]): Promise<void> {
 
     if (shouldPrune) {
       const pruneResults: string[] = [];
-      const localTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "local");
-      const globalTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "global");
+      // Content pruning follows the same scoping as the entry removal above: an
+      // explicit single-target uninstall leaves the kept install's scope alone.
+      const emptyTargets = {
+        skillTargets: [],
+        ruleTargets: [],
+        agentTargets: [],
+        codexConfigTargets: [],
+        skillsLockTargets: [],
+      };
+      const localTargets = scopesToClean.has("local")
+        ? getManagedContentTargets(ALL_ADAPTERS, projectRoot, "local")
+        : emptyTargets;
+      const globalTargets = scopesToClean.has("global")
+        ? getManagedContentTargets(ALL_ADAPTERS, projectRoot, "global")
+        : emptyTargets;
 
       const bundledSkillNames = getBundledSkillNames(SKILLS_DIR);
       pruneResults.push(
@@ -543,13 +584,17 @@ export async function uninstall(args: string[]): Promise<void> {
         }
       }
 
-      // Remove the committed local-mode marker (.argent/install.json).
-      try {
-        if (removeInstallRecord(projectRoot)) {
-          pruneResults.push(`${pc.green("+")} Removed .argent/install.json`);
+      // Remove the committed local-mode marker (.argent/install.json) — but not
+      // on a --global-only uninstall of a local-mode project, where the record
+      // must keep steering update/uninstall at the retained devDependency.
+      if (scopesToClean.has("local")) {
+        try {
+          if (removeInstallRecord(projectRoot)) {
+            pruneResults.push(`${pc.green("+")} Removed .argent/install.json`);
+          }
+        } catch (err) {
+          pruneResults.push(`${pc.red("x")} Could not remove .argent/install.json: ${err}`);
         }
-      } catch (err) {
-        pruneResults.push(`${pc.red("x")} Could not remove .argent/install.json: ${err}`);
       }
 
       if (pruneResults.length > 0) {
