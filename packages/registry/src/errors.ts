@@ -34,6 +34,7 @@ export const FAILURE_COMMANDS = [
   "simulator_server",
   "pymobiledevice3",
   "cdp",
+  "electron",
   "npm",
   "npx",
   "unknown",

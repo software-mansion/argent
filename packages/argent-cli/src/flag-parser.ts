@@ -43,11 +43,17 @@ function isScalarType(type: string | undefined): boolean {
 
 function coerceScalar(raw: string, type: string | undefined, field: string): unknown {
   if (type === "number") {
+    // Number("") and Number("   ") are 0, so reject empty/whitespace explicitly.
+    if (raw.trim() === "")
+      throw new FlagParseException(`--${field} expected a number, got "${raw}"`);
     const n = Number(raw);
     if (Number.isNaN(n)) throw new FlagParseException(`--${field} expected a number, got "${raw}"`);
     return n;
   }
   if (type === "integer") {
+    // Number("") and Number("   ") are 0, so reject empty/whitespace explicitly.
+    if (raw.trim() === "")
+      throw new FlagParseException(`--${field} expected an integer, got "${raw}"`);
     const n = Number(raw);
     if (!Number.isInteger(n))
       throw new FlagParseException(`--${field} expected an integer, got "${raw}"`);
@@ -88,6 +94,11 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
   // an array field appends; a second value for a scalar field overwrites
   // (with a warning would be nice but we keep it silent to avoid stderr noise).
   const seenArrayFields = new Set<string>();
+  // Track which fields were set via `--field-json`, independent of order: a
+  // field touched by BOTH `--field` (scalar-array form) and `--field-json` is
+  // ambiguous no matter which came first, so both directions must throw rather
+  // than one silently overwriting/discarding the other's value.
+  const jsonFields = new Set<string>();
 
   function takeNext(i: number, flag: string): { value: string; nextIndex: number } {
     if (i + 1 >= argv.length) {
@@ -140,7 +151,15 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       const fieldName = flag.slice(0, -"-json".length);
       const { value, nextIndex } =
         inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, flag);
+      if (seenArrayFields.has(fieldName)) {
+        // A prior --${fieldName} (scalar-array form) already populated this
+        // field; overwriting it here would silently discard those values.
+        throw new FlagParseException(
+          `--${fieldName} and --${flag} cannot be mixed for the same field; pass it entirely as --${flag} '<json>' or --args '<json>'`
+        );
+      }
       args[fieldName] = parseJsonOrThrow(value, `--${flag}`);
+      jsonFields.add(fieldName);
       i = nextIndex;
       continue;
     }
@@ -185,6 +204,18 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       }
       const { value, nextIndex } =
         inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, flag);
+      if (jsonFields.has(flag)) {
+        // --${flag}-json already set this field (in either order relative to
+        // this occurrence); mixing the two forms is ambiguous and one would
+        // silently clobber or corrupt the other's value. Checked BEFORE
+        // coerceScalar so a mixed --field/--field-json with an also-invalid
+        // plain value surfaces this (more actionable) mixing error rather than
+        // a scalar-coercion error — matching the --field-json branch above,
+        // which checks mixing before parsing the JSON.
+        throw new FlagParseException(
+          `--${flag} and --${flag}-json cannot be mixed for the same field; pass it entirely as --${flag}-json '<json>' or --args '<json>'`
+        );
+      }
       const coerced = coerceScalar(value, itemType, flag);
       if (!seenArrayFields.has(flag)) {
         args[flag] = [coerced];

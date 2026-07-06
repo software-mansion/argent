@@ -78,6 +78,13 @@ export function __resetVegaBinaryCacheForTests(): void {
 async function resolveVegaOrThrow(): Promise<string> {
   const path = await resolveVegaBinary();
   if (!path) {
+    // A genuinely missing `vega`/`kepler` binary is always classified upstream as
+    // TOOL_DEPENDENCY_MISSING, never here: every tool path into runVega goes through the
+    // dependency preflight first (boot-device's ensureDep("vega"); the
+    // reinstall/launch/restart Vega branches' requires:["vega"]), and the only non-tool
+    // caller, listVegaDevices, guards with resolveVegaBinary() and degrades to []. So this
+    // throw can never reach the telemetry boundary as its own code — keep the helpful
+    // message as a plain Error (a code here could never bucket a real failure).
     throw new Error(
       "`vega` (or `kepler`) not found on PATH or under `~/vega/bin`. " +
         "Install the Vega SDK and run `source ~/vega/env`, then retry."
@@ -593,6 +600,10 @@ export async function vegaDevice(
   subcommand: string[],
   options: { timeoutMs?: number } = {}
 ): Promise<VegaRunResult> {
+  // Defensive: every real caller threads a non-empty `amazon-…` serial (Vega
+  // device classification requires that prefix), so `!serial` can only trip a
+  // direct caller that forgot the udid — never the registry/telemetry path. It
+  // stays a plain Error without a code, which could never bucket a real failure.
   if (!serial) throw new Error("vegaDevice requires a non-empty device serial");
   return runVegaDevice(subcommand, options);
 }

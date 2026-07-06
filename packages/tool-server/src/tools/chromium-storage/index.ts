@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
@@ -71,13 +72,24 @@ Returns { value } for a single key, { entries, count } for all, or a status obje
       }
       case "set": {
         if (params.key == null || params.value == null) {
-          throw new Error("`set` requires `key` and `value`.");
+          throw new FailureError("`set` requires `key` and `value`.", {
+            error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
+            failure_stage: "chromium_storage_set_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         await setStorageItem(cdp, params.store, params.key, params.value);
         return { set: true };
       }
       case "remove": {
-        if (params.key == null) throw new Error("`remove` requires `key`.");
+        if (params.key == null)
+          throw new FailureError("`remove` requires `key`.", {
+            error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
+            failure_stage: "chromium_storage_remove_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         await removeStorageItem(cdp, params.store, params.key);
         return { removed: true };
       }

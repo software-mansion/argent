@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { CDPClient } from "../utils/debugger/cdp-client";
 
 export interface CdpTarget {
@@ -52,13 +53,27 @@ export async function discoverPrimaryPage(port: number, signal?: AbortSignal): P
     // Distinguish "no pages at all" from "only devtools://" for a clearer hint.
     const all = await fetchJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`, signal);
     if (all.some((t) => t.type === "page")) {
-      throw new Error(
+      throw new FailureError(
         `Chromium CDP on port ${port} has only devtools:// pages (the main BrowserWindow may be hidden or closed). ` +
-          `Bring the app window to the foreground and retry.`
+          `Bring the app window to the foreground and retry.`,
+        {
+          error_code: FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET,
+          failure_stage: "chromium_cdp_discover_page_devtools_only",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+          failure_command: "cdp",
+        }
       );
     }
-    throw new Error(
-      `Chromium CDP on port ${port} reported no page targets. Is the app started with --remote-debugging-port=${port}?`
+    throw new FailureError(
+      `Chromium CDP on port ${port} reported no page targets. Is the app started with --remote-debugging-port=${port}?`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET,
+        failure_stage: "chromium_cdp_discover_page_none",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+        failure_command: "cdp",
+      }
     );
   }
   return pages[0]!;
@@ -73,19 +88,101 @@ export async function browserWebSocketUrl(port: number, signal?: AbortSignal): P
   const version = await ensureCdpReachable(port, signal);
   const url = version.webSocketDebuggerUrl;
   if (!url) {
-    throw new Error(
-      `Chromium CDP on port ${port} did not report a browser webSocketDebuggerUrl in /json/version.`
+    throw new FailureError(
+      `Chromium CDP on port ${port} did not report a browser webSocketDebuggerUrl in /json/version.`,
+      {
+        // The endpoint responded but its payload was incomplete — a malformed
+        // response, not an unreachable port. Distinct code so telemetry doesn't
+        // conflate "reached but malformed" with a genuinely down debug port.
+        error_code: FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE,
+        failure_stage: "chromium_cdp_browser_ws",
+        failure_area: "tool_server",
+        error_kind: "network",
+        failure_command: "cdp",
+        network_failure: "invalid_response",
+      }
     );
   }
   return url;
 }
 
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { signal });
-  if (!res.ok) {
-    throw new Error(`Chromium CDP discovery: GET ${url} failed (HTTP ${res.status})`);
+  let res: Response;
+  try {
+    res = await fetch(url, { signal });
+  } catch (err) {
+    // A caller-driven abort is expected control flow, not a reachability
+    // failure — let it surface untouched.
+    if (err instanceof Error && err.name === "AbortError") throw err;
+    // The common case: nothing is listening on the debug port (the app isn't
+    // running, or was started without --remote-debugging-port). `fetch` rejects
+    // before we ever get a response, so classify it here rather than letting a
+    // raw system error bubble up unclassified. undici wraps the OS error: the
+    // ECONN* code lives on err.cause, not err itself — check both and map the
+    // well-known socket codes precisely (mirrors the Vega toolkit path) rather
+    // than always reporting connection_refused.
+    const code =
+      (err as NodeJS.ErrnoException).code ?? (err as { cause?: NodeJS.ErrnoException }).cause?.code;
+    const network_failure =
+      code === "ECONNREFUSED"
+        ? "connection_refused"
+        : code === "ECONNRESET"
+          ? "connection_reset"
+          : code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT"
+            ? "timeout"
+            : "other";
+    throw new FailureError(
+      `Chromium CDP discovery: GET ${url} could not connect. ` +
+        `Is the app running with --remote-debugging-port?`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
+        failure_stage: "chromium_cdp_discovery_connect",
+        failure_area: "tool_server",
+        error_kind: "network",
+        failure_command: "cdp",
+        network_failure,
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
   }
-  return (await res.json()) as T;
+  if (!res.ok) {
+    // The endpoint was reachable and answered — it just returned a non-2xx
+    // status. That is a malformed/erroring response, not a down debug port, so
+    // it gets INVALID_RESPONSE (matching browserWebSocketUrl above) rather than
+    // UNREACHABLE — telemetry must not conflate the two.
+    throw new FailureError(`Chromium CDP discovery: GET ${url} failed (HTTP ${res.status})`, {
+      error_code: FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE,
+      failure_stage: "chromium_cdp_discovery_fetch",
+      failure_area: "tool_server",
+      error_kind: "network",
+      failure_command: "cdp",
+      network_failure: "invalid_response",
+    });
+  }
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    // A caller-driven abort while the body is still streaming is expected
+    // control flow — surface it untouched, like the fetch() catch above.
+    if (err instanceof Error && err.name === "AbortError") throw err;
+    // The port answered 200 but its body isn't valid JSON — a non-CDP service
+    // squatting the debug port, or a truncated/reset body. `res.json()` rejects
+    // with a raw SyntaxError that would otherwise escape unclassified; this is
+    // the same "reached but malformed" class as the !res.ok branch above, so it
+    // gets INVALID_RESPONSE rather than falling through to the generic bucket.
+    throw new FailureError(
+      `Chromium CDP discovery: GET ${url} returned a body that is not valid JSON`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE,
+        failure_stage: "chromium_cdp_discovery_parse",
+        failure_area: "tool_server",
+        error_kind: "network",
+        failure_command: "cdp",
+        network_failure: "invalid_response",
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
+  }
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   FailureError,
   TypedEventEmitter,
   subprocessFailureMetadata,
+  getFailureSignal,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceInstance,
@@ -278,6 +279,26 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
   namespace: SIMULATOR_SERVER_NAMESPACE,
   getURN(device: DeviceInfo) {
     return `${SIMULATOR_SERVER_NAMESPACE}:${device.id}`;
+  },
+  /**
+   * A cached simulator-server handle can outlive the thing it points at: when a
+   * simulator is un-booted (or the native server crashes) the child process may
+   * stay alive but stop listening on its API port, so every subsequent request
+   * fails with `ECONNREFUSED` against the now-dead port — the exact "worked once,
+   * then every call times out" symptom, unrecoverable until a human runs
+   * `stop-simulator-server`. The process never emitting `exit` means the
+   * registry's normal teardown (wired to `proc.on("exit")`) never fires.
+   *
+   * Treat a connection-refused failure as proof the instance is dead so the
+   * registry disposes it (killing the wedged process) and re-spawns a fresh
+   * simulator-server on the next call. Scoped to connection-refused only:
+   * ECONNREFUSED means the request never reached the server, so retrying can't
+   * double-apply a gesture. Timeouts and resets are deliberately excluded — the
+   * request there may have taken effect, and a hung-but-listening server is a
+   * different failure that respawning wouldn't fix.
+   */
+  recoverable(error: unknown): boolean {
+    return getFailureSignal(error)?.network_failure === "connection_refused";
   },
   async factory(_deps, _payload, options) {
     const opts = options as unknown as SimulatorServerFactoryOptions | undefined;
