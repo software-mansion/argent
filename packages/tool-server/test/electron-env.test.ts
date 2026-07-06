@@ -20,7 +20,13 @@ describe("electronGuiChildEnv", () => {
 
   it("layers overrides on top and never lets an override re-introduce Node mode", () => {
     process.env.ELECTRON_RUN_AS_NODE = "1";
-    const env = electronGuiChildEnv({ ARGENT_PREVIEW_URL: "http://x/preview/" });
+    // The delete runs AFTER the overrides spread, so even an override that
+    // explicitly re-sets the flag cannot bring Node mode back. This asserts the
+    // ordering, not just the parent-env strip.
+    const env = electronGuiChildEnv({
+      ARGENT_PREVIEW_URL: "http://x/preview/",
+      ELECTRON_RUN_AS_NODE: "1",
+    });
     expect(env.ARGENT_PREVIEW_URL).toBe("http://x/preview/");
     expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
   });
