@@ -46,6 +46,16 @@ export interface ToolsServerPaths {
    * without relying on the (often-disabled) postinstall kill.
    */
   version?: string;
+  /**
+   * Which install topology this package belongs to: a project-local
+   * devDependency or the global PATH install. Optional. Classified by the
+   * consuming package AT SPAWN TIME — when its cwd is still meaningful (a
+   * committed local MCP command only resolves with cwd at the project root) —
+   * and exported to the tool-server as ARGENT_INSTALL_KIND, so tools like
+   * update-argent don't have to re-infer it later from a cwd an editor may
+   * have set to `/` or `$HOME`.
+   */
+  installKind?: "global" | "local";
 }
 
 export interface BuildToolsServerEnvOptions {
@@ -79,6 +89,7 @@ export function buildToolsServerEnv(
     env.ARGENT_IDLE_TIMEOUT_MINUTES = String(options.idleTimeoutMinutes);
   }
   if (options.token) env[AUTH_TOKEN_ENV] = options.token;
+  if (paths.installKind) env.ARGENT_INSTALL_KIND = paths.installKind;
   return env;
 }
 

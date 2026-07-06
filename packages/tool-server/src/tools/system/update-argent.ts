@@ -23,12 +23,21 @@ function resolveCliEntry(): string | null {
 // committable local devDependency? Spawning our own cli.js is not enough: the
 // `update` command re-resolves its target from the cwd, so without an explicit
 // flag a global server running inside a repo that ALSO declares argent locally
-// would update the local devDep instead of itself. The tool-server bundle lives
-// in the argent package's dist/; if that package root sits inside a project's
-// node_modules it is the local install, otherwise it is the global one. We walk
-// up from cwd so hoisted-workspace / pnpm layouts (bundle under a parent
-// node_modules or a .pnpm store) still classify correctly.
+// would update the local devDep instead of itself.
+//
+// The authoritative signal is ARGENT_INSTALL_KIND, classified by the spawning
+// package at process start — the moment cwd is trustworthy (a committed local
+// MCP command only resolves with cwd at the project root) — and forwarded by
+// the launcher. Fallback for servers spawned by older argent versions: the
+// tool-server bundle lives in the argent package's dist/; if that package root
+// sits inside a project's node_modules it is the local install, otherwise the
+// global one. We walk up from cwd so hoisted-workspace / pnpm layouts (bundle
+// under a parent node_modules or a .pnpm store) still classify correctly —
+// though this server's own cwd is editor-chosen and may be `/` or `$HOME`,
+// which is exactly why the env signal takes precedence.
 function classifyRunningInstall(): "global" | "local" {
+  const envKind = process.env.ARGENT_INSTALL_KIND;
+  if (envKind === "local" || envKind === "global") return envKind;
   let runningRoot: string;
   try {
     runningRoot = fs.realpathSync(path.dirname(__dirname)); // dist/ -> package root
