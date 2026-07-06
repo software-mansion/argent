@@ -26,6 +26,7 @@ import {
  * Project a describe node for the shared flatten (see `flow-tree-flatten`). A
  * node is emitted as a leaf when a selector could address it — an identifier
  * (DOM id / testid), a label (ARIA), visible text, or a clickable control —
+ * or when it holds input focus, which the type directive's focus wait reads;
  * and it has an on-screen frame; an identified node — or a password field —
  * shields its text so hoisting scopes to the nearest identified ancestor.
  */
@@ -33,7 +34,9 @@ function projectChromiumNode(node: DescribeNode): FlatNode<DescribeNode> {
   // The walker already pruned hidden subtrees; frames of off-viewport elements
   // clamp to zero area, which is the "no on-screen frame" signal here.
   const onScreen = node.frame.width > 0 && node.frame.height > 0;
-  const addressable = Boolean(node.identifier || node.label || node.value || node.clickable);
+  const addressable = Boolean(
+    node.identifier || node.label || node.value || node.clickable || node.focused
+  );
 
   const leaf: DescribeNode | null =
     onScreen && addressable ? { ...node, children: [] } : null;

@@ -767,6 +767,35 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(valuesOf(tree)).toContain("IFRAMETEXT");
   });
 
+  // ---- input focus (the flow type directive's focus wait reads this) ----
+  it("marks the document's activeElement as focused, excluding the body", () => {
+    const focusedInput = el({ tag: "input", attrs: { id: "focused-input" }, rect: BOX });
+    const otherInput = el({
+      tag: "input",
+      attrs: { id: "other-input" },
+      rect: { x: 0, y: 200, w: 200, h: 30 },
+    });
+    const body = el({ tag: "body", attrs: { id: "the-body" }, rect: { x: 0, y: 0, w: W, h: H } });
+    // The mock defines no Document constructor, so the script's protoGetter
+    // falls back to direct reads: a stub document with activeElement/body is
+    // enough. The body being activeElement (the no-focus default) must NOT
+    // mark it focused.
+    const doc = { activeElement: focusedInput, body };
+    for (const n of [focusedInput, otherInput, body]) {
+      (n as unknown as Record<string, unknown>).ownerDocument = doc;
+    }
+    body.children = [focusedInput, otherInput];
+
+    const { tree } = run([body]);
+    expect(findById(tree, "focused-input")!.focused).toBe(true);
+    expect(findById(tree, "other-input")!.focused).toBeUndefined();
+
+    doc.activeElement = body;
+    const { tree: unfocusedTree } = run([body]);
+    expect(findById(unfocusedTree, "focused-input")!.focused).toBeUndefined();
+    expect(findById(unfocusedTree, "the-body")!.focused).toBeUndefined();
+  });
+
   // ---- a missing captured accessor must degrade, not abort the whole describe ----
   it("degrades instead of aborting when a captured prototype accessor is absent", () => {
     // scrollHeight is read only for overflow:auto/scroll nodes. Removing its prototype

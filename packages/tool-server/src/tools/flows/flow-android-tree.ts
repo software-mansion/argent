@@ -91,7 +91,8 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
 /**
  * Project a uiautomator XML node for the shared flatten (see
  * `flow-tree-flatten`). A view is emitted as a leaf when it carries a
- * `resource-id` (React Native `testID`) or a label and has an on-screen frame;
+ * `resource-id` (React Native `testID`) or a label — or holds input focus,
+ * which the type directive's focus wait reads — and has an on-screen frame;
  * system chrome is skipped; an identified node — or a password field — shields
  * its text so hoisting scopes to the nearest identified ancestor. A password
  * field never contributes its secret: its own text is the `[password]`
@@ -109,6 +110,7 @@ function projectAndroidNode(
 
   const identifier = (attrs["resource-id"] ?? "").trim();
   const isPassword = attrs.password === "true";
+  const isFocused = attrs.focused === "true";
   const label = isPassword ? "[password]" : labelOf(attrs);
   const rawText = (attrs.text ?? "").trim();
   const hasValue = !isPassword && Boolean(rawText) && rawText !== label;
@@ -119,10 +121,12 @@ function projectAndroidNode(
 
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
-  // Keep any view a selector could address: a resource-id (RN testID) or a
-  // label. Pure layout scaffolding with neither is dropped — but its children
-  // are still walked, so a testID nested under an unlabelled container survives.
-  if (!skip && (identifier || label)) {
+  // Keep any view a selector could address — a resource-id (RN testID) or a
+  // label — plus the focused view, which the type directive's focus wait needs
+  // even when it carries neither (an anonymous EditText). Pure layout
+  // scaffolding is dropped — but its children are still walked, so a testID
+  // nested under an unlabelled container survives.
+  if (!skip && (identifier || label || isFocused)) {
     const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
@@ -137,6 +141,7 @@ function projectAndroidNode(
       if (attrs.checked === "true") leaf.checked = true;
       if (attrs.enabled === "false") leaf.disabled = true;
       if (isPassword) leaf.password = true;
+      if (isFocused) leaf.focused = true;
     }
   }
 

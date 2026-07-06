@@ -98,6 +98,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getAttr = Element.prototype.getAttribute;
   const hasAttr = Element.prototype.hasAttribute;
   const getBCR = Element.prototype.getBoundingClientRect;
+  // Document's named getter is [LegacyOverrideBuiltIns] (like a form's): a
+  // <form name="activeElement"> shadows document.activeElement, so both focus
+  // reads go through prototype accessors. The typeof guard covers the test
+  // harness's mock DOM, which defines no Document constructor — protoGetter's
+  // direct-read fallback then degrades focus reporting instead of throwing.
+  const docProto = typeof Document === "undefined" ? {} : Document.prototype;
+  const getOwnerDocument = protoGetter(Node.prototype, "ownerDocument");
+  const getActiveElement = protoGetter(docProto, "activeElement");
+  const getDocBody = protoGetter(docProto, "body");
 
   function nodeRole(el) {
     const r = getAttr.call(el, "role");
@@ -445,6 +454,17 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (isChecked(el)) node.checked = true;
     if (isPassword(el)) node.password = true;
     if (scrollable) node.scrollable = true;
+    // Input focus: el is its document's activeElement. The body is excluded —
+    // it's the default holder when nothing is focused, and its screen-spanning
+    // frame would satisfy any overlap check. Per-document, so a focused input
+    // inside a same-origin iframe reports too (its host iframe element also
+    // does, via the outer document — harmless for a frame-overlap consumer).
+    if (!invisibleSelf) {
+      const doc = getOwnerDocument.call(el);
+      if (doc && getActiveElement.call(doc) === el && getDocBody.call(doc) !== el) {
+        node.focused = true;
+      }
+    }
     return node;
   }
 

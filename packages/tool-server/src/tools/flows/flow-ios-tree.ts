@@ -43,6 +43,7 @@ interface RawViewNode {
   windowFrame?: RawRect;
   hidden?: boolean;
   alpha?: number;
+  firstResponder?: boolean;
   children?: RawViewNode[];
 }
 
@@ -89,6 +90,7 @@ function asViewNode(v: unknown): RawViewNode | null {
     windowFrame: asRect(r.windowFrame),
     hidden: typeof r.hidden === "boolean" ? r.hidden : undefined,
     alpha: finiteNumber(r.alpha),
+    firstResponder: r.firstResponder === true ? true : undefined,
     children,
   };
 }
@@ -126,7 +128,8 @@ function normalizeFrame(rect: RawRect, screenW: number, screenH: number): Descri
 /**
  * Project a UIView node for the shared flatten (see `flow-tree-flatten`). A view
  * is emitted as a leaf when it carries an `identifier` (React Native `testID`)
- * or a `label` and has an on-screen frame; hidden/transparent subtrees are
+ * or a `label` — or is the first responder, which the type directive's focus
+ * wait reads — and has an on-screen frame; hidden/transparent subtrees are
  * skipped; an identified node shields its text so hoisting scopes to the nearest
  * identified ancestor. Its own text is just its label.
  */
@@ -140,7 +143,7 @@ function projectIosNode(
 
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
-  if (!skip && (node.identifier || node.label)) {
+  if (!skip && (node.identifier || node.label || node.firstResponder)) {
     const rect = node.windowFrame ?? node.frame;
     frame = rect ? normalizeFrame(rect, screenW, screenH) : null;
     if (frame) {
@@ -150,6 +153,7 @@ function projectIosNode(
         children: [],
         label: node.label,
         identifier: node.identifier,
+        focused: node.firstResponder || undefined,
       };
     }
   }
@@ -219,6 +223,9 @@ const FULL_HIERARCHY_FIELDS = [
   "windowFrame",
   "hidden",
   "alpha",
+  // The type directive's focus wait; an older injected framework ignores the
+  // request, which just leaves the wait's poll unconfirmed.
+  "firstResponder",
 ];
 
 /**

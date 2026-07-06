@@ -133,4 +133,25 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(pw!.subtreeText ?? "").not.toContain("hunter2");
     expect(JSON.stringify(tree)).not.toContain("hunter2");
   });
+
+  // The type directive's focus wait reads `focused` off the tree — the mapping
+  // must survive the flatten, including for an anonymous input (no
+  // resource-id, no text) that would otherwise not be leaf-eligible.
+  it("surfaces input focus, even on an anonymous view", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.EditText" resource-id="email" focused="false" package="com.acme.app" bounds="[40,200][1040,280]" />
+    <node index="1" class="android.widget.EditText" focused="true" package="com.acme.app" bounds="[40,400][1040,480]" />
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+
+    const [email] = findAll(tree, { identifier: "email" });
+    expect(email!.focused).toBeUndefined();
+
+    const focused = tree.children.filter((n) => n.focused === true);
+    expect(focused).toHaveLength(1);
+    expect(focused[0]!.frame.y).toBeCloseTo(400 / 1920, 5);
+  });
 });

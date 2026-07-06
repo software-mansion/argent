@@ -1,5 +1,10 @@
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
-import { getDescribeTapPoint, type DescribeFrame, type DescribeNode } from "../describe/contract";
+import {
+  getDescribeTapPoint,
+  type DescribeFrame,
+  type DescribeNode,
+  type DescribeSource,
+} from "../describe/contract";
 import {
   selectorToFrame,
   findAll,
@@ -54,6 +59,24 @@ export function invokeOnDevice(
 
 const DEFAULT_ACTION_TIMEOUT_MS = 7500;
 const POLL_INTERVAL_MS = 300;
+
+// `type` focus handshake: the focus tap resolves as soon as its Up event is
+// enqueued, but the app still has to move input focus there (first responder /
+// IME focus; an RN TextInput adds a JS round-trip) — keys injected before that
+// land in the previously-focused element. TYPE_FOCUS_SETTLE_MS is an
+// unconditional head start after the tap; `waitForFocus` then polls, on
+// sources that report focus, until the tapped frame holds it.
+const TYPE_FOCUS_SETTLE_MS = 500;
+const TYPE_FOCUS_TIMEOUT_MS = 3000;
+
+// Tree sources that surface `focused` (see flow-ios-tree / flow-android-tree /
+// the chromium DOM walker). The AX / uiautomator fallbacks never report it, so
+// polling them would burn the whole timeout on every type step.
+const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
+  "native-devtools",
+  "android-devtools",
+  "cdp-dom",
+]);
 
 // Settle detection: re-read the tree until two consecutive reads match, so a tap
 // never lands mid-fling and a resolved frame can't go stale before we act.
@@ -224,6 +247,52 @@ async function waitForFrame(
     if (Date.now() >= deadline) return undefined;
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, env.signal))) return undefined;
+  }
+}
+
+function framesOverlap(a: DescribeFrame, b: DescribeFrame): boolean {
+  return (
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+  );
+}
+
+function collectFocused(node: DescribeNode, acc: DescribeNode[]): DescribeNode[] {
+  if (node.focused) acc.push(node);
+  for (const child of node.children) collectFocused(child, acc);
+  return acc;
+}
+
+/**
+ * Poll until an element reporting `focused` overlaps the typed-into element.
+ * Overlap, not identity: the selector often matches a testID container while
+ * focus is reported by the input inside it. The target's frame is re-resolved
+ * each round — the keyboard sliding up routinely scrolls the field away from
+ * where it was tapped (keyboard avoidance), and the focused element must be
+ * compared against where the field is NOW; `tappedFrame` covers rounds where
+ * the selector momentarily doesn't resolve. Best-effort by design — a source
+ * that can't report focus returns immediately, and an unconfirmed poll falls
+ * through to typing after the timeout rather than failing the step, since "no
+ * focus seen" can also mean the focused view didn't make it into the tree.
+ */
+async function waitForFocus(
+  env: ActionEnv,
+  into: FlowSelector,
+  tappedFrame: DescribeFrame
+): Promise<void> {
+  const deadline = Date.now() + TYPE_FOCUS_TIMEOUT_MS;
+  for (;;) {
+    if (env.signal?.aborted) return;
+    try {
+      const { tree, source } = await fetchFlowTree(env.registry, env.device);
+      if (!FOCUS_REPORTING_SOURCES.has(source)) return;
+      const target = flowSelectorToFrame(tree, into) ?? tappedFrame;
+      if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
+    } catch {
+      // transient describe failure — retry until the deadline
+    }
+    if (Date.now() >= deadline) return;
+    const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
+    if (!(await sleepOrAbort(sleepMs, env.signal))) return;
   }
 }
 
@@ -416,10 +485,11 @@ async function runTap(
 }
 
 /**
- * Resolve `into` → tap to focus → type text via the keyboard tool. Unless
- * `submit` is explicitly `false`, a trailing Enter is pressed to commit the
- * value and dismiss the keyboard, so it can't obscure later steps (chained
- * form fields that end in an explicit submit `tap` should pass `submit: false`).
+ * Resolve `into` → tap to focus → wait for focus to land → type text via the
+ * keyboard tool. Unless `submit` is explicitly `false`, a trailing Enter is
+ * pressed to commit the value and dismiss the keyboard, so it can't obscure
+ * later steps (chained form fields that end in an explicit submit `tap` should
+ * pass `submit: false`).
  */
 async function runType(
   env: ActionEnv,
@@ -430,6 +500,12 @@ async function runType(
     return { ok: false, reason: offscreenHint(step.into) };
   }
   await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
+  // Keys are injected at the HID level and go to whatever holds focus, so the
+  // tap→type gap must cover the app's focus round-trip (see the constants).
+  if (!(await sleepOrAbort(TYPE_FOCUS_SETTLE_MS, env.signal))) {
+    return { ok: false, reason: "run aborted" };
+  }
+  await waitForFocus(env, step.into, frame);
   await invokeOnDevice(env, "keyboard", { text: step.text });
   if (step.submit !== false) {
     // Press Enter as a separate keyboard call — the tool dispatches `key`
