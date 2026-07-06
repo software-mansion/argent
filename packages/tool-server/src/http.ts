@@ -500,6 +500,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
     const digest = createHash("sha256");
     req.on("data", (chunk: Buffer) => {
+      // Once released (aborted or finished) stop accounting — the socket may
+      // keep flowing after ws.destroy(), and re-counting would leak the
+      // in-flight total upward and eventually 507 every upload.
+      if (released) return;
       received += chunk.length;
       inFlightUploadBytes += chunk.length;
       digest.update(chunk);

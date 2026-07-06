@@ -140,17 +140,12 @@ async function materializeUpload(wire: FileInputWire): Promise<{ filePath: strin
 
 async function extractTarUpload(
   wire: FileInputWire,
+  uploadId: string,
   meta: ResolvedFileInput,
   tempDirs: string[],
   lookupUpload: UploadLookup | undefined
 ): Promise<{ value: string; meta: ResolvedFileInput }> {
-  if (!wire.uploadId) {
-    throw new FileInputError(
-      `Path "${wire.path}" does not exist on the tool-server host and no upload was provided. ` +
-        `Update argent to a version that supports uploads for remote sessions.`
-    );
-  }
-  const entry = lookupUpload?.(wire.uploadId);
+  const entry = lookupUpload?.(uploadId);
   if (!entry) {
     throw new FileInputError(
       `Upload "${wire.uploadId}" was not found on the tool-server — it may have expired. ` +
@@ -204,7 +199,7 @@ async function resolveOne(
 
   if (spec.kind === "tar-upload") {
     if (wire.uploadId) {
-      return extractTarUpload(wire, meta, tempDirs, lookupUpload);
+      return extractTarUpload(wire, wire.uploadId, meta, tempDirs, lookupUpload);
     }
     if (meta.presentOnHost) {
       return { value: wire.path, meta };

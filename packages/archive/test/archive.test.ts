@@ -121,6 +121,20 @@ describe("safeExtractTarGz hardening", () => {
     expect(await fs.readlink(path.join(member, "Current"))).toBe("A");
   });
 
+  it("rejects a symlink whose name contains ' -> ' (parser-confusion bypass)", async () => {
+    const src = path.join(tmpDir, "cfgbundle");
+    await fs.mkdir(src);
+    // Symlink NAME embeds " -> " while the real target is an absolute escape;
+    // a naive first-` -> ` parse would read "safe" and wave it through.
+    await fs.symlink("/etc/passwd", path.join(src, "inner -> safe"));
+    const tarPath = path.join(tmpDir, "confuse.tar.gz");
+    await createTarGzFile(src, tarPath);
+
+    const dest = path.join(tmpDir, "dest-confuse");
+    await fs.mkdir(dest);
+    await expect(safeExtractTarGz(tarPath, dest, "cfgbundle")).rejects.toBeInstanceOf(ArchiveError);
+  });
+
   it("rejects a hardlink member", async () => {
     const src = path.join(tmpDir, "hlbundle");
     await fs.mkdir(src);

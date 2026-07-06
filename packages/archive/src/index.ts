@@ -10,9 +10,9 @@
  *
  * The archive always carries the source's basename as its single top-level
  * member, so extraction recreates `<destDir>/<basename>`. Extraction is
- * tar-slip hardened and member-capped regardless of direction — a hostile tar
- * can arrive either way (a compromised client uploading, or a compromised
- * tool-server serving an artifact).
+ * tar-slip hardened regardless of direction — a hostile tar can arrive either
+ * way (a compromised client uploading, or a compromised tool-server serving an
+ * artifact).
  */
 
 import { execFile } from "node:child_process";
@@ -22,7 +22,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-/** Thrown when an archive is empty, over the member cap, or holds an unsafe (tar-slip) path. */
+/** Thrown when an archive is empty or holds an unsafe (tar-slip / bad-type) member. */
 export class ArchiveError extends Error {}
 
 /**
@@ -96,11 +96,16 @@ async function assertSafeMemberTypes(tarPath: string): Promise<void> {
     const type = line[0];
     if (type === "-" || type === "d") continue; // regular file or directory
     if (type === "l") {
-      const arrow = line.indexOf(" -> ");
-      const target = arrow === -1 ? "" : line.slice(arrow + 4).trim();
-      if (!target || isEscapingLinkTarget(target)) {
+      // `tar -tzvf` prints "<name> -> <target>". Split on ` -> `: a clean
+      // symlink yields exactly two parts. More than one ` -> ` means the name
+      // or target itself contains it — unparseable, so refuse rather than risk
+      // mis-reading the target (a name like `x -> safe` could otherwise hide a
+      // real escaping target). Legit `.app` symlinks never contain ` -> `.
+      const parts = line.split(" -> ");
+      const target = parts.length === 2 ? parts[1]!.trim() : "";
+      if (parts.length !== 2 || !target || isEscapingLinkTarget(target)) {
         throw new ArchiveError(
-          `Archive contains a symlink whose target "${target}" escapes the extract directory.`
+          `Archive contains a symlink whose target could not be confirmed safe: "${line.trim()}".`
         );
       }
       continue;
