@@ -427,27 +427,24 @@ export async function uninstall(args: string[]): Promise<void> {
       removeTargets = targetDecision.targets;
     }
 
-    // Which config scopes the entry/allowlist/content removal may touch.
-    // Historically workspace-wide; an EXPLICIT target choice (--local/--global
-    // or the coexistence prompt) narrows it to the entries that RUN the
-    // install(s) being removed, so the install the user chose to KEEP stays
-    // wired up everywhere:
-    //   local devDep  → project-scope entries (they run the repo-local copy);
-    //   global binary → global-scope entries, plus project-scope entries when
-    //                   the project is in global mode (those run the bare
-    //                   `argent` command being removed).
-    const scopesToClean = new Set<"local" | "global">();
-    if (removePreconfirmed) {
-      for (const t of removeTargets) {
-        if (t === "local" && installMode === "local") scopesToClean.add("local");
-        if (t === "global") {
-          scopesToClean.add("global");
-          if (installMode === "global") scopesToClean.add("local");
-        }
-      }
-    } else {
-      scopesToClean.add("local");
-      scopesToClean.add("global");
+    // Which config scopes the entry/allowlist/content removal may touch. Clean
+    // everything EXCEPT the scopes that keep a RETAINED install wired up —
+    // regardless of whether the narrowing came from an explicit flag, the
+    // coexistence prompt, or the implicit single-present default:
+    //   - a present global install not being removed keeps its global-scope
+    //     entries (and, in global mode, its project-scope entries too — those
+    //     run the bare `argent` command);
+    //   - a local-mode project keeps its project-scope entries (committed team
+    //     files) unless the local install itself is being removed.
+    // With a single install and nothing retained this cleans both scopes — the
+    // historical workspace-wide behavior.
+    const scopesToClean = new Set<"local" | "global">(["local", "global"]);
+    if (globalPresent && !removeTargets.includes("global")) {
+      scopesToClean.delete("global");
+      if (installMode === "global") scopesToClean.delete("local");
+    }
+    if (installMode === "local" && !removeTargets.includes("local")) {
+      scopesToClean.delete("local");
     }
 
     const results: string[] = [];

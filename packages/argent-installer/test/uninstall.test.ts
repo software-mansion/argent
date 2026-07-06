@@ -537,3 +537,112 @@ describe("uninstall — local (committable) mode package removal", () => {
     expect(fs.existsSync(path.join(tmpDir, ".argent", "install.json"))).toBe(false);
   });
 });
+
+// ── Scoped config cleanup (scopesToClean) ─────────────────────────────────────
+// The entry/allowlist/content cleanup protects the scopes that keep a RETAINED
+// install wired up, on implicit defaults as well as explicit flags. HOME is the
+// temp dir; the PROJECT lives in a subdir so project-scope and global-scope
+// config paths never collide (Cursor uses .cursor/mcp.json for both).
+
+describe("uninstall — scoped config cleanup", () => {
+  let savedHome: string | undefined;
+  let savedUserProfile: string | undefined;
+  let projDir: string;
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tmpDir;
+    process.env.USERPROFILE = tmpDir;
+    projDir = path.join(tmpDir, "proj");
+    fs.mkdirSync(projDir, { recursive: true });
+  });
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+  });
+
+  function stageProject(opts: { materialized: boolean }): void {
+    writeFile(
+      path.join(projDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    writeFile(
+      path.join(projDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent" })
+    );
+    if (opts.materialized) {
+      writeFile(
+        path.join(projDir, "node_modules", "@swmansion", "argent", "package.json"),
+        JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+      );
+    }
+  }
+
+  function stageConfigs(): { projectMcp: string; globalCursor: string } {
+    const projectMcp = path.join(projDir, ".mcp.json");
+    const globalCursor = path.join(tmpDir, ".cursor", "mcp.json");
+    writeFile(projectMcp, JSON.stringify({ mcpServers: { argent: getMcpEntry() } }));
+    writeFile(globalCursor, JSON.stringify({ mcpServers: { argent: getMcpEntry() } }));
+    return { projectMcp, globalCursor };
+  }
+
+  // The adapters delete a config file that becomes empty after removing the
+  // argent entry, so "file gone" also reads as "entry removed".
+  function hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    return Boolean(parsed.mcpServers && "argent" in parsed.mcpServers);
+  }
+
+  it("coexistence --yes removes the local install but keeps the global install's configs", async () => {
+    stageProject({ materialized: true });
+    const { projectMcp, globalCursor } = stageConfigs();
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    // Project-scope entry (runs the removed local copy) is gone…
+    expect(hasArgentEntry(projectMcp)).toBe(false);
+    // …but the RETAINED global install stays wired up in global scope.
+    expect(hasArgentEntry(globalCursor)).toBe(true);
+
+    const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
+    expect(calls.some(([, args]) => args.includes("-g"))).toBe(false);
+  });
+
+  it("--global keeps the committed project entries and the local-mode record", async () => {
+    stageProject({ materialized: true });
+    const { projectMcp, globalCursor } = stageConfigs();
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    // The retained local install's committed files survive…
+    expect(hasArgentEntry(projectMcp)).toBe(true);
+    expect(fs.existsSync(path.join(projDir, ".argent", "install.json"))).toBe(true);
+    // …while the removed global install is unwired and uninstalled.
+    expect(hasArgentEntry(globalCursor)).toBe(false);
+    const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
+    expect(calls.some(([, args]) => args.includes("-g"))).toBe(true);
+  });
+
+  it("fresh clone --yes (record, dep not materialized) removes the present global but keeps committed team files", async () => {
+    stageProject({ materialized: false });
+    const { projectMcp, globalCursor } = stageConfigs();
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    // The present global install was the target: unwired and uninstalled…
+    expect(hasArgentEntry(globalCursor)).toBe(false);
+    const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
+    expect(calls.some(([, args]) => args.includes("-g"))).toBe(true);
+    // …while the not-yet-materialized local mode's committed files survive.
+    expect(hasArgentEntry(projectMcp)).toBe(true);
+    expect(fs.existsSync(path.join(projDir, ".argent", "install.json"))).toBe(true);
+  });
+});
