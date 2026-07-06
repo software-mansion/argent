@@ -121,7 +121,7 @@ describe("decideInstallTargets — no flags, both installs coexist", () => {
     expect(d).toEqual({ kind: "prompt" });
   });
 
-  it("non-interactive → the interim both-default (local), never a prompt", () => {
+  it("non-interactive → the caller-provided both-default, never a prompt", () => {
     const d = decideInstallTargets(
       ctx({
         globalPresent: true,

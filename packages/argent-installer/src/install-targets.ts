@@ -25,7 +25,11 @@ export interface DecideTargetsContext {
   globalPresent: boolean;
   /** A local install is present for this project (declared devDep / installed). */
   localPresent: boolean;
-  /** Today's single-install default (resolveInstallMode) — used when unambiguous. */
+  /**
+   * Target when only one selection is unambiguous. Callers pass the PRESENT
+   * install: local if materialized, else global if on PATH, else the project's
+   * recorded mode (so the guidance paths still run when nothing is installed).
+   */
   defaultTarget: InstallMode;
   flags: TargetFlags;
   nonInteractive: boolean;

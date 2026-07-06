@@ -71,11 +71,13 @@ export class InstallModeFlagError extends Error {}
 // when fixed by a flag or the non-interactive default; null means "ask the user
 // interactively". Throws InstallModeFlagError on conflicting flags.
 //
-// `recordedMode` is the mode a committed .argent/install.json declares (null
-// when none). A non-interactive run honors it so `argent init -y` in a repo the
-// team already set up as local doesn't silently convert it back to global
-// (deleting the committed marker and rewriting the project MCP entry to the bare
-// `argent` command). Explicit flags still win.
+// `recordedMode` is the mode the project already opted into: a committed
+// .argent/install.json, or — absent a record — a dependency the project's own
+// manifest declares (init seeds it that way; see init.ts). A non-interactive
+// run honors it so `argent init -y` in a repo the team already set up as local
+// doesn't silently convert it back to global (deleting the committed marker
+// and rewriting the project MCP entry to the bare `argent` command). Explicit
+// flags still win.
 export function resolveInstallModeFromFlags(opts: {
   local: boolean;
   global: boolean;

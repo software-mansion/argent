@@ -596,11 +596,12 @@ export async function update(args: string[]): Promise<void> {
         }
         adaptersByScope.get(normScope)!.add(adapter);
       }
-      if (skipEntryRewrite) {
+      if (skipEntryRewrite && configuredScopes.some(({ scope }) => scope === "project")) {
         p.log.info(
           pc.dim(
             "Left project MCP entries unchanged — the repo-local argent binary can't be " +
-              "resolved right now (run your package manager's install first)."
+              "resolved right now (fresh checkout: run your package manager's install; " +
+              "after an out-of-band version bump, just re-run argent update)."
           )
         );
       }
