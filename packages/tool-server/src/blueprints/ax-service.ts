@@ -237,10 +237,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
     if (device.kind === "device") {
       // ax-service uses `xcrun simctl spawn`, which only works on simulators.
-      // Physical iPhones are driven over CoreDevice and have no accessibility/
-      // describe path yet.
+      // Physical iPhones are driven over CoreDevice, which has no app-free
+      // accessibility path: Apple gates the on-device axAuditDaemon to
+      // trusted/AppleInternal callers (see describe/platforms/ios/index.ts for
+      // the hardware-verified detail). `describe` rejects physical iOS before it
+      // reaches this guard — this is the backstop for any direct ax-service
+      // resolution.
       throw new FailureError(
-        `${AX_SERVICE_NAMESPACE} is iOS-simulator-only. The physical device '${device.id}' is driven over CoreDevice; describe/accessibility is not supported on physical iOS yet.`,
+        `${AX_SERVICE_NAMESPACE} is iOS-simulator-only. The physical device '${device.id}' is driven over CoreDevice, whose accessibility service Apple restricts to trusted/AppleInternal callers; describe is not available on physical iOS.`,
         {
           error_code: FAILURE_CODES.AX_PHYSICAL_DEVICE_UNSUPPORTED,
           failure_stage: "ax_service_factory_platform",

@@ -58,18 +58,35 @@ export async function describeIos(
   params: DescribeIosParams,
   options: DescribeIosOptions = {}
 ): Promise<DescribeTreeData> {
-  // Physical iPhones are driven over CoreDevice; both describe backends are
-  // simulator-only (ax-service shells `simctl spawn`; native-devtools injects a
-  // dylib via `simctl spawn`). Their blueprint guards throw for kind === "device",
-  // but the fallback chain below catches those throws and would otherwise return
-  // an empty tree plus the "reboot the simulator" degraded hint — a misleading
-  // result for hardware that has no simulator to reboot. Reject explicitly with a
-  // clear, 400-mapped error instead.
+  // Physical iPhones are driven over CoreDevice, and there is no app-free
+  // describe (accessibility tree) path on a real device today:
+  //   - The two simulator backends can't run against hardware: ax-service
+  //     shells `simctl spawn` and native-devtools injects a dylib via
+  //     `simctl spawn`, both simulator-only. Their blueprint guards throw for
+  //     kind === "device"; without this early return the fallback chain below
+  //     would swallow those throws and return an empty tree + the "reboot the
+  //     simulator" degraded hint — meaningless for hardware with no simulator.
+  //   - The on-device accessibility tree is served by CoreDevice's
+  //     axAuditDaemon, but Apple gates it to trusted/AppleInternal callers
+  //     (hardware-verified on iOS 27, 2026-07): the DTX service
+  //     `com.apple.accessibility.axAuditDaemon.remoteserver.shim.remote`
+  //     requires the `com.apple.mobile.lockdown.remote.trusted` entitlement —
+  //     over the developer (untrusted) CoreDevice tunnel pymobiledevice3 forms,
+  //     the daemon accepts the socket but terminates it on the first request
+  //     (every audit selector, and even the standard DTX capability handshake).
+  //     The RemoteXPC replacement `…axAuditDaemon.remoteAXService` requires the
+  //     `AppleInternal` entitlement, unreachable by any third party. DTX
+  //     transport itself works over the same tunnel (`developer dvt proclist`
+  //     succeeds), so this is Apple's auth wall, not a transport gap. Screenshot
+  //     (CoreDevice `canViewDeviceDisplay`) is the only app-free screen capture.
+  // Reject explicitly with a clear, 400-mapped error and point at screenshot.
   if (isPhysicalIos(device)) {
     throw new UnsupportedOperationError(
       "describe",
       device,
-      "physical iOS is driven over CoreDevice and has no on-device accessibility/describe path; use screenshot to inspect the screen"
+      "Apple restricts the physical device's CoreDevice accessibility service to " +
+        "trusted/AppleInternal callers, so there is no app-free accessibility tree; " +
+        "use screenshot to inspect the screen"
     );
   }
 

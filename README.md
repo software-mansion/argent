@@ -83,12 +83,18 @@ and leave it running: `sudo pymobiledevice3 remote tunneld`.
 
 **Limitations / notes**
 
-- Not supported on physical iOS yet: `describe` / accessibility inspection (use `screenshot`
-  instead), keyboard/typing, pinch & rotate (multi-touch), `open-url`, `reinstall-app`,
-  `restart-app`, and the native inspection / profiling tools (`native-*`, `native-profiler-*`,
-  `screenshot-diff`) — all return a clear "not supported" error. `launch-app` (via `devicectl`)
-  works independently of the CoreDevice tunnel — it can succeed even before the tunnel setup
-  above has run.
+- `describe` / accessibility inspection is **not available** on a physical device — use
+  `screenshot` instead. This is an Apple restriction, not a missing feature: the on-device
+  accessibility tree is served by CoreDevice's `axAuditDaemon`, which Apple gates to trusted /
+  `AppleInternal` callers. Over the developer (untrusted) CoreDevice tunnel `pymobiledevice3`
+  forms, the daemon accepts the connection but drops it on the first request, and its modern
+  RemoteXPC replacement requires an `AppleInternal` entitlement — so there is no app-free
+  accessibility tree to read (hardware-verified on iOS 27).
+- Not supported yet (return a clear "not supported" error): keyboard/typing, pinch & rotate
+  (multi-touch), `open-url`, `reinstall-app`, `restart-app`, and the native inspection /
+  profiling tools (`native-*`, `native-profiler-*`, `screenshot-diff`). `launch-app` (via
+  `devicectl`) works independently of the CoreDevice tunnel — it can succeed even before the
+  tunnel setup above has run.
 - Overrides: `ARGENT_PYMOBILEDEVICE3` (path to the binary), `ARGENT_PMD3_TUNNELD_PORT`
   (defaults to `49151`).
 
