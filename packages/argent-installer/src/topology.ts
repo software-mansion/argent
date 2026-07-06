@@ -227,6 +227,24 @@ export function getLocallyInstalledVersion(projectRoot: string): string | null {
   return probeLocalInstall(projectRoot).version;
 }
 
+// Version read straight from <projectRoot>/node_modules/<pkg>/package.json,
+// bypassing Node's module-resolution realpath cache. resolveLocalArgentDir
+// (via createRequire) memoizes the symlink's realpath for the process lifetime,
+// so right after an in-process `pnpm add`/`npm install` bumps the version it can
+// still report the OLD one (the pnpm store dir it first resolved still exists).
+// `update` uses this to confirm a bump actually landed even when the package
+// manager exited non-zero. Reads through the stable symlink so it follows to the
+// freshly-linked version; null when there is no copy at that path.
+export function readLocalPackageVersionUncached(projectRoot: string): string | null {
+  try {
+    const pkgPath = path.join(projectRoot, "node_modules", PACKAGE_NAME, "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string };
+    return pkg.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // Project-relative POSIX path to the locally-installed argent CLI entrypoint
 // (e.g. "node_modules/@swmansion/argent/dist/cli.js"), or null when the package
 // isn't installed locally or its bin can't be resolved. Derived from the

@@ -101,30 +101,56 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   const spinner = p.spinner();
   spinner.start(`Adding ${PACKAGE_NAME} to devDependencies (${pm})...`);
   const startedAt = performance.now();
+  // Run the add, but decide success from the DISK, not the exit code. pnpm 10+
+  // exits non-zero with ERR_PNPM_IGNORED_BUILDS when a freshly-added dependency
+  // has build/postinstall scripts it blocks by default — even though the package
+  // is fully installed. argent works without those scripts (the committed
+  // node-path MCP command serves tools regardless), so aborting there would fail
+  // a perfectly good install. We treat a non-zero exit as fatal only when
+  // nothing actually landed.
+  let installError: Error | null = null;
   try {
     await runShellCommand(cmd, { cwd: projectRoot });
   } catch (err) {
+    installError = err instanceof Error ? err : new Error(String(err));
+  }
+
+  // isLocallyInstalled is PnP-aware (a Yarn PnP project has no node_modules but
+  // declares the dep in-manifest); the extra isYarnPnp keeps that leniency. A
+  // non-PnP layout with no node_modules entry means the add really failed (a bad
+  // spec, ERR_PNPM_ADDING_TO_ROOT, a network error) — don't write a config that
+  // runs a missing binary.
+  if (!isLocallyInstalled(projectRoot) && !isYarnPnp(projectRoot)) {
     spinner.stop(pc.red("Local install failed."));
-    p.log.error(`${err}`);
+    p.log.error(
+      installError
+        ? `${installError}`
+        : `The install reported success but ${pc.cyan(PACKAGE_NAME)} is not in node_modules.`
+    );
     p.log.info(`Install manually with: ${pc.cyan(`cd ${projectRoot} && ${cmdStr}`)}`);
     await tel.trackPackageAction("fresh_install", startedAt, false, INSTALL_LOCAL_PACKAGE_FAILED);
     await tel.finalize(INSTALL_LOCAL_PACKAGE_FAILED);
     process.exit(1);
   }
 
-  // Verify the dep actually landed. A non-PnP layout with no node_modules entry
-  // means the install silently no-op'd; don't proceed to write a dead command.
-  if (!isLocallyInstalled(projectRoot) && !isYarnPnp(projectRoot)) {
-    spinner.stop(pc.red("Local install did not produce a node_modules entry."));
-    p.log.error(
-      `The install reported success but ${pc.cyan(PACKAGE_NAME)} is not in node_modules.`
-    );
-    await tel.trackPackageAction("fresh_install", startedAt, false, INSTALL_LOCAL_PACKAGE_FAILED);
-    await tel.finalize(INSTALL_LOCAL_PACKAGE_FAILED);
-    process.exit(1);
+  spinner.stop(pc.green(`Added ${PACKAGE_NAME} to devDependencies.`));
+
+  if (installError) {
+    // Installed, but the package manager still exited non-zero — almost always
+    // pnpm's blocked build scripts. Say so plainly, and point pnpm users at the
+    // optional approve-builds step for the native-only extras.
+    p.log.warn(pc.dim(`${pm} exited non-zero but ${PACKAGE_NAME} is installed — continuing.`));
+    if (pm === "pnpm") {
+      p.log.info(
+        pc.dim(
+          `pnpm blocks dependency build scripts by default. ${PACKAGE_NAME} does not need them; ` +
+            `run ${pc.cyan("pnpm approve-builds")} only if you want optional native features ` +
+            `(e.g. source-level profiling).`
+        )
+      );
+    }
   }
 
-  spinner.stop(pc.green(`Added ${PACKAGE_NAME} to devDependencies.`));
   await tel.trackPackageAction("fresh_install", startedAt, true);
 }
 

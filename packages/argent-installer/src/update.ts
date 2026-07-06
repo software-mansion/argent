@@ -23,6 +23,8 @@ import {
   globalInstallCommand,
   localInstallCommand,
   probeLocalInstall,
+  getLocallyInstalledVersion,
+  readLocalPackageVersionUncached,
   hasProjectPackageJson,
   isDeclaredLocally,
   resolveInstallMode,
@@ -402,6 +404,7 @@ export async function update(args: string[]): Promise<void> {
         isInstalledForMode ? (installed ?? "unknown") : null
       );
       const packageActionStartedAt = performance.now();
+      let installError: Error | null = null;
       try {
         execFileSync(cmd.bin, cmd.args, {
           stdio: "inherit",
@@ -410,15 +413,37 @@ export async function update(args: string[]): Promise<void> {
           ...(mode === "local" ? { cwd: projectRoot } : {}),
         });
       } catch (err) {
-        await trackPackageAction(
-          packageAction,
-          packageActionStartedAt,
-          false,
-          UPDATE_PACKAGE_ACTION_FAILED
+        installError = err instanceof Error ? err : new Error(String(err));
+      }
+      if (installError) {
+        // Trust the disk, not the exit code: pnpm 10+ exits non-zero
+        // (ERR_PNPM_IGNORED_BUILDS) when it blocks a dependency's build scripts,
+        // even though the package updated fine. Treat it as a real failure only
+        // when the target version did not actually land on disk.
+        const landed =
+          mode === "local"
+            ? // Cache-free read: the pre-install probe memoized the old version's
+              // realpath, so getLocallyInstalledVersion would report it stale here.
+              (readLocalPackageVersionUncached(projectRoot) ??
+              getLocallyInstalledVersion(projectRoot))
+            : getGloballyInstalledVersion();
+        const reachedTarget = landed !== null && !isNewerVersion(target, landed);
+        if (!reachedTarget) {
+          await trackPackageAction(
+            packageAction,
+            packageActionStartedAt,
+            false,
+            UPDATE_PACKAGE_ACTION_FAILED
+          );
+          await failUpdateTelemetry(UPDATE_PACKAGE_ACTION_FAILED);
+          p.log.error(`${installed ? "Update" : "Install"} failed: ${installError}`);
+          process.exit(1);
+        }
+        p.log.warn(
+          pc.dim(
+            `Your package manager exited non-zero but ${PACKAGE_NAME}@${landed} is installed — continuing.`
+          )
         );
-        await failUpdateTelemetry(UPDATE_PACKAGE_ACTION_FAILED);
-        p.log.error(`${installed ? "Update" : "Install"} failed: ${err}`);
-        process.exit(1);
       }
       await trackPackageAction(packageAction, packageActionStartedAt, true);
     } else {

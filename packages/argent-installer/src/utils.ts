@@ -37,6 +37,7 @@ export {
   isDeclaredLocally,
   isLocallyInstalled,
   getLocallyInstalledVersion,
+  readLocalPackageVersionUncached,
   getLocalArgentBinRelPath,
   probeLocalInstall,
 } from "./topology.js";
