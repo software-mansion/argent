@@ -2,10 +2,10 @@
  * Coverage for the physical-iOS (CoreDevice) backend after it moved from a
  * per-call `pymobiledevice3` CLI spawn to a persistent stdio sidecar:
  *
- *  - `adaptSpringboardToDescribeResult` — the SpringBoard home-screen → describe
- *    tree adapter that backs `describe` on a real iPhone (in-app AX is Apple-
- *    gated). Frames are grid-derived; this pins the layout math (widget spans
- *    push icons down; dock sits at the bottom; every frame stays in [0,1]).
+ *  - `adaptCoreDeviceAxToDescribeResult` — the axAudit accessibility tree →
+ *    describe adapter that backs `describe` on a real iPhone. Pins caption→role
+ *    parsing, label cleanup, rect normalization, and frame interpolation for the
+ *    elements the audit didn't rect (every frame stays in [0,1]).
  *  - `agentError` — the 9021 (iOS-27 host-input gate) message mapping.
  *  - `CoreDeviceAgent` — the stdio JSON protocol: ready handshake, id-correlated
  *    request/response, and error propagation (via a stand-in node process).
@@ -15,40 +15,15 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
-import { adaptSpringboardToDescribeResult } from "../src/tools/describe/platforms/ios/ios-springboard-adapter";
+import { adaptCoreDeviceAxToDescribeResult } from "../src/tools/describe/platforms/ios/ios-coredevice-ax-adapter";
 import { agentError } from "../src/blueprints/core-device";
 import { CoreDeviceAgent, CoreDeviceAgentError } from "../src/blueprints/coredevice-agent";
-
-const METRICS = {
-  homeScreenIconColumns: 4,
-  homeScreenIconRows: 6,
-  homeScreenWidth: 393,
-  homeScreenHeight: 852,
-  homeScreenIconDockMaxCount: 4,
-};
-
-const leaf = (name: string, id: string) => ({ displayName: name, bundleIdentifier: id });
-const widget = (size: string) => ({ iconType: "custom", gridSize: size });
-
-// Two 2x2 "small" widgets fill the top two rows; the first app row therefore
-// starts at grid row 2. A second page must NOT appear (it's off-screen).
-const ICON_STATE = [
-  [leaf("Phone", "com.apple.mobilephone"), leaf("Safari", "com.apple.mobilesafari")], // dock
-  [
-    widget("small"),
-    widget("small"),
-    leaf("FaceTime", "com.apple.facetime"),
-    leaf("Maps", "com.apple.Maps"),
-  ],
-  [leaf("OffPage", "com.example.offpage")], // page 2, not rendered
-];
 
 interface Node {
   role: string;
   frame: { x: number; y: number; width: number; height: number };
   children: Node[];
   label?: string;
-  identifier?: string;
 }
 function flatten(n: Node, out: Node[] = []): Node[] {
   out.push(n);
@@ -57,34 +32,48 @@ function flatten(n: Node, out: Node[] = []): Node[] {
 }
 const center = (f: Node["frame"]) => ({ x: f.x + f.width / 2, y: f.y + f.height / 2 });
 
-describe("adaptSpringboardToDescribeResult", () => {
-  const tree = adaptSpringboardToDescribeResult({ iconState: ICON_STATE, metrics: METRICS });
+// A realistic axAudit snapshot: some elements carry an audit rect (points on a
+// 393x852 screen), others don't (interpolated by the adapter).
+const AXTREE = {
+  screen: { w: 393, h: 852 },
+  elements: [
+    { caption: "Settings, Button", id: "a1", rect: "{{318, 63}, {55, 36}}" },
+    { caption: "Wi-Fi, Header", id: "a2", rect: "{{32, 168}, {55, 26}}" },
+    { caption: "Wi-Fi, 1, Button, Toggle", id: "a3" }, // no rect -> interpolated
+    { caption: "Other…, Button", id: "a4", rect: "{{16, 553}, {361, 52}}" },
+    { caption: "Known networks will be joined automatically.", id: "a5" }, // static text
+  ],
+};
+
+describe("adaptCoreDeviceAxToDescribeResult", () => {
+  const tree = adaptCoreDeviceAxToDescribeResult(AXTREE);
   const nodes = flatten(tree as Node);
   const byLabel = (l: string) => nodes.find((n) => n.label === l);
 
-  it("returns leaf icons with label + bundle identifier", () => {
-    const faceTime = byLabel("FaceTime");
-    expect(faceTime?.identifier).toBe("com.apple.facetime");
-    expect(byLabel("Phone")?.identifier).toBe("com.apple.mobilephone");
+  it("parses roles from caption traits and strips them from the label", () => {
+    expect(byLabel("Settings")?.role).toBe("AXButton");
+    expect(byLabel("Wi-Fi")?.role).toBe("AXHeader");
+    // Button trait wins the role; trailing Button/Toggle stripped from the label.
+    expect(byLabel("Wi-Fi, 1")?.role).toBe("AXButton");
+    // No trait -> static text, full caption kept as label.
+    const stat = nodes.find((n) => n.label?.startsWith("Known networks"));
+    expect(stat?.role).toBe("AXStaticText");
   });
 
-  it("packs the first app below the two 2x2 widgets (widgets occupy the top rows)", () => {
-    // FaceTime is item 3 on the page but the two small widgets take rows 0-1,
-    // so it lands on row 2 — visibly below the widgets, not at the very top.
-    const widgets = nodes.filter((n) => n.role === "AXGroup" && n !== tree);
-    expect(widgets).toHaveLength(2);
-    const widgetBottom = Math.max(...widgets.map((w) => w.frame.y + w.frame.height));
-    const faceTime = byLabel("FaceTime")!;
-    expect(center(faceTime.frame).y).toBeGreaterThan(widgetBottom - 0.01);
+  it("normalizes an audited rect (points) into a [0,1] frame", () => {
+    const other = byLabel("Other…")!;
+    // {{16, 553}, {361, 52}} on 393x852
+    expect(other.frame.x).toBeCloseTo(16 / 393, 3);
+    expect(other.frame.y).toBeCloseTo(553 / 852, 3);
+    expect(other.frame.width).toBeCloseTo(361 / 393, 3);
   });
 
-  it("places the dock along the bottom", () => {
-    expect(center(byLabel("Phone")!.frame).y).toBeGreaterThan(0.85);
-    expect(center(byLabel("Safari")!.frame).y).toBeGreaterThan(0.85);
-  });
-
-  it("omits off-screen pages (only the first home page + dock)", () => {
-    expect(byLabel("OffPage")).toBeUndefined();
+  it("interpolates a rect-less element between its neighbours (reading order)", () => {
+    const wifiHeader = center(byLabel("Wi-Fi")!.frame).y; // ~168/852
+    const other = center(byLabel("Other…")!.frame).y; // ~553/852
+    const toggle = center(byLabel("Wi-Fi, 1")!.frame).y; // no rect, between the two
+    expect(toggle).toBeGreaterThan(wifiHeader);
+    expect(toggle).toBeLessThan(other);
   });
 
   it("keeps every frame within the normalized [0,1] box", () => {
@@ -99,10 +88,12 @@ describe("adaptSpringboardToDescribeResult", () => {
     }
   });
 
-  it("does not throw on empty / malformed icon state", () => {
-    expect(() => adaptSpringboardToDescribeResult({ iconState: [], metrics: {} })).not.toThrow();
+  it("does not throw on an empty / screen-less tree", () => {
+    expect(() => adaptCoreDeviceAxToDescribeResult({ elements: [] })).not.toThrow();
     expect(() =>
-      adaptSpringboardToDescribeResult({ iconState: null, metrics: METRICS })
+      adaptCoreDeviceAxToDescribeResult({
+        elements: [{ caption: "x", id: "1" }],
+      })
     ).not.toThrow();
   });
 });

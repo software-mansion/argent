@@ -52,7 +52,7 @@ Argent can drive a **physical iPhone** — no app installed on the device — ov
 CoreDevice "remote control" services (the same path Xcode's device window uses), via
 [`pymobiledevice3`](https://github.com/doronz88/pymobiledevice3). Supported interactions:
 `screenshot`, `gesture-tap`, `gesture-swipe`, `button`, `launch-app`, and `describe` (the
-home-screen app grid — see the note below). The device shows up in `list-devices` with
+live on-screen accessibility tree — see the note below). The device shows up in `list-devices` with
 `kind: "device"`. Interactions run through one persistent `pymobiledevice3` helper per
 device (connected once), so a tap/screenshot costs a socket write rather than a fresh
 Python cold-start.
@@ -86,15 +86,15 @@ and leave it running: `sudo pymobiledevice3 remote tunneld`.
 
 **Limitations / notes**
 
-- `describe` returns the **SpringBoard home-screen layout** (app icons + dock, via CoreDevice's
-  `springboardservices`) — the only app-free _structured_ screen data on a physical device.
-  Icon frames are derived from the home-screen grid geometry, so they're approximate: good
-  enough to tap the right icon, but confirm with `screenshot` before a precise tap. It always
-  reflects the home screen, so if an app is open its content is **not** there — use `screenshot`.
-  There is no app-free _in-app_ accessibility tree: that's served by CoreDevice's `axAuditDaemon`,
-  which Apple gates to trusted / `AppleInternal` callers (hardware-verified on iOS 27 — the DTX
-  service drops the connection on the first request over the developer tunnel, and its modern
-  RemoteXPC replacement needs the `AppleInternal` entitlement).
+- `describe` returns the device's **live on-screen accessibility tree** — the frontmost app's
+  elements (or the home screen), read app-free via the iOS-26+ accessibility-audit service over
+  CoreDevice. Element labels, values, traits (roles) and reading order are exact. Frames are exact
+  for the elements the accessibility audit reports and **interpolated** from reading-order
+  neighbours for the rest (Apple doesn't expose per-element geometry on a physical device), so
+  they're good enough to tap a row in a vertical list — but confirm with `screenshot` before a
+  precise tap, especially for controls like toggles. (This needs the RSDCheckin handshake iOS 26
+  added; the helper performs it. For pixel-exact in-app frames + taps you'd need an on-device
+  XCUITest runner, which requires code-signing.)
 - Not supported yet (return a clear "not supported" error): keyboard/typing, pinch & rotate
   (multi-touch), `open-url`, `reinstall-app`, `restart-app`, and the native inspection /
   profiling tools (`native-*`, `native-profiler-*`, `screenshot-diff`). `launch-app` (via

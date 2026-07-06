@@ -70,11 +70,19 @@ type CoreDeviceFactoryOptions = Record<string, unknown> & { device: DeviceInfo }
  * running CoreDevice tunnel (`sudo pymobiledevice3 remote tunneld`, which needs
  * root to create the tunnel interface — every command here then runs unprivileged).
  */
-export interface CoreDeviceHomescreen {
-  /** SpringBoard `getIconState` — the home-screen app/folder/widget layout. */
-  iconState: unknown;
-  /** SpringBoard icon-grid geometry (columns/rows/icon size/screen points). */
-  metrics: Record<string, number>;
+export interface CoreDeviceAxElement {
+  /** VoiceOver caption: label + value + traits, e.g. "Wi-Fi, 1, Button, Toggle". */
+  caption: string;
+  /** Per-element identifier (hex) — stable within a single snapshot. */
+  id: string;
+  /** On-screen rect "{{x, y}, {w, h}}" in points, when the audit reported one. */
+  rect?: string;
+}
+
+export interface CoreDeviceAxTree {
+  elements: CoreDeviceAxElement[];
+  /** Screen size in points, for normalizing rects to 0..1. */
+  screen?: { w?: number; h?: number };
 }
 
 export interface CoreDeviceApi {
@@ -87,11 +95,12 @@ export interface CoreDeviceApi {
   /** Press a hardware button by its pymobiledevice3 name (home/lock/volume-up/volume-down/...). */
   button(name: string): Promise<void>;
   /**
-   * The SpringBoard home-screen layout — the only app-free *structured* screen
-   * data reachable on a physical iPhone (in-app accessibility is Apple-gated;
-   * see describe/platforms/ios). Backs `describe` for the home screen.
+   * The on-screen accessibility tree of the frontmost app (or the home screen),
+   * via the iOS-26+ axAudit service — rich semantic captions + reading order for
+   * every element, plus on-screen rects for the subset the accessibility audit
+   * flags (Apple doesn't expose per-element geometry on hardware). Backs `describe`.
    */
-  homescreen(): Promise<CoreDeviceHomescreen>;
+  axtree(): Promise<CoreDeviceAxTree>;
 }
 
 export function coreDeviceRef(device: DeviceInfo): {
@@ -587,11 +596,12 @@ export const coreDeviceBlueprint: ServiceBlueprint<CoreDeviceApi, DeviceInfo> = 
       async button(name) {
         await call("button", "button", { name }, 15_000);
       },
-      async homescreen() {
-        const res = await call("homescreen", "homescreen", {}, 20_000);
+      async axtree() {
+        // The audit walk + rect pass runs on-device; give it room.
+        const res = await call("axtree", "axtree", {}, 45_000);
         return {
-          iconState: res.icon_state,
-          metrics: (res.metrics as Record<string, number>) ?? {},
+          elements: (res.elements as CoreDeviceAxTree["elements"]) ?? [],
+          screen: res.screen as CoreDeviceAxTree["screen"],
         };
       },
     };

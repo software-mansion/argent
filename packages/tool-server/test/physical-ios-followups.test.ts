@@ -255,26 +255,25 @@ describe("tools unsupported on physical iOS reject with UnsupportedOperationErro
   });
 
   // describe is NOT in the unsupported set: on a physical iPhone it returns the
-  // SpringBoard home-screen layout (the only app-free structured screen data;
-  // in-app AX is Apple-gated). It resolves the CoreDevice service for a
-  // homescreen() snapshot, so a stub service stands in for the device here.
-  it("describe — returns the SpringBoard home-screen tree (source springboard), not a rejection", async () => {
+  // real on-screen accessibility tree via the CoreDevice axtree() snapshot
+  // (works in-app and on the home screen). A stub service stands in here.
+  it("describe — returns the CoreDevice accessibility tree (source coredevice-ax), not a rejection", async () => {
     const registry = {
       resolveService: async () => ({
-        homescreen: async () => ({
-          iconState: [
-            [{ displayName: "Phone", bundleIdentifier: "com.apple.mobilephone" }],
-            [{ displayName: "Settings", bundleIdentifier: "com.apple.Preferences" }],
+        axtree: async () => ({
+          screen: { w: 393, h: 852 },
+          elements: [
+            { caption: "General, Button", id: "e1", rect: "{{16, 100}, {361, 44}}" },
+            { caption: "Accessibility, Button", id: "e2" },
           ],
-          metrics: { homeScreenIconColumns: 4, homeScreenIconRows: 6 },
         }),
       }),
     };
     const result = await describeIos(registry as never, device, {});
-    expect(result.source).toBe("springboard");
+    expect(result.source).toBe("coredevice-ax");
     const flat = JSON.stringify(result.tree);
-    expect(flat).toContain("Settings");
-    expect(flat).toContain("com.apple.Preferences");
+    expect(flat).toContain("General");
+    expect(flat).toContain("Accessibility");
     expect(result.hint).toContain("screenshot");
   });
 });

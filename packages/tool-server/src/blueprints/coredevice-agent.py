@@ -36,8 +36,31 @@ from pymobiledevice3.remote.core_device.hid_service import (
 from pymobiledevice3.remote.core_device.screen_capture_service import ScreenCaptureService
 from pymobiledevice3.services.springboard import SpringBoardServicesService
 from pymobiledevice3.cli.developer.core_device import _do_drag, _send_button_press, _NAMED_BUTTONS
+from pymobiledevice3.dtx_service_provider import DtxServiceProvider
+from pymobiledevice3.dtx.connection import DTXConnection
+from pymobiledevice3.services.accessibilityaudit import AccessibilityAudit, deserialize_object
 
 import urllib.request
+
+
+# --- RSDCheckin fix for the iOS-26+ accessibility (axAudit) DTX service --------
+# In iOS 26 Apple re-plumbed axauditd onto RemoteServiceDiscovery; the
+# `…axAuditDaemon.remoteserver.shim.remote` DTX daemon now requires the RSDCheckin
+# handshake before it accepts DTX framing. pymobiledevice3's DtxServiceProvider
+# opens RSD services with a raw connect (create_service_connection) and skips
+# RSDCheckin, so iOS 26/27 drops the connection on the first byte. start_lockdown_service
+# performs RSDCheckin — route RSD DTX opens through it. (ref: littledivy/iphone-mirroring-axdump)
+_orig_open_dtx = DtxServiceProvider._open_dtx_connection
+
+
+async def _open_dtx_with_checkin(self, service_name, *, strip_ssl=False):
+    if isinstance(self.lockdown, RemoteServiceDiscoveryService):
+        svc = await self.lockdown.start_lockdown_service(service_name)
+        return DTXConnection(svc.reader, svc.writer)
+    return await _orig_open_dtx(self, service_name, strip_ssl=strip_ssl)
+
+
+DtxServiceProvider._open_dtx_connection = _open_dtx_with_checkin
 
 
 def _resolve_rsd(udid: str, port: int):
@@ -115,6 +138,82 @@ class Agent:
         icons = await _maybe_await(sb.get_icon_state())
         metrics = await _maybe_await(sb.get_homescreen_icon_metrics())
         return {"icon_state": icons, "metrics": metrics}
+
+    async def op_axtree(self, msg):
+        """The on-screen accessibility tree of whatever app is frontmost (or the
+        home screen), via the iOS-26+ axAudit service (RSDCheckin-unlocked above).
+
+        Returns each element's accessible caption (label + value + traits) in
+        VoiceOver reading order plus a stable element id, and — where the
+        accessibility audit reports one — its on-screen rect in points. Per-element
+        geometry isn't exposed on hardware, so only audited elements carry a rect;
+        the TS layer fills the gaps. Screen size (points) comes from SpringBoard.
+        """
+        limit = int(msg.get("limit", 120))
+
+        # 1) Walk the elements (caption + reading order + element id).
+        walk = AccessibilityAudit(self.rsd)
+        elements = []
+        try:
+            async for el in walk.iter_elements():
+                elements.append(
+                    {"caption": el.caption, "id": el.element.identifier.hex()}
+                )
+                if len(elements) >= limit:
+                    break
+        finally:
+            with contextlib.suppress(Exception):
+                await walk.close()
+
+        # 2) Audit for rects, keyed by element id (the only hardware frame source).
+        rects = {}
+        audit = AccessibilityAudit(self.rsd)
+        try:
+            types = await audit.supported_audits_types()
+            await audit._ensure_ready()
+            await audit._invoke("deviceBeginAuditTypes:", types, expects_reply=False)
+            while True:
+                name, args = await audit._event_queue.get()
+                if name != "hostDeviceDidCompleteAuditCategoriesWithAuditIssues:":
+                    continue
+                issues = deserialize_object(audit._extract_event_payload(args))
+                # iOS 27 returns the AXAuditIssue list directly; older wrap it in [{"value":…}].
+                if (
+                    isinstance(issues, list)
+                    and issues
+                    and isinstance(issues[0], dict)
+                    and "value" in issues[0]
+                ):
+                    issues = issues[0]["value"]
+                for iss in issues or []:
+                    try:
+                        eid = iss._fields["AuditElementValue_v1"]._fields[
+                            "PlatformElementValue_v1"
+                        ].hex()
+                        rect = iss._fields.get("ElementRectValue_v1")
+                        if eid and rect and eid not in rects:
+                            rects[eid] = rect
+                    except Exception:
+                        continue
+                break
+        except Exception:
+            pass  # audit is best-effort; the tree still returns without rects
+        finally:
+            with contextlib.suppress(Exception):
+                await audit.close()
+
+        for el in elements:
+            if el["id"] in rects:
+                el["rect"] = rects[el["id"]]
+
+        # 3) Screen size in points, for normalizing the rects.
+        screen = None
+        with contextlib.suppress(Exception):
+            sb = SpringBoardServicesService(lockdown=self.rsd)
+            m = await _maybe_await(sb.get_homescreen_icon_metrics())
+            screen = {"w": m.get("homeScreenWidth"), "h": m.get("homeScreenHeight")}
+
+        return {"elements": elements, "screen": screen}
 
     async def op_ping(self, _):
         return {"pong": True}

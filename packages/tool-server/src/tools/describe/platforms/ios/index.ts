@@ -9,7 +9,7 @@ import { parseNativeDescribeScreenResult } from "../../../native-devtools/native
 import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
-import { adaptSpringboardToDescribeResult } from "./ios-springboard-adapter";
+import { adaptCoreDeviceAxToDescribeResult } from "./ios-coredevice-ax-adapter";
 
 const DEGRADED_HINT =
   "This simulator was not booted through argent — system dialogs and native modals may not appear. You MUST call boot-device with force=true now to restart the simulator and apply full accessibility settings before continuing.";
@@ -27,16 +27,18 @@ const TVOS_HINT =
   "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
   "See the argent-tv-interact skill.";
 
-// Physical iPhones expose no app-free in-app accessibility tree (Apple gates the
-// CoreDevice axAuditDaemon to trusted/AppleInternal callers). The one structured
-// screen data we CAN read is SpringBoard's home-screen layout — so describe
-// returns that, with this hint making its scope and precision explicit.
-const PHYSICAL_IOS_SPRINGBOARD_HINT =
-  "This is the SpringBoard home-screen layout — the only app-free structured screen data on a " +
-  "physical iPhone — NOT necessarily the current screen. If an app is open, its content is not " +
-  "here: call screenshot instead. Icon frames are approximate (derived from the home-screen grid, " +
-  "not exact pixels), so confirm with screenshot before a precise tap. In-app accessibility is not " +
-  "reachable on physical iOS (Apple gates the CoreDevice accessibility service to trusted/AppleInternal callers).";
+// Physical iPhones expose their real on-screen accessibility tree app-free via
+// the iOS-26+ axAudit service (read over CoreDevice). Captions (label + value +
+// traits) and reading order are exact for every element; frames are exact only
+// for the subset the accessibility audit flags, and interpolated for the rest —
+// this hint makes that precision boundary explicit.
+const PHYSICAL_IOS_AX_HINT =
+  "This is the live accessibility tree of the frontmost app (or the home screen), read over " +
+  "CoreDevice. Element labels, values, traits and reading order are exact. Frames are exact for " +
+  "elements the accessibility audit reported and APPROXIMATE (interpolated from neighbours) for the " +
+  "rest — good enough to tap a row in a vertical list, but confirm with screenshot before a precise " +
+  "tap, especially for controls like toggles. Apple does not expose per-element geometry on a " +
+  "physical device, so screenshot remains authoritative for exact positions.";
 
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
@@ -70,32 +72,23 @@ export async function describeIos(
   params: DescribeIosParams,
   options: DescribeIosOptions = {}
 ): Promise<DescribeTreeData> {
-  // Physical iPhones are driven over CoreDevice. There is no app-free *in-app*
-  // accessibility tree on a real device: the on-device tree is served by
-  // CoreDevice's axAuditDaemon, but Apple gates it to trusted/AppleInternal
-  // callers (hardware-verified on iOS 27, 2026-07). The DTX service
-  // `…axAuditDaemon.remoteserver.shim.remote` opens over the developer
-  // (untrusted) CoreDevice tunnel pymobiledevice3 forms, but the daemon
-  // terminates the connection on the first message (every audit selector, and
-  // even the standard DTX capability handshake); its RemoteXPC replacement
-  // `…axAuditDaemon.remoteAXService` requires the `AppleInternal` entitlement.
-  // (DTX transport itself works over the same tunnel — `dvt proclist` succeeds —
-  // so it's Apple's auth wall, not a transport gap.) The two simulator backends
-  // below can't run against hardware either (they shell `simctl spawn`).
-  //
-  // What we CAN read app-free is SpringBoard's home-screen layout, so `describe`
-  // on a physical device returns the home-screen app grid (icons + dock) via
-  // CoreDevice's springboardservices. Icon frames are derived from the icon-grid
-  // geometry and are approximate; the hint tells the agent this is the home
-  // screen (not necessarily the current app) and to confirm with screenshot.
+  // Physical iPhones are driven over CoreDevice. describe reads the device's real
+  // on-screen accessibility tree app-free via the iOS-26+ axAudit service (the
+  // `…axAuditDaemon.remoteserver.shim.remote` DTX daemon). This works in ANY app
+  // and on the home screen — the same VoiceOver-style walk. It needs the RSDCheckin
+  // handshake that iOS 26 added (the sidecar performs it); without it the daemon
+  // drops the connection on the first byte. Apple exposes no per-element geometry
+  // on hardware, so frames are exact only for elements the accessibility audit
+  // flags and interpolated for the rest (see the adapter + hint). The two
+  // simulator backends below can't run against hardware (they shell `simctl spawn`).
   if (isPhysicalIos(device)) {
     const ref = coreDeviceRef(device);
     const coreDevice = await registry.resolveService<CoreDeviceApi>(ref.urn, ref.options);
-    const home = await coreDevice.homescreen();
+    const axtree = await coreDevice.axtree();
     return {
-      tree: adaptSpringboardToDescribeResult(home),
-      source: "springboard",
-      hint: PHYSICAL_IOS_SPRINGBOARD_HINT,
+      tree: adaptCoreDeviceAxToDescribeResult(axtree),
+      source: "coredevice-ax",
+      hint: PHYSICAL_IOS_AX_HINT,
     };
   }
 
