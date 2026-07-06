@@ -9,6 +9,7 @@ import {
   detectProjectPackageManager,
   globalInstallCommand,
   localInstallCommand,
+  projectInstallCommand,
   formatShellCommand,
   resolveProjectRoot,
   hasProjectPackageJson,
@@ -96,10 +97,19 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
 
   const pm = detectProjectPackageManager(projectRoot);
   const installTarget = fromTar ?? PACKAGE_NAME;
-  const cmd = localInstallCommand(pm, installTarget);
+  // Declared in the manifest but not materialized (a fresh clone): run the
+  // plain project install, which honors the COMMITTED version pin. The `add`
+  // form would resolve the bare package name to @latest and silently rewrite
+  // the team's pin — the exact mutation `update` refuses on principle.
+  const materializeOnly = isDeclaredLocally(projectRoot) && !fromTar;
+  const cmd = materializeOnly ? projectInstallCommand(pm) : localInstallCommand(pm, installTarget);
   const cmdStr = formatShellCommand(cmd);
   const spinner = p.spinner();
-  spinner.start(`Adding ${PACKAGE_NAME} to devDependencies (${pm})...`);
+  spinner.start(
+    materializeOnly
+      ? `Installing project dependencies to materialize ${PACKAGE_NAME} (${pm})...`
+      : `Adding ${PACKAGE_NAME} to devDependencies (${pm})...`
+  );
   const startedAt = performance.now();
   // Run the add, but decide success from the DISK, not the exit code. pnpm 10+
   // exits non-zero with ERR_PNPM_IGNORED_BUILDS when a freshly-added dependency
@@ -133,7 +143,13 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
     process.exit(1);
   }
 
-  spinner.stop(pc.green(`Added ${PACKAGE_NAME} to devDependencies.`));
+  spinner.stop(
+    pc.green(
+      materializeOnly
+        ? `Installed ${PACKAGE_NAME} from the committed dependency.`
+        : `Added ${PACKAGE_NAME} to devDependencies.`
+    )
+  );
 
   if (installError) {
     // Installed, but the package manager still exited non-zero — almost always

@@ -115,6 +115,23 @@ export function localInstallCommand(pm: PackageManager, pkg: string): ShellComma
   }
 }
 
+// Materialize the project's DECLARED dependencies (`npm install` & friends)
+// without touching any version pin. This is the right move when the manifest
+// already declares argent but node_modules is empty (a fresh clone): running
+// the `add` form there would rewrite the team's committed pin to @latest.
+export function projectInstallCommand(pm: PackageManager): ShellCommand {
+  switch (pm) {
+    case "yarn":
+      return { bin: "yarn", args: ["install"] };
+    case "pnpm":
+      return { bin: "pnpm", args: ["install"] };
+    case "bun":
+      return { bin: "bun", args: ["install"] };
+    default:
+      return { bin: "npm", args: ["install"] };
+  }
+}
+
 export function localUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
     case "yarn":

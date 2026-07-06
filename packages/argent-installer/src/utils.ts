@@ -26,6 +26,7 @@ export {
   globalUninstallCommand,
   localInstallCommand,
   localUninstallCommand,
+  projectInstallCommand,
 } from "./package-manager.js";
 export type { PackageManager, ShellCommand } from "./package-manager.js";
 export { hasProjectPackageJson, isYarnPnp } from "./preflight.js";
