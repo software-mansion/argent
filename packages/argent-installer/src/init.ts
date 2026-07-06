@@ -10,6 +10,7 @@ import {
   resolveProjectRoot,
   resolveInstallModeFromFlags,
   InstallModeFlagError,
+  isDeclaredLocally,
   readInstallRecord,
   writeInstallRecord,
   removeInstallRecord,
@@ -73,7 +74,14 @@ export async function init(args: string[]): Promise<void> {
     // A committed .argent/install.json records the mode the project opted into.
     // Seed both the non-interactive default and the interactive prompt from it so
     // re-running init in a local-mode repo doesn't silently revert it to global.
-    const recordedMode = readInstallRecord(resolveProjectRoot(process.cwd()))?.mode ?? null;
+    // Absent a record, a dependency the project's own manifest declares is the
+    // same local-intent signal update/uninstall honor (resolveInstallMode) —
+    // without it, `init -y` in a repo whose .argent/ was never committed would
+    // silently rewrite the committed local-command MCP config back to global.
+    const initProjectRoot = resolveProjectRoot(process.cwd());
+    const recordedMode =
+      readInstallRecord(initProjectRoot)?.mode ??
+      (isDeclaredLocally(initProjectRoot) ? ("local" as const) : null);
 
     let modeFromFlags: InstallMode | null;
     try {
@@ -157,8 +165,16 @@ export async function init(args: string[]): Promise<void> {
       } catch (err) {
         p.log.warn(`Could not write .argent/install.json: ${err}`);
       }
-    } else if (removeInstallRecord(effectiveRoot)) {
-      p.log.info(pc.dim("Removed stale .argent/install.json (previous local-mode marker)."));
+    } else {
+      // Clear the marker where update/uninstall will look for it (the resolved
+      // project root, where recordedMode above was read) as well as a custom
+      // scope root — a stale record at either would keep steering later
+      // commands at a devDependency the user just switched away from.
+      const removedAtProject = removeInstallRecord(projectRoot);
+      const removedAtCustom = effectiveRoot !== projectRoot && removeInstallRecord(effectiveRoot);
+      if (removedAtProject || removedAtCustom) {
+        p.log.info(pc.dim("Removed stale .argent/install.json (previous local-mode marker)."));
+      }
     }
 
     // ── Tool Auto-Approval ────────────────────────────────────────────────────
