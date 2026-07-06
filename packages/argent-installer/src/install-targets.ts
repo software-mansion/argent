@@ -31,8 +31,12 @@ export interface DecideTargetsContext {
   nonInteractive: boolean;
   /**
    * Targets to act on when both installs coexist and the run is non-interactive
-   * (no prompt possible). The agent-triggered `update` passes ["local"] as an
-   * interim default; a proper resolution is planned separately.
+   * (no prompt possible). `update` passes ["global", "local"] — updating both
+   * is safe and matches the interactive prompt's both-preselected default.
+   * `uninstall` passes ["local"] — removal is destructive and the global
+   * install is shared with other projects, so `-y` never nukes it without an
+   * explicit --global. (The agent-triggered `update` always pins an explicit
+   * flag, so it never reaches this default.)
    */
   nonInteractiveBothDefault: InstallMode[];
 }

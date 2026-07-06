@@ -380,17 +380,30 @@ export async function uninstall(args: string[]): Promise<void> {
 
     // ── Choose which install(s) to remove ───────────────────────────────────────
     // Decide this up front (before any config is touched) so an invalid flag or a
-    // cancelled coexistence prompt aborts without mutating anything. Only the
-    // package removal below is scoped to the target(s); MCP-config/skill cleanup
-    // stays workspace-wide as before.
+    // cancelled coexistence prompt aborts without mutating anything. Package
+    // removal is scoped to the target(s); config/content cleanup follows an
+    // explicitly narrowed target too (see scopesToClean below) and is otherwise
+    // workspace-wide as before.
     const uninstallLocalProbe = probeLocalInstall(projectRoot);
     const globalPresent = isGloballyInstalled();
     const localPresent = installMode === "local" && uninstallLocalProbe.installed;
     const targetFlags = parseTargetFlags(args);
+    // Default to the install that is actually PRESENT: a local-mode record whose
+    // devDependency isn't materialized (fresh clone) must not shadow a present
+    // global install — main's behavior in that directory was to offer the global
+    // package for removal. When both coexist non-interactively, only the local
+    // devDep is removed: unlike `update -y` (which safely acts on both),
+    // removal is destructive and the global install is shared with other
+    // projects, so nuking it needs an explicit --global.
+    const defaultUninstallTarget: InstallMode = localPresent
+      ? "local"
+      : globalPresent
+        ? "global"
+        : installMode;
     const targetDecision = decideInstallTargets({
       globalPresent,
       localPresent,
-      defaultTarget: installMode,
+      defaultTarget: defaultUninstallTarget,
       flags: targetFlags,
       nonInteractive,
       nonInteractiveBothDefault: ["local"],

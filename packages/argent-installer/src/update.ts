@@ -492,17 +492,36 @@ export async function update(args: string[]): Promise<void> {
     const projectRoot = resolveProjectRoot(process.cwd());
     installMode = resolveInstallMode(projectRoot);
 
-    // Target selection: explicit flags win; a lone install is used as-is; a
-    // coexisting global + local pair is disambiguated by prompt (both
-    // preselected) or, non-interactively, the interim local default.
+    // Target selection: explicit flags win; a lone PRESENT install is used
+    // as-is; a coexisting global + local pair is disambiguated by prompt (both
+    // preselected) or, non-interactively, acts on both. "Present" is what
+    // matters here: a local-mode repo whose devDependency isn't materialized
+    // yet (fresh clone) must not shadow a present global install — otherwise
+    // `update` in that repo would warn about the local dep and silently leave
+    // an outdated global binary untouched.
     const flags = parseTargetFlags(args);
+    const localInstalled = installMode === "local" && probeLocalInstall(projectRoot).installed;
+    const globalInstalled = isGloballyInstalled();
+    const defaultTarget: InstallMode = localInstalled
+      ? "local"
+      : globalInstalled
+        ? "global"
+        : installMode;
+    // An explicit --local run gets the detailed guidance from
+    // applyUpdateForTarget instead of this one-liner.
+    if (installMode === "local" && !localInstalled && !flags.local) {
+      p.log.warn(
+        `${PACKAGE_NAME} is declared for this project but not installed — run your package ` +
+          `manager's install, or ${pc.cyan("argent update --local")} for guidance.`
+      );
+    }
     const decision = decideInstallTargets({
-      globalPresent: isGloballyInstalled(),
-      localPresent: installMode === "local",
-      defaultTarget: installMode,
+      globalPresent: globalInstalled,
+      localPresent: localInstalled,
+      defaultTarget,
       flags,
       nonInteractive,
-      nonInteractiveBothDefault: ["local"],
+      nonInteractiveBothDefault: ["global", "local"],
     });
 
     let targets: InstallMode[];
@@ -519,8 +538,8 @@ export async function update(args: string[]): Promise<void> {
       if (decision.reason === "noninteractive-both") {
         p.log.info(
           pc.dim(
-            "Both a global and a project-local install were found; updating the local install " +
-              "(pass --global to include the global one)."
+            "Both a global and a project-local install were found; updating both " +
+              "(pass --global or --local to narrow)."
           )
         );
       }
