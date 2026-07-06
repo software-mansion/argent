@@ -65,37 +65,26 @@ describe("decideInstallTargets — explicit flags win", () => {
   });
 });
 
-describe("decideInstallTargets — flag on an absent install", () => {
-  it("--global errors when no global install and not allowed absent", () => {
+describe("decideInstallTargets — flags select regardless of what's installed", () => {
+  it("--global selects global even with no global install (the command installs it)", () => {
     const d = decideInstallTargets(
       ctx({ globalPresent: false, flags: { global: true, local: false } })
-    );
-    expect(d.kind).toBe("error");
-  });
-
-  it("--global is allowed absent when allowAbsentGlobalFlag (update can install)", () => {
-    const d = decideInstallTargets(
-      ctx({
-        globalPresent: false,
-        flags: { global: true, local: false },
-        allowAbsentGlobalFlag: true,
-      })
     );
     expect(d).toEqual({ kind: "targets", targets: ["global"], reason: "flags" });
   });
 
-  it("--local errors when the project has no local install", () => {
+  it("--local selects local even when not installed (the command guides the user)", () => {
     const d = decideInstallTargets(
       ctx({ localPresent: false, flags: { global: false, local: true } })
     );
-    expect(d.kind).toBe("error");
+    expect(d).toEqual({ kind: "targets", targets: ["local"], reason: "flags" });
   });
 
-  it("a valid flag + an absent flag still errors on the absent one", () => {
+  it("--global --local selects both even if one is absent", () => {
     const d = decideInstallTargets(
       ctx({ globalPresent: true, localPresent: false, flags: { global: true, local: true } })
     );
-    expect(d.kind).toBe("error");
+    expect(d).toEqual({ kind: "targets", targets: ["global", "local"], reason: "flags" });
   });
 });
 

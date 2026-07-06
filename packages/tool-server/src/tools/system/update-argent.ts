@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { getUpdateState } from "../../utils/update-checker";
 
@@ -18,14 +19,68 @@ function resolveCliEntry(): string | null {
   }
 }
 
+// Which install is serving THIS session — the global PATH install or a project's
+// committable local devDependency? Spawning our own cli.js is not enough: the
+// `update` command re-resolves its target from the cwd, so without an explicit
+// flag a global server running inside a repo that ALSO declares argent locally
+// would update the local devDep instead of itself. The tool-server bundle lives
+// in the argent package's dist/; if that package root sits inside a project's
+// node_modules it is the local install, otherwise it is the global one. We walk
+// up from cwd so hoisted-workspace / pnpm layouts (bundle under a parent
+// node_modules or a .pnpm store) still classify correctly.
+function classifyRunningInstall(): "global" | "local" {
+  let runningRoot: string;
+  try {
+    runningRoot = fs.realpathSync(path.dirname(__dirname)); // dist/ -> package root
+  } catch {
+    return "global";
+  }
+  let dir = process.cwd();
+  while (true) {
+    try {
+      const nmReal = fs.realpathSync(path.join(dir, "node_modules"));
+      if (runningRoot === nmReal || runningRoot.startsWith(nmReal + path.sep)) {
+        return "local";
+      }
+    } catch {
+      // no node_modules at this level — keep walking up
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return "global";
+}
+
+// Map the resolved target to the `argent update` flags that pin it, so the
+// spawned update never re-guesses from cwd.
+function targetFlagsFor(target: "global" | "local" | "both"): string[] {
+  if (target === "both") return ["--global", "--local"];
+  return [`--${target}`];
+}
+
+const zodSchema = z.object({
+  target: z
+    .enum(["auto", "global", "local", "both"])
+    .optional()
+    .describe(
+      "Which install to update. 'auto' (default) updates the install serving this session — " +
+        "the global PATH install or this project's local devDependency, whichever this server runs from. " +
+        "Pass 'global' / 'local' to force one, or 'both' when the user has both and wants each updated."
+    ),
+});
+
 let updateScheduled = false;
 
-export const updateArgentTool: ToolDefinition<void> = {
+export const updateArgentTool: ToolDefinition<{
+  target?: "auto" | "global" | "local" | "both";
+}> = {
   id: "update-argent",
   description:
-    "Apply a pending Argent update. Only call this tool when the user has explicitly consented to updating Argent in this conversation. Use when an update notification indicates a new version is available and the user agrees to update. Returns { message } with the update status and version info. The tool server will restart automatically after the update. Fails if no update is available or an update is already in progress.",
+    "Apply a pending Argent update. Only call this tool when the user has explicitly consented to updating Argent in this conversation. Use when an update notification indicates a new version is available and the user agrees to update. By default updates the install serving this session; pass `target` to choose global/local/both. Returns { message } with the update status and version info. The tool server will restart automatically after the update. Fails if no update is available or an update is already in progress.",
+  zodSchema,
   services: () => ({}),
-  async execute(_services, _params, _options) {
+  async execute(_services, params, _options) {
     const { updateAvailable, updateInstallable, currentVersion, installableVersion } =
       getUpdateState();
 
@@ -56,6 +111,13 @@ export const updateArgentTool: ToolDefinition<void> = {
       };
     }
 
+    // Resolve the target BEFORE scheduling so the confirmation message names the
+    // install we will actually update. 'auto' pins the install serving this
+    // session; anything else honors the agent's explicit choice.
+    const requested = params?.target ?? "auto";
+    const resolved = requested === "auto" ? classifyRunningInstall() : requested;
+    const targetFlags = targetFlagsFor(resolved);
+
     updateScheduled = true;
 
     // Delay the actual update spawn so the HTTP response can be flushed first.
@@ -63,7 +125,7 @@ export const updateArgentTool: ToolDefinition<void> = {
     // the response to reach the MCP server before that happens.
     setTimeout(() => {
       const cliEntry = resolveCliEntry();
-      const updateArgs = ["update", "--yes", "--version", installableVersion];
+      const updateArgs = ["update", "--yes", ...targetFlags, "--version", installableVersion];
       const cmd = cliEntry ? process.execPath : "argent";
       const args = cliEntry ? [cliEntry, ...updateArgs] : updateArgs;
       const child = spawn(cmd, args, {
@@ -82,8 +144,21 @@ export const updateArgentTool: ToolDefinition<void> = {
       child.unref();
     }, 2000);
 
+    const targetLabel =
+      resolved === "both" ? "global and project-local installs" : `${resolved} install`;
+    // When we auto-updated only one of two possible installs, hint at the flag
+    // for the other so the agent can offer it if the user also has that one.
+    const otherHint =
+      requested === "auto" && resolved !== "both"
+        ? ` If you also have a ${resolved === "local" ? "global" : "project-local"} install, ` +
+          `call this tool again with target "${resolved === "local" ? "global" : "local"}" to update it too.`
+        : "";
+
     return {
-      message: `Argent update initiated (v${currentVersion} -> v${installableVersion}). The tool server will stop and restart automatically once the update is installed. Subsequent tool calls will reconnect to the updated server.`,
+      message:
+        `Argent update initiated (v${currentVersion} -> v${installableVersion}) for the ${targetLabel}. ` +
+        `The tool server will stop and restart automatically once the update is installed. ` +
+        `Subsequent tool calls will reconnect to the updated server.${otherHint}`,
     };
   },
 };

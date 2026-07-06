@@ -24,6 +24,7 @@ import {
   localInstallCommand,
   probeLocalInstall,
   hasProjectPackageJson,
+  isDeclaredLocally,
   resolveInstallMode,
   formatShellCommand,
   resolveProjectRoot,
@@ -224,10 +225,17 @@ export async function update(args: string[]): Promise<void> {
     // install themselves.
     if (mode === "local" && localProbe && !localProbe.installed) {
       p.log.warn(`${PACKAGE_NAME} is not installed in this project yet.`);
-      if (hasProjectPackageJson(projectRoot)) {
+      if (isDeclaredLocally(projectRoot)) {
         p.log.info(
           `It is declared in package.json — run your package manager's install ` +
             `(e.g. ${pc.cyan("npm install")}), then re-run ${pc.cyan("argent update")}.`
+        );
+      } else if (hasProjectPackageJson(projectRoot)) {
+        // A `--local` on a project that doesn't depend on argent: update won't
+        // silently add + half-configure a devDependency (that is init's job).
+        p.log.info(
+          `It is not a dependency of this project. Run ${pc.cyan("argent init --local")} to add it, ` +
+            `or ${pc.cyan("argent update --global")} for the global install.`
         );
       } else {
         p.log.info(
@@ -244,7 +252,7 @@ export async function update(args: string[]): Promise<void> {
 
     const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
     let latest: string | null = null;
-    let target: string | null = null;
+    let target: string | null;
     let minReleaseAgeMs = 0;
 
     if (requestedVersion !== null) {
@@ -461,16 +469,10 @@ export async function update(args: string[]): Promise<void> {
       flags,
       nonInteractive,
       nonInteractiveBothDefault: ["local"],
-      allowAbsentGlobalFlag: true, // `update --global` may install a missing global
-      allowAbsentLocalFlag: false,
     });
 
     let targets: InstallMode[];
-    if (decision.kind === "error") {
-      p.log.error(decision.message);
-      await failUpdateTelemetry();
-      process.exit(2);
-    } else if (decision.kind === "prompt") {
+    if (decision.kind === "prompt") {
       const picked = await promptInstallTargets("update");
       if (picked === "cancel") {
         await completeUpdateTelemetry();

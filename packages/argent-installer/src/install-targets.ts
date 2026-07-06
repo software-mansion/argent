@@ -35,38 +35,25 @@ export interface DecideTargetsContext {
    * interim default; a proper resolution is planned separately.
    */
   nonInteractiveBothDefault: InstallMode[];
-  /** Allow a `--global` flag even when no global install is present (update installs). */
-  allowAbsentGlobalFlag?: boolean;
-  /** Allow a `--local` flag even when no local install is present. */
-  allowAbsentLocalFlag?: boolean;
 }
 
 export type TargetDecision =
   | { kind: "targets"; targets: InstallMode[]; reason: "flags" | "single" | "noninteractive-both" }
-  | { kind: "prompt" }
-  | { kind: "error"; message: string };
+  | { kind: "prompt" };
 
 // Pure target resolver — no I/O, so the whole selection matrix is unit-testable.
 export function decideInstallTargets(ctx: DecideTargetsContext): TargetDecision {
   const { flags } = ctx;
 
+  // Explicit flags always win and are additive. A flag naming an install that
+  // is not present is deliberately NOT an error — the per-command handler
+  // resolves it the friendly way: `update` installs a missing global (and points
+  // a missing local at `argent init`), `uninstall` reports there was nothing to
+  // remove. This mirrors how `update` already installed a missing global.
   if (flags.global || flags.local) {
     const targets: InstallMode[] = [];
-    if (flags.global) {
-      if (!ctx.globalPresent && !ctx.allowAbsentGlobalFlag) {
-        return { kind: "error", message: `No global ${PACKAGE_NAME} install found on your PATH.` };
-      }
-      targets.push("global");
-    }
-    if (flags.local) {
-      if (!ctx.localPresent && !ctx.allowAbsentLocalFlag) {
-        return {
-          kind: "error",
-          message: `This project has no local ${PACKAGE_NAME} install (not declared in package.json).`,
-        };
-      }
-      targets.push("local");
-    }
+    if (flags.global) targets.push("global");
+    if (flags.local) targets.push("local");
     return { kind: "targets", targets, reason: "flags" };
   }
 

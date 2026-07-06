@@ -394,8 +394,6 @@ export async function uninstall(args: string[]): Promise<void> {
       flags: targetFlags,
       nonInteractive,
       nonInteractiveBothDefault: ["local"],
-      allowAbsentGlobalFlag: false,
-      allowAbsentLocalFlag: false,
     });
 
     let removeTargets: InstallMode[] = [];
@@ -403,11 +401,7 @@ export async function uninstall(args: string[]): Promise<void> {
     // so it suppresses the per-install confirm below; a lone auto-selected install
     // still gets the usual prompt (global stays default-off).
     let removePreconfirmed = targetFlags.global || targetFlags.local;
-    if (targetDecision.kind === "error") {
-      p.log.error(targetDecision.message);
-      await finalizeUninstallTelemetry(false, false);
-      process.exit(2);
-    } else if (targetDecision.kind === "prompt") {
+    if (targetDecision.kind === "prompt") {
       const picked = await promptInstallTargets("remove");
       if (picked === "cancel") {
         await finalizeUninstallTelemetry(false, false);

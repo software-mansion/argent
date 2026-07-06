@@ -82,19 +82,58 @@ describe("update-argent tool", () => {
     expect((result as { message: string }).message).toContain("restart");
   });
 
-  it("spawns `argent update --yes` (not npx) after 2 seconds", async () => {
-    await updateArgentTool.execute({}, undefined, undefined);
+  it("spawns `argent update` with a pinned target flag (not npx) after 2 seconds", async () => {
+    await updateArgentTool.execute({}, { target: "global" }, undefined);
 
     vi.advanceTimersByTime(1999);
     expect(mockSpawn).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
     expect(mockSpawn).toHaveBeenCalledOnce();
-    expect(mockSpawn).toHaveBeenCalledWith("argent", ["update", "--yes", "--version", "99.0.0"], {
-      detached: true,
-      stdio: "ignore",
-      env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
-    });
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--global", "--version", "99.0.0"],
+      {
+        detached: true,
+        stdio: "ignore",
+        env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
+      }
+    );
+  });
+
+  it("pins --local when target is 'local'", async () => {
+    await updateArgentTool.execute({}, { target: "local" }, undefined);
+    vi.advanceTimersByTime(2000);
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--local", "--version", "99.0.0"],
+      expect.anything()
+    );
+  });
+
+  it("pins both --global and --local when target is 'both'", async () => {
+    await updateArgentTool.execute({}, { target: "both" }, undefined);
+    vi.advanceTimersByTime(2000);
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--global", "--local", "--version", "99.0.0"],
+      expect.anything()
+    );
+  });
+
+  it("auto (default) pins exactly one target flag and hints at the other install", async () => {
+    const result = await updateArgentTool.execute({}, undefined, undefined);
+    vi.advanceTimersByTime(2000);
+
+    const args = mockSpawn.mock.calls[0]![1] as string[];
+    expect(args[0]).toBe("update");
+    expect(args).toContain("--version");
+    expect(args).toContain("99.0.0");
+    // In 'auto' mode we resolve to the single install serving this session.
+    const flags = args.filter((a) => a === "--global" || a === "--local");
+    expect(flags).toHaveLength(1);
+    // ...and hint at the OTHER install so the agent can offer to update it too.
+    expect((result as { message: string }).message).toMatch(/call this tool again with target/);
   });
 
   it("does NOT spawn before 2 seconds have elapsed", async () => {
