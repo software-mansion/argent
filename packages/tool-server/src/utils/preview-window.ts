@@ -2,6 +2,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { electronGuiChildEnv } from "./electron-env";
 
 /**
  * macOS only. Build (and cache) a thin `.app` wrapper around the installed
@@ -192,7 +193,11 @@ export function createPreviewWindowManager(
     const launchBin = wrapperBin ?? electronBin;
     const launchArgs = wrapperBin ? ["--no-sandbox", mainScript] : [mainScript];
     const next = spawn(launchBin, launchArgs, {
-      env: { ...process.env, ARGENT_PREVIEW_URL: url },
+      // Strip ELECTRON_RUN_AS_NODE so the child boots as a GUI Electron app, not
+      // a bare Node runtime (see electronGuiChildEnv). An Electron-based MCP
+      // host puts it in our env, and inheriting it makes main.cjs crash at
+      // app.setName() with `app` undefined — the window never opens.
+      env: electronGuiChildEnv({ ARGENT_PREVIEW_URL: url }),
       stdio: ["pipe", "ignore", "pipe"],
     });
     // `spawn` does not throw synchronously for ENOENT / EACCES — the error

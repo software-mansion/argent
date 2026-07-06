@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { ensureCdpReachable } from "../../blueprints/chromium-cdp";
 import { chromiumIdFromPort } from "../../utils/device-info";
 import { trackChromiumPort } from "../../utils/chromium-discovery";
+import { electronGuiChildEnv } from "../../utils/electron-env";
 
 // Booting an Electron app is one way to produce a Chromium/CDP device: the
 // launched process is a Chromium runtime exposing a CDP endpoint, so the
@@ -172,7 +173,11 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     child = spawn(launcher.command, args, {
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ELECTRON_ENABLE_LOGGING: "1" },
+      // Strip ELECTRON_RUN_AS_NODE (see electronGuiChildEnv): if the tool-server
+      // inherited it from an Electron-based MCP host, the app would boot as a
+      // headless Node runtime with no CDP endpoint, and the readiness race below
+      // would time out instead of the app coming up.
+      env: electronGuiChildEnv({ ELECTRON_ENABLE_LOGGING: "1" }),
     });
   } catch (err) {
     throw new Error(
