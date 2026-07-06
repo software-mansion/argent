@@ -166,13 +166,12 @@ export async function init(args: string[]): Promise<void> {
         p.log.warn(`Could not write .argent/install.json: ${err}`);
       }
     } else {
-      // Clear the marker where update/uninstall will look for it (the resolved
-      // project root, where recordedMode above was read) as well as a custom
-      // scope root — a stale record at either would keep steering later
-      // commands at a devDependency the user just switched away from.
-      const removedAtProject = removeInstallRecord(projectRoot);
-      const removedAtCustom = effectiveRoot !== projectRoot && removeInstallRecord(effectiveRoot);
-      if (removedAtProject || removedAtCustom) {
+      // Clear a stale local-mode marker at the root this run actually
+      // configured (for local/global scope that IS the resolved project root,
+      // where update/uninstall will look). A custom scope root is a DIFFERENT
+      // project — the cwd project's committed record is not ours to delete
+      // just because the user pointed init --global somewhere else.
+      if (removeInstallRecord(effectiveRoot)) {
         p.log.info(pc.dim("Removed stale .argent/install.json (previous local-mode marker)."));
       }
     }
