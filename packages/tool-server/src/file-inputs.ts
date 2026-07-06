@@ -21,12 +21,11 @@
  * behavior.
  */
 
-import { execFile } from "node:child_process";
-import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, posix, resolve, sep } from "node:path";
-import { promisify } from "node:util";
+import { basename, join } from "node:path";
 import bytesUtil from "bytes";
+import { safeExtractTarGz } from "@argent/archive";
 import {
   isFileInputWire,
   type FileInputSpec,
@@ -42,10 +41,6 @@ import {
  * `http.ts` (which bounds the base64-encoded request as a whole).
  */
 const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
-/** Bounds member count so a zip-style tar can't exhaust handles mid-extract. */
-const MAX_TAR_MEMBERS = 10_000;
-
-const execFileAsync = promisify(execFile);
 
 /** Typed so the HTTP layer can map it to a 422 instead of a generic 500. */
 export class FileInputError extends Error {}
@@ -143,63 +138,6 @@ async function materializeUpload(wire: FileInputWire): Promise<{ filePath: strin
   return { filePath, dir };
 }
 
-function normalizeTarMemberPath(memberPath: string): string {
-  return memberPath.replace(/^\.\//, "").replace(/\\/g, "/");
-}
-
-/** Reject tar-slip paths (absolute, `..`, or resolving outside extractDir). */
-function isSafeTarMember(memberPath: string, extractDir: string): boolean {
-  const normalized = normalizeTarMemberPath(memberPath);
-  if (!normalized || normalized === "." || normalized === "./") return false;
-  if (normalized.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalized)) return false;
-  const relative = posix.normalize(normalized);
-  if (relative === ".." || relative.startsWith("../") || relative.split("/").includes("..")) {
-    return false;
-  }
-  const root = resolve(extractDir);
-  const resolved = resolve(extractDir, relative);
-  return resolved === root || resolved.startsWith(root + sep);
-}
-
-async function listTarMembers(tarPath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("tar", ["-tzf", tarPath]);
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
-
-async function assertSafeTarArchive(tarPath: string, extractDir: string): Promise<void> {
-  let members: string[];
-  try {
-    members = await listTarMembers(tarPath);
-  } catch (err) {
-    throw new FileInputError(
-      `Failed to read uploaded archive: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-  if (members.length === 0) {
-    throw new FileInputError("Uploaded archive is empty.");
-  }
-  if (members.length > MAX_TAR_MEMBERS) {
-    throw new FileInputError(
-      `Uploaded archive exceeds the ${MAX_TAR_MEMBERS}-member limit.`
-    );
-  }
-  for (const member of members) {
-    if (!isSafeTarMember(member, extractDir)) {
-      throw new FileInputError(
-        `Uploaded archive contains an unsafe path "${member}" — refusing extraction.`
-      );
-    }
-  }
-}
-
-async function safeExtractTar(tarPath: string, extractDir: string): Promise<void> {
-  await assertSafeTarArchive(tarPath, extractDir);
-  await execFileAsync("tar", ["-xzf", tarPath, "-C", extractDir]);
-}
-
 async function extractTarUpload(
   wire: FileInputWire,
   meta: ResolvedFileInput,
@@ -235,22 +173,17 @@ async function extractTarUpload(
   const extractDir = await mkdtemp(join(tmpdir(), `argent-tar-upload-${hashPrefix}-`));
   tempDirs.push(extractDir);
   // The sweeper no longer owns this tar, so remove it even if extraction throws.
+  let uploaded: string;
   try {
-    await safeExtractTar(entry.tarPath, extractDir);
+    uploaded = await safeExtractTarGz(entry.tarPath, extractDir, basename(wire.path));
+  } catch (err) {
+    throw new FileInputError(
+      `Could not extract the uploaded archive for "${wire.path}": ${err instanceof Error ? err.message : String(err)}`
+    );
   } finally {
     await rm(entry.tarPath, { force: true }).catch(() => {});
   }
-  // The client tars a single top-level member named after the path's basename.
-  // Match it exactly (readdir order is unspecified), falling back to the first
-  // real entry when the name doesn't survive the round-trip (e.g. unicode
-  // NFC/NFD normalization).
-  const entries = await readdir(extractDir);
-  const expected = basename(wire.path);
-  const uploaded = entries.find((e) => e === expected) ?? entries.find((e) => !e.startsWith("._"));
-  if (!uploaded) {
-    throw new FileInputError(`Extracted archive for "${wire.path}" is empty.`);
-  }
-  return { value: join(extractDir, uploaded), meta: { ...meta, viaUpload: true } };
+  return { value: uploaded, meta: { ...meta, viaUpload: true } };
 }
 
 async function resolveOne(

@@ -116,9 +116,10 @@ describe("POST /upload", () => {
 
   it("rejects new uploads once total pending storage exceeds the cap", async () => {
     handle.dispose();
-    handle = createHttpApp(stubRegistry(), { maxPendingUploadBytes: 4 });
+    const body = await tarballOf("MyApp.app", "app-bytes");
+    // Cap sized to exactly one tarball: the first fills it, the second is over.
+    handle = createHttpApp(stubRegistry(), { maxPendingUploadBytes: body.length });
 
-    const body = await tarballOf("MyApp.app", "app-bytes"); // well over 4 bytes
     const first = await supertest(handle.app)
       .post("/upload")
       .set("Content-Type", "application/gzip")

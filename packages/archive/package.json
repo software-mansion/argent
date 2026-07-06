@@ -1,14 +1,11 @@
 {
   "private": true,
-  "name": "@argent/tools-client",
+  "name": "@argent/archive",
   "version": "0.13.0",
-  "description": "Spawn-and-talk client for the argent tool-server (used by MCP and CLI)",
+  "description": "Shared tar.gz helpers for the file boundary: create an archive of a path and extract one back to its top-level member.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "dependencies": {
-    "@argent/archive": "file:../archive"
-  },
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "test": "vitest run",

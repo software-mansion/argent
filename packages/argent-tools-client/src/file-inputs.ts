@@ -19,13 +19,13 @@
  * tool-server cannot direct writes anywhere else on the client machine.
  */
 
-import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { promisify } from "node:util";
+
+import { createTarGzFile } from "@argent/archive";
 
 /** Must match the tool-server's wire contract (`@argent/registry` file-inputs.ts). */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
@@ -69,8 +69,6 @@ export interface ClientFileDirective {
  */
 const MAX_CONTENT_BYTES = 32 * 1024 * 1024;
 
-const execFileAsync = promisify(execFile);
-
 export interface PrepareFileInputsOptions {
   /**
    * Inline file bytes for `kind: "file"` wrappers. True when the client is
@@ -106,19 +104,7 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
 
 async function tarball(sourcePath: string): Promise<string> {
   const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
-  try {
-    await execFileAsync("tar", [
-      "-czf",
-      tarPath,
-      "-C",
-      path.dirname(sourcePath),
-      path.basename(sourcePath),
-    ]);
-  } catch (err) {
-    // `tar` can leave a partial archive the caller never sees — clean it up.
-    await rm(tarPath, { force: true }).catch(() => {});
-    throw err;
-  }
+  await createTarGzFile(sourcePath, tarPath);
   return tarPath;
 }
 

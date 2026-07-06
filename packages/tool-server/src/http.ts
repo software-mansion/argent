@@ -301,8 +301,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // call that references them; the TTL sweeper clears orphans from aborted or
   // failed calls.
   const uploads = new Map<string, UploadEntry & { expireAt: number; bytes: number }>();
+  // Bytes already written to disk (settled Map) plus bytes of streams still
+  // in flight, so the cap holds against concurrent uploads — not just settled
+  // ones, which a burst of parallel requests would otherwise slip past.
+  let inFlightUploadBytes = 0;
   const pendingUploadBytes = (): number =>
-    [...uploads.values()].reduce((total, e) => total + e.bytes, 0);
+    inFlightUploadBytes + [...uploads.values()].reduce((total, e) => total + e.bytes, 0);
   const uploadSweeper = setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of uploads) {
@@ -476,29 +480,49 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     const tarPath = join(tmpdir(), `argent-upload-${id}.tar.gz`);
     const ws = createWriteStream(tarPath);
 
+    let received = 0;
+    let released = false;
+    // Drop this stream's in-flight contribution exactly once (on success it
+    // moves into the Map; on failure it's discarded), so the running total
+    // can't leak or double-count.
+    const releaseInFlight = (): void => {
+      if (released) return;
+      released = true;
+      inFlightUploadBytes -= received;
+    };
+
     const abort = (status: number, message: string): void => {
+      releaseInFlight();
       ws.destroy();
       rm(tarPath, { force: true }).catch(() => {});
       if (!res.headersSent) res.status(status).json({ error: message });
     };
 
-    let received = 0;
     const digest = createHash("sha256");
     req.on("data", (chunk: Buffer) => {
       received += chunk.length;
+      inFlightUploadBytes += chunk.length;
       digest.update(chunk);
       if (received > maxUploadBytes) {
         abort(413, `Upload exceeds the ${bytesUtil(maxUploadBytes, { unitSeparator: " " })} limit.`);
+      } else if (pendingUploadBytes() > maxPendingUploadBytes) {
+        abort(
+          507,
+          `Pending uploads exceed the ${bytesUtil(maxPendingUploadBytes, { unitSeparator: " " })} ` +
+            `storage limit; retry once earlier uploads are consumed.`
+        );
       }
     });
     req.pipe(ws);
     // pipe() leaves ws open if the client disconnects mid-upload.
     req.on("close", () => {
       if (req.readableEnded) return;
+      releaseInFlight();
       ws.destroy();
       rm(tarPath, { force: true }).catch(() => {});
     });
     ws.on("finish", () => {
+      releaseInFlight();
       if (res.headersSent) return;
       uploads.set(id, {
         tarPath,

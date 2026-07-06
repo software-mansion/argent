@@ -14,8 +14,8 @@
 
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
-import { dirname, basename } from "node:path";
 import { spawn } from "node:child_process";
+import { createTarGzArgs } from "@argent/archive";
 import type { Request, Response } from "express";
 import type {
   Registry,
@@ -118,7 +118,7 @@ function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response)
   // buffer (e.g. tar's "file changed as we read it" warnings on a live trace)
   // and deadlock the child. A truncated archive from a non-zero exit is caught
   // client-side, where extraction fails and the artifact resolves to null.
-  const child = spawn("tar", ["-czf", "-", "-C", dirname(entry.path), basename(entry.path)], {
+  const child = spawn("tar", createTarGzArgs(entry.path, "-"), {
     stdio: ["ignore", "pipe", "ignore"],
   });
   child.on("error", (err) => {
