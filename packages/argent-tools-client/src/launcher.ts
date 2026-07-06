@@ -601,11 +601,17 @@ export async function killToolServerForInstallDir(packageDir: string): Promise<n
     // in ensureToolsServer. `ps` being unavailable (Windows) fails the check,
     // so there we keep the historical unguarded kill rather than silently never
     // stopping servers during update/uninstall.
+    const alive = isProcessAlive(fresh.pid);
     const guarded = process.platform !== "win32";
-    if (
-      isProcessAlive(fresh.pid) &&
-      (!guarded || processCommandMatches(fresh.pid, fresh.bundlePath))
-    ) {
+    if (alive && guarded && !processCommandMatches(fresh.pid, fresh.bundlePath)) {
+      // A live pid we cannot positively identify as this install's server.
+      // Kill nothing — and KEEP the record: if it does belong to a live server
+      // whose command line we merely failed to parse, unlinking would orphan
+      // it (`server stop`/status could no longer find it). A truly stale
+      // record is swept once its pid dies.
+      continue;
+    }
+    if (alive) {
       await terminatePid(
         fresh.pid,
         guarded ? () => processCommandMatches(fresh.pid, fresh.bundlePath) : undefined
@@ -635,12 +641,14 @@ function processCommandMatches(pid: number, marker: string | undefined): boolean
     }).trim();
     if (!cmd) return false;
     // Structural match: our servers run `node <bundlePath> start`. Require the
-    // bundle path to appear as its OWN whitespace-delimited argument AND the
+    // bundle path to appear at an argument boundary immediately followed by the
     // `start` subcommand — not a bare substring — so an unrelated process that
-    // merely mentions the path (an editor, a `node --inspect <path>` debug
-    // session, a longer path with the same prefix) is never matched.
-    const argv = cmd.split(/\s+/);
-    return argv.includes(marker) && argv.includes("start");
+    // merely mentions the path (an editor, a longer path with the same prefix)
+    // is never matched. Matched on the raw command string rather than a
+    // whitespace-split argv so a bundle path CONTAINING spaces ("~/My App/…")
+    // still matches its own ps output.
+    const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:^|\\s)${escaped} start(?:\\s|$)`).test(cmd);
   } catch {
     return false;
   }

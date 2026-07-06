@@ -237,4 +237,28 @@ describe("killToolServerForInstallDir", () => {
     expect(await launcher.killToolServerForInstallDir("/nowhere/else")).toBe(0);
     expect(await launcher.readToolsServerState(BUNDLE)).not.toBeNull();
   });
+
+  // win32 has no `ps`, so the guard is deliberately disabled there — this test
+  // would SIGTERM the test runner itself.
+  it.skipIf(process.platform === "win32")(
+    "keeps the record and signals nothing when a LIVE pid cannot be identified as ours",
+    async () => {
+      // Use this test process's own pid: alive, but its command line is the
+      // vitest runner — not `node <bundle> start` — so the identity guard must
+      // refuse to signal it AND must leave the record in place (unlinking would
+      // orphan a live server whose ps output we merely failed to parse).
+      const installDir = join(TEST_HOME, "proj2", "node_modules", "@swmansion", "argent");
+      const ownBundle = join(installDir, "dist", "tool-server.cjs");
+      await launcher.writeToolsServerState({
+        ...sampleState,
+        bundlePath: ownBundle,
+        pid: process.pid,
+      });
+
+      const killed = await launcher.killToolServerForInstallDir(installDir);
+
+      expect(killed).toBe(0);
+      expect(await launcher.readToolsServerState(ownBundle)).not.toBeNull();
+    }
+  );
 });
