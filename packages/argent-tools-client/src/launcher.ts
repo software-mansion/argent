@@ -568,7 +568,8 @@ function tryRealpath(p: string): string {
  * a different install (the global binary vs a repo-local devDependency) may be
  * actively serving another editor session and must be left alone. Symlinked
  * layouts (pnpm store, npm global prefix) are compared via realpath. Returns
- * the number of servers terminated.
+ * the number of matching records cleaned up (their servers terminated when the
+ * pid still verifiably belongs to that install's tool-server).
  */
 export async function killToolServerForInstallDir(packageDir: string): Promise<number> {
   const parents = new Set([path.resolve(packageDir), tryRealpath(packageDir)]);
@@ -577,7 +578,28 @@ export async function killToolServerForInstallDir(packageDir: string): Promise<n
     const bundles = new Set([path.resolve(state.bundlePath), tryRealpath(state.bundlePath)]);
     const matches = [...bundles].some((b) => [...parents].some((p) => isPathWithin(b, p)));
     if (!matches) continue;
-    await terminatePid(state.pid);
+    // The snapshot may be stale: another launcher can have republished this
+    // slot (rename) since readAllToolsServerStates read it. Decide on the
+    // file's current contents so we never kill/unlink a record we didn't match
+    // — same reasoning as sweepDeadStateFiles.
+    const fresh = await readStateFile(file);
+    if (!fresh || fresh.pid !== state.pid || fresh.bundlePath !== state.bundlePath) continue;
+    // Identity check before signalling: records for retired installs are swept
+    // only opportunistically, so a long-lived record's pid may have been
+    // recycled onto an unrelated process — same guard as the wedged-server kill
+    // in ensureToolsServer. `ps` being unavailable (Windows) fails the check,
+    // so there we keep the historical unguarded kill rather than silently never
+    // stopping servers during update/uninstall.
+    const guarded = process.platform !== "win32";
+    if (
+      isProcessAlive(fresh.pid) &&
+      (!guarded || processCommandMatches(fresh.pid, fresh.bundlePath))
+    ) {
+      await terminatePid(
+        fresh.pid,
+        guarded ? () => processCommandMatches(fresh.pid, fresh.bundlePath) : undefined
+      );
+    }
     await unlink(file).catch(() => {});
     killed += 1;
   }
