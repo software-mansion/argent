@@ -55,13 +55,6 @@ export const INSTALL_INIT_TRIGGERED_UPDATE_FAILED: InstallerFailureSignal = {
   error_kind: "subprocess",
 };
 
-export const INSTALL_SKILLS_REFRESH_FAILED: InstallerFailureSignal = {
-  error_code: FAILURE_CODES.INSTALL_SKILLS_REFRESH_FAILED,
-  failure_stage: "installer_skills_refresh",
-  failure_area: "installer",
-  error_kind: "subprocess",
-};
-
 // Catch-all for any unexpected throw that escapes the classified paths (file
 // I/O, copyRulesAndAgents, the online check, a clack prompt). Without it the
 // outer wrapper would drain telemetry but report no error code.

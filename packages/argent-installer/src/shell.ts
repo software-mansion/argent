@@ -1,6 +1,34 @@
 import { spawn } from "node:child_process";
 import type { ShellCommand } from "./package-manager.js";
 
+export interface TrustDiskOutcome {
+  /** The caller's on-disk probe found the desired outcome. */
+  landed: boolean;
+  /** The command's non-zero-exit error, or null when it exited cleanly. */
+  exitError: Error | null;
+}
+
+// Run a package-manager command whose exit code can lie, and decide success
+// from the DISK instead. pnpm 10+ exits non-zero (ERR_PNPM_IGNORED_BUILDS)
+// when it blocks a dependency's build/postinstall scripts even though the
+// package installed fine — argent works without those scripts, so treating
+// the exit code as authoritative would fail a perfectly good install. The
+// single owner of that policy: a non-zero exit is captured (never thrown) and
+// callers branch on `landed` — typically fatal only when `!landed`, and a
+// dim "exited non-zero but installed — continuing" warning when both are set.
+export async function runTrustingDisk(
+  execute: () => void | Promise<void>,
+  landedOnDisk: () => boolean
+): Promise<TrustDiskOutcome> {
+  let exitError: Error | null = null;
+  try {
+    await execute();
+  } catch (err) {
+    exitError = err instanceof Error ? err : new Error(String(err));
+  }
+  return { landed: landedOnDisk(), exitError };
+}
+
 // Run a package-manager command, capturing stderr for the rejection message.
 // On Windows the bin is suffixed with `.cmd` and spawned through a shell so the
 // npm/yarn/pnpm/bun wrappers resolve. `opts.cwd` is required for local-install

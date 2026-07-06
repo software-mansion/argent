@@ -1,5 +1,8 @@
 import { execFileSync } from "node:child_process";
+import * as p from "@clack/prompts";
 import pc from "picocolors";
+import { track } from "@argent/telemetry";
+import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   buildArgentSkillsSource,
   getGlobalSkillLockPath,
@@ -168,4 +171,35 @@ export function summarizeSkillRefreshForTelemetry(
     pruned_count: results.reduce((sum, result) => sum + result.pruned.length, 0),
     failed_count: results.filter((result) => result.syncError || result.pruneError).length,
   };
+}
+
+// ── Refresh + report ──────────────────────────────────────────────────────────
+
+// The two flows that re-sync argent skills after a version bump — the
+// init-triggered update and `argent update` — differ only in the
+// failure_stage naming the flow. Single owner of the "Skills Updated" note,
+// the skill_refresh_result event, and the INSTALL_SKILLS_REFRESH_FAILED
+// signal (previously duplicated once per flow with drifting stage strings).
+export type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_refresh";
+
+export function reportSkillRefresh(projectRoot: string, stage: SkillRefreshStage): void {
+  const results = refreshArgentSkills(projectRoot);
+  const summary = formatSkillRefreshSummary(results);
+  if (summary) {
+    p.note(summary, "Skills Updated");
+  }
+  const telemetrySummary = summarizeSkillRefreshForTelemetry(results);
+  if (telemetrySummary.scope_count > 0) {
+    const failureSignal: FailureSignal & { failure_area: "installer" } = {
+      error_code: FAILURE_CODES.INSTALL_SKILLS_REFRESH_FAILED,
+      failure_stage: stage,
+      failure_area: "installer",
+      error_kind: "subprocess",
+    };
+    track("installation:skill_refresh_result", {
+      is_success: telemetrySummary.failed_count === 0,
+      ...telemetrySummary,
+      ...(telemetrySummary.failed_count > 0 ? failureSignal : {}),
+    });
+  }
 }

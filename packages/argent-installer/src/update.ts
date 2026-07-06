@@ -35,11 +35,8 @@ import {
   type InstallMode,
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
-import {
-  refreshArgentSkills,
-  formatSkillRefreshSummary,
-  summarizeSkillRefreshForTelemetry,
-} from "./skills.js";
+import { runTrustingDisk } from "./shell.js";
+import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
@@ -104,13 +101,6 @@ const UPDATE_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
   failure_stage: "installer_update_unclassified",
   failure_area: "installer",
   error_kind: "unknown",
-};
-
-const INSTALL_SKILLS_REFRESH_FAILED: InstallerFailureSignal = {
-  error_code: FAILURE_CODES.INSTALL_SKILLS_REFRESH_FAILED,
-  failure_stage: "installer_update_skills_refresh",
-  failure_area: "installer",
-  error_kind: "subprocess",
 };
 
 export function getUpdateTriggerFromEnv(env: NodeJS.ProcessEnv = process.env): UpdateTrigger {
@@ -404,30 +394,33 @@ export async function update(args: string[]): Promise<void> {
         isInstalledForMode ? (installed ?? "unknown") : null
       );
       const packageActionStartedAt = performance.now();
-      let installError: Error | null = null;
-      try {
-        execFileSync(cmd.bin, cmd.args, {
-          stdio: "inherit",
-          env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
-          // Local installs must rewrite the project's manifest/lockfile.
-          ...(mode === "local" ? { cwd: projectRoot } : {}),
-        });
-      } catch (err) {
-        installError = err instanceof Error ? err : new Error(String(err));
-      }
+      // Success is decided from the DISK, not the exit code (see runTrustingDisk
+      // — pnpm 10+ exits non-zero on blocked build scripts). The probe: whether
+      // the TARGET VERSION actually landed.
+      let landedVersion: string | null = null;
+      const { landed: reachedTarget, exitError: installError } = await runTrustingDisk(
+        () => {
+          execFileSync(cmd.bin, cmd.args, {
+            stdio: "inherit",
+            env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
+            // Local installs must rewrite the project's manifest/lockfile.
+            ...(mode === "local" ? { cwd: projectRoot } : {}),
+          });
+        },
+        () => {
+          landedVersion =
+            mode === "local"
+              ? // Cache-free read: the pre-install probe memoized the old version's
+                // realpath, so getLocallyInstalledVersion would report it stale here.
+                (readLocalPackageVersionUncached(projectRoot) ??
+                getLocallyInstalledVersion(projectRoot))
+              : getGloballyInstalledVersion();
+          // `target` is narrowed non-null by the enclosing if; the closure
+          // re-widens it, hence the assertion.
+          return landedVersion !== null && !isNewerVersion(target!, landedVersion);
+        }
+      );
       if (installError) {
-        // Trust the disk, not the exit code: pnpm 10+ exits non-zero
-        // (ERR_PNPM_IGNORED_BUILDS) when it blocks a dependency's build scripts,
-        // even though the package updated fine. Treat it as a real failure only
-        // when the target version did not actually land on disk.
-        const landed =
-          mode === "local"
-            ? // Cache-free read: the pre-install probe memoized the old version's
-              // realpath, so getLocallyInstalledVersion would report it stale here.
-              (readLocalPackageVersionUncached(projectRoot) ??
-              getLocallyInstalledVersion(projectRoot))
-            : getGloballyInstalledVersion();
-        const reachedTarget = landed !== null && !isNewerVersion(target, landed);
         if (!reachedTarget) {
           await trackPackageAction(
             packageAction,
@@ -441,7 +434,7 @@ export async function update(args: string[]): Promise<void> {
         }
         p.log.warn(
           pc.dim(
-            `Your package manager exited non-zero but ${PACKAGE_NAME}@${landed} is installed — continuing.`
+            `Your package manager exited non-zero but ${PACKAGE_NAME}@${landedVersion} is installed — continuing.`
           )
         );
       }
@@ -638,19 +631,7 @@ export async function update(args: string[]): Promise<void> {
         p.note(ruleResults.join("\n"), "Rules & Agents Updated");
       }
 
-      const skillRefreshResults = refreshArgentSkills(projectRoot);
-      const skillSummary = formatSkillRefreshSummary(skillRefreshResults);
-      if (skillSummary) {
-        p.note(skillSummary, "Skills Updated");
-      }
-      const skillTelemetrySummary = summarizeSkillRefreshForTelemetry(skillRefreshResults);
-      if (skillTelemetrySummary.scope_count > 0) {
-        track("installation:skill_refresh_result", {
-          is_success: skillTelemetrySummary.failed_count === 0,
-          ...skillTelemetrySummary,
-          ...(skillTelemetrySummary.failed_count > 0 ? INSTALL_SKILLS_REFRESH_FAILED : {}),
-        });
-      }
+      reportSkillRefresh(projectRoot, "installer_update_skills_refresh");
     }
 
     await completeUpdateTelemetry();

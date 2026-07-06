@@ -19,13 +19,9 @@ import {
   getLocallyInstalledVersion,
   isYarnPnp,
 } from "./utils.js";
-import { runShellCommand } from "./shell.js";
+import { runShellCommand, runTrustingDisk } from "./shell.js";
 import { PACKAGE_NAME } from "./constants.js";
-import {
-  refreshArgentSkills,
-  formatSkillRefreshSummary,
-  summarizeSkillRefreshForTelemetry,
-} from "./skills.js";
+import { reportSkillRefresh } from "./skills.js";
 import type { InstallMode } from "./install-record.js";
 import {
   InitTelemetry,
@@ -34,7 +30,6 @@ import {
   INSTALL_LOCAL_PRECONDITION_FAILED,
   INSTALL_FROM_TAR_PACKAGE_FAILED,
   INSTALL_INIT_TRIGGERED_UPDATE_FAILED,
-  INSTALL_SKILLS_REFRESH_FAILED,
 } from "./init-telemetry.js";
 
 // Step 0 — ensure argent is installed for the chosen mode and return the
@@ -111,26 +106,19 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
       : `Adding ${PACKAGE_NAME} to devDependencies (${pm})...`
   );
   const startedAt = performance.now();
-  // Run the add, but decide success from the DISK, not the exit code. pnpm 10+
-  // exits non-zero with ERR_PNPM_IGNORED_BUILDS when a freshly-added dependency
-  // has build/postinstall scripts it blocks by default — even though the package
-  // is fully installed. argent works without those scripts (the committed
-  // node-path MCP command serves tools regardless), so aborting there would fail
-  // a perfectly good install. We treat a non-zero exit as fatal only when
-  // nothing actually landed.
-  let installError: Error | null = null;
-  try {
-    await runShellCommand(cmd, { cwd: projectRoot });
-  } catch (err) {
-    installError = err instanceof Error ? err : new Error(String(err));
-  }
+  // Success is decided from the DISK, not the exit code (see runTrustingDisk —
+  // pnpm 10+ exits non-zero on blocked build scripts). The probe: whether the
+  // package is present after the run. isLocallyInstalled is PnP-aware (a Yarn
+  // PnP project has no node_modules but declares the dep in-manifest); the
+  // extra isYarnPnp keeps that leniency. A non-PnP layout with no node_modules
+  // entry means the add really failed (a bad spec, ERR_PNPM_ADDING_TO_ROOT, a
+  // network error) — don't write a config that runs a missing binary.
+  const { landed, exitError: installError } = await runTrustingDisk(
+    () => runShellCommand(cmd, { cwd: projectRoot }),
+    () => isLocallyInstalled(projectRoot) || isYarnPnp(projectRoot)
+  );
 
-  // isLocallyInstalled is PnP-aware (a Yarn PnP project has no node_modules but
-  // declares the dep in-manifest); the extra isYarnPnp keeps that leniency. A
-  // non-PnP layout with no node_modules entry means the add really failed (a bad
-  // spec, ERR_PNPM_ADDING_TO_ROOT, a network error) — don't write a config that
-  // runs a missing binary.
-  if (!isLocallyInstalled(projectRoot) && !isYarnPnp(projectRoot)) {
+  if (!landed) {
     spinner.stop(pc.red("Local install failed."));
     p.log.error(
       installError
@@ -326,19 +314,7 @@ async function runGlobal(opts: {
           // skills in every scope that already tracks them — this is the only
           // point in init where we can surface orphans (skills removed from a
           // previous argent version) before Step 2's single-scope `skills add`.
-          const skillRefreshResults = refreshArgentSkills(resolveProjectRoot(process.cwd()));
-          const skillSummary = formatSkillRefreshSummary(skillRefreshResults);
-          if (skillSummary) {
-            p.note(skillSummary, "Skills Updated");
-          }
-          const skillTelemetrySummary = summarizeSkillRefreshForTelemetry(skillRefreshResults);
-          if (skillTelemetrySummary.scope_count > 0) {
-            track("installation:skill_refresh_result", {
-              is_success: skillTelemetrySummary.failed_count === 0,
-              ...skillTelemetrySummary,
-              ...(skillTelemetrySummary.failed_count > 0 ? INSTALL_SKILLS_REFRESH_FAILED : {}),
-            });
-          }
+          reportSkillRefresh(resolveProjectRoot(process.cwd()), "installer_skills_refresh");
         } catch (err) {
           updateSpinner.stop(pc.red("Update failed."));
           p.log.error(`${err}`);
