@@ -775,7 +775,12 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       attrs: { id: "other-input" },
       rect: { x: 0, y: 200, w: 200, h: 30 },
     });
-    const body = el({ tag: "body", attrs: { id: "the-body" }, rect: { x: 0, y: 0, w: W, h: H } });
+    const body = el({
+      tag: "body",
+      attrs: { id: "the-body" },
+      rect: { x: 0, y: 0, w: W, h: H },
+      children: [focusedInput, otherInput],
+    });
     // The mock defines no Document constructor, so the script's protoGetter
     // falls back to direct reads: a stub document with activeElement/body is
     // enough. The body being activeElement (the no-focus default) must NOT
@@ -784,7 +789,6 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     for (const n of [focusedInput, otherInput, body]) {
       (n as unknown as Record<string, unknown>).ownerDocument = doc;
     }
-    body.children = [focusedInput, otherInput];
 
     const { tree } = run([body]);
     expect(findById(tree, "focused-input")!.focused).toBe(true);
