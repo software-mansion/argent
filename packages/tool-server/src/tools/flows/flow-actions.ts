@@ -362,6 +362,18 @@ function offscreenHint(sel: FlowSelector): string {
 
 /** Execute one selector-acting directive (`tap` / `type` / `await` / `assert` / `scroll-to`). */
 export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
+  // Vega is remote-driven — there is no touch input, so the touch directives
+  // can never act on it. Fail upfront with authoring guidance instead of a
+  // low-level gesture dispatch error after the selector resolves.
+  if (
+    env.device.platform === "vega" &&
+    (step.kind === "tap" || step.kind === "type" || step.kind === "scroll-to")
+  ) {
+    return {
+      ok: false,
+      reason: `${step.kind} is a touch directive and Vega is remote-driven — move focus with \`tool: tv-remote\` steps (and type via \`tool: keyboard\`) instead`,
+    };
+  }
   switch (step.kind) {
     case "tap":
       return runTap(env, step);

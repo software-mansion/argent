@@ -187,7 +187,7 @@ export function clearActiveFlow(): void {
  * A flow that BEGINS with a `launch` step is an e2e flow (standalone-runnable,
  * controls its own start state); one that doesn't is a fragment.
  */
-export type Launch = string | { ios?: string; android?: string; chromium?: string };
+export type Launch = string | { ios?: string; android?: string; chromium?: string; vega?: string };
 
 /** Axis + sense a `scroll-to` step scrolls in to reveal its target. */
 export type ScrollDirection = "up" | "down" | "left" | "right";
@@ -537,7 +537,7 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`), timeout };
 }
 
-const LAUNCH_PLATFORMS = ["ios", "android", "chromium"] as const;
+const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 
 /** Parse a `launch` step body: a bare app id, or a per-platform map. */
 function parseLaunch(raw: unknown): Launch {

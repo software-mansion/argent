@@ -28,6 +28,7 @@ import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/nati
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
+import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
 const zodSchema = z.object({
@@ -168,6 +169,29 @@ async function waitForNativeDevtools(
 }
 
 /**
+ * Poll until the Vega automation toolkit — the only tree source on Vega —
+ * serves a page source. Like iOS's injected dylib, the toolkit attaches
+ * asynchronously at app launch, and `describeVega` degrades to an empty tree +
+ * relaunch hint until it does; gating the launch on a served page source keeps
+ * that window from eating the first directive's auto-wait (or silently
+ * confirming a `hidden` assert against a blind read).
+ */
+async function waitForVegaAutomation(device: DeviceInfo, signal?: AbortSignal): Promise<boolean> {
+  const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
+  for (;;) {
+    if (signal?.aborted) return false;
+    try {
+      const data = await describeVega(device.id);
+      if (!data.hint) return true;
+    } catch {
+      // transient adb/forward failure mid-boot — retry until the deadline
+    }
+    if (Date.now() >= deadline) return false;
+    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return false;
+  }
+}
+
+/**
  * Probe whether the android-devtools helper — the full-hierarchy source flows
  * resolve testIDs against (`flow-android-tree.ts`) — is usable.
  *
@@ -218,6 +242,15 @@ async function treeSourceGate(
       return (
         `could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
         `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`
+      );
+    }
+  }
+  if (device.platform === "vega" && !signal?.aborted) {
+    const ready = await waitForVegaAutomation(device, signal);
+    if (!ready && !signal?.aborted) {
+      return (
+        `the Vega automation toolkit never served a page source for ${bundleId} (the flow tree source). ` +
+        `The toolkit attaches at app launch — re-run to relaunch; if it keeps failing, confirm the app was built with automation support and the VVD is reachable over adb.`
       );
     }
   }
@@ -491,8 +524,15 @@ async function execLeafStep(
     case "await":
     case "assert":
     case "scroll-to": {
-      const r = await runDirective(state, step);
-      return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
+      // A directive that *throws* (vs. reporting a failed outcome) — e.g. a
+      // touch gesture on a focus-driven TV target — must still land in the
+      // structured report rather than abort the whole run unreported.
+      try {
+        const r = await runDirective(state, step);
+        return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
+      } catch (err) {
+        return { ...base, status: "error", reason: errMsg(err) };
+      }
     }
 
     case "wait": {
@@ -511,7 +551,13 @@ async function execLeafStep(
           maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
           updateBaselines: state.updateBaselines,
         });
-        return { ...base, status: r.status, reason: r.reason, warning: r.warning, artifacts: r.artifacts };
+        return {
+          ...base,
+          status: r.status,
+          reason: r.reason,
+          warning: r.warning,
+          artifacts: r.artifacts,
+        };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
       }

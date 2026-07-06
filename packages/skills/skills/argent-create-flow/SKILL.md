@@ -9,7 +9,8 @@ A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` di
 
 Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
 
-**Two flow types** 
+**Two flow types**
+
 - **e2e** — begins with a `launch:` step, which starts that app from scratch (terminate + relaunch), so the flow controls its own start state. No `executionPrerequisite`. May `run:` fragments; cannot itself be a `run:` target. Record one by adding a `restart-app` of the app under test as the **first** step — it is captured as the `launch` step.
 - **fragment** — doesn't begin with a launch; runs against the device's current state. May declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time.
 
@@ -47,9 +48,25 @@ This condition-as-key form is the only spelling. For advanced `await` control be
 
 `scroll-to` takes an optional `direction` (`up` | `down` | `left` | `right`, default `down` — so the common case is just `- scroll-to: <selector>`) and optionally a `within: <selector>` that anchors the scroll inside a specific container — required to drive a **nested** scroller (e.g. a horizontal carousel inside a vertical list), since the device can't be asked which container to scroll. It scrolls in bounded momentum-free increments, re-checks after each, and stops if a scroll reveals nothing new (end of the container). `tap`/`type` do **not** scroll — add a `scroll-to` before any target that may be off-screen. It's a no-op when the target is already visible, so a defensive `scroll-to` costs nothing on replay and keeps the flow working on smaller screens.
 
+### TV targets (Vega)
+
+A Vega (Fire TV) device is remote-driven — there is no touch input, so the touch directives (`tap`, `type`, `scroll-to`) fail on it with guidance. Drive focus with `tool: tv-remote` steps and type with `tool: keyboard` instead; everything else (`launch`, `await`, `assert`, `wait`, `snapshot`, `echo`, `run`, selectors) works unchanged — the tree comes from the on-device automation toolkit, which attaches at app launch (the `launch` step waits for it, so a leading `launch` also guarantees selectors resolve).
+
+```yaml
+steps:
+  - launch: com.example.app.main # the interactive component id from manifest.toml
+  - await: { visible: Home }
+  - tool: tv-remote
+    args: { button: [down, select] } # move focus, then confirm — one step per navigation
+  - await: { visible: Explore Screen }
+  - snapshot: explore
+```
+
+Since a `tv-remote` path is positional (like a coordinate tap), gate each navigation with an `await` on the destination screen and echo where focus should be — that is what makes the flow diagnosable when the focus order changes.
+
 ### Standalone runner
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium] [--update-baselines] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`; the status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs.
+`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`; the status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs.
 
 ## 2. Tools
 

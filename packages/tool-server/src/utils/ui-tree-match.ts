@@ -4,6 +4,7 @@ import type { DescribeFrame, DescribeNode, DescribeTreeData } from "../tools/des
 import { describeIos } from "../tools/describe/platforms/ios";
 import { describeAndroid } from "../tools/describe/platforms/android";
 import { describeChromium } from "../tools/describe/platforms/chromium";
+import { describeVega } from "../tools/describe/platforms/vega";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../blueprints/chromium-cdp";
 
 /**
@@ -325,8 +326,8 @@ export function deriveSelector(node: DescribeNode): Selector | null {
 /**
  * Fetch the describe tree for a device, resolving services through the registry
  * (the chromium CDP session is the only one that flows in as a service). iOS /
- * Android describe resolve their own services internally. Vega is not supported
- * by the matching directives yet.
+ * Android describe resolve their own services internally; Vega reads the
+ * on-device automation toolkit's page source (`describeVega`).
  */
 export async function fetchTree(
   registry: Registry,
@@ -343,6 +344,9 @@ export async function fetchTree(
     const ref = chromiumCdpRef(device);
     const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
     return describeChromium(api);
+  }
+  if (device.platform === "vega") {
+    return describeVega(device.id);
   }
   throw new Error(`ui-tree matching is not supported on platform "${device.platform}"`);
 }

@@ -17,6 +17,7 @@ import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
+import { describeVega, vegaRequires } from "../describe/platforms/vega";
 import {
   selectorSchema,
   nodeText,
@@ -118,6 +119,7 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
 };
 
 // ── Tree matching ────────────────────────────────────────────────────────
@@ -219,6 +221,9 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     if (device.platform === "android") {
       return describeAndroid(registry, device.id);
     }
+    if (device.platform === "vega") {
+      return describeVega(device.id);
+    }
     return describeChromium(services.chromium as ChromiumCdpApi);
   }
 
@@ -239,8 +244,8 @@ The selector is { text?, identifier?, role? }; every provided field must match. 
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
 It polls the same accessibility / DOM tree as \`describe\`
-(iOS AXRuntime, Android uiautomator, Chromium CDP) every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms)
-until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
+(iOS AXRuntime, Android uiautomator, Chromium CDP, Vega automation toolkit) every pollIntervalMs
+(default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
 
 Returns { success: boolean, elapsed: number } — success=false means the condition never held before the
 timeout (a \`note\` then explains what was seen). Use this after a tap/navigation to wait for the next screen,
@@ -265,6 +270,7 @@ or before tapping an element that appears asynchronously.`,
       assertSupported(AWAIT_UI_ELEMENT_TOOL_ID, capability, device);
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "android") await ensureDeps(androidRequires);
+      else if (device.platform === "vega") await ensureDeps(vegaRequires);
 
       // Resolve once, outside the poll loop — re-probing `xcrun` per fetch would
       // blow the per-fetch budget for a fake UDID that never caches.
