@@ -13,6 +13,7 @@ import {
   parse as parseJsonc,
   type JSONPath,
 } from "jsonc-parser";
+import { resolvePackageRoot } from "./package-root.js";
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 // The package-manager / topology / preflight / install-record helpers moved into
@@ -57,26 +58,10 @@ export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./
 export type { TargetFlags, DecideTargetsContext, TargetDecision } from "./install-targets.js";
 
 // ── Package root resolution ───────────────────────────────────────────────────
-// At runtime this module ships in two shapes:
-//   - tsc-compiled in the monorepo: packages/argent-installer/dist/utils.js
-//   - bundled into the published package: <pkg>/dist/installer.mjs
-// Walking up to the nearest package.json works for both layouts and any
-// future repacking, instead of hard-coding a "two levels up" assumption.
-
-/**
- * Given a starting dirname, walk up until the first directory containing a
- * package.json. Falls back to the starting directory if none found. Exported
- * so it can be tested against simulated directory structures.
- */
-export function resolvePackageRoot(dirname: string): string {
-  let current = path.resolve(dirname);
-  while (true) {
-    if (fs.existsSync(path.join(current, "package.json"))) return current;
-    const parent = path.dirname(current);
-    if (parent === current) return path.resolve(dirname);
-    current = parent;
-  }
-}
+// resolvePackageRoot lives in the leaf package-root.ts module (topology.ts
+// needs it too, and importing it from this barrel — which re-exports topology —
+// was an ESM cycle). Re-exported here so existing import sites keep resolving.
+export { resolvePackageRoot };
 
 export const PACKAGE_ROOT = resolvePackageRoot(import.meta.dirname);
 

@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { execSync } from "node:child_process";
 import semver from "semver";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
-import { resolvePackageRoot } from "./utils.js";
+import { resolvePackageRoot } from "./package-root.js";
 import { isYarnPnp } from "./preflight.js";
 
 // Argent supports two independent install topologies:
