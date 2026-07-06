@@ -120,9 +120,7 @@ function renderReport(report: FlowReport): string {
     }
   }
   const warnings = report.steps.filter((s) => s.warning).length;
-  const warningsNote = warnings
-    ? `, ${warnings} warning${warnings === 1 ? "" : "s"}`
-    : "";
+  const warningsNote = warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : "";
   lines.push(
     `\n${report.ok ? "PASS" : "FAIL"} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped${warningsNote}`
   );

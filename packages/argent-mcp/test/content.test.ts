@@ -443,7 +443,10 @@ describe("flowRunToMcpContent", () => {
           status: "fail",
           reason: "diff 3.10% > 0.5% (home)",
           artifacts: {
-            baseline: { ...artifactHandle("b1", "base.png", "image/png"), hostPath: "/srv/base.png" },
+            baseline: {
+              ...artifactHandle("b1", "base.png", "image/png"),
+              hostPath: "/srv/base.png",
+            },
             diff: { ...artifactHandle("d1", "diff.png", "image/png"), hostPath: "/srv/diff.png" },
           },
         },
@@ -478,7 +481,8 @@ describe("flowRunToMcpContent", () => {
     const blocks = await flowRunToMcpContent(input);
 
     const artifactText = blocks.find(
-      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("/srv/baseline.png")
+      (b): b is { type: "text"; text: string } =>
+        b.type === "text" && b.text.includes("/srv/baseline.png")
     );
     expect(artifactText).toBeDefined();
     expect(blocks.find((b) => b.type === "image")).toBeUndefined();

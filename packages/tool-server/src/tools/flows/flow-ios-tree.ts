@@ -165,7 +165,7 @@ function projectIosNode(
     // scrolled off or zero-area) — otherwise a text assert against an ancestor
     // would pass on content the screen doesn't show. Every labelled node is
     // leaf-eligible, so `frame` was computed for any node with text.
-    ownText: frame ? node.label ?? "" : "",
+    ownText: frame ? (node.label ?? "") : "",
     leaf,
     shield: Boolean(node.identifier),
   };
@@ -260,4 +260,3 @@ export async function queryFullHierarchyTree(
     return null;
   }
 }
-

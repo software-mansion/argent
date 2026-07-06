@@ -54,9 +54,7 @@ describe("adaptChromiumTreeForFlows", () => {
     const matches = findAll(tree, { identifier: "log-box" });
     expect(matches).toHaveLength(1);
     expect(assertText(matches[0]!)).toContain("outer tap gesture");
-    expect(
-      evaluateCondition("text", "outer tap gesture", matches, "contains")
-    ).toBe(true);
+    expect(evaluateCondition("text", "outer tap gesture", matches, "contains")).toBe(true);
   });
 
   it("scopes hoisted text to the nearest identified ancestor", () => {
@@ -77,10 +75,7 @@ describe("adaptChromiumTreeForFlows", () => {
 
   it("never hoists text from zero-area (off-viewport) nodes", () => {
     const tree = adaptChromiumTreeForFlows(screen());
-    const walk = (n: DescribeNode): string[] => [
-      n.subtreeText ?? "",
-      ...n.children.flatMap(walk),
-    ];
+    const walk = (n: DescribeNode): string[] => [n.subtreeText ?? "", ...n.children.flatMap(walk)];
     expect(walk(tree).join(" ")).not.toContain("Below the fold");
   });
 
@@ -109,9 +104,7 @@ describe("adaptChromiumTreeForFlows", () => {
     expect(tree.role).toBe("Screen");
     for (const child of tree.children) {
       expect(child.children).toHaveLength(0);
-      expect(
-        Boolean(child.identifier || child.label || child.value || child.clickable)
-      ).toBe(true);
+      expect(Boolean(child.identifier || child.label || child.value || child.clickable)).toBe(true);
     }
   });
 });

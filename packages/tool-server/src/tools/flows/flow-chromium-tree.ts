@@ -38,8 +38,7 @@ function projectChromiumNode(node: DescribeNode): FlatNode<DescribeNode> {
     node.identifier || node.label || node.value || node.clickable || node.focused
   );
 
-  const leaf: DescribeNode | null =
-    onScreen && addressable ? { ...node, children: [] } : null;
+  const leaf: DescribeNode | null = onScreen && addressable ? { ...node, children: [] } : null;
 
   return {
     skip: false,
