@@ -24,7 +24,7 @@ export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
         device.id,
         "override",
         "--time",
-        "9:41",
+        "9:37",
         "--batteryState",
         "charged",
         "--batteryLevel",
@@ -39,7 +39,7 @@ export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
     if (device.platform === "android") {
       await adbShell(device.id, "settings put global sysui_demo_allowed 1");
       await adbShell(device.id, `${DEMO_BROADCAST} -e command enter`);
-      await adbShell(device.id, `${DEMO_BROADCAST} -e command clock -e hhmm 0941`);
+      await adbShell(device.id, `${DEMO_BROADCAST} -e command clock -e hhmm 0937`);
       await adbShell(
         device.id,
         `${DEMO_BROADCAST} -e command battery -e level 100 -e plugged false`

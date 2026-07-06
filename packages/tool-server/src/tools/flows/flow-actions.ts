@@ -518,12 +518,13 @@ async function runType(
  * One engine behind both conditional directives — they differ only in budget
  * and intent:
  *
- * - `await` (action-length timeout) — a real wait for a transition. Evaluating
- *   it here, rather than delegating to the `await-ui-element` tool, gives it
- *   the same loose bare-string semantics (identifier-first, then text) and the
- *   same full-hierarchy tree source as every other selector directive; the raw
+ * - `await` (action-length default timeout, overridable per step via
+ *   `timeout:`) — a real wait for a transition. Evaluating it here, rather
+ *   than delegating to the `await-ui-element` tool, gives it the same loose
+ *   bare-string semantics (identifier-first, then text) and the same
+ *   full-hierarchy tree source as every other selector directive; the raw
  *   `tool: await-ui-element` step remains the escape hatch for custom
- *   timeout/poll/bundleId.
+ *   poll/bundleId.
  * - `assert` (short grace window, {@link DEFAULT_ASSERT_TIMEOUT_MS}) — a
  *   correctness check that only absorbs the latency of an update landing a
  *   frame after an action; a genuinely-false assertion still fails quickly.
