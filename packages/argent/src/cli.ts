@@ -68,7 +68,10 @@ Commands:
               devDependency setup the whole team gets on \`npm install\`)
   install     Alias for init
   update      Check for updates and refresh configuration
+              (acts on the project's install; --global/--local pick a target
+              when a global install and a project devDependency coexist)
   uninstall   Remove argent configuration from the workspace
+              (--global/--local scope which install's package is removed)
   remove      Alias for uninstall
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)

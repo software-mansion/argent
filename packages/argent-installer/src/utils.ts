@@ -51,6 +51,8 @@ export {
   InstallModeFlagError,
 } from "./install-record.js";
 export type { InstallMode, InstallRecord } from "./install-record.js";
+export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
+export type { TargetFlags, DecideTargetsContext, TargetDecision } from "./install-targets.js";
 
 // ── Package root resolution ───────────────────────────────────────────────────
 // At runtime this module ships in two shapes:

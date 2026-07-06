@@ -30,6 +30,7 @@ import {
   type InstallMode,
   type ShellCommand,
 } from "./utils.js";
+import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
@@ -376,6 +377,49 @@ export async function uninstall(args: string[]): Promise<void> {
 
     const projectRoot = resolveProjectRoot(process.cwd());
     installMode = resolveInstallMode(projectRoot);
+
+    // ── Choose which install(s) to remove ───────────────────────────────────────
+    // Decide this up front (before any config is touched) so an invalid flag or a
+    // cancelled coexistence prompt aborts without mutating anything. Only the
+    // package removal below is scoped to the target(s); MCP-config/skill cleanup
+    // stays workspace-wide as before.
+    const uninstallLocalProbe = probeLocalInstall(projectRoot);
+    const globalPresent = isGloballyInstalled();
+    const localPresent = installMode === "local" && uninstallLocalProbe.installed;
+    const targetFlags = parseTargetFlags(args);
+    const targetDecision = decideInstallTargets({
+      globalPresent,
+      localPresent,
+      defaultTarget: installMode,
+      flags: targetFlags,
+      nonInteractive,
+      nonInteractiveBothDefault: ["local"],
+      allowAbsentGlobalFlag: false,
+      allowAbsentLocalFlag: false,
+    });
+
+    let removeTargets: InstallMode[] = [];
+    // A --global/--local flag or the coexistence multiselect IS the confirmation,
+    // so it suppresses the per-install confirm below; a lone auto-selected install
+    // still gets the usual prompt (global stays default-off).
+    let removePreconfirmed = targetFlags.global || targetFlags.local;
+    if (targetDecision.kind === "error") {
+      p.log.error(targetDecision.message);
+      await finalizeUninstallTelemetry(false, false);
+      process.exit(2);
+    } else if (targetDecision.kind === "prompt") {
+      const picked = await promptInstallTargets("remove");
+      if (picked === "cancel") {
+        await finalizeUninstallTelemetry(false, false);
+        p.cancel("Uninstall cancelled.");
+        process.exit(0);
+      }
+      removeTargets = picked;
+      removePreconfirmed = true;
+    } else {
+      removeTargets = targetDecision.targets;
+    }
+
     const results: string[] = [];
 
     // ── Remove MCP entries ──────────────────────────────────────────────────────
@@ -524,22 +568,22 @@ export async function uninstall(args: string[]): Promise<void> {
       p.log.info(pc.dim("Kept Argent-owned skills, rules, and agents."));
     }
 
-    // ── Uninstall the package ───────────────────────────────────────────────────
-    // Scope removal to the project's install MODE. `argent uninstall` in a
-    // local-mode project removes the repo-local devDependency and must NEVER
-    // reach out and uninstall the shared GLOBAL install (which would be a
-    // surprising, machine-wide side effect — especially under --yes); a
-    // global-mode uninstall behaves as before. A coexisting install in the other
-    // mode is left alone — removing it is a separate, explicit decision.
+    // ── Uninstall the package(s) ─────────────────────────────────────────────────
+    // Removal is scoped to the target(s) chosen above. A local-mode uninstall
+    // removes the repo-local devDependency and never reaches out to the shared
+    // GLOBAL install unless the user explicitly asked (a --global flag or the
+    // coexistence prompt). The tool-server teardown is likewise scoped to each
+    // install's own dir — a server for the OTHER install may be serving another
+    // editor session and must be left alone.
 
     interface RemovableInstall {
       kind: "local" | "global";
       cmd: ShellCommand;
       cwd?: string;
       prompt: string;
-      // Interactive default: a local devDep in the project the user ran
-      // uninstall in is likely meant to go; a global install is shared, so
-      // default off (preserves the prior global-mode behavior).
+      // Interactive default when auto-selected: a local devDep in the project the
+      // user ran uninstall in is likely meant to go; a global install is shared,
+      // so default off (preserves the prior global-mode behavior).
       defaultRemove: boolean;
       // Install dir the package manager is about to delete — the scope for the
       // tool-server teardown below. Null when unresolvable (Yarn PnP), which
@@ -547,65 +591,66 @@ export async function uninstall(args: string[]): Promise<void> {
       installDir: string | null;
     }
 
-    let removable: RemovableInstall | null = null;
-    if (installMode === "local") {
-      // PnP-aware probe: a Yarn PnP project has no node_modules but the local
-      // devDependency is still there to remove.
-      const localProbe = probeLocalInstall(projectRoot);
-      if (localProbe.installed) {
-        removable = {
+    const buildRemovable = (kind: InstallMode): RemovableInstall | null => {
+      if (kind === "local") {
+        // PnP-aware probe: a Yarn PnP project has no node_modules but the local
+        // devDependency is still there to remove.
+        if (!uninstallLocalProbe.installed) return null;
+        return {
           kind: "local",
           cmd: localUninstallCommand(detectProjectPackageManager(projectRoot), PACKAGE_NAME),
           cwd: projectRoot,
           prompt: `Remove the local ${PACKAGE_NAME} devDependency from this project?`,
           defaultRemove: true,
-          installDir: localProbe.packageDir,
+          installDir: uninstallLocalProbe.packageDir,
         };
       }
-    } else if (isGloballyInstalled()) {
-      removable = {
+      if (!globalPresent) return null;
+      return {
         kind: "global",
         cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
         installDir: getGloballyInstalledPackageRoot(),
       };
-    }
+    };
 
-    // In --yes mode, surface when there is nothing to remove for this mode — the
-    // probe is PATH/node_modules based, so an install under a different toolchain
-    // (or the other mode) is intentionally left untouched.
-    if (nonInteractive && !removable) {
+    const removables = removeTargets
+      .map((t) => buildRemovable(t))
+      .filter((r): r is RemovableInstall => r !== null);
+
+    if (removables.length === 0) {
+      // The probe is PATH/node_modules based, so an install under a different
+      // toolchain (or the other mode) is intentionally left untouched.
       p.log.info(
         pc.dim(
-          `Skipped package removal: no ${installMode} ${PACKAGE_NAME} install detected. ` +
+          `Skipped package removal: no matching ${PACKAGE_NAME} install detected. ` +
             `If it is installed elsewhere, remove it manually.`
         )
       );
     }
 
-    let shouldRemove = nonInteractive && removable !== null;
-    if (!nonInteractive && removable) {
-      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-      const choice = await p.confirm({
-        message: removable.prompt,
-        initialValue: removable.defaultRemove,
-      });
-      if (!p.isCancel(choice)) shouldRemove = choice as boolean;
-    }
+    for (const removable of removables) {
+      let shouldRemove = nonInteractive || removePreconfirmed;
+      if (!nonInteractive && !removePreconfirmed) {
+        p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+        const choice = await p.confirm({
+          message: removable.prompt,
+          initialValue: removable.defaultRemove,
+        });
+        shouldRemove = p.isCancel(choice) ? false : (choice as boolean);
+      }
+      if (!shouldRemove) continue;
 
-    if (shouldRemove && removable) {
-      // Stop the tool-server(s) spawned from the install being removed so no
-      // binary is held open during removal — and ONLY that install's servers. A
-      // server belonging to a different install (the global binary during a
-      // local-mode uninstall, or vice versa) may be serving another editor
-      // session and must be left alone — same invariant as the postinstall kill
-      // and the launcher's reuse gate.
       try {
         if (removable.installDir) await killToolServerForInstallDir(removable.installDir);
       } catch (err) {
         p.log.error(`Could not stop the running tool server: ${err}`);
-        await finalizeUninstallTelemetry(hasPrunedContent, false, UNINSTALL_TOOLSERVER_STOP_FAILED);
+        await finalizeUninstallTelemetry(
+          hasPrunedContent,
+          hasUninstalledPackage,
+          UNINSTALL_TOOLSERVER_STOP_FAILED
+        );
         throw err;
       }
 

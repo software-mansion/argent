@@ -31,6 +31,7 @@ import {
   AGENTS_DIR,
   type InstallMode,
 } from "./utils.js";
+import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import {
   refreshArgentSkills,
   formatSkillRefreshSummary,
@@ -129,7 +130,8 @@ export async function update(args: string[]): Promise<void> {
   telemetryInit("installer");
   const updateStartTime = performance.now();
   let telemetryFinalized = false;
-  // Resolved once Step 0 begins; reported on every terminal update event.
+  // Reflects the project's install mode (resolveInstallMode); reported on every
+  // terminal update event and used to key the config refresh.
   let installMode: InstallMode = "global";
 
   const trackPackageAction = async (
@@ -170,27 +172,13 @@ export async function update(args: string[]): Promise<void> {
     });
   };
 
-  try {
-    p.intro(pc.bgCyan(pc.black(" argent update ")));
-
-    // `--no-telemetry` force-disables before the first track(); otherwise just
-    // surface the notice. update never prompts — it often runs from the old
-    // binary or non-TTY contexts where the init consent step can't apply.
-    await resolveTelemetryConsent({ nonInteractive: true, disableFlag: noTelemetry });
-
-    track("installation:cli_update_start", {});
-
-    // Mode decides what we update: the global PATH binary, or the project's
-    // devDependency. The committed .argent/install.json wins; otherwise we infer
-    // from an on-disk local install (resolveInstallMode), defaulting to global.
-    const projectRoot = resolveProjectRoot(process.cwd());
-    installMode = resolveInstallMode(projectRoot);
-
-    // Disclose which install we're about to act on. The mode is inferred (a
-    // committed .argent/install.json, else a manifest declaration), so a user
-    // who has both a global install and a project devDependency can see which
-    // one `update` targets before it mutates anything.
-    if (installMode === "local") {
+  // Version-check + install for ONE install target (global PATH binary or the
+  // project's local devDependency). Hard failures finalize telemetry and
+  // process.exit — aborting the whole command; soft outcomes (nothing to do,
+  // user declined) return so a multi-target run can move on to the next target.
+  const applyUpdateForTarget = async (mode: InstallMode, projectRoot: string): Promise<void> => {
+    // Disclose which install we're about to act on before any mutation.
+    if (mode === "local") {
       p.log.info(
         `Target: ${pc.cyan("local install")} — this project's ${PACKAGE_NAME} ` +
           `devDependency ${pc.dim(`(${projectRoot})`)}.`
@@ -205,17 +193,17 @@ export async function update(args: string[]): Promise<void> {
     // the user has: the project's resolved copy in local mode (PnP-aware — a
     // Yarn PnP project has no node_modules but is still installed), or the
     // global binary's package.json in global mode.
-    const localProbe = installMode === "local" ? probeLocalInstall(projectRoot) : null;
-    const globallyInstalled = installMode === "global" && isGloballyInstalled();
-    const isInstalledForMode = installMode === "local" ? localProbe!.installed : globallyInstalled;
+    const localProbe = mode === "local" ? probeLocalInstall(projectRoot) : null;
+    const globallyInstalled = mode === "global" && isGloballyInstalled();
+    const isInstalledForMode = mode === "local" ? localProbe!.installed : globallyInstalled;
     const installed =
-      installMode === "local"
+      mode === "local"
         ? localProbe!.version
         : globallyInstalled
           ? getGloballyInstalledVersion()
           : null;
 
-    if (installMode === "global" && globallyInstalled && !installed) {
+    if (mode === "global" && globallyInstalled && !installed) {
       await trackPackageAction(
         "update_failed",
         updateStartTime,
@@ -234,7 +222,7 @@ export async function update(args: string[]): Promise<void> {
     // package.json the package manager walks up and mutates an unrelated
     // ancestor project. Never auto-mutate; tell the user to materialize the
     // install themselves.
-    if (installMode === "local" && localProbe && !localProbe.installed) {
+    if (mode === "local" && localProbe && !localProbe.installed) {
       p.log.warn(`${PACKAGE_NAME} is not installed in this project yet.`);
       if (hasProjectPackageJson(projectRoot)) {
         p.log.info(
@@ -248,15 +236,13 @@ export async function update(args: string[]): Promise<void> {
         );
       }
       await trackPackageAction("no_update", updateStartTime, true);
-      await completeUpdateTelemetry();
-      process.exit(0);
+      return;
     }
 
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
-    const pm =
-      installMode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
+    const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
     let latest: string | null = null;
     let target: string | null = null;
     let minReleaseAgeMs = 0;
@@ -321,7 +307,7 @@ export async function update(args: string[]): Promise<void> {
       p.log.info(`Installed: ${pc.cyan("version unknown")} ${pc.dim("(Yarn PnP)")}`);
     } else {
       p.log.warn(
-        installMode === "local"
+        mode === "local"
           ? `${PACKAGE_NAME} is not installed in this project.`
           : `${PACKAGE_NAME} is not installed globally.`
       );
@@ -353,7 +339,7 @@ export async function update(args: string[]): Promise<void> {
       }
 
       const cmd =
-        installMode === "local"
+        mode === "local"
           ? localInstallCommand(pm, `${PACKAGE_NAME}@${target}`)
           : globalInstallCommand(pm, `${PACKAGE_NAME}@${target}`);
       const cmdStr = formatShellCommand(cmd);
@@ -364,7 +350,7 @@ export async function update(args: string[]): Promise<void> {
         const proceed = await p.confirm({
           message: isInstalledForMode
             ? `Update to v${target}?`
-            : installMode === "local"
+            : mode === "local"
               ? `Add ${PACKAGE_NAME}@${target} to this project's devDependencies?`
               : `Install ${PACKAGE_NAME}@${target} globally?`,
           initialValue: true,
@@ -372,9 +358,8 @@ export async function update(args: string[]): Promise<void> {
 
         if (p.isCancel(proceed) || !proceed) {
           await trackPackageAction("update_skipped", updateStartTime, true);
-          await completeUpdateTelemetry();
-          p.cancel(installed ? "Update cancelled." : "Install cancelled.");
-          process.exit(0);
+          p.log.info(pc.dim(`Skipped the ${mode} install.`));
+          return;
         }
       }
 
@@ -389,7 +374,7 @@ export async function update(args: string[]): Promise<void> {
       // to stop; the launcher's version-aware reuse gate retires a stale server
       // on the next call.
       const installDirToStop =
-        installMode === "local" ? localProbe!.packageDir : getGloballyInstalledPackageRoot();
+        mode === "local" ? localProbe!.packageDir : getGloballyInstalledPackageRoot();
       try {
         if (installDirToStop) await killToolServerForInstallDir(installDirToStop);
       } catch (err) {
@@ -414,7 +399,7 @@ export async function update(args: string[]): Promise<void> {
           stdio: "inherit",
           env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
           // Local installs must rewrite the project's manifest/lockfile.
-          ...(installMode === "local" ? { cwd: projectRoot } : {}),
+          ...(mode === "local" ? { cwd: projectRoot } : {}),
         });
       } catch (err) {
         await trackPackageAction(
@@ -446,83 +431,152 @@ export async function update(args: string[]): Promise<void> {
         p.log.success("Already on the latest version.");
       }
     }
+  };
 
-    // Refresh configuration
-    spinner.start("Refreshing workspace configuration...");
+  try {
+    p.intro(pc.bgCyan(pc.black(" argent update ")));
 
-    const results: string[] = [];
+    // `--no-telemetry` force-disables before the first track(); otherwise just
+    // surface the notice. update never prompts — it often runs from the old
+    // binary or non-TTY contexts where the init consent step can't apply.
+    await resolveTelemetryConsent({ nonInteractive: true, disableFlag: noTelemetry });
 
-    // Per scope: project-scope entries in local mode run the repo-local copy
-    // (the bin path may have moved across versions); global scopes and global
-    // mode keep the bare `argent` command.
-    const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
-    const entryFor = (scope: "local" | "global"): McpServerEntry =>
-      getMcpEntryForScope(installMode, scope, localCmdMode);
+    track("installation:cli_update_start", {});
 
-    // Only refresh adapter scopes that already contain an argent entry. A
-    // present editor dir (`.gemini`, `.cursor`, ...) is not consent — issue
-    // #195 — so we look for the argent MCP server key in the actual config.
-    const configuredScopes = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
-    const adaptersByScope = new Map<"local" | "global", Set<McpConfigAdapter>>([
-      ["local", new Set()],
-      ["global", new Set()],
-    ]);
+    // The committed .argent/install.json (else a manifest declaration) decides
+    // the project's mode; it keys the config refresh below and the telemetry
+    // funnel. Which install(s) to actually update is a separate choice — see the
+    // target selection next.
+    const projectRoot = resolveProjectRoot(process.cwd());
+    installMode = resolveInstallMode(projectRoot);
 
-    for (const { adapter, scope, configPath } of configuredScopes) {
-      const normScope = scope === "project" ? "local" : "global";
-      try {
-        adapter.write(configPath, entryFor(normScope));
-        results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
-      } catch {
-        // Skip paths that can't be written.
+    // Target selection: explicit flags win; a lone install is used as-is; a
+    // coexisting global + local pair is disambiguated by prompt (both
+    // preselected) or, non-interactively, the interim local default.
+    const flags = parseTargetFlags(args);
+    const decision = decideInstallTargets({
+      globalPresent: isGloballyInstalled(),
+      localPresent: installMode === "local",
+      defaultTarget: installMode,
+      flags,
+      nonInteractive,
+      nonInteractiveBothDefault: ["local"],
+      allowAbsentGlobalFlag: true, // `update --global` may install a missing global
+      allowAbsentLocalFlag: false,
+    });
+
+    let targets: InstallMode[];
+    if (decision.kind === "error") {
+      p.log.error(decision.message);
+      await failUpdateTelemetry();
+      process.exit(2);
+    } else if (decision.kind === "prompt") {
+      const picked = await promptInstallTargets("update");
+      if (picked === "cancel") {
+        await completeUpdateTelemetry();
+        p.cancel("Update cancelled.");
+        process.exit(0);
       }
-      adaptersByScope.get(normScope)!.add(adapter);
+      targets = picked;
+    } else {
+      targets = decision.targets;
+      if (decision.reason === "noninteractive-both") {
+        p.log.info(
+          pc.dim(
+            "Both a global and a project-local install were found; updating the local install " +
+              "(pass --global to include the global one)."
+          )
+        );
+      }
     }
 
-    // Refresh allowlists only for scopes that already had argent configured —
-    // matches the editor list above.
-    for (const [scope, adapters] of adaptersByScope) {
-      for (const adapter of adapters) {
-        if (!adapter.addAllowlist) continue;
+    for (const mode of targets) {
+      await applyUpdateForTarget(mode, projectRoot);
+    }
+
+    // ── Refresh configuration ───────────────────────────────────────────────────
+    // Keyed on the PROJECT's mode (installMode), independent of which install we
+    // just updated: a local-mode project keeps its committed node-path command
+    // even when only the global install was bumped, and only scopes that already
+    // hold an argent entry are touched.
+    {
+      const spinner = p.spinner();
+      spinner.start("Refreshing workspace configuration...");
+
+      const results: string[] = [];
+
+      // Per scope: project-scope entries in local mode run the repo-local copy
+      // (the bin path may have moved across versions); global scopes and global
+      // mode keep the bare `argent` command.
+      const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
+      const entryFor = (scope: "local" | "global"): McpServerEntry =>
+        getMcpEntryForScope(installMode, scope, localCmdMode);
+
+      // Only refresh adapter scopes that already contain an argent entry. A
+      // present editor dir (`.gemini`, `.cursor`, ...) is not consent — issue
+      // #195 — so we look for the argent MCP server key in the actual config.
+      const configuredScopes = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
+      const adaptersByScope = new Map<"local" | "global", Set<McpConfigAdapter>>([
+        ["local", new Set()],
+        ["global", new Set()],
+      ]);
+
+      for (const { adapter, scope, configPath } of configuredScopes) {
+        const normScope = scope === "project" ? "local" : "global";
         try {
-          adapter.addAllowlist(projectRoot, scope);
+          adapter.write(configPath, entryFor(normScope));
+          results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
         } catch {
-          // non-fatal
+          // Skip paths that can't be written.
+        }
+        adaptersByScope.get(normScope)!.add(adapter);
+      }
+
+      // Refresh allowlists only for scopes that already had argent configured —
+      // matches the editor list above.
+      for (const [scope, adapters] of adaptersByScope) {
+        for (const adapter of adapters) {
+          if (!adapter.addAllowlist) continue;
+          try {
+            adapter.addAllowlist(projectRoot, scope);
+          } catch {
+            // non-fatal
+          }
         }
       }
-    }
 
-    // Refresh rules/agents the same way: per-scope, only for adapters the user
-    // opted into in that scope.
-    const localAdapters = [...adaptersByScope.get("local")!];
-    const globalAdapters = [...adaptersByScope.get("global")!];
-    const ruleResults = [
-      ...copyRulesAndAgents(globalAdapters, projectRoot, "global", RULES_DIR, AGENTS_DIR),
-      ...copyRulesAndAgents(localAdapters, projectRoot, "local", RULES_DIR, AGENTS_DIR),
-    ];
+      // Refresh rules/agents the same way: per-scope, only for adapters the user
+      // opted into in that scope.
+      const localAdapters = [...adaptersByScope.get("local")!];
+      const globalAdapters = [...adaptersByScope.get("global")!];
+      const ruleResults = [
+        ...copyRulesAndAgents(globalAdapters, projectRoot, "global", RULES_DIR, AGENTS_DIR),
+        ...copyRulesAndAgents(localAdapters, projectRoot, "local", RULES_DIR, AGENTS_DIR),
+      ];
 
-    spinner.stop("Configuration refreshed.");
+      spinner.stop("Configuration refreshed.");
 
-    if (results.length > 0) {
-      p.note(results.join("\n"), "MCP Configs Updated");
-    }
+      if (results.length > 0) {
+        p.note(results.join("\n"), "MCP Configs Updated");
+      }
 
-    if (ruleResults.length > 0) {
-      p.note(ruleResults.join("\n"), "Rules & Agents Updated");
-    }
+      if (ruleResults.length > 0) {
+        p.note(ruleResults.join("\n"), "Rules & Agents Updated");
+      }
 
-    const skillRefreshResults = refreshArgentSkills(projectRoot);
-    const skillSummary = formatSkillRefreshSummary(skillRefreshResults);
-    if (skillSummary) {
-      p.note(skillSummary, "Skills Updated");
-    }
-    const skillTelemetrySummary = summarizeSkillRefreshForTelemetry(skillRefreshResults);
-    if (skillTelemetrySummary.scope_count > 0) {
-      track("installation:skill_refresh_result", {
-        is_success: skillTelemetrySummary.failed_count === 0,
-        ...skillTelemetrySummary,
-        ...(skillTelemetrySummary.failed_count > 0 ? INSTALL_SKILLS_REFRESH_FAILED : {}),
-      });
+      const skillRefreshResults = refreshArgentSkills(projectRoot);
+      const skillSummary = formatSkillRefreshSummary(skillRefreshResults);
+      if (skillSummary) {
+        p.note(skillSummary, "Skills Updated");
+      }
+      const skillTelemetrySummary = summarizeSkillRefreshForTelemetry(skillRefreshResults);
+      if (skillTelemetrySummary.scope_count > 0) {
+        track("installation:skill_refresh_result", {
+          is_success: skillTelemetrySummary.failed_count === 0,
+          ...skillTelemetrySummary,
+          ...(skillTelemetrySummary.failed_count > 0 ? INSTALL_SKILLS_REFRESH_FAILED : {}),
+        });
+      }
     }
 
     await completeUpdateTelemetry();
