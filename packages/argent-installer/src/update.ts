@@ -460,6 +460,15 @@ export async function update(args: string[]): Promise<void> {
         p.log.info("No installable update is available yet.");
       } else if (latest && target && latest !== target) {
         p.log.success("Already on the latest installable version.");
+      } else if (
+        requestedVersion !== null &&
+        installed &&
+        !isNewerVersion(requestedVersion, installed)
+      ) {
+        // A --version at or below the installed one is a no-op, not "latest".
+        p.log.success(
+          `Requested v${requestedVersion} is not newer than the installed v${installed} — nothing to do.`
+        );
       } else {
         p.log.success("Already on the latest version.");
       }
@@ -536,6 +545,14 @@ export async function update(args: string[]): Promise<void> {
       // (the bin path may have moved across versions); global scopes and global
       // mode keep the bare `argent` command.
       const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
+      // Never REWRITE existing entries to the degraded npx fallback. local-npx
+      // means the repo-local bin couldn't be resolved right now — a fresh clone
+      // before `npm install`, or a pruned pnpm store dir behind Node's realpath
+      // cache. The committed node-path command in the config is still the right
+      // one once the install materializes; clobbering it would dirty the team's
+      // committed file with a strictly worse command. (init still writes the
+      // fallback, with its own warning, when configuring from scratch.)
+      const skipEntryRewrite = localCmdMode?.kind === "local-npx";
       const entryFor = (scope: "local" | "global"): McpServerEntry =>
         getMcpEntryForScope(installMode, scope, localCmdMode);
 
@@ -550,13 +567,23 @@ export async function update(args: string[]): Promise<void> {
 
       for (const { adapter, scope, configPath } of configuredScopes) {
         const normScope = scope === "project" ? "local" : "global";
-        try {
-          adapter.write(configPath, entryFor(normScope));
-          results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
-        } catch {
-          // Skip paths that can't be written.
+        if (!(skipEntryRewrite && normScope === "local")) {
+          try {
+            adapter.write(configPath, entryFor(normScope));
+            results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
+          } catch {
+            // Skip paths that can't be written.
+          }
         }
         adaptersByScope.get(normScope)!.add(adapter);
+      }
+      if (skipEntryRewrite) {
+        p.log.info(
+          pc.dim(
+            "Left project MCP entries unchanged — the repo-local argent binary can't be " +
+              "resolved right now (run your package manager's install first)."
+          )
+        );
       }
 
       // Refresh allowlists only for scopes that already had argent configured —
