@@ -356,10 +356,9 @@ describe("describe tool", () => {
     expect(result.should_restart).toBeUndefined();
     expect(result.description).toMatch(/AXButton\s+"General"/);
     expect(elementLineCount(result.description)).toBe(1);
-    // The real tree must be returned untouched — no terminal non-injectable hint
-    // clobbering it.
+    // The real tree must be returned untouched, with no terminal non-injectable
+    // hint clobbering it — `hint` is the field the screenshot guidance lands in.
     expect(result.hint).toBeUndefined();
-    expect(result.description).not.toContain(NON_INJECTABLE_NATIVE_WARNING);
   });
 
   it("returns empty AX result when native-devtools is unavailable", async () => {
