@@ -17,9 +17,9 @@ function mockRegistry(): Registry {
       return { ok: true };
     }),
     getTool: vi.fn(() => undefined),
-    // iOS flows gate on a native-devtools connection: report connected so the
-    // run proceeds, but expose no target app so the tree fetch falls back to
-    // the AX tree (these tests don't drive the native hierarchy).
+    // iOS launch steps gate on a native-devtools connection: report connected
+    // so the run proceeds. No selector directives run in these tests, so the
+    // flow tree is never fetched.
     resolveService: vi.fn(async () => ({
       isConnected: () => true,
       listConnectedBundleIds: () => [],

@@ -139,11 +139,11 @@ const POST_LAUNCH_SETTLE_MS = 1500;
  * Flows resolve selectors against the native UIView tree, served over the
  * native-devtools connection the injected dylib opens asynchronously after
  * launch. The post-launch settle alone can race a slow cold start, so we
- * additionally poll for the connection before step 1. If it never connects,
- * selectors would silently fall back to the (collapsing) AX tree — where a
- * testID container the flow addresses (e.g. a `within` scroll container) is
- * absent, producing confusing "not visible" failures. So the caller treats a
- * failure to connect as a hard error rather than degrading the whole run.
+ * additionally poll for the connection before step 1. `fetchFlowTree` treats a
+ * missing connection as a hard per-read error (it never degrades to the
+ * collapsing AX tree — see flow-tree.ts), so without this gate a slow cold
+ * start would fail the first directive with a raw tree-source error; gating
+ * the launch step reports the problem where it belongs, with a relaunch hint.
  */
 const NATIVE_READY_TIMEOUT_MS = 8000;
 const NATIVE_READY_POLL_MS = 250;
@@ -222,11 +222,12 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
 
 /**
  * Gate a launch on the platform's full-hierarchy tree source being ready. If
- * it never comes up, selectors would silently fall back to the trimmed AX tree
- * — where a testID container the flow addresses is absent, producing confusing
- * "not visible" failures — so the launch step fails outright rather than
- * degrade. Returns null when ready (or the platform needs no gate / the run
- * was aborted), else the reason to report.
+ * it never comes up, every selector read would fail — `fetchFlowTree` refuses
+ * to degrade to the trimmed AX tree (see flow-tree.ts) — so the launch step
+ * fails outright with an actionable, platform-specific reason instead of
+ * letting the first directive surface a raw tree-source error. Returns null
+ * when ready (or the platform needs no gate / the run was aborted), else the
+ * reason to report.
  */
 async function treeSourceGate(
   registry: Registry,

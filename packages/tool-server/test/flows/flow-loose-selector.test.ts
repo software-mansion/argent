@@ -5,14 +5,15 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
-// Drive resolution through the mocked iOS AX tree (flows fall back to it when
-// native-devtools is unavailable, as in these unit tests).
+// Serve the flow tree directly: flows resolve selectors against the platform's
+// full-hierarchy source and hard-fail rather than degrade to the AX tree, so
+// these unit tests stub the tree fetch itself.
 let currentTree: () => DescribeNode;
-vi.mock("../../src/tools/describe/platforms/ios", () => ({
-  describeIos: vi.fn(
+vi.mock("../../src/tools/flows/flow-tree", () => ({
+  fetchFlowTree: vi.fn(
     async (): Promise<DescribeTreeData> => ({
       tree: currentTree(),
-      source: "ax-service",
+      source: "native-devtools",
     })
   ),
 }));
@@ -49,13 +50,6 @@ function mockRegistry(taps: TapCall[]): Registry {
     getTool: vi.fn((id: string) =>
       id === "gesture-tap" ? { inputSchema: { properties: { udid: {} } } } : undefined
     ),
-    // iOS flows gate on a native-devtools connection: report connected so the
-    // run proceeds, but expose no target app so the tree fetch falls back to
-    // the mocked AX tree above.
-    resolveService: vi.fn(async () => ({
-      isConnected: () => true,
-      listConnectedBundleIds: () => [],
-    })),
   } as unknown as Registry;
 }
 

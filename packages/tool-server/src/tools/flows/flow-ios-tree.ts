@@ -22,8 +22,9 @@ import {
  * independently, with no `accessible` prop required.
  *
  * This lives under flows/ (not the describe layer) on purpose: it's a flow-only
- * concern, and it falls back to the unchanged shared `fetchTree` (the AX tree)
- * whenever native-devtools isn't available, so the describe path is untouched.
+ * concern, and the describe path is untouched. When native-devtools is
+ * unavailable it throws rather than letting the caller degrade to the AX tree —
+ * see `fetchFlowTree` for why a silent fallback would flip flow outcomes.
  */
 
 // ── getFullHierarchy → DescribeNode adapter ──────────────────────────────────
@@ -229,34 +230,51 @@ const FULL_HIERARCHY_FIELDS = [
 ];
 
 /**
- * Query the raw UIView tree via native-devtools `getFullHierarchy`. Returns the
- * adapted tree, or `null` when native-devtools is unavailable / not yet
- * connected / errored — in which case the caller falls back to the AX tree.
+ * Query the raw UIView tree via native-devtools `getFullHierarchy` and adapt
+ * it. Throws — with the reason — when native-devtools is unavailable / not yet
+ * connected / errored: flows never degrade to the AX tree (see
+ * `fetchFlowTree`), so the caller's retry loop either rides out a transient
+ * failure or surfaces this message as the step's failure reason.
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
   device: DeviceInfo
-): Promise<DescribeTreeData | null> {
+): Promise<DescribeTreeData> {
+  let nativeApi: NativeDevtoolsApi;
   try {
     const ndRef = nativeDevtoolsRef(device);
-    const nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
-    const target = await resolveNativeTargetApp(nativeApi, undefined);
-
-    if (await nativeApi.requiresAppRestart(target.bundleId)) return null;
-
-    const rawResult = (await nativeApi.queryViewHierarchy(
-      target.bundleId,
-      "ViewHierarchy.getFullHierarchy",
-      {
-        fields: FULL_HIERARCHY_FIELDS,
-        maxDepth: 40,
-      }
-    )) as { windows?: unknown[]; error?: string };
-
-    if (rawResult.error) return null;
-
-    return { tree: adaptFullHierarchyToDescribeResult(rawResult), source: "native-devtools" };
-  } catch {
-    return null;
+    nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  } catch (err) {
+    throw new Error(
+      `native devtools is unavailable (${errMsg(err)}) — flows resolve selectors against the full view hierarchy it serves`
+    );
   }
+  // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
+  // already carry the actionable next step, so they propagate unwrapped.
+  const target = await resolveNativeTargetApp(nativeApi, undefined);
+
+  if (await nativeApi.requiresAppRestart(target.bundleId)) {
+    throw new Error(
+      `${target.bundleId} was launched before argent's instrumentation loaded — relaunch it (launch-app, or a flow \`launch\` step) so the full view hierarchy is readable`
+    );
+  }
+
+  const rawResult = (await nativeApi.queryViewHierarchy(
+    target.bundleId,
+    "ViewHierarchy.getFullHierarchy",
+    {
+      fields: FULL_HIERARCHY_FIELDS,
+      maxDepth: 40,
+    }
+  )) as { windows?: unknown[]; error?: string };
+
+  if (rawResult.error) {
+    throw new Error(`getFullHierarchy failed for ${target.bundleId}: ${rawResult.error}`);
+  }
+
+  return { tree: adaptFullHierarchyToDescribeResult(rawResult), source: "native-devtools" };
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

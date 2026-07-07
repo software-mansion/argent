@@ -70,8 +70,9 @@ const TYPE_FOCUS_SETTLE_MS = 500;
 const TYPE_FOCUS_TIMEOUT_MS = 3000;
 
 // Tree sources that surface `focused` (see flow-ios-tree / flow-android-tree /
-// the chromium DOM walker). The AX / uiautomator fallbacks never report it, so
-// polling them would burn the whole timeout on every type step.
+// the chromium DOM walker). A source outside this set (e.g. a platform served
+// by the shared `fetchTree`) never reports it, so polling would burn the whole
+// timeout on every type step — skip the focus wait there instead.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
   "native-devtools",
   "android-devtools",
@@ -206,11 +207,18 @@ function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFra
  * run was aborted. Resolving a frame from a settled tree is what keeps a tap
  * from landing mid-deceleration (where a scroll view swallows it) or acting on a
  * frame that has already moved.
+ *
+ * Throws when EVERY read in the window failed: that is a tree-source outage
+ * (e.g. native devtools disconnected mid-run — `fetchFlowTree` refuses to
+ * degrade to a trimmed tree), not a mid-animation blip, and swallowing it would
+ * convert the outage into a misleading "element not found" downstream. The
+ * throw lands in the step's structured report via `execLeafStep`'s catch.
  */
 export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefined> {
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   let prevFp: string | undefined;
   let prevTree: DescribeNode | undefined;
+  let lastError: Error | undefined;
   for (;;) {
     if (env.signal?.aborted) return undefined;
     try {
@@ -219,10 +227,14 @@ export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefin
       if (prevFp !== undefined && fp === prevFp) return tree;
       prevFp = fp;
       prevTree = tree;
-    } catch {
+    } catch (err) {
       // transient describe failure mid-navigation — retry until the deadline
+      lastError = err instanceof Error ? err : new Error(String(err));
     }
-    if (Date.now() >= deadline) return prevTree;
+    if (Date.now() >= deadline) {
+      if (prevTree === undefined && lastError !== undefined) throw lastError;
+      return prevTree;
+    }
     if (!(await sleepOrAbort(SETTLE_POLL_MS, env.signal))) return undefined;
   }
 }

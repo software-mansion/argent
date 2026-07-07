@@ -5,16 +5,16 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
-// fetchTree (in ui-tree-match) reads the iOS tree through describeIos, so the
-// scroll/settle loop is driven by mocking that one platform adapter. The mock
-// returns a scripted tree per call; `revealTarget()` flips it to a screen where
-// the target is visible (simulating a scroll bringing it on-screen).
+// The scroll/settle loop reads the flow tree, so it is driven by stubbing the
+// tree fetch itself (flows hard-fail rather than degrade to the AX tree). The
+// mock returns a scripted tree per call; `revealTarget()` flips it to a screen
+// where the target is visible (simulating a scroll bringing it on-screen).
 let currentTree: () => DescribeNode;
-vi.mock("../../src/tools/describe/platforms/ios", () => ({
-  describeIos: vi.fn(
+vi.mock("../../src/tools/flows/flow-tree", () => ({
+  fetchFlowTree: vi.fn(
     async (): Promise<DescribeTreeData> => ({
       tree: currentTree(),
-      source: "ax-service",
+      source: "native-devtools",
     })
   ),
 }));
@@ -62,13 +62,6 @@ function mockRegistry(swipes: SwipeCall[], onSwipe?: () => void): Registry {
     getTool: vi.fn((id: string) =>
       id === "gesture-swipe" ? { inputSchema: { properties: { udid: {} } } } : undefined
     ),
-    // iOS flows gate on a native-devtools connection: report connected so the
-    // run proceeds, but expose no target app so the tree fetch falls back to
-    // the mocked AX tree above.
-    resolveService: vi.fn(async () => ({
-      isConnected: () => true,
-      listConnectedBundleIds: () => [],
-    })),
   } as unknown as Registry;
 }
 

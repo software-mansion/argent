@@ -28,8 +28,10 @@ import {
  *
  * This module parses the same dump without that trim: it flattens the
  * hierarchy keeping **every** view with a `resource-id` (RN `testID`) or a
- * label — exactly the shape `flow-ios-tree.ts` produces on iOS. Falls back to
- * the shared `fetchTree` (the trimmed AX tree) when the helper is unavailable.
+ * label — exactly the shape `flow-ios-tree.ts` produces on iOS. Throws when
+ * the helper is unavailable rather than letting the caller degrade to the
+ * trimmed uiautomator tree — see `fetchFlowTree` for why a silent fallback
+ * would flip flow outcomes.
  */
 
 // Flows keep far more of the dump than the trimmed agent describe, so raise
@@ -190,25 +192,30 @@ export function adaptFullAndroidHierarchyToDescribeResult(
 
 /**
  * Query the Android view hierarchy via the android-devtools helper and adapt
- * it untrimmed. Returns the adapted tree, or `null` when the helper is
- * unavailable / errors — in which case the caller falls back to the trimmed
- * AX tree.
+ * it untrimmed. Throws — with the reason — when the helper is unavailable /
+ * errors: flows never degrade to the trimmed uiautomator tree (see
+ * `fetchFlowTree`), so the caller's retry loop either rides out a transient
+ * failure or surfaces this message as the step's failure reason.
  */
 export async function queryAndroidFullHierarchy(
   registry: Registry,
   device: DeviceInfo
-): Promise<DescribeTreeData | null> {
+): Promise<DescribeTreeData> {
+  let devtools: AndroidDevtoolsApi;
   try {
     const ref = androidDevtoolsRef(device);
-    const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
-    const [{ xml }, size] = await Promise.all([
-      // clearCache: await/assert polls must see text changes, not cached reads.
-      devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true }),
-      devtools.getScreenSize(),
-    ]);
-    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, size.width, size.height);
-    return { tree, source: "android-devtools" };
-  } catch {
-    return null;
+    devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `the android devtools helper is unavailable (${msg}) — flows resolve testID selectors against the full hierarchy it serves; confirm the device is unlocked and the helper can be installed (\`adb install -t\`)`
+    );
   }
+  const [{ xml }, size] = await Promise.all([
+    // clearCache: await/assert polls must see text changes, not cached reads.
+    devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true }),
+    devtools.getScreenSize(),
+  ]);
+  const tree = adaptFullAndroidHierarchyToDescribeResult(xml, size.width, size.height);
+  return { tree, source: "android-devtools" };
 }

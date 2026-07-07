@@ -5,19 +5,22 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
-// The iOS test drives the type step against the trimmed AX tree (a source that
-// can't report focus) by mocking the one platform adapter, exactly like
-// flow-scroll.test.ts. The Android test never reaches this mock — its tree
-// comes from the android-devtools getHierarchy stub below.
+// The iOS test exercises the focus-wait's source gate (a source that can't
+// report focus bails out of the poll) by stubbing the tree fetch with an
+// `ax-service`-tagged tree — flows no longer degrade to that source on their
+// own, so the stub is the only way to present it. The Android test leaves
+// `currentFetch` unset and drives the REAL fetch path: its tree comes from the
+// android-devtools getHierarchy stub below.
 let currentTree: () => DescribeNode;
-vi.mock("../../src/tools/describe/platforms/ios", () => ({
-  describeIos: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "ax-service",
-    })
-  ),
-}));
+let currentFetch: (() => DescribeTreeData) | undefined;
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/tools/flows/flow-tree")>();
+  return {
+    fetchFlowTree: vi.fn(async (...args: Parameters<typeof actual.fetchFlowTree>) =>
+      currentFetch ? currentFetch() : actual.fetchFlowTree(...args)
+    ),
+  };
+});
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
@@ -47,15 +50,12 @@ function mockRegistry(calls: Call[], getHierarchy: () => { xml: string }): Regis
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-    // One service object serves both platforms' resolveService calls: the
-    // Android flow tree reads getHierarchy/getScreenSize; the iOS run reads
-    // the native-devtools connection state (none, so it falls back to the
-    // mocked AX tree above).
+    // The Android flow tree reads getHierarchy/getScreenSize off the resolved
+    // android-devtools service; the iOS test never resolves a service (its
+    // tree fetch is stubbed via `currentFetch`).
     resolveService: vi.fn(async () => ({
       getHierarchy: vi.fn(async () => getHierarchy()),
       getScreenSize: vi.fn(async () => ({ width: 1080, height: 1920 })),
-      isConnected: () => true,
-      listConnectedBundleIds: () => [],
     })),
   } as unknown as Registry;
 }
@@ -73,6 +73,7 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-type-"));
+  currentFetch = undefined;
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -117,7 +118,7 @@ describe("type directive focus wait", () => {
     expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(800);
   });
 
-  it("skips the focus poll on a source that can't report focus (iOS AX tree)", async () => {
+  it("skips the focus poll on a source that can't report focus", async () => {
     let axReads = 0;
     currentTree = () => {
       axReads++;
@@ -134,6 +135,7 @@ describe("type directive focus wait", () => {
         ],
       };
     };
+    currentFetch = () => ({ tree: currentTree(), source: "ax-service" });
     const calls: Call[] = [];
     const registry = mockRegistry(calls, () => ({ xml: emailXml(false) }));
 

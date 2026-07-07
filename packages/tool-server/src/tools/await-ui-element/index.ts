@@ -10,6 +10,7 @@ import type {
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
@@ -213,13 +214,14 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     device: DeviceInfo,
     params: Params,
     services: Record<string, unknown>,
-    isTvOs: boolean
+    isTvOs: boolean,
+    androidIsTv: boolean
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
       return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
     }
     if (device.platform === "android") {
-      return describeAndroid(registry, device.id);
+      return describeAndroid(registry, device.id, undefined, androidIsTv);
     }
     if (device.platform === "vega") {
       return describeVega(device.id);
@@ -273,8 +275,11 @@ or before tapping an element that appears asynchronously.`,
       else if (device.platform === "vega") await ensureDeps(vegaRequires);
 
       // Resolve once, outside the poll loop — re-probing `xcrun` per fetch would
-      // blow the per-fetch budget for a fake UDID that never caches.
+      // blow the per-fetch budget for a fake UDID that never caches. Same for
+      // the Android TV probe: a serial that isn't listed is never cached, so
+      // leaving it inside `describeAndroid` would spawn `adb devices` per poll.
       const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
+      const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
 
       // Start the wait clock after setup so its fixed cost isn't charged against
       // timeoutMs (the deadline should bound polling, not device resolution).
@@ -295,7 +300,7 @@ or before tapping an element that appears asynchronously.`,
       let everMatched = false;
 
       const poll = await pollDescribeTree<WaitResult>({
-        fetchTree: () => fetchTree(device, params, services, isTvOs),
+        fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv),
         timeoutMs,
         pollIntervalMs,
         signal,
