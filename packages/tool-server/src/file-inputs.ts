@@ -152,33 +152,36 @@ async function extractTarUpload(
         `Re-run the tool to upload the path again.`
     );
   }
-  if (!wire.contentHash) {
-    throw new FileInputError(
-      `Upload for "${wire.path}" is missing a content hash — update argent to a version ` +
-        `that supports tar uploads for remote sessions.`
-    );
-  }
-  if (entry.sha256 !== wire.contentHash) {
-    throw new FileInputError(
-      `Upload content hash mismatch for "${wire.path}" — the tarball may have been ` +
-        `corrupted in transit. Re-run the tool to upload again.`
-    );
-  }
-  const hashPrefix = entry.sha256.slice(0, 16);
-  const extractDir = await mkdtemp(join(tmpdir(), `argent-tar-upload-${hashPrefix}-`));
-  tempDirs.push(extractDir);
-  // The sweeper no longer owns this tar, so remove it even if extraction throws.
-  let uploaded: string;
+  // The HTTP layer already removed this entry from the upload registry, so the
+  // sweeper and dispose() can no longer reclaim entry.tarPath — remove it on
+  // every exit from here, including the hash-check failures below.
   try {
-    uploaded = await safeExtractTarGz(entry.tarPath, extractDir, basename(wire.path));
+    if (!wire.contentHash) {
+      throw new FileInputError(
+        `Upload for "${wire.path}" is missing a content hash — update argent to a version ` +
+          `that supports tar uploads for remote sessions.`
+      );
+    }
+    if (entry.sha256 !== wire.contentHash) {
+      throw new FileInputError(
+        `Upload content hash mismatch for "${wire.path}" — the tarball may have been ` +
+          `corrupted in transit. Re-run the tool to upload again.`
+      );
+    }
+    const extractDir = await mkdtemp(
+      join(tmpdir(), `argent-tar-upload-${entry.sha256.slice(0, 16)}-`)
+    );
+    tempDirs.push(extractDir);
+    const uploaded = await safeExtractTarGz(entry.tarPath, extractDir, basename(wire.path));
+    return { value: uploaded, meta: { ...meta, viaUpload: true } };
   } catch (err) {
+    if (err instanceof FileInputError) throw err;
     throw new FileInputError(
       `Could not extract the uploaded archive for "${wire.path}": ${err instanceof Error ? err.message : String(err)}`
     );
   } finally {
     await rm(entry.tarPath, { force: true }).catch(() => {});
   }
-  return { value: uploaded, meta: { ...meta, viaUpload: true } };
 }
 
 async function resolveOne(

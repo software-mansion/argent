@@ -278,14 +278,18 @@ describe("resolveFileInputs — tar-upload kind", () => {
         (id) => (id === uploadId ? entry : undefined)
       )
     ).rejects.toThrow(/content hash mismatch/i);
+    // The upload tar must be reclaimed even though the failure is before extraction —
+    // the registry entry is already gone, so nothing else would clean it up.
+    await expect(fs.stat(tarPath)).rejects.toThrow();
   });
 
   it("refuses to extract archives with path-traversal members", async () => {
     const tarPath = path.join(tmpDir, "malicious.tar.gz");
     const innocent = path.join(tmpDir, "innocent.txt");
     await fs.writeFile(innocent, "pwned");
-    // BSD/GNU tar: rewrite member names to climb out of the extract dir.
-    await execFileAsync("tar", ["-czf", tarPath, "-s", ",^,../../,", "-C", tmpDir, "innocent.txt"]);
+    // -P keeps the absolute member name (portable across GNU and bsd tar); an
+    // absolute path escapes the extract dir and must be refused before extraction.
+    await execFileAsync("tar", ["-c", "-z", "-P", "-f", tarPath, innocent]);
     const uploadId = "malicious";
     const entry = await uploadEntry(tarPath);
 

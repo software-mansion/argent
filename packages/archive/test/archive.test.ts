@@ -4,12 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import {
-  ArchiveError,
-  createTarGzArgs,
-  createTarGzFile,
-  safeExtractTarGz,
-} from "../src/index.js";
+import { ArchiveError, createTarGzArgs, createTarGzFile, safeExtractTarGz } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
 let tmpDir: string;
@@ -73,11 +68,13 @@ describe("createTarGzFile + safeExtractTarGz round-trip", () => {
 });
 
 describe("safeExtractTarGz hardening", () => {
-  it("rejects an archive containing a tar-slip path", async () => {
-    await fs.writeFile(path.join(tmpDir, "innocent.txt"), "x");
+  it("rejects an archive with an escaping (absolute) member path", async () => {
+    const abs = path.join(tmpDir, "innocent.txt");
+    await fs.writeFile(abs, "x");
     const tarPath = path.join(tmpDir, "slip.tar.gz");
-    // bsdtar `-s ,^,../../,` rewrites each member to escape the extract dir.
-    await execFileAsync("tar", ["-czf", tarPath, "-s", ",^,../../,", "-C", tmpDir, "innocent.txt"]);
+    // -P keeps the absolute member name (portable across GNU and bsd tar); an
+    // absolute path escapes the extract dir and must be rejected before extraction.
+    await execFileAsync("tar", ["-c", "-z", "-P", "-f", tarPath, abs]);
 
     const dest = path.join(tmpDir, "dest");
     await fs.mkdir(dest);

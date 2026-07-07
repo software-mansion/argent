@@ -515,7 +515,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       inFlightUploadBytes += chunk.length;
       digest.update(chunk);
       if (received > maxUploadBytes) {
-        abort(413, `Upload exceeds the ${bytesUtil(maxUploadBytes, { unitSeparator: " " })} limit.`);
+        abort(
+          413,
+          `Upload exceeds the ${bytesUtil(maxUploadBytes, { unitSeparator: " " })} limit.`
+        );
       } else if (pendingUploadBytes() > maxPendingUploadBytes) {
         abort(
           507,
@@ -775,8 +778,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // instead of being recorded as anonymous. Only present when there is
       // attribution worth propagating.
       let recordChildInvocation:
-        | ((childInvocationId: string, childArgs?: unknown) => () => void)
-        | undefined;
+        ((childInvocationId: string, childArgs?: unknown) => () => void) | undefined;
       const recordInvocation = options?.recordInvocation;
       if (recordInvocation) {
         const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
