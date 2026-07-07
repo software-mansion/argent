@@ -28,7 +28,8 @@ vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.f
 const PROJECT_ROOT = "/proj";
 
 // Mock registry: invokeTool returns a canned result; the CDP resolveService
-// (page-fronting) throws so its best-effort swallow path runs; getSnapshot is
+// throws by default — page-fronting swallows that, and a test that needs a
+// reachable CDP api (the pinned-device attach) overrides it; getSnapshot is
 // empty so teardown skips disposing a session; getTool is a stub.
 function makeRegistry(invoke: (id: string, args: unknown) => Promise<unknown> = async () => ({})) {
   return {
@@ -142,6 +143,11 @@ describe("flow-execute chromium boot", () => {
   it("does not boot or tear down when an explicit --device pins an existing instance", async () => {
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n");
     const registry = makeRegistry();
+    const refreshViewport = vi.fn(async () => ({ width: 800, height: 600 }));
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport,
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
 
     const result = await runFlow(registry, {
       name: "pinned",
@@ -155,9 +161,33 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPid).not.toHaveBeenCalled();
     expect(result.device).toBe("chromium-cdp-9999");
 
-    // The launch step falls back to an in-place launch-app (viewport refresh).
+    // The launch step attaches in place over CDP (viewport refresh). It must
+    // NOT route the launch value through launch-app: on chromium that value is
+    // an app *path*, which launch-app's bundleId grammar rejects under the real
+    // registry's input validation.
     const invokedTools = (registry.invokeTool as any).mock.calls.map((c: unknown[]) => c[0]);
-    expect(invokedTools).toContain("launch-app");
+    expect(invokedTools).not.toContain("launch-app");
+    expect(refreshViewport).toHaveBeenCalled();
     expect(result.ok).toBe(true);
+    expect(result.steps[0]).toMatchObject({ kind: "launch", status: "pass" });
+  });
+
+  it("errors the launch step (and skips the rest) when the pinned instance is unreachable", async () => {
+    const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: after\n");
+    const registry = makeRegistry(); // resolveService throws: no CDP session behind the pinned id
+
+    const result = await runFlow(registry, {
+      name: "pinned-dead",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "launch", status: "error" });
+    expect(result.steps[0].reason).toContain(
+      'could not attach to chromium instance "chromium-cdp-9999"'
+    );
+    expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
   });
 });

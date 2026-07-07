@@ -277,8 +277,13 @@ async function treeSourceGate(
  *
  * Chromium can't relaunch in place: `execute` boots a fresh instance before
  * step 1 (`state.chromiumBooted`), so here the step just settles it. The
- * exception is the `--device` opt-out, where the runner did not boot and falls
- * back to an in-place `launch-app` instead of spawning a second window.
+ * exception is a run the runner did not boot for — an explicit `device` pinning
+ * an already-running instance, or auto-detection picking a booted one — where
+ * the step attaches in place instead of spawning a second window: it confirms
+ * the CDP session is reachable and refreshes the cached viewport. That is done
+ * against the CDP service directly, not via `launch-app` — the chromium launch
+ * value is an app *path*, which `launch-app`'s bundleId grammar rejects (and
+ * its chromium handler is this same viewport refresh anyway).
  */
 async function runLaunch(state: ExecState, app: Launch): Promise<{ ok: boolean; reason?: string }> {
   const { registry, device, signal } = state;
@@ -288,14 +293,18 @@ async function runLaunch(state: ExecState, app: Launch): Promise<{ ok: boolean; 
       await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal); // already booted + fronted; just settle
       return { ok: true };
     }
-    const appPath = appIdForPlatform(app, "chromium");
-    if (!appPath) {
+    if (!appIdForPlatform(app, "chromium")) {
       return { ok: false, reason: `no chromium app declared — add a chromium launch entry` };
     }
     try {
-      await invokeOnDevice(state, "launch-app", { bundleId: appPath });
+      const ref = chromiumCdpRef(device);
+      const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
+      await api.refreshViewport();
     } catch (err) {
-      return { ok: false, reason: `launch-app failed: ${errMsg(err)}` };
+      return {
+        ok: false,
+        reason: `could not attach to chromium instance "${device.id}": ${errMsg(err)}`,
+      };
     }
     await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
     return { ok: true };

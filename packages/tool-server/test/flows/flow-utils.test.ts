@@ -515,7 +515,7 @@ describe("chromiumLaunchSpec", () => {
     expect(chromiumLaunchSpec(undefined)).toBeNull();
   });
 
-  it("appIdForPlatform returns the chromium path (for the non-boot launch-app fallback)", () => {
+  it("appIdForPlatform returns the chromium path (the runner's declared-target guard)", () => {
     expect(appIdForPlatform({ chromium: { path: "./app", args: ["--e2e"] } }, "chromium")).toBe(
       "./app"
     );
