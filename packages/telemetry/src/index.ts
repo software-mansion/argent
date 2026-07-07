@@ -22,7 +22,8 @@ import { isEnabled, writeConsentFlag, getConsentState } from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import type { EventName, EventPropertyMap } from "./events.js";
 
-export type { EventName, EventPropertyMap } from "./events.js";
+export type { EventName, EventPropertyMap, Platform } from "./events.js";
+export { PLATFORMS } from "./events.js";
 export type { Runtime } from "./base-props.js";
 export type { TelemetryResetResult } from "./uninstall-reset.js";
 export { resetLocalTelemetryState } from "./uninstall-reset.js";
