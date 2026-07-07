@@ -82,3 +82,22 @@ export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | 
 export async function isTvOsSimulator(udid: string): Promise<boolean> {
   return (await getSimulatorRuntimeKind(udid)) === "tv";
 }
+
+/**
+ * Synchronous, cache-only view of a UDID's runtime kind: returns the memoized
+ * "mobile"/"tv" verdict if a prior `getSimulatorRuntimeKind` call resolved it,
+ * otherwise undefined. It NEVER runs `simctl` — callers on a latency-sensitive
+ * hot path (telemetry platform inference) use this to distinguish tvOS from iOS
+ * only when the kind is already known, and fall back to the coarse platform when
+ * it isn't, rather than paying a ~100ms probe per call. The cache is warmed as a
+ * side effect of the describe/screenshot/keyboard/streaming paths that any real
+ * tvOS session exercises.
+ */
+export function getCachedSimulatorRuntimeKind(udid: string): "mobile" | "tv" | undefined {
+  return runtimeKindCache.get(udid);
+}
+
+/** Test-only: clear the iOS runtime-kind memo so cases don't leak verdicts. */
+export function __resetSimulatorRuntimeKindCacheForTesting(): void {
+  runtimeKindCache.clear();
+}

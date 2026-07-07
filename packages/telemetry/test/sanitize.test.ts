@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "@argent/registry";
 import { sanitize, ALLOWED } from "../src/sanitize.js";
-import { EVENT_NAMES } from "../src/events.js";
+import { EVENT_NAMES, PLATFORMS } from "../src/events.js";
 
 describe("sanitize", () => {
   describe("event allowlist", () => {
@@ -44,6 +44,20 @@ describe("sanitize", () => {
       expect(sanitize("tool:invoke", { tool: "list-devices", platform: "unknown" })).toEqual({
         tool: "list-devices",
       });
+    });
+
+    it("accepts every telemetry platform, including the TV variants", () => {
+      // The TV variants (`tvos`, `android-tv`) are telemetry-only refinements of
+      // `ios` / `android`; the sanitizer must let them through so the split
+      // survives to PostHog.
+      for (const platform of PLATFORMS) {
+        expect(sanitize("tool:invoke", { tool: "describe", platform })).toEqual({
+          tool: "describe",
+          platform,
+        });
+      }
+      expect(PLATFORMS).toContain("tvos");
+      expect(PLATFORMS).toContain("android-tv");
     });
 
     it("drops the legacy `from_tar` decision (developer-only path is off the books)", () => {

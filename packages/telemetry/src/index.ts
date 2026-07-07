@@ -16,7 +16,8 @@ import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import { forget as forgetImpl, type ForgetOptions, type ForgetResult } from "./erasure.js";
 import type { EventName, EventPropertyMap } from "./events.js";
 
-export type { EventName, EventPropertyMap } from "./events.js";
+export type { EventName, EventPropertyMap, Platform } from "./events.js";
+export { PLATFORMS } from "./events.js";
 export type { Runtime } from "./base-props.js";
 export type { ForgetOptions, ForgetResult } from "./erasure.js";
 export type { ConsentState, ConsentSource } from "./consent.js";
