@@ -750,7 +750,16 @@ function fromYamlStep(raw: YamlStep): FlowStep {
       );
     }
     const step: FlowStep = { kind: "snapshot", name: b.name };
-    if (b.maxMismatch !== undefined) step.maxMismatch = Number(b.maxMismatch);
+    if (b.maxMismatch !== undefined) {
+      // The runner compares `mismatchPercentage <= maxMismatch` — a NaN here
+      // (e.g. from "5%") would make every comparison false, failing the
+      // snapshot even on byte-identical frames.
+      const m = Number(b.maxMismatch);
+      if (!Number.isFinite(m) || m < 0 || m > 100) {
+        badEntry(raw, "snapshot maxMismatch must be a number between 0 and 100 (percent of pixels)");
+      }
+      step.maxMismatch = m;
+    }
     return step;
   }
 

@@ -419,6 +419,19 @@ describe("parseFlow", () => {
     expect(() => parseFlow("steps:\n  - snapshot: ../evil\n")).toThrow(/must match/);
   });
 
+  it("accepts a string-number maxMismatch", () => {
+    const flow = parseFlow('steps:\n  - snapshot: { name: home, maxMismatch: "1.5" }\n');
+    expect(flow.steps).toEqual([{ kind: "snapshot", name: "home", maxMismatch: 1.5 }]);
+  });
+
+  it("rejects a non-numeric, negative, or out-of-range maxMismatch", () => {
+    for (const bad of ['"5%"', "-1", "101", ".nan"]) {
+      expect(() => parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${bad} }\n`)).toThrow(
+        "snapshot maxMismatch must be a number between 0 and 100"
+      );
+    }
+  });
+
   it("rejects a tap body mixing a selector with coordinates", () => {
     expect(() => parseFlow("steps:\n  - tap: { identifier: box, x: 0.5, y: 0.5 }\n")).toThrow(
       "tap takes a selector or x/y coordinates, not both"
