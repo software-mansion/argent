@@ -211,6 +211,34 @@ export const ALLOWED: ValidatorMap = {
     total_tool_calls: COUNT,
     ...FAILURE_SIGNAL,
   },
+  "lens:preview_opened": {
+    round: COUNT,
+    element_count: COUNT,
+    variant_count: COUNT,
+    is_cli_session: bool,
+    platform: PLATFORM,
+  },
+  "lens:round_completed": {
+    round: COUNT,
+    element_count: COUNT,
+    variant_count: COUNT,
+    annotation_count: COUNT,
+    element_comment_count: COUNT,
+    skipped_comment_count: COUNT,
+    has_global_comment: bool,
+    is_cli_session: bool,
+    had_parked_await: bool,
+    round_duration_ms: DURATION_MS,
+    platform: PLATFORM,
+  },
+  "lens:round_abandoned": {
+    round: COUNT,
+    element_count: COUNT,
+    variant_count: COUNT,
+    had_parked_await: bool,
+    is_cli_session: bool,
+    platform: PLATFORM,
+  },
 };
 
 /** Strip keys and values that are not allowed for this event. */

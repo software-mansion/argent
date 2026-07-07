@@ -24,7 +24,8 @@
  * parked is preserved across that roll and delivered on the next await.
  */
 
-import { TypedEventEmitter } from "@argent/registry";
+import { TypedEventEmitter, type Platform } from "@argent/registry";
+import { classifyDevice } from "./device-info";
 
 /** How the preview UI locates the live on-screen element for a proposal. */
 export interface VariantMatch {
@@ -163,6 +164,44 @@ export interface StoreSnapshot {
   lensAgentChoice: string | null;
 }
 
+/**
+ * Privacy-safe aggregate shape of one finished round, carried by the
+ * `roundCompleted` store event so the tool-server's composition layer can emit
+ * it as `lens:round_completed` telemetry WITHOUT the store depending on the
+ * telemetry package. Only counts/booleans/durations — never element names,
+ * comment text, variant code, file paths, or device identifiers. Structurally
+ * assignable to `LensRoundCompletedProps` in @argent/telemetry; if the two
+ * drift, the `track()` call site in index.ts fails to compile.
+ */
+export interface RoundCompletedStats {
+  round: number;
+  element_count: number;
+  variant_count: number;
+  annotation_count: number;
+  element_comment_count: number;
+  skipped_comment_count: number;
+  has_global_comment: boolean;
+  is_cli_session: boolean;
+  had_parked_await: boolean;
+  round_duration_ms: number;
+  platform?: Platform;
+}
+
+/**
+ * Privacy-safe aggregate of a round that was DISCARDED before the human
+ * submitted, carried by the `roundAbandoned` store event (the drop-off half of
+ * the funnel). Same privacy contract and telemetry-decoupling rationale as
+ * `RoundCompletedStats`; structurally assignable to `LensRoundAbandonedProps`.
+ */
+export interface RoundAbandonedStats {
+  round: number;
+  element_count: number;
+  variant_count: number;
+  had_parked_await: boolean;
+  is_cli_session: boolean;
+  platform?: Platform;
+}
+
 type StoreEvents = {
   /** Emitted whenever proposals change (UI may live-refresh). */
   changed: () => void;
@@ -175,6 +214,22 @@ type StoreEvents = {
   awaitParked: () => void;
   /** Emitted after a successful `submitSelection` — the round is done. */
   selectionSubmitted: () => void;
+  /**
+   * Emitted once when a round is FIRST finalized (not on a resubmit of the same
+   * round), carrying the privacy-safe aggregate `RoundCompletedStats`. The
+   * tool-server relays it as `lens:round_completed` telemetry; kept separate
+   * from `selectionSubmitted` (which fires on every submit, incl. resubmits) so
+   * the human-decision metric is counted exactly once per round.
+   */
+  roundCompleted: (stats: RoundCompletedStats) => void;
+  /**
+   * Emitted once when a round that had staged proposals is discarded before the
+   * human submitted (`reset()` on a non-completed, non-empty round). The
+   * tool-server relays it as `lens:round_abandoned` telemetry — the drop-off
+   * signal `roundCompleted` can't provide. Never fires for the happy-path roll
+   * (that reset runs only when the round was completed).
+   */
+  roundAbandoned: (stats: RoundAbandonedStats) => void;
   /**
    * Emitted when a CLI-driven Lens session is begun or ended (`argent lens`).
    * The tool-server's window manager listens: begin ⇒ open the window now, end
@@ -296,6 +351,23 @@ export class VariantProposalStore {
 
   /** Begin a fresh round, discarding the previous one's proposals/selections. */
   reset(): void {
+    // Drop-off telemetry: a round with staged proposals that is being discarded
+    // WITHOUT a submit is an abandonment (window closed, `argent lens` exited
+    // mid-review, or the round superseded). Emit BEFORE clearing state, and only
+    // for this case — a completed round reaching reset() is the happy-path roll
+    // (autoRollIfCompleted runs only when completed), not a loss. proposals.length
+    // is 0 after a reset, so re-entering reset() for the same round can't double
+    // count. Everything here is a privacy-safe aggregate — no names/text/raw ids.
+    if (!this.completed && this.proposals.length > 0) {
+      this.events.emit("roundAbandoned", {
+        round: this.round,
+        element_count: this.proposals.length,
+        variant_count: this.proposals.reduce((n, p) => n + p.variants.length, 0),
+        had_parked_await: this.waitersList.some((w) => !w.settled),
+        is_cli_session: this.cliSession,
+        platform: this.device ? classifyDevice(this.device) : undefined,
+      });
+    }
     // Any await still parked on the round being discarded must not hang
     // forever — resolve it so the agent gets a definitive answer and can
     // re-propose. (Reachable when a second caller proposes/resets while an
@@ -691,6 +763,34 @@ export class VariantProposalStore {
     }
     this.events.emit("changed");
     this.events.emit("selectionSubmitted");
+    // Count the human decision exactly once per round: a resubmit updates the
+    // same frozen outcome in place (the submit route is unauthenticated and the
+    // UI re-enables its button), so `!wasResubmit` guards against double-counting.
+    // Everything here is a privacy-safe aggregate derived from the just-frozen
+    // outcome and the still-intact proposals (reset happens later, on the next
+    // propose/roll), so no element names, comment text, or paths ever leave.
+    const outcome = this.lastOutcome;
+    if (!wasResubmit && outcome) {
+      const firstCreatedAt =
+        this.proposals.length > 0
+          ? Math.min(...this.proposals.map((p) => p.createdAt))
+          : outcome.completedAt;
+      this.events.emit("roundCompleted", {
+        round: outcome.round,
+        element_count: this.proposals.length,
+        variant_count: this.proposals.reduce((n, p) => n + p.variants.length, 0),
+        annotation_count: outcome.annotations.length,
+        element_comment_count: outcome.selections.filter((s) => s.comment).length,
+        skipped_comment_count: outcome.selections.filter(
+          (s) => s.chosenVariant == null && s.comment
+        ).length,
+        has_global_comment: Boolean(outcome.globalComment),
+        is_cli_session: this.cliSession,
+        had_parked_await: toSettle.length > 0,
+        round_duration_ms: Math.max(0, outcome.completedAt - firstCreatedAt),
+        platform: this.device ? classifyDevice(this.device) : undefined,
+      });
+    }
     return { ok: true, round, resolved: this.submitted.length };
   }
 

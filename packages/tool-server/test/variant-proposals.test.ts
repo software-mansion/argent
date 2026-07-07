@@ -7,6 +7,26 @@ const variant = (name: string, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+const KNOWN_PLATFORMS = new Set(["ios", "ios-remote", "android", "chromium", "vega"]);
+
+/**
+ * Assert a Lens telemetry payload carries only privacy-safe primitives: numbers,
+ * booleans, `undefined`, or (only for `platform`) a known platform enum. Any
+ * leaked user content — an element name, comment, id, or path — would be an
+ * arbitrary string that is none of these, so this fails without needing to know
+ * the specific text (strictly stronger than a literal blocklist).
+ */
+function assertPrivacySafe(payload: unknown): void {
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    const ok =
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      value === undefined ||
+      (key === "platform" && typeof value === "string" && KNOWN_PLATFORMS.has(value));
+    expect(ok, `field ${key}=${JSON.stringify(value)} is not a privacy-safe primitive`).toBe(true);
+  }
+}
+
 describe("VariantProposalStore — proposing (non-blocking)", () => {
   it("accumulates variants per element and across elements", () => {
     const s = new VariantProposalStore();
@@ -508,5 +528,199 @@ describe("VariantProposalStore — Lens-owned devices", () => {
     s.markDeviceOwned(" udid-3 ");
     expect(s.isDeviceOwned("udid-3")).toBe(true);
     expect(s.takeOwnedDevices()).toEqual(["udid-3"]);
+  });
+});
+
+describe("VariantProposalStore — roundCompleted telemetry event", () => {
+  it("emits once per round with privacy-safe aggregate stats", async () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") }); // v1
+    s.proposeVariant({ element: "Foo", variant: variant("Ghost") }); // v2
+    s.proposeVariant({ element: "Bar", variant: variant("Large") }); // v3
+    s.proposeVariant({ element: "Baz", variant: variant("Shadow") }); // v4
+    const foo = s.snapshot().proposals.find((p) => p.element === "Foo")!;
+    const bar = s.snapshot().proposals.find((p) => p.element === "Bar")!;
+    const baz = s.snapshot().proposals.find((p) => p.element === "Baz")!;
+
+    const p = s.awaitSelection({ timeoutMs: 5000 }); // park a waiter
+    await Promise.resolve();
+    s.submitSelection({
+      selections: [
+        { elementId: foo.id, variantId: foo.variants[1]!.id }, // chosen
+        { elementId: bar.id, variantId: null, comment: "tweak this" }, // skipped + comment
+        { elementId: baz.id, variantId: null }, // skipped, no comment
+      ],
+      globalComment: "ship it",
+      annotations: [
+        { target: "Header", match: { by: "text", value: "Header" }, comment: "move up" },
+      ],
+    });
+    await p;
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      round: 1,
+      element_count: 3,
+      variant_count: 4,
+      annotation_count: 1,
+      element_comment_count: 1, // only Bar carried a per-element comment
+      skipped_comment_count: 1, // and Bar was skipped, so that comment is a skip comment
+      has_global_comment: true,
+      is_cli_session: false,
+      had_parked_await: true,
+    });
+    // No device was bound (no udid passed), so platform is omitted.
+    expect((stats[0] as { platform?: string }).platform).toBeUndefined();
+    const dur = (stats[0] as { round_duration_ms: number }).round_duration_ms;
+    expect(typeof dur).toBe("number");
+    expect(dur).toBeGreaterThanOrEqual(0);
+    // Payload must be counts/booleans only — no element names, comments, ids.
+    expect(JSON.stringify(stats[0])).not.toMatch(/ship it|tweak this|move up|Foo|Bar|Baz|Header/);
+    // Content-agnostic guard (strictly stronger than the literal blocklist): every
+    // value must be a number, a boolean, or (only for `platform`) a known platform
+    // enum — any leaked free-text would be a string that is none of those.
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("captures platform and variant counts from the bound device", () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+
+    // Bind a chromium device via udid; propose one element with two variants.
+    s.proposeVariant({ element: "Foo", udid: "chromium-cdp-9222", variant: variant("Bold") });
+    s.proposeVariant({ element: "Foo", variant: variant("Ghost") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      element_count: 1,
+      variant_count: 2,
+      platform: "chromium",
+    });
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("does NOT re-emit on a resubmit of the same round", () => {
+    const s = new VariantProposalStore();
+    let count = 0;
+    s.events.on("roundCompleted", () => count++);
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    const foo = s.snapshot().proposals[0]!;
+
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: null }] }); // resubmit
+    expect(count).toBe(1);
+  });
+
+  it("re-emits for a fresh round after an auto-roll, with had_parked_await=false when queued", () => {
+    const s = new VariantProposalStore();
+    const rounds: number[] = [];
+    s.events.on("roundCompleted", (x) => rounds.push(x.round));
+
+    // Round 1: submit with no await parked -> queued, had_parked_await=false.
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo1 = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo1.id, variantId: foo1.variants[0]!.id }] });
+
+    // Next propose auto-rolls into round 2; submit again.
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+    const bar = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: bar.id, variantId: bar.variants[0]!.id }] });
+
+    expect(rounds).toEqual([1, 2]);
+  });
+
+  it("flags is_cli_session and had_parked_await=false on the CLI path", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ is_cli_session: boolean; had_parked_await: boolean }> = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+    s.setCliSession(true, []);
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.is_cli_session).toBe(true);
+    expect(stats[0]!.had_parked_await).toBe(false);
+  });
+});
+
+describe("VariantProposalStore — roundAbandoned telemetry event", () => {
+  it("emits once with aggregate stats when a staged round is discarded via reset()", () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    s.proposeVariant({ element: "Foo", udid: "chromium-cdp-9222", variant: variant("Bold") });
+    s.proposeVariant({ element: "Foo", variant: variant("Ghost") });
+    s.proposeVariant({ element: "Bar", variant: variant("Large") });
+    s.reset(); // human closed the window / session ended without submitting
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      round: 1,
+      element_count: 2,
+      variant_count: 3,
+      had_parked_await: false,
+      is_cli_session: false,
+      platform: "chromium",
+    });
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("does NOT emit for the happy-path roll after a completed round", () => {
+    const s = new VariantProposalStore();
+    let abandoned = 0;
+    let completed = 0;
+    s.events.on("roundAbandoned", () => abandoned++);
+    s.events.on("roundCompleted", () => completed++);
+
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+    // This propose auto-rolls (reset on a COMPLETED round) — not an abandonment.
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+
+    expect(completed).toBe(1);
+    expect(abandoned).toBe(0);
+  });
+
+  it("does NOT emit when reset() runs on an empty round", () => {
+    const s = new VariantProposalStore();
+    let abandoned = 0;
+    s.events.on("roundAbandoned", () => abandoned++);
+    s.reset(); // nothing staged
+    expect(abandoned).toBe(0);
+  });
+
+  it("flags had_parked_await=true when a parked await is superseded by reset()", async () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ had_parked_await: boolean }> = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const parked = s.awaitSelection({ timeoutMs: 5000 });
+    await Promise.resolve();
+    s.reset(); // supersede the round out from under the parked await
+
+    const outcome = await parked; // the await must settle, not hang
+    expect(outcome.status).toBe("no_proposals");
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.had_parked_await).toBe(true);
+  });
+
+  it("emits exactly once per abandoned round (a second reset can't double count)", () => {
+    const s = new VariantProposalStore();
+    let abandoned = 0;
+    s.events.on("roundAbandoned", () => abandoned++);
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    s.reset();
+    s.reset(); // round now empty — no second emit
+    expect(abandoned).toBe(1);
   });
 });

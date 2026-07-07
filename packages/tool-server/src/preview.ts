@@ -5,8 +5,9 @@ import type { Request, Response, Router } from "express";
 import express from "express";
 import { isFlagEnabled } from "@argent/configuration-core";
 import type { Registry } from "@argent/registry";
+import { track } from "@argent/telemetry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
-import { resolveDevice } from "./utils/device-info";
+import { resolveDevice, classifyDevice } from "./utils/device-info";
 import { shutdownDevice } from "./utils/device-shutdown";
 import { listDevicesTool } from "./tools/devices/list-devices";
 import {
@@ -56,6 +57,13 @@ function wsUrlFromHttp(httpUrl: string): string {
 
 export function createPreviewRouter(registry: Registry): Router {
   const router = express.Router();
+
+  // Last proposal round for which we emitted `lens:preview_opened`. The UI polls
+  // /variants (~1.2s) and /describe (~3x/s) but hits `/` only on a page load, so
+  // deduping the open signal per round collapses a browser refresh within a round
+  // to one event while still counting each new round's first view. Round numbers
+  // only ever increase (the store bumps on reset), so "!= last" is sufficient.
+  let lastOpenedRound = -1;
 
   // The lens-specific routes below (cli-session / cli-agent / boot / shutdown)
   // are tokenless like the rest of /preview but STATE-CHANGING — they open the
@@ -684,6 +692,24 @@ export function createPreviewRouter(registry: Registry): Router {
     if (!p) {
       res.status(404).type("text/plain").send("Preview UI not found");
       return;
+    }
+    // The preview page loaded — the one request BOTH human surfaces make (the
+    // Electron renderer's loadURL and a human's browser) and the agent NEVER
+    // makes (propose_variant/await_user_selection mutate the store in-process,
+    // issuing no HTTP). So this is the "a human opened the preview" signal the
+    // generic tool:* path can't give us. Gated on a live round (staged proposals,
+    // or a CLI session whose window opens up front) so a stray load of an empty
+    // preview isn't counted, and deduped per round (see `lastOpenedRound`).
+    const snap = variantProposalStore.snapshot();
+    if ((snap.proposals.length > 0 || snap.cliSession) && snap.round !== lastOpenedRound) {
+      lastOpenedRound = snap.round;
+      track("lens:preview_opened", {
+        round: snap.round,
+        element_count: snap.proposals.length,
+        variant_count: snap.proposals.reduce((n, p) => n + p.variants.length, 0),
+        is_cli_session: snap.cliSession,
+        platform: snap.device ? classifyDevice(snap.device) : undefined,
+      });
     }
     serveUiFile(res, p, "text/html");
   });

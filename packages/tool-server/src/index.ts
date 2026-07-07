@@ -11,7 +11,11 @@ import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
 import { createPreviewWindowManager } from "./utils/preview-window";
-import { variantProposalStore } from "./utils/variant-proposals";
+import {
+  variantProposalStore,
+  type RoundCompletedStats,
+  type RoundAbandonedStats,
+} from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
 
 const PROCESS_TIMEOUT_MS = 5_000;
@@ -207,9 +211,24 @@ export function start(): void {
       }
     }
   };
+  // A round the human FIRST finalized (fires once per round, never on a resubmit
+  // — the store guards that). The generic tool:* path can't see this: submission
+  // is an HTTP POST to /preview, not a tool call, and in a CLI Lens session the
+  // await tool is hidden entirely. This is the human-decision half of the funnel.
+  const onRoundCompleted = (stats: RoundCompletedStats): void => {
+    telemetryTrack("lens:round_completed", stats);
+  };
+  // The drop-off half of the funnel: a staged round discarded before the human
+  // submitted. Same rationale as roundCompleted — invisible to the generic
+  // tool:* path (no tool call, no HTTP), fired from the store's reset() choke.
+  const onRoundAbandoned = (stats: RoundAbandonedStats): void => {
+    telemetryTrack("lens:round_abandoned", stats);
+  };
   variantProposalStore.events.on("awaitParked", onAwaitParked);
   variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
   variantProposalStore.events.on("cliSessionChanged", onCliSessionChanged);
+  variantProposalStore.events.on("roundCompleted", onRoundCompleted);
+  variantProposalStore.events.on("roundAbandoned", onRoundAbandoned);
 
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
@@ -223,6 +242,8 @@ export function start(): void {
     variantProposalStore.events.off("awaitParked", onAwaitParked);
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
     variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
+    variantProposalStore.events.off("roundCompleted", onRoundCompleted);
+    variantProposalStore.events.off("roundAbandoned", onRoundAbandoned);
     cancelPendingClose();
 
     // Drain any simulators Lens booted headless for a CLI session. The happy
