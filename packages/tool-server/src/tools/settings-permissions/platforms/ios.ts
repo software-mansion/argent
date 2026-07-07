@@ -67,41 +67,39 @@ export const iosImpl: PlatformImpl<
       );
     }
 
-    const args = ["simctl", "privacy", udid, SIMCTL_ACTION[action], service];
-    // `simctl privacy` requires the bundle id for grant/revoke (enforced by the
-    // tool schema); for reset it is optional — omitting it resets the service
-    // for every app on the device.
-    if (bundleId) args.push(bundleId);
+    // Always per-app (bundleId is schema-required). A device-wide reset with no
+    // bundleId is deliberately not offered: on recent iOS runtimes simctl exits
+    // 0 but leaves every existing per-app TCC row intact, so it would report a
+    // success that never happened. A per-app `reset <service> <bundleId>` does
+    // remove the row.
+    const args = ["simctl", "privacy", udid, SIMCTL_ACTION[action], service, bundleId];
 
     try {
       await execFileAsync("xcrun", args, { timeout: 30_000 });
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      // Distinguish "this Xcode's simctl doesn't model that service" (a
-      // capability gap worth naming) from an ordinary simctl failure. The
-      // pattern is a best-effort heuristic: the rejection text comes from a
-      // CoreSimulator NSError whose exact wording we could not pin on an Xcode
-      // that rejects a service (this host's accepts everything we map, camera
-      // included). A miss just falls through to the generic branch with
-      // simctl's own text — nothing is lost, only the nicer hint.
-      const unsupportedService = /invalid.*service|unknown.*service/i.test(detail);
       // simctl privacy requires a booted device; its "Unable to lookup in
       // current state: Shutdown" doesn't tell an agent what to do about it.
       const shutdownHint = /current state:\s*shutdown/i.test(detail)
         ? " The simulator must be booted first — use boot-device."
         : "";
+      // `camera` is the one service some Xcodes don't model (simulators have no
+      // camera hardware). simctl rejects an unsupported service with a generic
+      // CoreSimulator NSError ("Failed to set access" / "Operation not
+      // permitted") that is indistinguishable from any other failure, so there
+      // is no reliable text to classify it as unsupported — key the hint off the
+      // service we know can be missing instead of parsing simctl's wording.
+      const cameraHint =
+        service === "camera" && !shutdownHint
+          ? " If this Xcode's `simctl privacy` does not model the 'camera' service, run `xcrun simctl privacy` to list the services it supports."
+          : "";
       throw new FailureError(
-        unsupportedService
-          ? `This Xcode's \`simctl privacy\` does not support the '${service}' service ` +
-              `(simctl said: ${detail.trim()}). Run \`xcrun simctl privacy\` to list the services it supports.`
-          : `Failed to ${action} '${permission}' on ${udid}: ${detail.trim()}${shutdownHint}`,
+        `Failed to ${action} '${permission}' on ${udid}: ${detail.trim()}${shutdownHint}${cameraHint}`,
         {
-          error_code: unsupportedService
-            ? FAILURE_CODES.SETTINGS_PERMISSION_UNSUPPORTED
-            : FAILURE_CODES.IOS_SETTINGS_PERMISSION_FAILED,
+          error_code: FAILURE_CODES.IOS_SETTINGS_PERMISSION_FAILED,
           failure_stage: "ios_settings_permission_simctl_privacy",
           failure_area: "tool_server",
-          error_kind: unsupportedService ? "unsupported" : "subprocess",
+          error_kind: "subprocess",
           ...subprocessFailureMetadata(err, "xcrun_simctl"),
         },
         { cause: err instanceof Error ? err : new Error(String(err)) }
@@ -111,7 +109,7 @@ export const iosImpl: PlatformImpl<
     return {
       action,
       permission,
-      ...(bundleId ? { bundleId } : {}),
+      bundleId,
       applied: [service],
     };
   },

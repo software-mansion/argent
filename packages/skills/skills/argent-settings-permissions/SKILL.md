@@ -47,9 +47,9 @@ One abstract permission can map to several concrete Android permissions; which o
 
 - **`grant`** — pre-authorize the permission. Requires `bundleId`.
 - **`deny`** — refuse it (iOS `revoke`). Requires `bundleId`. Use to test the app's "permission denied" path.
-- **`reset`** — return to the not-yet-asked state so the dialog reappears on next use.
-  - iOS: `bundleId` is optional; omitting it asks simctl to reset the service for **all** apps. On recent iOS runtimes a device-wide reset can leave existing per-app entries untouched — **prefer passing `bundleId`**.
-  - Android: `bundleId` is **required** (`pm revoke` + `pm clear-permission-flags` are per-package; there is no device-wide reset).
+- **`reset`** — return to the not-yet-asked state so the dialog reappears on next use. Always per-app (`bundleId` required):
+  - iOS: `simctl privacy reset <service> <bundleId>` removes that app's TCC row. A device-wide reset (no bundleId) is **not** offered — on recent iOS runtimes it exits 0 but leaves existing per-app grants untouched, so it would report a change that never happened.
+  - Android: `pm revoke` + a best-effort `pm clear-permission-flags` (the flag-clear does not exist before Android 11; the revoke is what counts toward success).
 
 ## Parameters
 
@@ -65,32 +65,32 @@ One abstract permission can map to several concrete Android permissions; which o
 - `udid` — target from `list-devices` (iOS simulator UDID, or Android serial). See `argent-ios-simulator-setup` / `argent-android-emulator-setup` to get one.
 - `action` — `grant` | `deny` | `reset`.
 - `permission` — one of the 11 names above.
-- `bundleId` — iOS bundle id or Android package name. Required for `grant`/`deny` (schema-enforced) and for every action on Android. Optional only for iOS `reset`.
+- `bundleId` — iOS bundle id or Android package name. **Required for every action**.
 
 ## Platform behavior
 
-**iOS simulator only.** Runs `xcrun simctl privacy <udid> grant|revoke|reset <service> [bundleId]`. There is no host-side TCC switch on a physical iPhone, so this tool does not apply to real iOS devices. The simulator must be **booted** first (`boot-device`) — otherwise simctl fails with a "current state: Shutdown" error and the tool surfaces the boot hint.
+**iOS simulator only.** Runs `xcrun simctl privacy <udid> grant|revoke|reset <service> <bundleId>` — always per-app (`bundleId` required). There is no host-side TCC switch on a physical iPhone, so this tool does not apply to real iOS devices. The simulator must be **booted** first (`boot-device`) — otherwise simctl fails with a "current state: Shutdown" error and the tool surfaces the boot hint.
 
-**Android emulator and physical device.** Runs `pm grant` / `pm revoke` (and, for `reset`, `pm clear-permission-flags … user-set user-fixed`) over adb. Requirements:
+**Android emulator and physical device.** Runs `pm grant` / `pm revoke` (and, for `reset`, a best-effort `pm clear-permission-flags … user-set user-fixed` — the revoke is what decides success) over adb. Requirements:
 
-- The app must be **installed** — the tool probes with `pm path` first and errors clearly if the package is missing.
+- The app must be **installed** — the tool probes with `pm list packages` first and errors clearly if the package is missing (a transport/timeout failure surfaces adb's real cause, not a false "not installed").
 - The app must **declare** the permission in its manifest. `pm` rejects any mapped permission the manifest doesn't request; those come back in the result's `skipped` list. The action succeeds if **at least one** mapped permission sticks, and errors only if `pm` rejected **all** of them.
 
 ## Gotchas
 
 - **Changing a permission can terminate a running app** (system behavior on both platforms). Prefer setting permissions **before** `launch-app`; if you change one while the app is running, `restart-app` afterward.
-- **Don't chase a device-wide reset on Android** — it's per-package only; pass `bundleId`.
+- **Reset is per-app on both platforms** — pass `bundleId`; there is no reliable device-wide reset.
 - **A partial Android result is normal.** `applied` lists what actually changed; `skipped` lists mapped permissions `pm` rejected (usually not in the manifest, or gated by API level). Both together tell you what happened.
-- **`camera` on iOS** may be rejected by an older Xcode whose simctl doesn't model it — the tool wraps simctl's "invalid service" error with a hint to run `xcrun simctl privacy` to list supported services.
+- **`camera` on iOS** may be rejected by an Xcode whose simctl doesn't model it (simulators have no camera hardware). simctl reports this as a generic CoreSimulator error, so a `camera` failure always carries a hint to run `xcrun simctl privacy` and list the supported services.
 
 ## Result
 
-Returns `{ action, permission, bundleId?, applied, skipped? }`:
+Returns `{ action, permission, bundleId, applied, skipped? }`:
 
 - `applied` — the platform-level services/permissions actually changed (the simctl service on iOS; the `android.permission.*` names on Android).
 - `skipped` — Android only, present when some mapped permissions were rejected but others succeeded.
 
-The call **fails** if nothing could be applied (unsupported permission for the platform, app not installed, or `pm` rejected everything) — read the error; it names the reason (missing manifest entry, shutdown simulator, unsupported service).
+The call **fails** when nothing could be applied — read the error; it names the reason: an unsupported permission for the platform (`notifications` on iOS, `reminders` on Android), the app not installed, a shutdown simulator (iOS), or `pm` rejecting every mapped permission (usually a missing manifest entry). A `camera` failure additionally hints to list the Xcode's supported services.
 
 ## Examples
 

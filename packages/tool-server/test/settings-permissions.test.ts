@@ -11,7 +11,6 @@ vi.mock("../src/utils/adb", async (importOriginal) => {
   return {
     adbShell: vi.fn(async () => ""),
     shellQuote: actual.shellQuote,
-    isTerminalAdbError: actual.isTerminalAdbError,
   };
 });
 
@@ -54,13 +53,14 @@ function execFileFails(message: string): void {
   );
 }
 
-// Default adb behavior: the `pm path` existence preflight finds the package,
-// and every mutating pm command succeeds silently (pm's real success shape).
+// Default adb behavior: the `pm list packages` existence preflight finds the
+// package (it prints a `package:<name>` line and exits 0), and every mutating pm
+// command succeeds silently (pm's real success shape).
 function adbDefaults(overrides?: (cmd: string) => string | Promise<string> | undefined): void {
   mockAdbShell.mockImplementation(async (_serial, cmd) => {
     const overridden = overrides?.(cmd);
     if (overridden !== undefined) return overridden;
-    if (cmd.startsWith("pm path")) return "package:/data/app/base.apk";
+    if (cmd.startsWith("pm list packages")) return "package:com.example.app";
     return "";
   });
 }
@@ -94,9 +94,11 @@ describe("settings-permissions schema", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("accepts reset without a bundleId (device-wide reset on iOS)", () => {
+  it("rejects reset without a bundleId (bundleId is required for every action)", () => {
+    // Device-wide reset is gone: simctl's no-bundleId reset silently leaves
+    // existing per-app grants intact on recent iOS, so the tool is per-app only.
     const parsed = schema.safeParse({ udid: IOS_UDID, action: "reset", permission: "location" });
-    expect(parsed.success).toBe(true);
+    expect(parsed.success).toBe(false);
   });
 
   it("rejects unknown permissions and actions", () => {
@@ -152,16 +154,15 @@ describe("settings-permissions schema", () => {
     });
   }
 
-  it("derives a sane MCP JSON schema despite the superRefine", () => {
-    // This is the first tool schema built as z.object(...).superRefine(...);
-    // pin the derivation so a zod upgrade can't silently break the
-    // MCP-visible schema (zod 4 keeps refinements inside the ZodObject and
-    // z.toJSONSchema simply omits them).
+  it("derives a sane MCP JSON schema with bundleId required for every action", () => {
+    // bundleId is a plain required field now (no superRefine), so it must appear
+    // in the JSON schema's `required` list — pin the derivation so a zod upgrade
+    // can't silently drop it and let a bundleId-less call reach the handler.
     const json = zodObjectToJsonSchema(schema) as {
       required?: string[];
       properties?: Record<string, { pattern?: string; enum?: string[] }>;
     };
-    expect(json.required).toEqual(["udid", "action", "permission"]);
+    expect(json.required).toEqual(["udid", "action", "permission", "bundleId"]);
     expect(json.properties?.bundleId?.pattern).toBe("^[A-Za-z_][A-Za-z0-9._-]*$");
     expect(json.properties?.action?.enum).toEqual(["grant", "deny", "reset"]);
     expect(json.properties?.permission?.enum).toHaveLength(11);
@@ -201,16 +202,26 @@ describe("settings-permissions iOS branch", () => {
     expect(args).toEqual(["simctl", "privacy", IOS_UDID, "revoke", "photos", "com.example.app"]);
   });
 
-  it("reset without bundleId omits the bundle argument (all apps)", async () => {
+  it("reset is per-app: `simctl privacy <udid> reset <service> <bundleId>`", async () => {
+    // A device-wide reset (no bundleId) is intentionally not supported — it is a
+    // no-op for existing per-app grants on recent iOS, so reset always targets
+    // the one app and echoes its bundleId back.
     execFileSucceeds();
     const result = await iosImpl.handler(
       {},
-      params({ action: "reset", permission: "location-always", bundleId: undefined }),
+      params({ action: "reset", permission: "location-always" }),
       iosDevice
     );
     const [, args] = execFileMock.mock.calls[0]!;
-    expect(args).toEqual(["simctl", "privacy", IOS_UDID, "reset", "location-always"]);
-    expect(result.bundleId).toBeUndefined();
+    expect(args).toEqual([
+      "simctl",
+      "privacy",
+      IOS_UDID,
+      "reset",
+      "location-always",
+      "com.example.app",
+    ]);
+    expect(result.bundleId).toBe("com.example.app");
   });
 
   it("notifications is rejected as unsupported without calling simctl", async () => {
@@ -220,11 +231,28 @@ describe("settings-permissions iOS branch", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
-  it("an 'invalid service' simctl failure surfaces as unsupported", async () => {
-    execFileFails("Invalid privacy service: camera");
-    await expect(
+  it("a camera failure surfaces IOS_SETTINGS_PERMISSION_FAILED with a list-services hint", async () => {
+    // simctl rejects a service it doesn't model with a generic CoreSimulator
+    // NSError, indistinguishable from any other failure — so instead of parsing
+    // its wording, camera (the one service simulators may lack) always carries a
+    // hint to list the supported services.
+    execFileFails(
+      "An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=1):\n" +
+        "Simulator device failed to complete the requested operation.\nOperation not permitted\n" +
+        "Underlying error (domain=NSPOSIXErrorDomain, code=1):\n\tFailed to set access"
+    );
+    const rejection = expect(
       iosImpl.handler({}, params({ permission: "camera" }), iosDevice)
-    ).rejects.toSatisfy(failsWith(FAILURE_CODES.SETTINGS_PERMISSION_UNSUPPORTED));
+    ).rejects;
+    await rejection.toSatisfy(failsWith(FAILURE_CODES.IOS_SETTINGS_PERMISSION_FAILED));
+    await rejection.toThrow(/run `xcrun simctl privacy` to list the services it supports/);
+  });
+
+  it("a non-camera failure does not get the camera hint", async () => {
+    execFileFails("Simulator device failed to complete the requested operation.");
+    await expect(
+      iosImpl.handler({}, params({ permission: "microphone" }), iosDevice)
+    ).rejects.not.toThrow(/list the services it supports/);
   });
 
   it("other simctl failures surface as IOS_SETTINGS_PERMISSION_FAILED", async () => {
@@ -279,7 +307,7 @@ describe("settings-permissions Android branch", () => {
     await androidImpl.handler({}, params({ action: "reset" }), androidDevice);
     const commands = mockAdbShell.mock.calls.map((c) => c[1]);
     expect(commands).toEqual([
-      "pm path 'com.example.app'",
+      "pm list packages 'com.example.app'",
       "pm revoke 'com.example.app' android.permission.CAMERA",
       "pm clear-permission-flags 'com.example.app' android.permission.CAMERA user-set user-fixed",
     ]);
@@ -297,23 +325,27 @@ describe("settings-permissions Android branch", () => {
     expect(commands.some((c) => c.startsWith("pm clear-permission-flags"))).toBe(false);
   });
 
-  it("reset does not count a permission whose flags could not be cleared", async () => {
-    // Revoke succeeds but the flags survive: the app stays "user-denied" and
-    // the dialog will NOT reappear — that's a deny, not a reset.
+  it("reset still counts a revoked permission whose flags could not be cleared", async () => {
+    // clear-permission-flags is best-effort: it doesn't exist before Android 11
+    // and can't undo the revoke, so its failure must NOT demote a permission the
+    // revoke already changed. Revoke succeeded here -> applied, not skipped, no
+    // error (previously this reported a misleading total failure).
     adbDefaults((cmd) => {
       if (cmd.startsWith("pm clear-permission-flags")) {
         throw new Error("pm clear-permission-flags exited with code 255");
       }
       return undefined;
     });
-    await expect(
-      androidImpl.handler({}, params({ action: "reset" }), androidDevice)
-    ).rejects.toSatisfy(failsWith(FAILURE_CODES.ANDROID_SETTINGS_PERMISSION_FAILED));
+    const result = await androidImpl.handler({}, params({ action: "reset" }), androidDevice);
+    expect(result.applied).toEqual(["android.permission.CAMERA"]);
+    expect(result.skipped).toBeUndefined();
   });
 
   it("a transport-level adb failure at the preflight is rethrown, not mislabeled as not-installed", async () => {
     adbDefaults((cmd) => {
-      if (cmd.startsWith("pm path")) throw new Error("adb: device 'emulator-5554' not found");
+      if (cmd.startsWith("pm list packages")) {
+        throw new Error("adb: device 'emulator-5554' not found");
+      }
       return undefined;
     });
     const rejection = expect(androidImpl.handler({}, params({}), androidDevice)).rejects;
@@ -321,18 +353,47 @@ describe("settings-permissions Android branch", () => {
     await rejection.not.toThrow(/not installed/);
   });
 
+  it("a slow/unavailable package manager at the preflight is rethrown, not mislabeled as not-installed", async () => {
+    // `pm list packages` exits 0 for a missing package, so any THROW here is a
+    // real failure (timeout/kill, or pm not up yet right after boot) — it must
+    // surface the real cause, not "not installed" (the old `pm path` probe's bug).
+    adbDefaults((cmd) => {
+      if (cmd.startsWith("pm list packages")) {
+        throw new Error("Could not access the Package Manager. Is the system running?");
+      }
+      return undefined;
+    });
+    const rejection = expect(androidImpl.handler({}, params({}), androidDevice)).rejects;
+    await rejection.toThrow(/Could not access the Package Manager/);
+    await rejection.not.toThrow(/not installed/);
+  });
+
   it("a package pm cannot resolve fails with not-found instead of a silent success", async () => {
-    // pm grant/revoke exit 0 for an unknown package (observed on API 34), so
-    // the handler must catch it at the `pm path` preflight.
+    // `pm list packages <pkg>` exits 0 with NO output for a missing package
+    // (verified on API 36), so the handler detects the absent `package:` line
+    // and never issues a grant/revoke (which would exit 0 for a missing package).
     mockAdbShell.mockImplementation(async (_serial, cmd) => {
-      if (cmd.startsWith("pm path")) throw new Error("pm path exited with code 1");
+      if (cmd.startsWith("pm list packages")) return "";
       return "";
     });
     await expect(androidImpl.handler({}, params({}), androidDevice)).rejects.toSatisfy(
       failsWith(FAILURE_CODES.ANDROID_SETTINGS_PERMISSION_FAILED)
     );
     const commands = mockAdbShell.mock.calls.map((c) => c[1]);
-    expect(commands).toEqual(["pm path 'com.example.app'"]);
+    expect(commands).toEqual(["pm list packages 'com.example.app'"]);
+  });
+
+  it("does not treat a substring package match as installed", async () => {
+    // `pm list packages` filters by substring, so a request for `com.example.app`
+    // can return only `com.example.app.helper`; the exact-line check must reject
+    // that rather than operate on the wrong package.
+    mockAdbShell.mockImplementation(async (_serial, cmd) => {
+      if (cmd.startsWith("pm list packages")) return "package:com.example.app.helper";
+      return "";
+    });
+    await expect(androidImpl.handler({}, params({}), androidDevice)).rejects.toSatisfy(
+      failsWith(FAILURE_CODES.ANDROID_SETTINGS_PERMISSION_FAILED)
+    );
   });
 
   it("location fans out to fine + coarse", async () => {
@@ -367,11 +428,19 @@ describe("settings-permissions Android branch", () => {
     expect(result.applied).toEqual(["android.permission.ACCESS_BACKGROUND_LOCATION"]);
   });
 
-  it("partial pm failures land in `skipped`, not an error", async () => {
-    // photos → READ_MEDIA_IMAGES ok, READ_MEDIA_VIDEO ok, READ_EXTERNAL_STORAGE rejected
+  it("partial pm failures (a real device throws on exit 255) land in `skipped`, not an error", async () => {
+    // photos → READ_MEDIA_IMAGES ok, READ_MEDIA_VIDEO ok, READ_EXTERNAL_STORAGE
+    // rejected. On a real device (verified on API 34) `pm grant` for a
+    // non-changeable permission exits 255 and writes the SecurityException to
+    // stderr, so adbShell THROWS and the failure is handled in runPm's catch
+    // branch (not the exit-0 stdout inspection). Exercise that realistic path.
     adbDefaults((cmd) => {
       if (cmd.includes("READ_EXTERNAL_STORAGE")) {
-        return "Exception occurred while executing 'grant':\njava.lang.SecurityException: Permission android.permission.READ_EXTERNAL_STORAGE requested by com.example.app is not a changeable permission type";
+        throw new Error(
+          "adb -s emulator-5554 shell pm grant 'com.example.app' android.permission.READ_EXTERNAL_STORAGE failed: " +
+            "java.lang.SecurityException: Permission android.permission.READ_EXTERNAL_STORAGE requested by com.example.app is not a changeable permission type\n" +
+            "\tat com.android.server.pm.permission.PermissionManagerServiceImpl.grantRuntimePermissionInternal(PermissionManagerServiceImpl.java:1423)"
+        );
       }
       return undefined;
     });
@@ -383,29 +452,40 @@ describe("settings-permissions Android branch", () => {
     expect(result.skipped).toEqual(["android.permission.READ_EXTERNAL_STORAGE"]);
   });
 
-  it("pm rejecting every mapped permission raises ANDROID_SETTINGS_PERMISSION_FAILED", async () => {
-    adbDefaults((cmd) =>
-      cmd.startsWith("pm grant")
-        ? "Exception occurred while executing 'grant':\njava.lang.SecurityException: Package com.example.app has not requested permission android.permission.CAMERA\n\tat com.android.server.pm.permission.PermissionManagerServiceImpl.grantRuntimePermissionInternal(PermissionManagerServiceImpl.java:1423)\n\tat android.os.Binder.execTransact(Binder.java:1275)"
-        : undefined
-    );
+  it("pm rejecting every mapped permission (thrown on exit 255) raises the failure and strips Java stack frames", async () => {
+    // The realistic API 34+ path: pm exits 255, adbShell throws, and the message
+    // (built from adb's stderr) carries the exception plus its Java stack frames.
+    // runPm's catch branch runs stripStackFrames on the THROWN err.message.
+    adbDefaults((cmd) => {
+      if (cmd.startsWith("pm grant")) {
+        throw new Error(
+          "adb -s emulator-5554 shell pm grant 'com.example.app' android.permission.CAMERA failed: " +
+            "java.lang.SecurityException: Package com.example.app has not requested permission android.permission.CAMERA\n" +
+            "\tat com.android.server.pm.permission.PermissionManagerServiceImpl.grantRuntimePermissionInternal(PermissionManagerServiceImpl.java:1423)\n" +
+            "\tat android.os.Binder.execTransact(Binder.java:1275)"
+        );
+      }
+      return undefined;
+    });
     const rejection = expect(androidImpl.handler({}, params({}), androidDevice)).rejects;
     await rejection.toSatisfy(failsWith(FAILURE_CODES.ANDROID_SETTINGS_PERMISSION_FAILED));
-    // The surfaced message keeps the exception line but drops the Java stack
-    // frames (they'd bloat every error the agent sees).
     await rejection.toSatisfy(
       (err: unknown) =>
         err instanceof Error &&
         err.message.includes("has not requested permission") &&
-        !err.message.includes("at com.android.server")
+        !err.message.includes("at com.android.server") &&
+        !err.message.includes("at android.os.Binder")
     );
   });
 
-  it("a thrown adb error (non-zero exit) counts as a pm failure", async () => {
-    adbDefaults((cmd) => {
-      if (cmd.startsWith("pm grant")) throw new Error("pm grant exited with code 255");
-      return undefined;
-    });
+  it("pm reporting a failure as exit-0 stdout is still treated as a failure", async () => {
+    // Some pm builds print the SecurityException to stdout and exit 0; runPm's
+    // stdout inspection must still classify a non-`Success` output as a failure.
+    adbDefaults((cmd) =>
+      cmd.startsWith("pm grant")
+        ? "Exception occurred while executing 'grant':\njava.lang.SecurityException: Package com.example.app has not requested permission android.permission.CAMERA"
+        : undefined
+    );
     await expect(androidImpl.handler({}, params({}), androidDevice)).rejects.toSatisfy(
       failsWith(FAILURE_CODES.ANDROID_SETTINGS_PERMISSION_FAILED)
     );
@@ -414,13 +494,6 @@ describe("settings-permissions Android branch", () => {
   it("reminders is rejected as unsupported (no Android equivalent)", async () => {
     await expect(
       androidImpl.handler({}, params({ permission: "reminders" }), androidDevice)
-    ).rejects.toSatisfy(failsWith(FAILURE_CODES.SETTINGS_PERMISSION_UNSUPPORTED));
-    expect(mockAdbShell).not.toHaveBeenCalled();
-  });
-
-  it("reset without bundleId is rejected on Android", async () => {
-    await expect(
-      androidImpl.handler({}, params({ action: "reset", bundleId: undefined }), androidDevice)
     ).rejects.toSatisfy(failsWith(FAILURE_CODES.SETTINGS_PERMISSION_UNSUPPORTED));
     expect(mockAdbShell).not.toHaveBeenCalled();
   });

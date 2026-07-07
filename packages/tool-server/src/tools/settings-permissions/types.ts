@@ -22,13 +22,13 @@ export interface SettingsPermissionsParams {
   udid: string;
   action: PermissionAction;
   permission: PermissionName;
-  bundleId?: string;
+  bundleId: string;
 }
 
 export interface SettingsPermissionsResult {
   action: PermissionAction;
   permission: PermissionName;
-  bundleId?: string;
+  bundleId: string;
   /**
    * The platform-level identifiers the action was actually applied to: the
    * `simctl privacy` service on iOS, the `android.permission.*` names on

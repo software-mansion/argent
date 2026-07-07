@@ -1,6 +1,6 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, isTerminalAdbError, shellQuote } from "../../../utils/adb";
+import { adbShell, shellQuote } from "../../../utils/adb";
 import type {
   PermissionAction,
   PermissionName,
@@ -119,40 +119,23 @@ export const androidImpl: PlatformImpl<
       );
     }
 
-    // grant/deny already require bundleId at the schema level; Android reset
-    // needs it too (per-permission reset goes through `pm revoke` +
-    // `pm clear-permission-flags`, both package-scoped — there is no
-    // per-service reset like simctl's).
-    if (!bundleId) {
-      throw new FailureError(
-        `Device-wide reset is not supported on Android — pass a bundleId; the package manager only changes permissions per package.`,
-        {
-          error_code: FAILURE_CODES.SETTINGS_PERMISSION_UNSUPPORTED,
-          failure_stage: "android_settings_permission_check_bundle_id",
-          failure_area: "tool_server",
-          error_kind: "unsupported",
-        }
-      );
-    }
-
     const pkg = shellQuote(bundleId);
 
     // `pm grant`/`pm revoke` silently exit 0 when the package is not installed
-    // (observed on API 34), so a typo'd bundleId would otherwise report a false
-    // success. `pm path` is the cheap authoritative existence probe: it prints
-    // `package:...` for an installed app and exits non-zero otherwise. A
-    // transport-level failure (device offline / unauthorized / not found) is
-    // NOT a "not installed" verdict — rethrow adb's own error so the caller
-    // sees the real cause instead of a confidently wrong diagnosis.
-    let installed: string;
-    try {
-      installed = await adbShell(udid, `pm path ${pkg}`, { timeoutMs: 15_000 });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (isTerminalAdbError(message)) throw err;
-      installed = "";
-    }
-    if (!installed.includes("package:")) {
+    // (observed on API 34 and API 36), so a typo'd bundleId would otherwise
+    // report a false success. `pm list packages <pkg>` is the authoritative
+    // existence probe: it exits 0 whether or not the package exists (verified on
+    // API 36) and prints a `package:<name>` line only for installed packages.
+    // Because a *successful* run answers both "installed" and "not installed"
+    // (with vs without the line), any *thrown* error here is unambiguously a
+    // transport / timeout / package-manager-not-yet-up failure — never a "not
+    // installed" verdict. Let it propagate with adb's real cause rather than
+    // catching it and reporting a confidently wrong "not installed" (the failure
+    // mode of the old `pm path` probe, which exits non-zero for a missing
+    // package and so could not tell the two apart).
+    const listing = await adbShell(udid, `pm list packages ${pkg}`, { timeoutMs: 15_000 });
+    const installed = listing.split("\n").some((line) => line.trim() === `package:${bundleId}`);
+    if (!installed) {
       throw new FailureError(
         `Package ${bundleId} is not installed on ${udid} — install the app before changing its permissions.`,
         {
@@ -174,14 +157,22 @@ export const androidImpl: PlatformImpl<
       } else if (action === "deny") {
         result = await runPm(udid, `revoke ${pkg} ${perm}`);
       } else {
-        // reset = revoke + drop the user-set/user-fixed flags so the app is
-        // back to "not asked yet" and the next request shows the dialog. Both
-        // steps must succeed for the perm to count as reset: a revoke whose
-        // flags survive leaves the app "user-denied" (no dialog on next ask),
-        // which is a deny, not a reset — report it in `skipped`, not `applied`.
+        // reset = `pm revoke`, then a best-effort attempt to drop the
+        // user-set/user-fixed flags so the next request shows the dialog again.
+        // The revoke is the state-changing step and alone decides success: it is
+        // rejected only when pm genuinely refuses the permission (not declared /
+        // not a changeable type) — the manifest-style failure the aggregate
+        // error below describes. Clearing the flags is a refinement that must
+        // never demote a permission the revoke already changed:
+        //   - `clear-permission-flags` does not exist before Android 11 (it is an
+        //     unknown pm subcommand there and exits non-zero), so coupling reset
+        //     to it would make every reset on API < 30 falsely report failure;
+        //   - and it cannot undo the revoke, so a flag-clear failure on a newer
+        //     device still leaves the permission revoked, not "pm-rejected".
+        // So we run it but ignore its outcome — `result` stays the revoke's.
         result = await runPm(udid, `revoke ${pkg} ${perm}`);
         if (result.ok) {
-          result = await runPm(udid, `clear-permission-flags ${pkg} ${perm} user-set user-fixed`);
+          await runPm(udid, `clear-permission-flags ${pkg} ${perm} user-set user-fixed`);
         }
       }
       if (result.ok) {
