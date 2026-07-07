@@ -161,6 +161,19 @@ function el(opts: Opts = {}): MockElement {
   return node;
 }
 
+// An <input> the script's `instanceof HTMLInputElement` branches recognise
+// (accessibleName's placeholder/value fallbacks, isPassword, isChecked): built
+// like el(), then re-prototyped onto the mock input class with the live
+// .type/.value/.placeholder properties those branches read directly.
+function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: string }) {
+  const node = el({ ...opts, tag: "input" }) as MockElement & Record<string, unknown>;
+  Object.setPrototypeOf(node, MockHTMLInputElement.prototype);
+  if (opts.type) node.type = opts.type;
+  if (opts.value) node.value = opts.value;
+  if (opts.placeholder) node.placeholder = opts.placeholder;
+  return node;
+}
+
 function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean } {
   const root = el({ tag: "html", rect: { x: 0, y: 0, w: W, h: H } }) as MockElement &
     Record<string, unknown>;
@@ -765,6 +778,29 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       el({ tag: "iframe", rect: { x: 0, y: 0, w: 500, h: 500 }, iframeDoc: innerDoc }),
     ]);
     expect(valuesOf(tree)).toContain("IFRAMETEXT");
+  });
+
+  // ---- a password input's typed value must never become its label ----
+  it("never reads a password input's typed value as its accessible name", () => {
+    // A placeholder-less password input (floating/uncontrolled-label pattern)
+    // with a typed value: the aria/placeholder/title fallbacks are all empty,
+    // and the value fallback must be skipped — otherwise the plaintext secret
+    // becomes node.label and reaches every describe consumer verbatim.
+    const { tree } = run([
+      inputEl({ type: "password", value: "hunter2", attrs: { id: "pw" }, rect: BOX }),
+    ]);
+    const pw = findById(tree, "pw");
+    expect(pw).toBeTruthy();
+    expect(pw!.password).toBe(true);
+    expect(pw!.label).toBeUndefined();
+    expect(JSON.stringify(tree)).not.toContain("hunter2");
+  });
+
+  it("still reads a non-password input's value as its accessible name", () => {
+    const { tree } = run([
+      inputEl({ type: "text", value: "typed text", attrs: { id: "txt" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "txt")!.label).toBe("typed text");
   });
 
   // ---- input focus (the flow type directive's focus wait reads this) ----

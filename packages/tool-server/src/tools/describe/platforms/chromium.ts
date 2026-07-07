@@ -133,7 +133,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       if (el.placeholder) return el.placeholder.slice(0, 200);
-      if (el.value) return el.value.slice(0, 200);
+      // Never fall through to a password input's value: with no aria label or
+      // placeholder (a floating/uncontrolled-label pattern) the typed secret
+      // would become the node's label and reach every describe consumer.
+      if (el.value && !isPassword(el)) return el.value.slice(0, 200);
     }
     if (el instanceof HTMLImageElement && el.alt) return el.alt.slice(0, 200);
     // getAttribute, not el.title: a <form> with a control named "title" clobbers the

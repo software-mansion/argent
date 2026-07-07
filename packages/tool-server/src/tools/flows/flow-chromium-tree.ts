@@ -28,7 +28,8 @@ import {
  * (DOM id / testid), a label (ARIA), visible text, or a clickable control —
  * or when it holds input focus, which the type directive's focus wait reads;
  * and it has an on-screen frame; an identified node — or a password field —
- * shields its text so hoisting scopes to the nearest identified ancestor.
+ * shields its text so hoisting scopes to the nearest identified ancestor. A
+ * password leaf's label is redacted to the `[password]` placeholder.
  */
 function projectChromiumNode(node: DescribeNode): FlatNode<DescribeNode> {
   // The walker already pruned hidden subtrees; frames of off-viewport elements
@@ -38,7 +39,18 @@ function projectChromiumNode(node: DescribeNode): FlatNode<DescribeNode> {
     node.identifier || node.label || node.value || node.clickable || node.focused
   );
 
-  const leaf: DescribeNode | null = onScreen && addressable ? { ...node, children: [] } : null;
+  let leaf: DescribeNode | null = null;
+  if (onScreen && addressable) {
+    leaf = { ...node, children: [] };
+    // Redact a password leaf's text, mirroring the Android adapter's
+    // `[password]` placeholder: the walker never reads a password's value into
+    // the label, but a failing text assert echoes a leaf's text verbatim, so
+    // the leaf must not carry the secret even if some walker output does.
+    if (node.password) {
+      leaf.label = "[password]";
+      delete leaf.value;
+    }
+  }
 
   return {
     skip: false,

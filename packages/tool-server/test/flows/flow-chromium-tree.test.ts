@@ -98,6 +98,30 @@ describe("adaptChromiumTreeForFlows", () => {
     expect(assertText(form[0]!)).not.toContain("hunter2");
   });
 
+  it("redacts a password leaf's label so a failing assert can't echo the secret", () => {
+    // The walker never reads a password's value into the label, but the leaf
+    // redacts too (defense in depth, mirroring the Android adapter's
+    // `[password]` placeholder) — assertReason echoes a leaf's text verbatim.
+    const tree = adaptChromiumTreeForFlows(
+      el({
+        role: "html",
+        children: [
+          el({
+            role: "input",
+            identifier: "pw",
+            password: true,
+            label: "hunter2",
+            frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.04 },
+          }),
+        ],
+      })
+    );
+    const pw = findAll(tree, { identifier: "pw" });
+    expect(pw).toHaveLength(1);
+    expect(pw[0]!.label).toBe("[password]");
+    expect(assertText(pw[0]!)).not.toContain("hunter2");
+  });
+
   it("never emits the root as a leaf, even when <html> carries an identifier", () => {
     // The walker reads id/data-testid off every element including <html>; the
     // iOS/Android adapters iterate children only and never project their root.
