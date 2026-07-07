@@ -169,9 +169,15 @@ export async function update(args: string[]): Promise<void> {
 
   // Version-check + install for ONE install target (global PATH binary or the
   // project's local devDependency). Hard failures finalize telemetry and
-  // process.exit — aborting the whole command; soft outcomes (nothing to do,
-  // user declined) return so a multi-target run can move on to the next target.
-  const applyUpdateForTarget = async (mode: InstallMode, projectRoot: string): Promise<void> => {
+  // process.exit — aborting the whole command; soft outcomes return so a
+  // multi-target run can move on to the next target. The returned outcome
+  // ("updated" / "declined" / "noop") lets the caller decide whether the run
+  // earned the config refresh: a run where the only prompt was answered "no"
+  // must end like the old single-target flow did — cancel, touch nothing.
+  const applyUpdateForTarget = async (
+    mode: InstallMode,
+    projectRoot: string
+  ): Promise<"updated" | "declined" | "noop"> => {
     // Disclose which install we're about to act on before any mutation.
     if (mode === "local") {
       p.log.info(
@@ -238,7 +244,7 @@ export async function update(args: string[]): Promise<void> {
         );
       }
       await trackPackageAction("no_update", updateStartTime, true);
-      return;
+      return "noop";
     }
 
     const spinner = p.spinner();
@@ -361,7 +367,7 @@ export async function update(args: string[]): Promise<void> {
         if (p.isCancel(proceed) || !proceed) {
           await trackPackageAction("update_skipped", updateStartTime, true);
           p.log.info(pc.dim(`Skipped the ${mode} install.`));
-          return;
+          return "declined";
         }
       }
 
@@ -441,6 +447,7 @@ export async function update(args: string[]): Promise<void> {
         );
       }
       await trackPackageAction(packageAction, packageActionStartedAt, true);
+      return "updated";
     } else {
       await trackPackageAction("no_update", updateStartTime, true);
       if (versionUnknown) {
@@ -468,6 +475,7 @@ export async function update(args: string[]): Promise<void> {
         p.log.success("Already on the latest version.");
       }
     }
+    return "noop";
   };
 
   try {
@@ -540,8 +548,22 @@ export async function update(args: string[]): Promise<void> {
       }
     }
 
+    const outcomes: Array<"updated" | "declined" | "noop"> = [];
     for (const mode of targets) {
-      await applyUpdateForTarget(mode, projectRoot);
+      outcomes.push(await applyUpdateForTarget(mode, projectRoot));
+    }
+
+    // "No" means no: when at least one target's prompt was declined and nothing
+    // was updated, end here — the pre-multi-target flow cancelled without
+    // touching a single config file, and running the refresh (entry rewrites,
+    // allowlists, the stale-config sweep's removals, skills) after a "no" would
+    // mutate files the user just refused to have touched. A partial run (one
+    // declined, another updated) still refreshes: the applied update needs its
+    // configuration re-emitted.
+    if (outcomes.includes("declined") && !outcomes.includes("updated")) {
+      await completeUpdateTelemetry();
+      p.cancel("Update cancelled.");
+      process.exit(0);
     }
 
     // ── Refresh configuration ───────────────────────────────────────────────────
