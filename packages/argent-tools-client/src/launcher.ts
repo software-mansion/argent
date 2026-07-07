@@ -40,10 +40,12 @@ export interface ToolsServerPaths {
   /** Directory containing the native devtools dylibs */
   nativeDevtoolsDir: string;
   /**
-   * Installed package version. Optional. When present, the launcher refuses to
-   * reuse a tracked server recorded under a different version — even at the same
-   * bundlePath — so an in-place devDependency bump self-heals on the next call
-   * without relying on the (often-disabled) postinstall kill.
+   * Installed package version AT MODULE IMPORT. Optional. The launcher's
+   * version gate reads the bundle's package.json fresh on every call (see
+   * reusableHandle) so an in-place bump, downgrade, or prerelease change
+   * self-heals on the next call without relying on the (often-disabled)
+   * postinstall kill; this frozen value is only the fallback when that disk
+   * read fails.
    */
   version?: string;
   /**
@@ -56,6 +58,15 @@ export interface ToolsServerPaths {
    * have set to `/` or `$HOME`.
    */
   installKind?: "global" | "local";
+  /**
+   * For a local install, the project root the package was classified under —
+   * the directory whose node_modules holds it. Classified alongside
+   * `installKind` at spawn time and exported as ARGENT_PROJECT_ROOT, so an
+   * agent-triggered `argent update --local` can pin the spawned updater's cwd
+   * to the right project instead of re-deriving it from the tool-server's own
+   * editor-chosen (often `/` or `$HOME`) cwd.
+   */
+  installProjectRoot?: string;
 }
 
 export interface BuildToolsServerEnvOptions {
@@ -90,6 +101,7 @@ export function buildToolsServerEnv(
   }
   if (options.token) env[AUTH_TOKEN_ENV] = options.token;
   if (paths.installKind) env.ARGENT_INSTALL_KIND = paths.installKind;
+  if (paths.installProjectRoot) env.ARGENT_PROJECT_ROOT = paths.installProjectRoot;
   return env;
 }
 
@@ -162,21 +174,67 @@ export function findFreePort(): Promise<number> {
 }
 
 /**
- * True iff semver-ish `a` is strictly newer than `b` (compares the numeric
- * major.minor.patch; ignores prerelease tags). Anything unparseable compares as
- * "not newer" so the caller reuses rather than kills — the conservative choice.
+ * True iff semver `a` is strictly newer than `b`, INCLUDING prerelease
+ * precedence — a team pinning rc/dev builds bumps 0.14.0-rc.1 → 0.14.0-rc.2,
+ * and truncating the prerelease tag would compare those equal and keep reusing
+ * the stale server (the exact postinstall-suppressed gap this gate closes).
+ * Anything unparseable compares as "not newer" so the caller reuses rather
+ * than kills — the conservative choice.
  */
-function isVersionNewer(a: string, b: string): boolean {
-  const parse = (v: string) => v.split(".").map((n) => Number.parseInt(n, 10));
+export function isVersionNewer(a: string, b: string): boolean {
+  const parse = (v: string): { nums: number[]; pre: string[] } | null => {
+    // Strip build metadata; split "1.2.3-rc.2" into numeric core + prerelease ids.
+    const [core = "", ...preParts] = v.split("+")[0]!.split("-");
+    const nums = core.split(".").map((n) => Number.parseInt(n, 10));
+    if (nums.length === 0 || nums.some((n) => Number.isNaN(n))) return null;
+    return { nums, pre: preParts.length > 0 ? preParts.join("-").split(".") : [] };
+  };
   const pa = parse(a);
   const pb = parse(b);
+  if (!pa || !pb) return false;
   for (let i = 0; i < 3; i++) {
-    const x = pa[i] ?? 0;
-    const y = pb[i] ?? 0;
-    if (Number.isNaN(x) || Number.isNaN(y)) return false;
+    const x = pa.nums[i] ?? 0;
+    const y = pb.nums[i] ?? 0;
     if (x !== y) return x > y;
   }
+  // Equal numeric core: per semver, a release outranks its prereleases, and
+  // prerelease identifiers compare field-by-field (numeric < alphanumeric,
+  // numerics numerically, alphanumerics lexically; more fields wins a prefix).
+  if (pa.pre.length === 0 && pb.pre.length === 0) return false;
+  if (pa.pre.length === 0) return true;
+  if (pb.pre.length === 0) return false;
+  for (let i = 0; i < Math.max(pa.pre.length, pb.pre.length); i++) {
+    const x = pa.pre[i];
+    const y = pb.pre[i];
+    if (x === undefined) return false; // a is a prefix of b → a is older
+    if (y === undefined) return true;
+    if (x === y) continue;
+    const xn = /^\d+$/.test(x) ? Number.parseInt(x, 10) : null;
+    const yn = /^\d+$/.test(y) ? Number.parseInt(y, 10) : null;
+    if (xn !== null && yn !== null) return xn > yn;
+    if (xn !== null) return false; // numeric < alphanumeric
+    if (yn !== null) return true;
+    return x > y;
+  }
   return false;
+}
+
+/**
+ * The CURRENT on-disk version of the install a bundle belongs to, read fresh
+ * from the package.json one level above the bundle's dist/ dir. Never cached:
+ * the caller's own `paths.version` is frozen at module import, so a long-lived
+ * MCP process would keep comparing against the version it started with — blind
+ * to any in-place bump, downgrade, or prerelease change made since.
+ */
+function readBundlePackageVersion(bundlePath: string): string | undefined {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(bundlePath), "..", "package.json"), "utf8")
+    ) as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -779,22 +837,30 @@ async function reusableHandle(
 ): Promise<ToolsServerHandle | null> {
   if (!state || !isProcessAlive(state.pid)) return null;
   if (wantBundlePath !== undefined && state.bundlePath !== wantBundlePath) return null;
-  // Same path, different version → an in-place bump (e.g. a local devDependency
-  // update) rewrote the bundle. Refuse reuse — forcing the caller to respawn —
-  // ONLY when WE are the newer install self-healing over a server that still
-  // holds older code. If the tracked server is NEWER than us, it is already
-  // running the bumped bundle: reuse it instead of killing and downgrading.
-  // Killing on any mismatch is what makes two long-lived sessions of different
-  // versions ping-pong SIGTERMs — each frozen at its own startup version, each
-  // tearing down the other's healthy server on every call. Only compare when
-  // BOTH versions are known; a legacy server with no recorded version is reused.
-  if (
-    wantVersion !== undefined &&
-    state.version !== undefined &&
-    state.version !== wantVersion &&
-    isVersionNewer(wantVersion, state.version)
-  ) {
-    return null;
+  // Same path, different version → the bundle was rewritten in place (a local
+  // devDependency update, a downgrade away from a bad release, a prerelease
+  // bump). The authority on "what should be running" is the DISK, read fresh —
+  // a tracked server whose recorded version no longer matches the on-disk
+  // package is running code that no longer exists and must be retired, in BOTH
+  // directions (an upgrade-only rule would keep executing a just-removed newer
+  // version after a downgrade). Comparing disk-vs-state (not caller-vs-state)
+  // is also what keeps two long-lived sessions of different frozen versions
+  // from ping-ponging SIGTERMs: both read the same disk, so both agree on the
+  // one server that may live. Only when the disk is unreadable do we fall back
+  // to the caller's frozen version, and then only in the caller-newer
+  // direction (self-heal without reintroducing the ping-pong). A legacy server
+  // with no recorded version is reused.
+  if (wantBundlePath !== undefined && state.version !== undefined) {
+    const diskVersion = readBundlePackageVersion(wantBundlePath);
+    if (diskVersion !== undefined) {
+      if (diskVersion !== state.version) return null;
+    } else if (
+      wantVersion !== undefined &&
+      state.version !== wantVersion &&
+      isVersionNewer(wantVersion, state.version)
+    ) {
+      return null;
+    }
   }
   const host = state.host ?? "127.0.0.1";
   const healthy = await isToolsServerHealthy(state.port, host, 2000, state.token);
@@ -854,6 +920,15 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
 
     // Spawn a new server with a fresh token. Auto-spawned servers always
     // authenticate (the token is local to this user and persisted 0600).
+    //
+    // Read the disk version BEFORE spawning — recording what we're about to
+    // execute, not the caller's import-time version (a stale caller recording
+    // its own version would make the next disk-vs-state comparison kill the
+    // healthy server it just spawned). Reading BEFORE also keeps an in-place
+    // bump that lands mid-spawn on the safe side: the record carries the
+    // pre-bump version, so the next call sees a disk mismatch and retires the
+    // old-code server — one redundant respawn at worst, never a stale reuse.
+    const diskVersion = readBundlePackageVersion(paths.bundlePath) ?? paths.version;
     const token = generateToken();
     const port = await findFreePort();
     const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
@@ -866,7 +941,7 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
       pid,
       startedAt: new Date().toISOString(),
       bundlePath: paths.bundlePath,
-      version: paths.version,
+      version: diskVersion,
       host: "127.0.0.1",
       token,
       managed: "autospawn",

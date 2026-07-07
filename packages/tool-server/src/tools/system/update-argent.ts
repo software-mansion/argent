@@ -19,37 +19,46 @@ function resolveCliEntry(): string | null {
   }
 }
 
+const PACKAGE_NAME = "@swmansion/argent";
+
 // Which install is serving THIS session — the global PATH install or a project's
-// committable local devDependency? Spawning our own cli.js is not enough: the
-// `update` command re-resolves its target from the cwd, so without an explicit
-// flag a global server running inside a repo that ALSO declares argent locally
-// would update the local devDep instead of itself.
+// committable local devDependency, and (for local) WHICH project? Spawning our
+// own cli.js is not enough: the `update` command re-resolves its target project
+// from ITS cwd, so without an explicit flag — and, for a local target, an
+// explicit cwd — a global server running inside a repo that ALSO declares
+// argent locally would update the local devDep instead of itself, and a
+// detached updater inheriting this server's editor-chosen cwd (often `/` or
+// `$HOME`) would bind to the wrong directory entirely.
 //
-// The authoritative signal is ARGENT_INSTALL_KIND, classified by the spawning
-// package at process start — the moment cwd is trustworthy (a committed local
-// MCP command only resolves with cwd at the project root) — and forwarded by
-// the launcher. Fallback for servers spawned by older argent versions: the
-// tool-server bundle lives in the argent package's dist/; if that package root
-// sits inside a project's node_modules it is the local install, otherwise the
-// global one. We walk up from cwd so hoisted-workspace / pnpm layouts (bundle
-// under a parent node_modules or a .pnpm store) still classify correctly —
-// though this server's own cwd is editor-chosen and may be `/` or `$HOME`,
-// which is exactly why the env signal takes precedence.
-function classifyRunningInstall(): "global" | "local" {
+// The authoritative signals are ARGENT_INSTALL_KIND / ARGENT_PROJECT_ROOT,
+// classified by the spawning package at process start — the moment cwd is
+// trustworthy (a committed local MCP command only resolves with cwd at the
+// project root) — and forwarded by the launcher. Fallback for servers spawned
+// by older argent versions: the tool-server bundle lives in the argent
+// package's dist/; if that package root sits inside a project's node_modules
+// it is the local install of THAT project, otherwise the global one. We walk
+// up from cwd so hoisted-workspace / pnpm layouts (bundle under a parent
+// node_modules or a .pnpm store) still classify correctly — though this
+// server's own cwd is editor-chosen, which is exactly why the env signals take
+// precedence.
+function classifyRunningInstall(): { kind: "global" | "local"; projectRoot: string | null } {
   const envKind = process.env.ARGENT_INSTALL_KIND;
-  if (envKind === "local" || envKind === "global") return envKind;
+  const envRoot = process.env.ARGENT_PROJECT_ROOT;
+  if (envKind === "local" || envKind === "global") {
+    return { kind: envKind, projectRoot: envKind === "local" && envRoot ? envRoot : null };
+  }
   let runningRoot: string;
   try {
     runningRoot = fs.realpathSync(path.dirname(__dirname)); // dist/ -> package root
   } catch {
-    return "global";
+    return { kind: "global", projectRoot: null };
   }
   let dir = process.cwd();
   while (true) {
     try {
       const nmReal = fs.realpathSync(path.join(dir, "node_modules"));
       if (runningRoot === nmReal || runningRoot.startsWith(nmReal + path.sep)) {
-        return "local";
+        return { kind: "local", projectRoot: dir };
       }
     } catch {
       // no node_modules at this level — keep walking up
@@ -58,7 +67,47 @@ function classifyRunningInstall(): "global" | "local" {
     if (parent === dir) break;
     dir = parent;
   }
-  return "global";
+  return { kind: "global", projectRoot: null };
+}
+
+// Last-resort project root for a local-targeted update when the running
+// install carries none (a global server asked to update the project's local
+// install): the nearest ancestor of cwd that PROVABLY hosts a local argent
+// install — a committed .argent/install.json or a package.json declaring the
+// dependency. A bare package.json is deliberately not enough; with an
+// editor-chosen cwd of `$HOME`, a stray home-dir manifest must not become the
+// update target.
+function findDeclaringProjectRoot(startDir: string): string | null {
+  let dir: string;
+  try {
+    dir = fs.realpathSync(startDir);
+  } catch {
+    return null;
+  }
+  while (true) {
+    if (fs.existsSync(path.join(dir, ".argent", "install.json"))) return dir;
+    try {
+      // Same declaration shapes the installer's own probe accepts
+      // (topology.ts readManifestDeclaration).
+      const manifest = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+        optionalDependencies?: Record<string, string>;
+      };
+      if (
+        manifest.devDependencies?.[PACKAGE_NAME] ||
+        manifest.dependencies?.[PACKAGE_NAME] ||
+        manifest.optionalDependencies?.[PACKAGE_NAME]
+      ) {
+        return dir;
+      }
+    } catch {
+      // no/unreadable manifest at this level — keep walking up
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 // Map the resolved target to the `argent update` flags that pin it, so the
@@ -93,24 +142,69 @@ export const updateArgentTool: ToolDefinition<{
     const { updateAvailable, updateInstallable, currentVersion, installableVersion } =
       getUpdateState();
 
-    if (!updateAvailable) {
-      return {
-        message: `Argent is already up to date (v${currentVersion}). No update needed.`,
-      };
+    // Resolve the target BEFORE the availability gates so a target covering an
+    // install OTHER than the running one is never refused on the running
+    // install's version. getUpdateState only knows the RUNNING install: "we are
+    // current" says nothing about the other install being current, so for a
+    // cross-install (or 'both') target the spawned installer — which re-checks
+    // each target against the registry — gets the final word.
+    const requested = params?.target ?? "auto";
+    const running = classifyRunningInstall();
+    const resolved = requested === "auto" ? running.kind : requested;
+
+    // A local-targeted update needs a project to bind to: the spawned updater
+    // must not re-derive the project itself — its inherited cwd is this
+    // detached server's editor-chosen (often `/` or `$HOME`) cwd. Pin the
+    // proven root explicitly. The recorded root is re-validated on disk (the
+    // project may have been deleted/renamed since this server started); when
+    // no root can be proven, refuse the local part instead of "initiating" an
+    // update that would no-op or bind to the wrong project.
+    let projectRoot: string | null = null;
+    let effectiveTarget = resolved;
+    if (resolved === "local" || resolved === "both") {
+      const recordedRoot =
+        running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null;
+      projectRoot = recordedRoot ?? findDeclaringProjectRoot(process.cwd());
+      if (!projectRoot) {
+        if (resolved === "local") {
+          return {
+            message:
+              "Could not determine which project's local install to update: this tool server " +
+              "does not run from a project-local install and no project declaring " +
+              `${PACKAGE_NAME} was found around its working directory. ` +
+              "Run `argent update --local` in the project directory instead.",
+          };
+        }
+        effectiveTarget = "global";
+      }
     }
 
-    if (!updateInstallable) {
-      return {
-        message:
-          "A newer Argent version exists, but it is not installable yet under the current minimum-release-age policy. Please try again later.",
-      };
-    }
+    // Gates come AFTER the 'both' → 'global' degradation: a degraded target IS
+    // the running install, and skipping the gates for it would spawn a
+    // pointless updater plus a false "will restart" promise when everything is
+    // already current.
+    const targetsOnlyRunningInstall = effectiveTarget === running.kind;
 
-    if (!installableVersion) {
-      return {
-        message:
-          "Argent found an installable update, but could not determine its version. Please try again later.",
-      };
+    if (targetsOnlyRunningInstall) {
+      if (!updateAvailable) {
+        return {
+          message: `Argent is already up to date (v${currentVersion}). No update needed.`,
+        };
+      }
+
+      if (!updateInstallable) {
+        return {
+          message:
+            "A newer Argent version exists, but it is not installable yet under the current minimum-release-age policy. Please try again later.",
+        };
+      }
+
+      if (!installableVersion) {
+        return {
+          message:
+            "Argent found an installable update, but could not determine its version. Please try again later.",
+        };
+      }
     }
 
     if (updateScheduled) {
@@ -120,12 +214,7 @@ export const updateArgentTool: ToolDefinition<{
       };
     }
 
-    // Resolve the target BEFORE scheduling so the confirmation message names the
-    // install we will actually update. 'auto' pins the install serving this
-    // session; anything else honors the agent's explicit choice.
-    const requested = params?.target ?? "auto";
-    const resolved = requested === "auto" ? classifyRunningInstall() : requested;
-    const targetFlags = targetFlagsFor(resolved);
+    const targetFlags = targetFlagsFor(effectiveTarget);
 
     updateScheduled = true;
 
@@ -134,7 +223,22 @@ export const updateArgentTool: ToolDefinition<{
     // the response to reach the MCP server before that happens.
     setTimeout(() => {
       const cliEntry = resolveCliEntry();
-      const updateArgs = ["update", "--yes", ...targetFlags, "--version", installableVersion];
+      // Pin --version only when the target IS the running install — the pinned
+      // version came from ITS update state. For a cross-install target the
+      // installer resolves the right version per target itself.
+      const updateArgs = ["update", "--yes", ...targetFlags];
+      if (targetsOnlyRunningInstall && installableVersion) {
+        updateArgs.push("--version", installableVersion);
+      }
+      // Pin WHERE via an explicit flag, not the child's cwd: the installer's
+      // own root derivation (resolveProjectRoot) walks editor/.git markers and
+      // can resolve a DIFFERENT ancestor than the manifest-proven root in
+      // monorepos — and a cwd that vanished since this server started would
+      // fail the spawn outright.
+      const spawnRoot =
+        projectRoot ??
+        (running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null);
+      if (spawnRoot) updateArgs.push("--project-root", spawnRoot);
       const cmd = cliEntry ? process.execPath : "argent";
       const args = cliEntry ? [cliEntry, ...updateArgs] : updateArgs;
       const child = spawn(cmd, args, {
@@ -150,11 +254,19 @@ export const updateArgentTool: ToolDefinition<{
         console.error(`[update-argent] failed to spawn updater: ${err}`);
         updateScheduled = false;
       });
+      // The updater exited without killing this server — it declined or
+      // no-op'd (target already current, nothing to update). Unblock future
+      // calls; a successful update restarts this server anyway.
+      child.on("exit", () => {
+        updateScheduled = false;
+      });
       child.unref();
     }, 2000);
 
     const targetLabel =
-      resolved === "both" ? "global and project-local installs" : `${resolved} install`;
+      effectiveTarget === "both"
+        ? "global and project-local installs"
+        : `${effectiveTarget} install`;
     // When we auto-updated only one of two possible installs, hint at the flag
     // for the other so the agent can offer it if the user also has that one.
     const otherHint =
@@ -162,12 +274,24 @@ export const updateArgentTool: ToolDefinition<{
         ? ` If you also have a ${resolved === "local" ? "global" : "project-local"} install, ` +
           `call this tool again with target "${resolved === "local" ? "global" : "local"}" to update it too.`
         : "";
+    const bothDegradedNote =
+      resolved === "both" && effectiveTarget === "global"
+        ? ` The project-local install was skipped: no project declaring ${PACKAGE_NAME} could be ` +
+          "located from this server — run `argent update --local` in the project directory for it."
+        : "";
+    const versionInfo = targetsOnlyRunningInstall
+      ? `(v${currentVersion} -> v${installableVersion}) `
+      : "";
+    const crossTargetNote = targetsOnlyRunningInstall
+      ? ""
+      : " The installer checks each targeted install against the registry and no-ops if it is already current.";
 
     return {
       message:
-        `Argent update initiated (v${currentVersion} -> v${installableVersion}) for the ${targetLabel}. ` +
-        `The tool server will stop and restart automatically once the update is installed. ` +
-        `Subsequent tool calls will reconnect to the updated server.${otherHint}`,
+        `Argent update initiated ${versionInfo}for the ${targetLabel}.` +
+        crossTargetNote +
+        ` The tool server will stop and restart automatically once the update is installed. ` +
+        `Subsequent tool calls will reconnect to the updated server.${otherHint}${bothDegradedNote}`,
     };
   },
 };
