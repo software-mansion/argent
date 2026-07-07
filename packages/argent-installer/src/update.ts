@@ -6,6 +6,7 @@ import { init as telemetryInit, track } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
+  detectAdapters,
   findConfiguredAdapterScopes,
   getMcpEntryForScope,
   resolveLocalCommandMode,
@@ -13,6 +14,7 @@ import {
   type McpConfigAdapter,
   type McpServerEntry,
 } from "./mcp-configs.js";
+import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
 import {
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,
@@ -625,6 +627,25 @@ export async function update(args: string[]): Promise<void> {
 
       if (results.length > 0) {
         p.note(results.join("\n"), "MCP Configs Updated");
+      }
+
+      // The same stale-config sweep init runs (its step 1d): configs the
+      // refresh above did not rewrite can still shadow or block the refreshed
+      // entries (a `claude mcp add` local-scope leftover, a dead global entry
+      // after a global→local migration, a recorded .mcp.json rejection).
+      const staleCleanup = cleanupStaleMcpConfigs({
+        writtenAdapters: [...new Set([...localAdapters, ...globalAdapters])],
+        detectedAdapters: detectAdapters(),
+        installMode,
+        scope: localAdapters.length > 0 ? "local" : "global",
+        effectiveRoot: projectRoot,
+      });
+      if (staleCleanup.lines.length > 0) {
+        p.note(staleCleanup.lines.join("\n"), "Stale Config Cleanup");
+        track("installation:stale_config_cleanup", {
+          removed_count: staleCleanup.removedCount,
+          warned_count: staleCleanup.warnedCount,
+        });
       }
 
       if (ruleResults.length > 0) {

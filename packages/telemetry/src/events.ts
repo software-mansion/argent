@@ -57,6 +57,14 @@ export interface InstallationAllowlistDecisionProps {
   is_enabled: boolean;
 }
 
+// Stale argent config found (and removed or flagged) by the post-write sweep
+// in init/update — entries in other scopes that would shadow or block the one
+// just written.
+export interface InstallationStaleConfigCleanupProps {
+  removed_count: number;
+  warned_count: number;
+}
+
 export interface InstallationSkillInstallProps {
   method: "default" | "interactive" | "manual";
   is_online: boolean;
@@ -162,6 +170,7 @@ export interface EventPropertyMap {
   "installation:update_decision": InstallationUpdateDecisionProps;
   "installation:editors_select": InstallationEditorsSelectProps;
   "installation:allowlist_decision": InstallationAllowlistDecisionProps;
+  "installation:stale_config_cleanup": InstallationStaleConfigCleanupProps;
   "installation:skill_install": InstallationSkillInstallProps;
   "installation:skill_refresh_result": InstallationSkillRefreshResultProps;
   "installation:package_action": InstallationPackageActionProps;
@@ -190,6 +199,7 @@ export const EVENT_NAMES: readonly EventName[] = [
   "installation:update_decision",
   "installation:editors_select",
   "installation:allowlist_decision",
+  "installation:stale_config_cleanup",
   "installation:skill_install",
   "installation:skill_refresh_result",
   "installation:package_action",

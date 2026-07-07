@@ -41,6 +41,31 @@ export interface McpServerEntry {
   env?: Record<string, string>;
 }
 
+// A same-named argent config found somewhere OTHER than the entry init just
+// wrote — a hidden scope the client resolves ahead of it (Claude Code's
+// per-project section of ~/.claude.json, VS Code's user-profile mcp.json), or
+// recorded client state that blocks the written entry from loading (Claude
+// Code's disabledMcpjsonServers). The shared cleanup step in
+// init-stale-config.ts decides removal vs. warning; adapters only report.
+export interface ShadowingConfigFinding {
+  /** Human-readable location, e.g. `~/.claude.json (project-local scope)`. */
+  location: string;
+  /** One-line consequence for the user, e.g. `takes precedence over .mcp.json`. */
+  reason: string;
+  /** The conflicting entry when parseable; null for non-entry state (a block list). */
+  entry: McpServerEntry | null;
+  /**
+   * Set by the adapter when removal needs no further policy checks — the state
+   * is keyed to this project root, or removing it only re-enables prompting.
+   * When false, the shared policy in init-stale-config.ts removes the finding
+   * only if it is provably dead (a bare `argent` entry with no global install)
+   * and warns otherwise.
+   */
+  autoRemove: boolean;
+  /** Remove the conflicting state. Returns true if something was removed. */
+  remove(): boolean;
+}
+
 export interface McpConfigAdapter {
   name: string;
   detect(): boolean;
@@ -53,6 +78,16 @@ export interface McpConfigAdapter {
   // configs for any editor whose dir happens to exist on the user's machine
   // (issue #195). Implementations must read the same key `remove()` checks.
   hasArgentEntry(configPath: string): boolean;
+  // The argent entry in normalized command/args form, or null when the config
+  // has none. A present-but-unrecognizable entry comes back as
+  // { command: "", args: [] } so callers can tell "absent" from "unreadable"
+  // (hasArgentEntry must stay true for it). The stale-config cleanup uses the
+  // command shape to judge whether an entry from a previous install is dead.
+  getArgentEntry(configPath: string): McpServerEntry | null;
+  // Report argent state in config locations OUTSIDE the projectPath/globalPath
+  // pair that the client resolves ahead of (or gates) the entry written at
+  // `writtenScope`. Only clients with hidden scopes implement this.
+  findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
   addAllowlist?(root: string, scope: "local" | "global"): void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
 }
@@ -170,6 +205,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+// Normalize a raw config-file server entry into McpServerEntry shape.
+// `undefined`/absent → null; anything present but unrecognizable → the
+// { command: "" } sentinel (see McpConfigAdapter.getArgentEntry).
+function normalizeServerEntry(raw: unknown): McpServerEntry | null {
+  if (raw === undefined || raw === null) return null;
+  if (isRecord(raw)) {
+    // opencode stores the command as a single array: { command: [cmd, ...args] }.
+    if (Array.isArray(raw.command) && raw.command.every((c) => typeof c === "string")) {
+      const [command = "", ...args] = raw.command as string[];
+      return { command, args };
+    }
+    if (typeof raw.command === "string") {
+      const args = Array.isArray(raw.args)
+        ? raw.args.filter((a): a is string => typeof a === "string")
+        : [];
+      return { command: raw.command, args };
+    }
+  }
+  return { command: "", args: [] };
+}
+
 function writeJsonOrRemove(filePath: string, data: Record<string, unknown>): void {
   const cleaned = pruneEmptyConfig(data);
   if (!isRecord(cleaned)) {
@@ -235,11 +291,15 @@ const cursorAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const config = readJson(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
-    return Boolean(servers?.[MCP_SERVER_KEY]);
+    return normalizeServerEntry(servers?.[MCP_SERVER_KEY]);
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
   },
 
   addAllowlist(): void {
@@ -272,6 +332,53 @@ const cursorAdapter: McpConfigAdapter = {
 // Format: { mcpServers: { argent: { type: "stdio", command, args, env } } }
 // Project: .mcp.json   Global: ~/.claude.json
 // Also manages permissions in .claude/settings.json
+
+// ~/.claude.json keys its "local scope" entries by the EXACT absolute project
+// path. Match keys against the root loosely — realpathSync.native canonicalizes
+// symlinks and, on case-insensitive filesystems, on-disk case (a session
+// started from /users/… writes a key .mcp.json-based lookups would miss).
+function claudeProjectKeysForRoot(projects: Record<string, unknown>, root: string): string[] {
+  const canonical = (value: string): string => {
+    try {
+      return fs.realpathSync.native(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  const target = canonical(root);
+  return Object.keys(projects).filter((key) => key === root || canonical(key) === target);
+}
+
+// A recorded "reject" for the argent .mcp.json server. Claude Code honors a
+// disabledMcpjsonServers entry from ANY settings file, so a rejection recorded
+// before this init would keep the fresh project-scope entry from ever loading.
+function claudeDisabledListFinding(
+  settingsPath: string,
+  label: string
+): ShadowingConfigFinding | null {
+  if (!fs.existsSync(settingsPath)) return null;
+  const disabled = readJson(settingsPath).disabledMcpjsonServers;
+  if (!Array.isArray(disabled) || !disabled.includes(MCP_SERVER_KEY)) return null;
+  return {
+    location: label,
+    reason: `a recorded "reject" in disabledMcpjsonServers blocks the .mcp.json entry from loading`,
+    entry: null,
+    // Removing the rejection only lets Claude Code prompt for approval again —
+    // running `argent init` is that consent.
+    autoRemove: true,
+    remove: (): boolean => {
+      const config = readJson(settingsPath);
+      const list = config.disabledMcpjsonServers;
+      if (!Array.isArray(list)) return false;
+      const idx = list.indexOf(MCP_SERVER_KEY);
+      if (idx === -1) return false;
+      list.splice(idx, 1);
+      if (list.length === 0) delete config.disabledMcpjsonServers;
+      writeJsonOrRemove(settingsPath, config);
+      return true;
+    },
+  };
+}
 
 const claudeAdapter: McpConfigAdapter = {
   name: "Claude Code",
@@ -316,11 +423,74 @@ const claudeAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const config = readJson(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
-    return Boolean(servers?.[MCP_SERVER_KEY]);
+    return normalizeServerEntry(servers?.[MCP_SERVER_KEY]);
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
+  },
+
+  // Claude Code's scope precedence is local > project (.mcp.json) > user
+  // (~/.claude.json top-level), whole-entry, matched by name. "Local scope"
+  // lives in a location the projectPath/globalPath pair doesn't cover:
+  // projects["<abs path>"].mcpServers in ~/.claude.json (the default target of
+  // `claude mcp add`). A stale entry there — typically `argent mcp` from a
+  // pre-committable global install — outranks BOTH scopes init can write, so
+  // the fresh install shows no tools and no error. Also reports recorded
+  // .mcp.json rejections (see claudeDisabledListFinding).
+  findShadowingConfigs(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[] {
+    const findings: ShadowingConfigFinding[] = [];
+    const claudeJsonPath = path.join(homedir(), ".claude.json");
+    const projects = readJson(claudeJsonPath).projects;
+    if (isRecord(projects)) {
+      for (const key of claudeProjectKeysForRoot(projects, root)) {
+        const project = projects[key];
+        if (!isRecord(project)) continue;
+        const servers = project.mcpServers;
+        if (!isRecord(servers) || !(MCP_SERVER_KEY in servers)) continue;
+        findings.push({
+          location: `~/.claude.json (local-scope entry for ${key})`,
+          reason:
+            "local scope outranks every entry argent can write — the new install would be silently ignored",
+          entry: normalizeServerEntry(servers[MCP_SERVER_KEY]),
+          // Keyed to this project root; removal cannot affect other projects.
+          autoRemove: true,
+          remove: (): boolean => {
+            // Re-read at removal time and bail unless the entry is still
+            // there: readJson yields {} on a parse failure, and writing that
+            // back would destroy unrelated state (~/.claude.json also holds
+            // OAuth sessions and trust decisions).
+            const config = readJson(claudeJsonPath);
+            const liveProjects = config.projects;
+            if (!isRecord(liveProjects) || !isRecord(liveProjects[key])) return false;
+            const liveServers = (liveProjects[key] as Record<string, unknown>).mcpServers;
+            if (!isRecord(liveServers) || !(MCP_SERVER_KEY in liveServers)) return false;
+            delete liveServers[MCP_SERVER_KEY];
+            if (Object.keys(liveServers).length === 0) {
+              delete (liveProjects[key] as Record<string, unknown>).mcpServers;
+            }
+            writeJson(claudeJsonPath, config);
+            return true;
+          },
+        });
+      }
+    }
+    if (writtenScope === "local") {
+      const candidates: Array<[string, string]> = [
+        [path.join(root, ".claude", "settings.json"), ".claude/settings.json"],
+        [path.join(root, ".claude", "settings.local.json"), ".claude/settings.local.json"],
+        [path.join(homedir(), ".claude", "settings.json"), "~/.claude/settings.json"],
+      ];
+      for (const [settingsPath, label] of candidates) {
+        const finding = claudeDisabledListFinding(settingsPath, label);
+        if (finding) findings.push(finding);
+      }
+    }
+    return findings;
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {
@@ -377,13 +547,62 @@ const vscodeAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const config = readJson(configPath);
     const servers = config.servers as Record<string, unknown> | undefined;
-    return Boolean(servers?.[MCP_SERVER_KEY]);
+    return normalizeServerEntry(servers?.[MCP_SERVER_KEY]);
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
+  },
+
+  // VS Code has a scope the projectPath/globalPath pair doesn't cover: the
+  // user-profile mcp.json (MCP: Open User Configuration). User-vs-workspace
+  // precedence for a same-named server is undocumented (observed: silent
+  // single-winner, direction not guaranteed), so a stale `argent` entry there
+  // can shadow a fresh .vscode/mcp.json entry. Report it; the shared policy
+  // removes it only when provably dead. Insiders keeps a sibling profile dir.
+  findShadowingConfigs(_root: string, _writtenScope: "local" | "global"): ShadowingConfigFinding[] {
+    const findings: ShadowingConfigFinding[] = [];
+    for (const userDir of vscodeUserDirs()) {
+      const configPath = path.join(userDir, "mcp.json");
+      const entry = this.getArgentEntry(configPath);
+      if (!entry) continue;
+      findings.push({
+        location: configPath,
+        reason:
+          "a user-profile MCP entry with the same name can take precedence over the workspace entry (VS Code does not document which wins)",
+        entry,
+        autoRemove: false,
+        remove: () => this.remove(configPath),
+      });
+    }
+    return findings;
   },
 };
+
+// Default-profile user config dirs for VS Code stable and Insiders. Only dirs
+// that exist are returned, so non-installed variants cost nothing.
+function vscodeUserDirs(): string[] {
+  const bases: string[] = [];
+  if (process.platform === "darwin") {
+    bases.push(path.join(homedir(), "Library", "Application Support"));
+  } else if (process.platform === "win32") {
+    if (process.env.APPDATA) bases.push(process.env.APPDATA);
+  } else {
+    bases.push(path.join(homedir(), ".config"));
+  }
+  const dirs: string[] = [];
+  for (const base of bases) {
+    for (const product of ["Code", "Code - Insiders"]) {
+      const dir = path.join(base, product, "User");
+      if (dirExists(dir)) dirs.push(dir);
+    }
+  }
+  return dirs;
+}
 
 // ── Windsurf adapter ─────────────────────────────────────────────────────────
 // MARK: Windsurf
@@ -427,11 +646,15 @@ const windsurfAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const config = readJson(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
-    return Boolean(servers?.[MCP_SERVER_KEY]);
+    return normalizeServerEntry(servers?.[MCP_SERVER_KEY]);
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
   },
 
   addAllowlist(): void {
@@ -502,11 +725,15 @@ const zedAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const config = readJsonc(configPath);
     const servers = config.context_servers as Record<string, unknown> | undefined;
-    return Boolean(servers?.[MCP_SERVER_KEY]);
+    return normalizeServerEntry(servers?.[MCP_SERVER_KEY]);
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
   },
 
   // Zed doesn't support server-level wildcards for MCP tools — each tool
@@ -580,11 +807,15 @@ const geminiAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const config = readJson(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
-    return Boolean(servers?.[MCP_SERVER_KEY]);
+    return normalizeServerEntry(servers?.[MCP_SERVER_KEY]);
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {
@@ -665,11 +896,15 @@ const codexAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const config = readToml(configPath);
     const servers = config.mcp_servers as Record<string, unknown> | undefined;
-    return Boolean(servers?.[MCP_SERVER_KEY]);
+    return normalizeServerEntry(servers?.[MCP_SERVER_KEY]);
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
   },
 
   addAllowlist(root, scope): void {
@@ -777,12 +1012,18 @@ const hermesAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const doc = readYaml(configPath);
     const servers = doc.get("mcp_servers");
-    if (!isMap(servers)) return false;
-    return servers.has(MCP_SERVER_KEY);
+    if (!isMap(servers)) return null;
+    if (!servers.has(MCP_SERVER_KEY)) return null;
+    const raw = (doc.toJS() as Record<string, unknown>).mcp_servers;
+    return normalizeServerEntry(isRecord(raw) ? raw[MCP_SERVER_KEY] : {});
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
   },
 };
 
@@ -855,11 +1096,15 @@ const openCodeAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const config = readJsonc(configPath);
     const servers = config.mcp as Record<string, unknown> | undefined;
-    return Boolean(servers?.[MCP_SERVER_KEY]);
+    return normalizeServerEntry(servers?.[MCP_SERVER_KEY]);
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {
@@ -932,11 +1177,15 @@ const kiroAdapter: McpConfigAdapter = {
     return true;
   },
 
-  hasArgentEntry(configPath: string): boolean {
-    if (!fs.existsSync(configPath)) return false;
+  getArgentEntry(configPath: string): McpServerEntry | null {
+    if (!fs.existsSync(configPath)) return null;
     const config = readJson(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
-    return Boolean(servers?.[MCP_SERVER_KEY]);
+    return normalizeServerEntry(servers?.[MCP_SERVER_KEY]);
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    return this.getArgentEntry(configPath) !== null;
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {

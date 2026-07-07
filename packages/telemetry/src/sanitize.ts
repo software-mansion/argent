@@ -157,6 +157,10 @@ export const ALLOWED: ValidatorMap = {
   "installation:allowlist_decision": {
     is_enabled: bool,
   },
+  "installation:stale_config_cleanup": {
+    removed_count: COUNT,
+    warned_count: COUNT,
+  },
   "installation:skill_install": {
     method: oneOf(["default", "interactive", "manual"] as const),
     is_online: bool,

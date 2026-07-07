@@ -29,6 +29,7 @@ import { runInstall } from "./install-runner.js";
 import { chooseAdapters } from "./init-adapters.js";
 import { chooseScope, type Scope } from "./init-scope.js";
 import { writeMcpConfigs } from "./init-mcp-write.js";
+import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
 import { configureAllowlist } from "./init-allowlist.js";
 import { runSkillsStep, type SkillsMethod } from "./init-skills.js";
 
@@ -149,6 +150,25 @@ export async function init(args: string[]): Promise<void> {
     });
 
     p.note(mcpLines.join("\n"), "MCP Configuration");
+
+    // Step 1d — remove or flag stale argent config that would shadow or block
+    // the entries just written (a leftover `claude mcp add` local-scope entry,
+    // a dead global entry after migrating to a committable install, a recorded
+    // .mcp.json rejection). See init-stale-config.ts for the policy.
+    const staleCleanup = cleanupStaleMcpConfigs({
+      writtenAdapters,
+      detectedAdapters: detected,
+      installMode: tel.installMode,
+      scope: normalizedScope,
+      effectiveRoot,
+    });
+    if (staleCleanup.lines.length > 0) {
+      p.note(staleCleanup.lines.join("\n"), "Stale Config Cleanup");
+      track("installation:stale_config_cleanup", {
+        removed_count: staleCleanup.removedCount,
+        warned_count: staleCleanup.warnedCount,
+      });
+    }
 
     // Record local mode so `update`/`uninstall` and teammates act on the
     // repo-local install. Global mode stays zero-footprint (writes nothing) —
