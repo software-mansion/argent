@@ -7,6 +7,7 @@ import { parse as parseJsonc } from "jsonc-parser";
 import {
   ALL_ADAPTERS,
   getMcpEntry,
+  isArgentManagedEntry,
   resolveLocalCommandMode,
   addClaudePermission,
   removeClaudePermission,
@@ -76,6 +77,117 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// ── isArgentManagedEntry ──────────────────────────────────────────────────────
+
+describe("isArgentManagedEntry", () => {
+  it("accepts every shape argent itself writes", () => {
+    expect(isArgentManagedEntry({ command: "argent", args: ["mcp"] })).toBe(true);
+    expect(
+      isArgentManagedEntry({
+        command: "node",
+        args: ["node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(true);
+    // Windows separators in a committed relative path still count as managed.
+    expect(
+      isArgentManagedEntry({
+        command: "node",
+        args: ["node_modules\\@swmansion\\argent\\dist\\cli.js", "mcp"],
+      })
+    ).toBe(true);
+    // The fallback shapes getLocalArgentBinRelPath emits for hoisted
+    // workspaces and pnpm store layouts are argent-authored too.
+    expect(
+      isArgentManagedEntry({
+        command: "node",
+        args: ["../../node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(true);
+    expect(
+      isArgentManagedEntry({
+        command: "node",
+        args: [
+          "node_modules/.pnpm/@swmansion+argent@1.0.0/node_modules/@swmansion/argent/dist/cli.js",
+          "mcp",
+        ],
+      })
+    ).toBe(true);
+    expect(isArgentManagedEntry({ command: "yarn", args: ["argent", "mcp"] })).toBe(true);
+    expect(isArgentManagedEntry({ command: "npx", args: ["--no-install", "argent", "mcp"] })).toBe(
+      true
+    );
+  });
+
+  it("rejects customized and unrecognizable entries", () => {
+    // A dev checkout: node with an absolute / out-of-tree path.
+    expect(
+      isArgentManagedEntry({ command: "node", args: ["/home/dev/argent/cli.js", "mcp"] })
+    ).toBe(false);
+    expect(isArgentManagedEntry({ command: "node", args: ["../elsewhere/cli.js", "mcp"] })).toBe(
+      false
+    );
+    // Env vars mark a hand-tuned entry even on the stock command.
+    expect(
+      isArgentManagedEntry({ command: "argent", args: ["mcp"], env: { PATH: "/custom" } })
+    ).toBe(false);
+    // Extra or missing args.
+    expect(isArgentManagedEntry({ command: "argent", args: ["mcp", "--flag"] })).toBe(false);
+    expect(isArgentManagedEntry({ command: "argent", args: [] })).toBe(false);
+    // The unreadable-entry sentinel and absent entries.
+    expect(isArgentManagedEntry({ command: "", args: [] })).toBe(false);
+    expect(isArgentManagedEntry(null)).toBe(false);
+    expect(isArgentManagedEntry({ command: "docker", args: ["run", "argent", "mcp"] })).toBe(false);
+  });
+});
+
+// ── getArgentEntry env passthrough ────────────────────────────────────────────
+
+describe("getArgentEntry env passthrough", () => {
+  it("surfaces env vars so classification can see hand-tuned entries", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const configPath = path.join(tmpDir, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          argent: { command: "argent", args: ["mcp"], env: { PATH: "/custom/bin" } },
+        },
+      })
+    );
+
+    expect(cursor.getArgentEntry(configPath)).toEqual({
+      command: "argent",
+      args: ["mcp"],
+      env: { PATH: "/custom/bin" },
+    });
+  });
+
+  it("maps opencode's `environment` key onto env", () => {
+    const opencode = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+    const configPath = path.join(tmpDir, "opencode.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcp: {
+          argent: {
+            type: "local",
+            command: ["argent", "mcp"],
+            enabled: true,
+            environment: { FOO: "bar" },
+          },
+        },
+      })
+    );
+
+    expect(opencode.getArgentEntry(configPath)).toEqual({
+      command: "argent",
+      args: ["mcp"],
+      env: { FOO: "bar" },
+    });
+  });
 });
 
 // ── getMcpEntry ───────────────────────────────────────────────────────────────

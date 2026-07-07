@@ -197,6 +197,27 @@ describe("claudeAdapter.findShadowingConfigs", () => {
     expect(readJsonFile(settingsPath).disabledMcpjsonServers).toEqual(["other"]);
   });
 
+  it("removing the rejection never prunes or deletes the user's settings file", () => {
+    const settingsPath = path.join(root, ".claude", "settings.json");
+    // Only argent's rejection plus empty user scaffolding: pruning empties
+    // would delete the whole file (and the .claude dir with it).
+    writeJsonFile(settingsPath, {
+      disabledMcpjsonServers: ["argent"],
+      permissions: { allow: [] },
+    });
+
+    const findings = claude.findShadowingConfigs!(root, "local");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].remove()).toBe(true);
+
+    // The file survives, the user's empty scaffolding survives, only the list
+    // entry is gone.
+    expect(fs.existsSync(settingsPath)).toBe(true);
+    const after = readJsonFile(settingsPath);
+    expect(after.disabledMcpjsonServers).toBeUndefined();
+    expect(after.permissions).toEqual({ allow: [] });
+  });
+
   it("checks rejections only for a project-scope write", () => {
     const settingsPath = path.join(root, ".claude", "settings.local.json");
     writeJsonFile(settingsPath, { disabledMcpjsonServers: ["argent"] });
@@ -290,7 +311,7 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(project.mcpServers.argent).toBeDefined();
   });
 
-  it("removes a dead bare-argent global entry on a local install", async () => {
+  it("removes a dead bare-argent global entry on a local install (confirmed)", async () => {
     globallyInstalled = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
@@ -301,11 +322,85 @@ describe("cleanupStaleMcpConfigs", () => {
       installMode: "local",
       scope: "local",
       effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
     });
 
     expect(result.removedCount).toBe(1);
     // The entry was the file's only content, so the file itself is pruned.
     expect(fs.existsSync(cursorGlobal)).toBe(false);
+  });
+
+  it("skips (and warns about) cross-project removals in a non-interactive run", async () => {
+    globallyInstalled = false;
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
+
+    // No confirmer = --yes. Removing state that reaches beyond this project on
+    // a fallible PATH probe is not a decision a non-interactive run may make.
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+    });
+
+    expect(result.removedCount).toBe(0);
+    expect(result.warnedCount).toBe(1);
+    expect(result.lines.join("\n")).toContain("non-interactive");
+    expect(fs.existsSync(cursorGlobal)).toBe(true);
+  });
+
+  it("stays quiet about a WORKING env-tuned stock entry (argent on PATH)", async () => {
+    globallyInstalled = true;
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    writeJsonFile(cursorGlobal, {
+      mcpServers: {
+        argent: { command: "argent", args: ["mcp"], env: { ARGENT_MCP_LOG: "/tmp/log" } },
+      },
+    });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
+    });
+
+    // Legitimate coexistence — same silence as an env-less working entry.
+    expect(result.lines).toHaveLength(0);
+    expect(fs.existsSync(cursorGlobal)).toBe(true);
+  });
+
+  it("never treats an env-carrying bare-argent entry as provably dead", async () => {
+    globallyInstalled = false;
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    // The env (an nvm PATH) is exactly what can make `argent` resolvable in
+    // the client even though this shell's probe misses it.
+    writeJsonFile(cursorGlobal, {
+      mcpServers: {
+        argent: {
+          command: "argent",
+          args: ["mcp"],
+          env: { PATH: "/home/user/.nvm/versions/node/v20/bin" },
+        },
+      },
+    });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
+    });
+
+    expect(result.removedCount).toBe(0);
+    expect(result.warnedCount).toBe(1);
+    expect(fs.existsSync(cursorGlobal)).toBe(true);
   });
 
   it("leaves a working bare-argent global entry alone, silently", async () => {
@@ -358,6 +453,7 @@ describe("cleanupStaleMcpConfigs", () => {
       installMode: "local",
       scope: "local",
       effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
     });
 
     expect(result.removedCount).toBe(1);

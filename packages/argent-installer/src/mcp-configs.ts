@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import {
   MCP_SERVER_KEY,
   MCP_BINARY_NAME,
+  PACKAGE_NAME,
   PERMISSION_RULE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
@@ -208,22 +209,65 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // Normalize a raw config-file server entry into McpServerEntry shape.
 // `undefined`/absent → null; anything present but unrecognizable → the
 // { command: "" } sentinel (see McpConfigAdapter.getArgentEntry).
+// Env vars ride along (opencode spells the key `environment`): they mark a
+// hand-tuned entry, and — an nvm PATH being the classic case — can make a
+// command resolvable in the client even when this shell's probe misses it, so
+// classification (isArgentManagedEntry, the stale sweep's dead check) must see
+// them.
 function normalizeServerEntry(raw: unknown): McpServerEntry | null {
   if (raw === undefined || raw === null) return null;
   if (isRecord(raw)) {
+    const rawEnv = isRecord(raw.env) ? raw.env : isRecord(raw.environment) ? raw.environment : null;
+    const env =
+      rawEnv && Object.keys(rawEnv).length > 0
+        ? Object.fromEntries(Object.entries(rawEnv).map(([key, value]) => [key, String(value)]))
+        : undefined;
     // opencode stores the command as a single array: { command: [cmd, ...args] }.
     if (Array.isArray(raw.command) && raw.command.every((c) => typeof c === "string")) {
       const [command = "", ...args] = raw.command as string[];
-      return { command, args };
+      return { command, args, ...(env ? { env } : {}) };
     }
     if (typeof raw.command === "string") {
       const args = Array.isArray(raw.args)
         ? raw.args.filter((a): a is string => typeof a === "string")
         : [];
-      return { command: raw.command, args };
+      return { command: raw.command, args, ...(env ? { env } : {}) };
     }
   }
   return { command: "", args: [] };
+}
+
+// True when `entry` is a shape argent itself writes — one of the four
+// buildMcpEntry command modes, exact args, no env. Anything else (a dev
+// checkout's `node ~/dev/argent/cli.js mcp`, extra args, env vars, the
+// unreadable-entry sentinel) is a deliberate or unknown customization that
+// refresh/cleanup flows must not rewrite or remove. The node form is accepted
+// for any RELATIVE path into a node_modules copy of the package — that covers
+// everything getLocalArgentBinRelPath can emit (the stable
+// `node_modules/<pkg>/...` path, a hoisted-workspace `../../node_modules/...`
+// path, a pnpm store path with its inner node_modules) — while an absolute or
+// out-of-tree path is a hand-tuned override even though the command is `node`.
+export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
+  if (entry === null || hasEnv(entry)) return false;
+  const { command, args } = entry;
+  switch (command) {
+    case MCP_BINARY_NAME:
+      return args.length === 1 && args[0] === "mcp";
+    case "node": {
+      if (args.length !== 2 || args[1] !== "mcp" || !args[0]) return false;
+      if (path.isAbsolute(args[0])) return false;
+      const normalized = args[0].split("\\").join("/");
+      return normalized.includes(`node_modules/${PACKAGE_NAME}/`);
+    }
+    case "yarn":
+      return args.length === 2 && args[0] === "argent" && args[1] === "mcp";
+    case "npx":
+      return (
+        args.length === 3 && args[0] === "--no-install" && args[1] === "argent" && args[2] === "mcp"
+      );
+    default:
+      return false;
+  }
 }
 
 function writeJsonOrRemove(filePath: string, data: Record<string, unknown>): void {
@@ -374,7 +418,11 @@ function claudeDisabledListFinding(
       if (idx === -1) return false;
       list.splice(idx, 1);
       if (list.length === 0) delete config.disabledMcpjsonServers;
-      writeJsonOrRemove(settingsPath, config);
+      // Plain write — settings.json is the USER'S file, not an argent-owned
+      // config shell. writeJsonOrRemove would prune every other empty structure
+      // in it and delete the whole file (and an emptied .claude dir) when only
+      // empty scaffolding remains; dropping one list entry must never do that.
+      writeJson(settingsPath, config);
       return true;
     },
   };

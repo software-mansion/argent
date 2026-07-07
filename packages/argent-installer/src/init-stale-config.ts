@@ -60,10 +60,13 @@ export async function cleanupStaleMcpConfigs(args: {
    * Asked ONCE, with one "<client>: <path>" line per planned removal that
    * reaches beyond this project (dead entries in global config files), before
    * any of them is executed. Project-confined removals never prompt. Omit for
-   * non-interactive runs — the removals then proceed (the entries failed the
-   * PATH probe, so they are dead in this environment and, barring a version-
-   * manager PATH split, everywhere else). Returning false leaves every listed
-   * entry in place, each reported as a warning line.
+   * non-interactive runs — the removals are then SKIPPED, each reported as a
+   * warning line: the "dead" verdict is a PATH probe in this shell, a version
+   * manager (nvm) can make it miss a binary other environments still resolve,
+   * and a --yes run (including the agent-triggered `update --yes`) gives no
+   * human the chance to catch that. Cross-project state is only ever removed
+   * with an explicit confirmation. Returning false likewise leaves every
+   * listed entry in place.
    */
   confirmCrossProjectRemovals?: (items: string[]) => Promise<boolean>;
 }): Promise<StaleConfigCleanupResult> {
@@ -75,8 +78,15 @@ export async function cleanupStaleMcpConfigs(args: {
   // is false.
   const globalArgentOnPath = isGloballyInstalled();
 
+  // Bare `argent` command, nothing on PATH, and no env vars that could make it
+  // resolvable inside the client anyway (a custom PATH is exactly what an nvm
+  // user adds to a hand-tuned entry) — dead in every environment that resolves
+  // PATH the way this shell does.
   const isProvablyDead = (entry: McpServerEntry | null): boolean =>
-    entry !== null && entry.command === MCP_BINARY_NAME && !globalArgentOnPath;
+    entry !== null &&
+    entry.command === MCP_BINARY_NAME &&
+    !globalArgentOnPath &&
+    !(entry.env && Object.keys(entry.env).length > 0);
 
   const removed = (adapterName: string, location: string, what: string): void => {
     removedCount += 1;
@@ -167,9 +177,21 @@ export async function cleanupStaleMcpConfigs(args: {
           "a global-scope argent entry with a custom command also exists; " +
             "if it is a leftover, remove it or its settings may leak into this install"
         );
+      } else if (!globalArgentOnPath) {
+        // Bare `argent` with env vars, not on PATH here (an env-less entry
+        // would have been provably dead above): the env — an nvm PATH being
+        // the classic case — may well make it work inside the client, so
+        // never remove it, but say what it is accurately.
+        warned(
+          adapter.name,
+          globalPath,
+          "a global-scope argent entry with custom env vars also exists; its env may make " +
+            "it work in your client even though `argent` is not on this shell's PATH — " +
+            "if it is a leftover, remove it"
+        );
       }
       // entry.command === argent && argent on PATH: a working global install
-      // the user kept — legitimate coexistence, stay quiet.
+      // the user kept (env-tuned or not) — legitimate coexistence, stay quiet.
     }
   } else if (scope === "global") {
     // Writing global scope while a project-scope entry exists at this root:
@@ -199,12 +221,25 @@ export async function cleanupStaleMcpConfigs(args: {
   }
 
   // ── Execute the cross-project removals ──────────────────────────────────────
+  // Only ever with an explicit confirmation. A non-interactive run (no
+  // confirmer) reports the findings and touches nothing — deleting state that
+  // reaches beyond this project on the strength of a fallible PATH probe is
+  // not a decision --yes may make on the user's behalf.
   if (pending.length > 0) {
-    const proceed = args.confirmCrossProjectRemovals
-      ? await args.confirmCrossProjectRemovals(
-          pending.map((item) => `${item.adapterName}: ${item.location}`)
-        )
-      : true;
+    if (!args.confirmCrossProjectRemovals) {
+      for (const item of pending) {
+        warned(
+          item.adapterName,
+          item.location,
+          `found ${item.what}; skipped in non-interactive mode — ` +
+            `re-run \`argent init\` without --yes to review and remove it`
+        );
+      }
+      return { lines, removedCount, warnedCount };
+    }
+    const proceed = await args.confirmCrossProjectRemovals(
+      pending.map((item) => `${item.adapterName}: ${item.location}`)
+    );
     for (const item of pending) {
       if (!proceed) {
         warned(item.adapterName, item.location, `kept ${item.what} at your request`);

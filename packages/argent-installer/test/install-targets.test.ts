@@ -1,9 +1,17 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   parseTargetFlags,
   decideInstallTargets,
+  promptInstallTargets,
   type DecideTargetsContext,
 } from "../src/install-targets.js";
+
+const promptsMock = vi.hoisted(() => ({
+  multiselect: vi.fn(async () => ["local"]),
+  isCancel: vi.fn(() => false),
+}));
+
+vi.mock("@clack/prompts", () => promptsMock);
 
 function ctx(overrides: Partial<DecideTargetsContext>): DecideTargetsContext {
   return {
@@ -148,5 +156,30 @@ describe("decideInstallTargets — no flags, both installs coexist", () => {
       targets: ["global", "local"],
       reason: "noninteractive-both",
     });
+  });
+});
+
+describe("promptInstallTargets — preselection mirrors the non-interactive default", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    promptsMock.multiselect.mockResolvedValue(["local"]);
+    promptsMock.isCancel.mockReturnValue(false);
+  });
+
+  it("update preselects both installs (updating both is safe)", async () => {
+    await promptInstallTargets("update");
+    expect(promptsMock.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({ initialValues: ["global", "local"] })
+    );
+  });
+
+  it("remove preselects only the local devDependency — never the shared global", async () => {
+    // Enter-through-defaults on `argent remove` must match `remove --yes`:
+    // the global install is shared with every other project on the machine,
+    // so its removal stays an explicit selection.
+    await promptInstallTargets("remove");
+    expect(promptsMock.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({ initialValues: ["local"] })
+    );
   });
 });

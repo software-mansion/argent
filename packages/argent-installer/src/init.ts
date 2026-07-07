@@ -164,8 +164,9 @@ export async function init(args: string[]): Promise<void> {
       // Removals that reach beyond this project (dead entries in global
       // config files) get one confirmation. The "dead" verdict is a PATH
       // probe in THIS shell — a version-manager split (nvm) could hide a
-      // binary other environments still resolve, so a human gets the last
-      // word when there is one. Non-interactive runs proceed without it.
+      // binary other environments still resolve, so a human ALWAYS gets the
+      // last word: non-interactive runs pass no confirmer, which makes the
+      // sweep report those entries instead of removing them.
       confirmCrossProjectRemovals: parsed.nonInteractive
         ? undefined
         : async (items) => {
@@ -207,12 +208,30 @@ export async function init(args: string[]): Promise<void> {
         p.log.warn(`Could not write .argent/install.json: ${err}`);
       }
     } else {
-      // Clear a stale local-mode marker at the root this run actually
+      // Clear a STALE local-mode marker at the root this run actually
       // configured (for local/global scope that IS the resolved project root,
       // where update/uninstall will look). A custom scope root is a DIFFERENT
       // project — the cwd project's committed record is not ours to delete
       // just because the user pointed init --global somewhere else.
-      if (removeInstallRecord(effectiveRoot)) {
+      //
+      // Stale means the local install is gone: while the manifest still
+      // declares the devDependency, the record is a live — often committed,
+      // team-shared — file describing a working local install, and a
+      // `init --global` that merely ADDS a coexisting global setup must not
+      // delete it (the project-scope entries it describes keep outranking the
+      // global ones regardless).
+      if (isDeclaredLocally(effectiveRoot)) {
+        if (readInstallRecord(effectiveRoot)) {
+          p.log.info(
+            pc.dim(
+              `Kept .argent/install.json — this project still declares ${PACKAGE_NAME} as a ` +
+                `devDependency, so it stays in local mode. To fully convert to a global ` +
+                `install, run ${pc.cyan("argent uninstall --local")} first, then re-run ` +
+                `${pc.cyan("argent init --global")}.`
+            )
+          );
+        }
+      } else if (removeInstallRecord(effectiveRoot)) {
         p.log.info(pc.dim("Removed stale .argent/install.json (previous local-mode marker)."));
       }
     }

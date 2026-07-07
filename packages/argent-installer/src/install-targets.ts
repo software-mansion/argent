@@ -7,9 +7,10 @@ import type { InstallMode } from "./install-record.js";
 // possibly both. Selection rules (shared by both commands):
 //   1. Explicit --global / --local flags win and are additive (pass both = both).
 //   2. Otherwise, when only ONE install is present, act on it (no prompt).
-//   3. When BOTH coexist, interactively ask which to act on (both preselected);
-//      non-interactively fall back to a caller-chosen default so the
-//      agent-triggered path never blocks on a prompt.
+//   3. When BOTH coexist, interactively ask which to act on (preselection
+//      mirrors the command's non-interactive default — see
+//      promptInstallTargets); non-interactively fall back to a caller-chosen
+//      default so the agent-triggered path never blocks on a prompt.
 // This keeps the historical single-install behavior byte-for-byte and only
 // changes the genuinely ambiguous "global + local coexist" case, which used to
 // be resolved silently (and sometimes wrongly) in favor of the local devDep.
@@ -82,8 +83,13 @@ export function decideInstallTargets(ctx: DecideTargetsContext): TargetDecision 
 }
 
 // Interactive multiselect shown when a global install and a project-local
-// install coexist. Both are preselected (Enter acts on both). `verb` shapes the
-// wording ("update" / "remove"). Returns "cancel" on Ctrl-C / Esc.
+// install coexist. `verb` shapes the wording ("update" / "remove") AND the
+// preselection, which mirrors the command's non-interactive default so
+// Enter-through-defaults and --yes agree: `update` preselects both (updating
+// both is safe); `remove` preselects only the local devDependency — the global
+// install is shared with every other project on the machine, and main's flow
+// kept it unless the user explicitly said otherwise, so removing it must stay
+// an explicit selection, never the default. Returns "cancel" on Ctrl-C / Esc.
 export async function promptInstallTargets(
   verb: "update" | "remove"
 ): Promise<InstallMode[] | "cancel"> {
@@ -101,7 +107,7 @@ export async function promptInstallTargets(
         hint: `${PACKAGE_NAME} in this project's node_modules`,
       },
     ],
-    initialValues: ["global", "local"] as InstallMode[],
+    initialValues: (verb === "update" ? ["global", "local"] : ["local"]) as InstallMode[],
     required: true,
   });
 
