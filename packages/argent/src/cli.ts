@@ -34,7 +34,11 @@ import type * as Mcp from "@argent/mcp";
 import type * as Cli from "@argent/cli";
 import { BUNDLED_RUNTIME_PATHS } from "./bundled-paths.js";
 import { installFatalHandlers } from "./fatal-handlers.js";
-import { installerHelpRequested, printInstallerHelp } from "./installer-help.js";
+import {
+  INSTALLER_COMMAND_META,
+  installerHelpRequested,
+  printInstallerHelp,
+} from "./installer-help.js";
 
 const PACKAGE_NAME = "@swmansion/argent";
 
@@ -64,11 +68,11 @@ Usage: argent <command> [options]
 
 Commands:
   mcp         Start the MCP stdio server (used by editors)
-  init        Initialize argent in the current workspace (MCP server + skills)
-  install     Alias for init
-  update      Check for updates and refresh configuration
-  uninstall   Remove argent configuration from the workspace
-  remove      Alias for uninstall
+  init        ${INSTALLER_COMMAND_META.init.summary}
+  install     ${INSTALLER_COMMAND_META.install.summary}
+  update      ${INSTALLER_COMMAND_META.update.summary}
+  uninstall   ${INSTALLER_COMMAND_META.uninstall.summary}
+  remove      ${INSTALLER_COMMAND_META.remove.summary}
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
   server      Manage the shared tool-server (start / status / stop / logs)
