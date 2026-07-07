@@ -47,6 +47,27 @@ function baselineDir(flowsDir: string, flowName: string): string {
 }
 
 /**
+ * Remove the differ's scratch directory, sparing only `keep` — the file
+ * registered as an artifact, whose host path must stay readable for a client
+ * to materialize it later. Best-effort: a failed cleanup never fails the
+ * snapshot itself.
+ */
+async function cleanupDiffDir(dir: string, keep?: string): Promise<void> {
+  try {
+    if (!keep) {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    }
+    for (const entry of await fs.readdir(dir)) {
+      const entryPath = path.join(dir, entry);
+      if (entryPath !== keep) await fs.rm(entryPath, { recursive: true, force: true });
+    }
+  } catch {
+    // best-effort cleanup
+  }
+}
+
+/**
  * Capture the current screen and compare it to a stored baseline keyed by
  * platform + resolution. A missing baseline FAILS the step — adopting one is
  * always an explicit `updateBaselines` gesture. The key is derived from the
@@ -118,45 +139,56 @@ export async function runSnapshot(
     };
   }
 
+  // Scratch directory for the differ's full-res diff and downscaled context
+  // diff. Nothing in it may outlive this call except a file registered as an
+  // artifact below (its host path is materialized later) — the finally sweeps
+  // the rest, or a long-lived tool-server running snapshot flows would accrete
+  // argent-flow-diff-* directories forever.
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-diff-"));
-  const result = await diffPngFiles({ baselinePath, currentPath, outputDir });
+  let keepInOutputDir: string | undefined;
+  try {
+    const result = await diffPngFiles({ baselinePath, currentPath, outputDir });
 
-  // The differ reports an aspect-ratio bail as mismatchPercentage 0, which the
-  // threshold below would read as a clean pass — but nothing was compared.
-  // Unreachable while the key embeds the capture's dimensions; load-bearing
-  // the moment a baseline file is renamed or the key scheme changes.
-  if (result.dimensionMismatch) {
-    const { expected, actual } = result.dimensionMismatch;
-    return {
-      status: "fail",
-      reason:
-        `baseline is ${expected.width}x${expected.height} but the capture is ` +
-        `${actual.width}x${actual.height} (${key}) — nothing was compared`,
-      artifacts: {
-        baseline: await store.register(baselinePath, { mimeType: "image/png" }),
-        current: shot.image,
-      },
+    // The differ reports an aspect-ratio bail as mismatchPercentage 0, which the
+    // threshold below would read as a clean pass — but nothing was compared.
+    // Unreachable while the key embeds the capture's dimensions; load-bearing
+    // the moment a baseline file is renamed or the key scheme changes.
+    if (result.dimensionMismatch) {
+      const { expected, actual } = result.dimensionMismatch;
+      return {
+        status: "fail",
+        reason:
+          `baseline is ${expected.width}x${expected.height} but the capture is ` +
+          `${actual.width}x${actual.height} (${key}) — nothing was compared`,
+        artifacts: {
+          baseline: await store.register(baselinePath, { mimeType: "image/png" }),
+          current: shot.image,
+        },
+      };
+    }
+
+    const within = result.mismatchPercentage <= opts.maxMismatch;
+    const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
+    if (within) {
+      return { status: "pass", reason };
+    }
+
+    const artifacts: SnapshotArtifacts = {
+      baseline: await store.register(baselinePath, { mimeType: "image/png" }),
+      current: shot.image,
     };
+    // Also expose the annotated context diff — the image a client renders inline
+    // so the agent can see WHAT differed. (Absent when the diff bailed early,
+    // e.g. on a dimension mismatch.)
+    if (result.contextDiffPath) {
+      artifacts.diff = await store.register(result.contextDiffPath, {
+        mimeType: "image/png",
+        filename: `${key.replace(/\.png$/, "")}-diff.png`,
+      });
+      keepInOutputDir = result.contextDiffPath;
+    }
+    return { status: "fail", reason, artifacts };
+  } finally {
+    await cleanupDiffDir(outputDir, keepInOutputDir);
   }
-
-  const within = result.mismatchPercentage <= opts.maxMismatch;
-  const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
-  if (within) {
-    return { status: "pass", reason };
-  }
-
-  const artifacts: SnapshotArtifacts = {
-    baseline: await store.register(baselinePath, { mimeType: "image/png" }),
-    current: shot.image,
-  };
-  // Also expose the annotated context diff — the image a client renders inline
-  // so the agent can see WHAT differed. (Absent when the diff bailed early,
-  // e.g. on a dimension mismatch.)
-  if (result.contextDiffPath) {
-    artifacts.diff = await store.register(result.contextDiffPath, {
-      mimeType: "image/png",
-      filename: `${key.replace(/\.png$/, "")}-diff.png`,
-    });
-  }
-  return { status: "fail", reason, artifacts };
 }

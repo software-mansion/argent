@@ -10,7 +10,11 @@ import type { ActionEnv } from "../../src/tools/flows/flow-actions";
 const h = vi.hoisted(() => ({
   shotPath: "",
   mismatchPercentage: 0,
+  writeContextDiff: false,
+  /** Set by the differ mock: the context diff it wrote inside outputDir. */
   contextDiffPath: "",
+  /** Set by the differ mock: the scratch outputDir runSnapshot handed it. */
+  outputDir: "",
   dimensionMismatch: null as null | {
     expected: { width: number; height: number };
     actual: { width: number; height: number };
@@ -23,11 +27,25 @@ vi.mock("../../src/tools/flows/flow-actions", () => ({
 }));
 
 vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
-  diffPngFiles: vi.fn(async () => ({
-    mismatchPercentage: h.mismatchPercentage,
-    contextDiffPath: h.contextDiffPath || undefined,
-    dimensionMismatch: h.dimensionMismatch ?? undefined,
-  })),
+  diffPngFiles: vi.fn(async (options: { outputDir: string }) => {
+    h.outputDir = options.outputDir;
+    // The real differ bails before writing anything on a dimension mismatch.
+    if (h.dimensionMismatch) {
+      return { mismatchPercentage: 0, dimensionMismatch: h.dimensionMismatch };
+    }
+    // Emulate the real differ: the full-res diff always lands in outputDir,
+    // the downscaled context diff only when a test asks for one.
+    const { writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    await writeFile(join(options.outputDir, "shot-diff.png"), Buffer.alloc(4));
+    let contextDiffPath: string | undefined;
+    if (h.writeContextDiff) {
+      contextDiffPath = join(options.outputDir, "shot-context-diff.png");
+      await writeFile(contextDiffPath, Buffer.alloc(4));
+      h.contextDiffPath = contextDiffPath;
+    }
+    return { mismatchPercentage: h.mismatchPercentage, contextDiffPath };
+  }),
 }));
 
 const env = {
@@ -63,7 +81,9 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-visual-"));
   h.shotPath = path.join(tmpDir, "shot.png");
   h.mismatchPercentage = 0;
+  h.writeContextDiff = false;
   h.contextDiffPath = "";
+  h.outputDir = "";
   h.dimensionMismatch = null;
   await writeFakePng(h.shotPath);
 });
@@ -144,8 +164,7 @@ describe("runSnapshot baselines", () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
     h.mismatchPercentage = 3.1;
-    h.contextDiffPath = path.join(tmpDir, "context-diff.png");
-    await writeFakePng(h.contextDiffPath);
+    h.writeContextDiff = true;
 
     const r = await runSnapshot(env, opts());
 
@@ -171,5 +190,60 @@ describe("runSnapshot baselines", () => {
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
     expect(r.artifacts?.diff).toBeUndefined();
+  });
+});
+
+describe("runSnapshot diff-dir cleanup", () => {
+  const seedBaseline = async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+  };
+
+  it("removes the whole scratch dir on a within-tolerance pass", async () => {
+    await seedBaseline();
+    h.writeContextDiff = true; // the real differ writes both files even on a pass
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("pass");
+    expect(h.outputDir).not.toBe("");
+    await expect(fs.access(h.outputDir)).rejects.toThrow();
+  });
+
+  it("keeps only the registered context diff on failure", async () => {
+    await seedBaseline();
+    h.mismatchPercentage = 3.1;
+    h.writeContextDiff = true;
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("fail");
+    // The registered artifact's host path must survive for materialization…
+    await expect(fs.access(h.contextDiffPath)).resolves.toBeUndefined();
+    // …and it is the only leftover — the unregistered full-res diff is gone.
+    await expect(fs.readdir(h.outputDir)).resolves.toEqual([path.basename(h.contextDiffPath)]);
+  });
+
+  it("removes the scratch dir when a failure produced no context diff", async () => {
+    await seedBaseline();
+    h.mismatchPercentage = 100;
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("fail");
+    await expect(fs.access(h.outputDir)).rejects.toThrow();
+  });
+
+  it("removes the scratch dir on a dimension-mismatch bail", async () => {
+    await seedBaseline();
+    h.dimensionMismatch = {
+      expected: { width: 390, height: 844 },
+      actual: { width: 393, height: 852 },
+    };
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("fail");
+    await expect(fs.access(h.outputDir)).rejects.toThrow();
   });
 });
