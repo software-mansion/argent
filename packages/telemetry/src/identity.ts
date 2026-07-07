@@ -7,8 +7,11 @@ import { argentHomeDir, identityFilePath } from "./paths.js";
 // chars — a one-way hash of stable hardware identifiers, so no raw hardware id
 // is ever exposed. That validated hash is used verbatim as the telemetry
 // distinct_id. Require the exact shape (after lower-casing) so a truncated read,
-// a bare hex token (git SHA, all-zeros), or an error banner is rejected and we
-// fall back to a random id rather than persisting garbage as a "stable" id. We
+// a wrong-length hex token (e.g. a 40-hex git SHA), or an error banner is
+// rejected and we fall back to a random id rather than persisting garbage as a
+// "stable" id. (A same-length 64-hex blob is indistinguishable from a real
+// fingerprint by shape alone, so shape validation guards length/charset, not
+// provenance.) We
 // lower-case before matching so a future binary emitting upper-case hex still
 // maps to the same id — and it doubles as the self-describing marker for the
 // fast path below (a fingerprint id is 64-hex; the random fallback is a dashed

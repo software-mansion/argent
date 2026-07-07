@@ -14,10 +14,10 @@ export interface TelemetryResetResult {
 // (uninstall does not remove ~/.argent/config.json, so without this the marker
 // would persist and silently suppress the notice on reinstall).
 //
-// This is NOT an identity erasure. The distinct_id is derived deterministically
-// from the host fingerprint (uuidv5), so deleting the id file does not mint a
-// fresh identity — while consent stays enabled the next tracked event re-derives
-// the identical id. A genuine, lasting opt-out is `markDisabled()` /
+// This is NOT an identity erasure. The distinct_id IS the host fingerprint (a
+// 64-hex one-way hash of stable hardware ids, used verbatim), so deleting the id
+// file does not mint a fresh identity — while consent stays enabled the next
+// tracked event re-derives the identical id. A genuine, lasting opt-out is `markDisabled()` /
 // `argent telemetry disable`, which this deliberately leaves untouched so a
 // persisted opt-out survives a reinstall.
 //
