@@ -122,7 +122,7 @@ Record an `await-ui-element` step to **gate** the next step on a screen transiti
    - `tool: await-ui-element` gating a transition → `await: { visible: "…" }` / `{ hidden: … }` / `{ text: { in: …, equals: … } }`, carrying a custom `timeoutMs` over as a `timeout` sibling key. Converting also upgrades the wait from the trimmed `describe` tree to the flow's full-hierarchy tree (see Selectors). Keep the raw `tool: await-ui-element` step only when it sets a custom `pollIntervalMs`/`bundleId` the directive can't express.
    - A scroll-to-reach-an-element — a `tool: gesture-swipe` used to bring a specific element on screen before interacting with it (a `tap`, `type`, `assert`, …) → `scroll-to: { target: "<that element>", direction: … }`, dropping the swipe. This is far more robust than a fixed-distance swipe: it scrolls momentum-free and stops exactly when the target appears, so it survives layout and content changes. (`tap`/`type` do not scroll, so a raw swipe whose fling lands differently on another device leaves the following tap unresolved — always prefer the `scroll-to` rewrite.) Keep a `gesture-swipe` as a raw `tool:` step when it isn't scrolling toward a specific element — especially a velocity-dependent gesture like swipe-to-dismiss, edge-swipe-back, or swipe-to-reveal a row action, which a momentum-free `scroll-to` would not reproduce.
 
-Every other recorded tool (`gesture-swipe`, `gesture-scroll`, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, a `restart-app` is captured as a `launch:` step, a `flow-execute` of a sibling fragment is captured as a `run: <name>` composition directive, device ids are stripped, and text-only selectors are emitted as bare strings. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
+Every other recorded tool (`gesture-swipe`, `gesture-scroll`, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, a `restart-app` is captured as a `launch:` step, a `flow-execute` of a sibling fragment is captured as a `run: <name>` composition directive, and device ids are stripped. Captured selectors are emitted in the strict map form (`tap: { text: General }`), never as a loose bare string — the recorder verified the exact element the tap hit, and a bare string would re-parse as loose and route through the identifier-first fallback it was never checked against. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
 
 ### Example session
 
@@ -131,7 +131,7 @@ flow-start-recording  { name: "open-about", project_root: "/Users/dev/MyApp" }
 flow-add-echo  { message: "Start Settings from scratch" }
 flow-add-step  { command: "restart-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.apple.Preferences\"}" }   # ⇒ captured as `- launch: com.apple.Preferences` — this is now an e2e flow
 flow-add-echo  { message: "On the Settings root list, tapping the 'General' row" }
-flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.35}" }   # ⇒ captured as `- tap: General` (portable selector, no udid)
+flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.35}" }   # ⇒ captured as `- tap: { text: General }` (portable selector, no udid)
 flow-add-step  { command: "await-ui-element", args: "{\"udid\": \"ABC\", \"condition\": \"visible\", \"selector\": {\"text\": \"About\"}}" }   # gate the transition
 flow-add-echo  { message: "On Settings > General, tapping 'About'" }
 flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.17}" }
@@ -161,10 +161,10 @@ steps:
   - echo: Start Settings from scratch
   - launch: com.apple.Preferences
   - echo: On the Settings root list, tapping the 'General' row
-  - tap: General
+  - tap: { text: General }
   - await: { visible: About }
   - echo: On Settings > General, tapping 'About'
-  - tap: About
+  - tap: { text: About }
   - await: { visible: Model Name }
 ```
 
