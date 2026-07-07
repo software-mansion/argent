@@ -545,8 +545,14 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
 
   let timeout: number | undefined;
   if (kind === "await" && "timeout" in b) {
-    if (typeof b.timeout !== "number" || b.timeout <= 0) {
-      badEntry({ [kind]: b }, "await.timeout must be a positive number");
+    // Like `wait`, reject non-finite values: YAML `.inf` (or an overflowing
+    // literal like 1e400) parses to Infinity — typeof number and > 0 — which
+    // would make the runner's poll deadline unreachable and the await unbounded.
+    if (typeof b.timeout !== "number" || !Number.isFinite(b.timeout) || b.timeout <= 0) {
+      badEntry(
+        { [kind]: b },
+        "await.timeout needs a positive number of milliseconds (e.g. `timeout: 10000`)"
+      );
     }
     timeout = b.timeout as number;
   }
@@ -756,7 +762,10 @@ function fromYamlStep(raw: YamlStep): FlowStep {
       // snapshot even on byte-identical frames.
       const m = Number(b.maxMismatch);
       if (!Number.isFinite(m) || m < 0 || m > 100) {
-        badEntry(raw, "snapshot maxMismatch must be a number between 0 and 100 (percent of pixels)");
+        badEntry(
+          raw,
+          "snapshot maxMismatch must be a number between 0 and 100 (percent of pixels)"
+        );
       }
       step.maxMismatch = m;
     }

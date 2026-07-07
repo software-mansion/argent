@@ -370,6 +370,29 @@ describe("parseFlow", () => {
     expect(() => parseFlow("steps:\n  - wait: -5\n")).toThrow("wait needs a non-negative number");
   });
 
+  it("parses an await timeout in milliseconds", () => {
+    const flow = parseFlow("steps:\n  - await: { visible: Account, timeout: 10000 }\n");
+    expect(flow.steps).toEqual([
+      {
+        kind: "await",
+        condition: "visible",
+        selector: { text: "Account", loose: true },
+        timeout: 10000,
+      },
+    ]);
+  });
+
+  it("rejects an await timeout that is not a positive finite number", () => {
+    // `.inf`, `.nan`, and an overflowing literal all parse to a typeof-number
+    // value; letting Infinity through would make the runner's poll deadline
+    // unreachable (an unbounded await).
+    for (const bad of ["soon", "0", "-5", ".inf", ".nan", "1e400"]) {
+      expect(() => parseFlow(`steps:\n  - await: { visible: Account, timeout: ${bad} }\n`)).toThrow(
+        "await.timeout needs a positive number of milliseconds"
+      );
+    }
+  });
+
   it("rejects a scroll-to with an invalid direction", () => {
     expect(() =>
       parseFlow("steps:\n  - scroll-to: { target: Account, direction: sideways }\n")
@@ -426,9 +449,9 @@ describe("parseFlow", () => {
 
   it("rejects a non-numeric, negative, or out-of-range maxMismatch", () => {
     for (const bad of ['"5%"', "-1", "101", ".nan"]) {
-      expect(() => parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${bad} }\n`)).toThrow(
-        "snapshot maxMismatch must be a number between 0 and 100"
-      );
+      expect(() =>
+        parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${bad} }\n`)
+      ).toThrow("snapshot maxMismatch must be a number between 0 and 100");
     }
   });
 
