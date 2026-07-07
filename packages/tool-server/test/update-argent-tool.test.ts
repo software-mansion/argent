@@ -19,9 +19,8 @@ const mockSpawn = vi.mocked(spawn);
 const mockGetUpdateState = vi.mocked(getUpdateState);
 
 function makeChild() {
-  // `on` is required: the tool attaches 'error' and 'exit' listeners so a
-  // failed spawn (ENOENT when `argent` isn't on PATH — the norm in local mode)
-  // can't crash the tool-server, and a no-op updater run unblocks later calls.
+  // `on` is required: the tool attaches 'error' and 'exit' listeners (spawn
+  // ENOENT must not crash the tool-server; a no-op updater exit unblocks later calls).
   return { unref: vi.fn(), on: vi.fn() } as unknown as ReturnType<typeof spawn>;
 }
 
@@ -138,12 +137,10 @@ describe("update-argent tool", () => {
   });
 
   it("pins --local (no --version) and --project-root when targeting the other install", async () => {
-    // A global-serving session asked to update the project's local install:
-    // the --version pin came from the RUNNING install's update state, so the
-    // installer resolves the right version per target itself — and the spawned
-    // updater must bind to the declaring project via an explicit flag (its
-    // inherited cwd is this server's editor-chosen cwd; a cwd pin would also
-    // fail the spawn if the dir vanished).
+    // Cross-install target: the --version pin describes the RUNNING install, so
+    // the installer resolves the version itself. The project is bound via an
+    // explicit flag, not cwd — the spawned updater inherits the server's
+    // editor-chosen cwd, and a cwd pin would fail the spawn if the dir vanished.
     const projDir = stageDeclaringProject();
     process.chdir(projDir);
 
@@ -173,8 +170,8 @@ describe("update-argent tool", () => {
   });
 
   it("re-proves a recorded project root that no longer exists instead of pinning it", async () => {
-    // The server recorded ARGENT_PROJECT_ROOT at spawn; the project has since
-    // been deleted. The tool must not schedule an update bound to a dead path.
+    // ARGENT_PROJECT_ROOT points at a since-deleted project; the tool must not
+    // schedule an update bound to a dead path.
     process.env.ARGENT_INSTALL_KIND = "local";
     process.env.ARGENT_PROJECT_ROOT = path.join(tmpDir, "deleted-project");
 
@@ -222,9 +219,8 @@ describe("update-argent tool", () => {
   });
 
   it("a degraded 'both' honors the running install's up-to-date gate", async () => {
-    // 'both' with no locatable project degrades to global-only — exactly the
-    // running install — so an up-to-date state must answer instead of spawning
-    // a pointless updater with a false "will restart" promise.
+    // With no locatable project, 'both' degrades to the running install — so an
+    // up-to-date state must answer instead of spawning a pointless updater.
     mockGetUpdateState.mockReturnValue(stateUpToDate());
 
     const result = await updateArgentTool.execute({}, { target: "both" }, undefined);
@@ -308,9 +304,9 @@ describe("update-argent tool", () => {
     await updateArgentTool.execute({}, {}, undefined);
     vi.advanceTimersByTime(2000);
 
-    // The updater ran and exited WITHOUT killing this server — it no-op'd
-    // (e.g. a cross-install target that was already current). The next call
-    // must not be stuck behind "already in progress".
+    // The updater exited without restarting this server (a no-op, e.g. a
+    // cross-install target already current); the next call must not be stuck
+    // behind "already in progress".
     expect(handlers.exit).toBeTypeOf("function");
     handlers.exit!(0);
 
@@ -328,9 +324,8 @@ describe("update-argent tool", () => {
   });
 
   it("a cross-install target bypasses the running install's up-to-date gate", async () => {
-    // The update state only describes the RUNNING (global) install; "we are
-    // current" says nothing about the project's local devDependency. The
-    // installer gets the final word for the other install.
+    // The update state describes only the RUNNING (global) install — it says
+    // nothing about the local devDependency; the installer gets the final word.
     mockGetUpdateState.mockReturnValue(stateUpToDate());
     const projDir = stageDeclaringProject();
     process.chdir(projDir);

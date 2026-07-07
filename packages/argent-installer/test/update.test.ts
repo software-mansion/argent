@@ -127,10 +127,9 @@ describe.skipIf(process.platform === "win32")(
 
     // Mimics the layout npm/pnpm/yarn produce for a global install — a bin
     // entry that is a symlink into <prefix>/lib/node_modules/<pkg>/dist/.
-    // Returns the dir to put on PATH. The package.json name must be the real
-    // PACKAGE_NAME: getGloballyInstalledPackageRoot validates it so an
-    // unexpected layout (a bin wrapper whose walk-up lands on a stray
-    // package.json) can't scope tool-server teardown to an unrelated install.
+    // Returns the dir to put on PATH. The package.json must use the real
+    // PACKAGE_NAME — getGloballyInstalledPackageRoot validates it so a stray
+    // package.json can't scope tool-server teardown to an unrelated install.
     function stageInstall(root: string, version: string): string {
       const pkgRoot = path.join(root, "lib", "node_modules", PACKAGE_NAME);
       const distDir = path.join(pkgRoot, "dist");
@@ -189,10 +188,9 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("returns null when the walked-up package.json is NOT argent's", () => {
-      // A bin whose parent tree's first package.json belongs to something else
-      // (e.g. a wrapper script sitting under a stray ~/package.json). Trusting
-      // that root would scope tool-server teardown to an unrelated install, so
-      // the name-validated probe must reject it rather than report a version.
+      // The walk-up lands on a non-argent package.json (e.g. a stray
+      // ~/package.json); the name-validated probe must reject it rather than
+      // report a version for an unrelated install.
       const binDir = path.join(tmpDir, "stray", "bin");
       const distDir = path.join(tmpDir, "stray", "lib", "node_modules", "not-argent", "dist");
       fs.mkdirSync(binDir, { recursive: true });

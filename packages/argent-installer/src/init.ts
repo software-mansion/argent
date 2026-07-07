@@ -33,11 +33,10 @@ import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
 import { configureAllowlist } from "./init-allowlist.js";
 import { runSkillsStep, type SkillsMethod } from "./init-skills.js";
 
-// `argent init` orchestrator. Each phase below is a thin call into a dedicated
-// module — the goal is for this file to read top-to-bottom like a recipe, with
-// telemetry bookkeeping centralized in the shared InitTelemetry context. Step
-// modules signal a cancelled prompt by throwing InitCancelled(step), which the
-// catch below turns into the cli_init_cancel event + a clean exit.
+// `argent init` orchestrator: each phase is a thin call into a dedicated
+// module, telemetry bookkeeping lives in the shared InitTelemetry context.
+// Step modules signal a cancelled prompt by throwing InitCancelled(step),
+// which the catch below turns into the cli_init_cancel event + a clean exit.
 export async function init(args: string[]): Promise<void> {
   const parsed = parseInitArgs(args);
   const initStartTime = performance.now();
@@ -85,13 +84,12 @@ export async function init(args: string[]): Promise<void> {
 
     // ── Install mode: global (default) vs local (committable devDependency) ──────
 
-    // A committed .argent/install.json records the mode the project opted into.
-    // Seed both the non-interactive default and the interactive prompt from it so
-    // re-running init in a local-mode repo doesn't silently revert it to global.
-    // Absent a record, a dependency the project's own manifest declares is the
-    // same local-intent signal update/uninstall honor (resolveInstallMode) —
-    // without it, `init -y` in a repo whose .argent/ was never committed would
-    // silently rewrite the committed local-command MCP config back to global.
+    // Seed the non-interactive default and the prompt from the committed
+    // .argent/install.json so re-running init in a local-mode repo doesn't
+    // silently revert it to global. Absent a record, a locally declared
+    // dependency is the same local-intent signal update/uninstall honor
+    // (resolveInstallMode); without it, `init -y` in a repo whose .argent/
+    // was never committed would rewrite the committed MCP config to global.
     const initProjectRoot = resolveProjectRoot(process.cwd());
     const recordedMode =
       readInstallRecord(initProjectRoot)?.mode ??
@@ -165,20 +163,17 @@ export async function init(args: string[]): Promise<void> {
     p.note(mcpLines.join("\n"), "MCP Configuration");
 
     // Step 1d — remove or flag stale argent config that would shadow or block
-    // the entries just written (a leftover `claude mcp add` local-scope entry,
-    // a dead global entry after migrating to a committable install, a recorded
-    // .mcp.json rejection). See init-stale-config.ts for the policy.
+    // the entries just written. See init-stale-config.ts for the policy.
     const staleCleanup = await cleanupStaleMcpConfigs({
       writtenAdapters,
       detectedAdapters: detected,
       installMode: tel.installMode,
       scope: normalizedScope,
       effectiveRoot,
-      // Removals that reach beyond this project (dead entries in global
-      // config files) get one confirmation. The "dead" verdict is a PATH
-      // probe in THIS shell — a version-manager split (nvm) could hide a
-      // binary other environments still resolve, so a human ALWAYS gets the
-      // last word: non-interactive runs pass no confirmer, which makes the
+      // Removals reaching beyond this project (dead entries in global config
+      // files) get one confirmation: the "dead" verdict is a PATH probe in
+      // THIS shell, which an nvm-style split can fool, so a human always gets
+      // the last word. Non-interactive runs pass no confirmer, making the
       // sweep report those entries instead of removing them.
       confirmCrossProjectRemovals: parsed.nonInteractive
         ? undefined
@@ -206,10 +201,9 @@ export async function init(args: string[]): Promise<void> {
     }
 
     // Record local mode so `update`/`uninstall` and teammates act on the
-    // repo-local install. Global mode stays zero-footprint (writes nothing) —
-    // and clears a leftover local-mode record, which would otherwise win in
-    // resolveInstallMode forever and keep `update`/`uninstall` targeting a
-    // devDependency the user just switched away from.
+    // repo-local install. Global mode writes nothing, and clears a leftover
+    // local-mode record that would otherwise win in resolveInstallMode and
+    // keep update/uninstall targeting a devDependency the user switched from.
     if (tel.installMode === "local") {
       try {
         writeInstallRecord(effectiveRoot, {
@@ -221,18 +215,13 @@ export async function init(args: string[]): Promise<void> {
         p.log.warn(`Could not write .argent/install.json: ${err}`);
       }
     } else {
-      // Clear a STALE local-mode marker at the root this run actually
-      // configured (for local/global scope that IS the resolved project root,
-      // where update/uninstall will look). A custom scope root is a DIFFERENT
-      // project — the cwd project's committed record is not ours to delete
-      // just because the user pointed init --global somewhere else.
-      //
+      // Clear a STALE local-mode marker only at the root this run configured
+      // (where update/uninstall will look); a custom scope root is a
+      // DIFFERENT project whose committed record is not ours to delete.
       // Stale means the local install is gone: while the manifest still
-      // declares the devDependency, the record is a live — often committed,
-      // team-shared — file describing a working local install, and a
-      // `init --global` that merely ADDS a coexisting global setup must not
-      // delete it (the project-scope entries it describes keep outranking the
-      // global ones regardless).
+      // declares the devDependency, the record describes a working — often
+      // committed, team-shared — local install, and an `init --global` that
+      // merely ADDS a coexisting global setup must not delete it.
       if (isDeclaredLocally(effectiveRoot)) {
         if (readInstallRecord(effectiveRoot)) {
           p.log.info(

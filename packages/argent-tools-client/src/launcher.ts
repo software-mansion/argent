@@ -8,10 +8,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, writeFile, readFile, readdir, unlink, rename, chmod } from "node:fs/promises";
 
 const STATE_DIR = path.join(homedir(), ".argent");
-// Legacy single-slot state file. Still read (and cleared when it records the
-// caller's own bundle) so servers tracked by older argent versions are found,
-// but never written: each install now tracks its server in its own per-bundle
-// file — see stateFileForBundle.
+// Legacy single-slot state file. Read (and cleared when it records the
+// caller's own bundle) for older-argent compat, but never written — each
+// install now has its own per-bundle file (see stateFileForBundle).
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
 // Cross-process mutex guarding the "decide whether to spawn, then spawn" critical
@@ -40,31 +39,24 @@ export interface ToolsServerPaths {
   /** Directory containing the native devtools dylibs */
   nativeDevtoolsDir: string;
   /**
-   * Installed package version AT MODULE IMPORT. Optional. The launcher's
-   * version gate reads the bundle's package.json fresh on every call (see
-   * reusableHandle) so an in-place bump, downgrade, or prerelease change
-   * self-heals on the next call without relying on the (often-disabled)
-   * postinstall kill; this frozen value is only the fallback when that disk
-   * read fails.
+   * Installed package version AT MODULE IMPORT. Optional. The version gate
+   * reads the bundle's package.json fresh on every call (see reusableHandle);
+   * this frozen value is only the fallback when that disk read fails.
    */
   version?: string;
   /**
-   * Which install topology this package belongs to: a project-local
-   * devDependency or the global PATH install. Optional. Classified by the
-   * consuming package AT SPAWN TIME — when its cwd is still meaningful (a
-   * committed local MCP command only resolves with cwd at the project root) —
-   * and exported to the tool-server as ARGENT_INSTALL_KIND, so tools like
-   * update-argent don't have to re-infer it later from a cwd an editor may
-   * have set to `/` or `$HOME`.
+   * Install topology: project-local devDependency or global PATH install.
+   * Optional. Classified by the consuming package AT SPAWN TIME — while its
+   * cwd is still meaningful — and exported as ARGENT_INSTALL_KIND, so tools
+   * like update-argent don't re-infer it from a cwd an editor may have set to
+   * `/` or `$HOME`.
    */
   installKind?: "global" | "local";
   /**
-   * For a local install, the project root the package was classified under —
-   * the directory whose node_modules holds it. Classified alongside
-   * `installKind` at spawn time and exported as ARGENT_PROJECT_ROOT, so an
-   * agent-triggered `argent update --local` can pin the spawned updater's cwd
-   * to the right project instead of re-deriving it from the tool-server's own
-   * editor-chosen (often `/` or `$HOME`) cwd.
+   * For a local install, the project root whose node_modules holds the
+   * package. Classified alongside `installKind` and exported as
+   * ARGENT_PROJECT_ROOT, so `argent update --local` can pin the updater's cwd
+   * to the right project instead of the tool-server's editor-chosen cwd.
    */
   installProjectRoot?: string;
 }
@@ -175,11 +167,9 @@ export function findFreePort(): Promise<number> {
 
 /**
  * True iff semver `a` is strictly newer than `b`, INCLUDING prerelease
- * precedence — a team pinning rc/dev builds bumps 0.14.0-rc.1 → 0.14.0-rc.2,
- * and truncating the prerelease tag would compare those equal and keep reusing
- * the stale server (the exact postinstall-suppressed gap this gate closes).
- * Anything unparseable compares as "not newer" so the caller reuses rather
- * than kills — the conservative choice.
+ * precedence — truncating the tag would compare 0.14.0-rc.1 and 0.14.0-rc.2
+ * equal and keep reusing a stale server. Anything unparseable compares as
+ * "not newer" so the caller reuses rather than kills.
  */
 export function isVersionNewer(a: string, b: string): boolean {
   const parse = (v: string): { nums: number[]; pre: string[] } | null => {
@@ -220,11 +210,10 @@ export function isVersionNewer(a: string, b: string): boolean {
 }
 
 /**
- * The CURRENT on-disk version of the install a bundle belongs to, read fresh
- * from the package.json one level above the bundle's dist/ dir. Never cached:
- * the caller's own `paths.version` is frozen at module import, so a long-lived
- * MCP process would keep comparing against the version it started with — blind
- * to any in-place bump, downgrade, or prerelease change made since.
+ * The CURRENT on-disk version of the bundle's install, read fresh from the
+ * package.json one level above its dist/ dir. Never cached: `paths.version`
+ * is frozen at module import, which would leave a long-lived MCP process
+ * blind to in-place bumps or downgrades.
  */
 function readBundlePackageVersion(bundlePath: string): string | undefined {
   try {
@@ -422,11 +411,10 @@ export function spawnToolsServer(
 }
 
 /**
- * Per-bundle state file for a given tool-server bundle. Each argent install
- * (global binary, a repo-local devDependency, two repos pinning different
- * versions) has a distinct bundlePath and therefore its own slot — so one
- * install spawning its server never clobbers another install's record and
- * orphans a server nothing can find or stop (the single-slot failure mode).
+ * Per-bundle state file for a tool-server bundle. Each argent install has a
+ * distinct bundlePath and therefore its own slot, so one install spawning its
+ * server never clobbers another's record and orphans that server (the
+ * single-slot failure mode).
  */
 export function stateFileForBundle(bundlePath: string): string {
   const key = createHash("sha256").update(bundlePath).digest("hex").slice(0, 12);
@@ -443,11 +431,10 @@ async function readStateFile(file: string): Promise<ToolsServerState | null> {
 }
 
 /**
- * Read the tracked tool-server state. With `bundlePath`, resolve the record for
- * THAT install: its per-bundle file first, then the legacy single-slot file
- * (written by older argent versions) when it records the same bundle. Without
- * `bundlePath`, read the legacy file only — a backward-compat shape for callers
- * that predate per-bundle tracking.
+ * Read the tracked tool-server state. With `bundlePath`, resolve THAT
+ * install's record: per-bundle file first, then the legacy single-slot file
+ * when it records the same bundle. Without, read the legacy file only
+ * (backward-compat shape).
  */
 export async function readToolsServerState(bundlePath?: string): Promise<ToolsServerState | null> {
   if (bundlePath === undefined) return readStateFile(STATE_FILE);
@@ -550,12 +537,10 @@ export async function readAllToolsServerStates(): Promise<
 async function sweepDeadStateFiles(): Promise<void> {
   for (const { file } of await readAllToolsServerStates()) {
     if (file === STATE_FILE) continue; // legacy slot is handled by its owners
-    // Re-read immediately before unlinking. readAllToolsServerStates snapshotted
-    // every file up front, and `argent server start --detach` writes its record
-    // without taking the spawn lock — so between the snapshot and here it may
-    // have rename()'d a fresh LIVE record over this (previously dead) slot.
-    // Deleting that would orphan a running server, so decide on the current
-    // contents, not the stale snapshot.
+    // Re-read before unlinking: `argent server start --detach` writes without
+    // the spawn lock, so a fresh LIVE record may have been rename()'d over
+    // this slot since the snapshot. Deleting that would orphan a running
+    // server — decide on the current contents.
     const fresh = await readStateFile(file);
     if (fresh && !isProcessAlive(fresh.pid)) await unlink(file).catch(() => {});
   }
@@ -615,9 +600,8 @@ async function terminatePid(pid: number, stillOurs?: () => boolean): Promise<voi
 
 /**
  * Terminate the tracked tool-server and drop its record. With `bundlePath`,
- * scoped to THAT install's server (per-bundle file, plus the legacy file when
- * it records the same bundle); without, operates on the legacy single-slot
- * record only — the backward-compat shape.
+ * scoped to THAT install's server; without, operates on the legacy
+ * single-slot record only (backward-compat shape).
  */
 export async function killToolServer(bundlePath?: string): Promise<void> {
   const state = await readState(bundlePath);
@@ -641,14 +625,12 @@ function tryRealpath(p: string): string {
 
 /**
  * Terminate every tracked tool-server whose bundle lives inside `packageDir`,
- * and drop their records. This is the teardown installers need: `argent update`
- * / `argent uninstall` are about to replace or delete ONE install's files, so
- * only servers spawned from that install may be killed — a server belonging to
- * a different install (the global binary vs a repo-local devDependency) may be
- * actively serving another editor session and must be left alone. Symlinked
- * layouts (pnpm store, npm global prefix) are compared via realpath. Returns
- * the number of matching records cleaned up (their servers terminated when the
- * pid still verifiably belongs to that install's tool-server).
+ * and drop their records. Teardown for `argent update` / `argent uninstall`:
+ * they replace ONE install's files, so only that install's servers may be
+ * killed — a different install's server may be serving another editor session.
+ * Symlinked layouts (pnpm store, npm global prefix) are compared via realpath.
+ * Returns the number of matching records cleaned up (servers terminated when
+ * the pid still verifiably belongs to that install's tool-server).
  */
 export async function killToolServerForInstallDir(packageDir: string): Promise<number> {
   const parents = new Set([path.resolve(packageDir), tryRealpath(packageDir)]);
@@ -657,26 +639,23 @@ export async function killToolServerForInstallDir(packageDir: string): Promise<n
     const bundles = new Set([path.resolve(state.bundlePath), tryRealpath(state.bundlePath)]);
     const matches = [...bundles].some((b) => [...parents].some((p) => isPathWithin(b, p)));
     if (!matches) continue;
-    // The snapshot may be stale: another launcher can have republished this
-    // slot (rename) since readAllToolsServerStates read it. Decide on the
-    // file's current contents so we never kill/unlink a record we didn't match
-    // — same reasoning as sweepDeadStateFiles.
+    // The snapshot may be stale (another launcher can have republished this
+    // slot since the read) — decide on the file's current contents so we never
+    // kill/unlink a record we didn't match. Same reasoning as sweepDeadStateFiles.
     const fresh = await readStateFile(file);
     if (!fresh || fresh.pid !== state.pid || fresh.bundlePath !== state.bundlePath) continue;
-    // Identity check before signalling: records for retired installs are swept
-    // only opportunistically, so a long-lived record's pid may have been
-    // recycled onto an unrelated process — same guard as the wedged-server kill
-    // in ensureToolsServer. `ps` being unavailable (Windows) fails the check,
-    // so there we keep the historical unguarded kill rather than silently never
-    // stopping servers during update/uninstall.
+    // Identity check before signalling: a long-lived record's pid may have
+    // been recycled onto an unrelated process — same guard as the
+    // wedged-server kill in ensureToolsServer. On Windows `ps` is unavailable
+    // and the check always fails, so we keep the unguarded kill there rather
+    // than silently never stopping servers during update/uninstall.
     const alive = isProcessAlive(fresh.pid);
     const guarded = process.platform !== "win32";
     if (alive && guarded && !processCommandMatches(fresh.pid, fresh.bundlePath)) {
-      // A live pid we cannot positively identify as this install's server.
-      // Kill nothing — and KEEP the record: if it does belong to a live server
-      // whose command line we merely failed to parse, unlinking would orphan
-      // it (`server stop`/status could no longer find it). A truly stale
-      // record is swept once its pid dies.
+      // Live pid we can't positively identify as this install's server: kill
+      // nothing and KEEP the record — unlinking a merely-unparseable live
+      // server would orphan it for `server stop`/status. A truly stale record
+      // is swept once its pid dies.
       continue;
     }
     if (alive) {
@@ -709,12 +688,10 @@ function processCommandMatches(pid: number, marker: string | undefined): boolean
     }).trim();
     if (!cmd) return false;
     // Structural match: our servers run `node <bundlePath> start`. Require the
-    // bundle path to appear at an argument boundary immediately followed by the
-    // `start` subcommand — not a bare substring — so an unrelated process that
-    // merely mentions the path (an editor, a longer path with the same prefix)
-    // is never matched. Matched on the raw command string rather than a
-    // whitespace-split argv so a bundle path CONTAINING spaces ("~/My App/…")
-    // still matches its own ps output.
+    // bundle path at an argument boundary followed by `start` — not a bare
+    // substring — so an unrelated process merely mentioning the path never
+    // matches. Matched on the raw command string, not whitespace-split argv,
+    // so a bundle path containing spaces still matches its own ps output.
     const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?:^|\\s)${escaped} start(?:\\s|$)`).test(cmd);
   } catch {
@@ -833,12 +810,10 @@ async function acquireSpawnLock(): Promise<SpawnLock | null> {
  * lock-free fast path and the double-check inside the lock can reuse it.
  *
  * When `wantBundlePath` is given, only a server running that SAME bundle is
- * reused. A different bundlePath means a different argent install — a global
- * binary vs a repo-local devDependency, or two repos pinning different versions
- * — and reusing it would silently run the wrong version against the caller's
- * MCP. We return null instead, so the caller spawns its own; the other server is
- * left running (another session may depend on it, and the tools-client does not
- * recover from a killed server) and idle-times-out on its own.
+ * reused — a different bundlePath is a different argent install, and reusing
+ * it would silently run the wrong version. We return null so the caller spawns
+ * its own; the other server is left running (another session may depend on it,
+ * and the tools-client does not recover from a killed server).
  */
 async function reusableHandle(
   state: ToolsServerState | null,
@@ -847,19 +822,16 @@ async function reusableHandle(
 ): Promise<ToolsServerHandle | null> {
   if (!state || !isProcessAlive(state.pid)) return null;
   if (wantBundlePath !== undefined && state.bundlePath !== wantBundlePath) return null;
-  // Same path, different version → the bundle was rewritten in place (a local
-  // devDependency update, a downgrade away from a bad release, a prerelease
-  // bump). The authority on "what should be running" is the DISK, read fresh —
-  // a tracked server whose recorded version no longer matches the on-disk
-  // package is running code that no longer exists and must be retired, in BOTH
-  // directions (an upgrade-only rule would keep executing a just-removed newer
-  // version after a downgrade). Comparing disk-vs-state (not caller-vs-state)
-  // is also what keeps two long-lived sessions of different frozen versions
-  // from ping-ponging SIGTERMs: both read the same disk, so both agree on the
-  // one server that may live. Only when the disk is unreadable do we fall back
-  // to the caller's frozen version, and then only in the caller-newer
-  // direction (self-heal without reintroducing the ping-pong). A legacy server
-  // with no recorded version is reused.
+  // Same path, different version → the bundle was rewritten in place. The
+  // authority is the DISK, read fresh: a server whose recorded version no
+  // longer matches the on-disk package is running code that no longer exists
+  // and must be retired, in BOTH directions (upgrade-only would keep a stale
+  // server after a downgrade). Comparing disk-vs-state (not caller-vs-state)
+  // also stops two long-lived sessions with different frozen versions from
+  // ping-ponging SIGTERMs — both read the same disk. Only when the disk is
+  // unreadable do we fall back to the caller's frozen version, and then only
+  // in the caller-newer direction (self-heal without the ping-pong). A legacy
+  // server with no recorded version is reused.
   if (wantBundlePath !== undefined && state.version !== undefined) {
     const diskVersion = readBundlePackageVersion(wantBundlePath);
     if (diskVersion !== undefined) {
@@ -879,11 +851,10 @@ async function reusableHandle(
 }
 
 export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsServerHandle> {
-  // Fast path: a healthy server running OUR bundle is already tracked — reuse it
-  // without paying the cost (or contention) of the spawn lock. This is the
-  // overwhelmingly common case. Records are kept per bundle, so another
-  // install's server is neither considered nor disturbed — see
-  // stateFileForBundle and reusableHandle.
+  // Fast path (the overwhelmingly common case): a healthy server running OUR
+  // bundle is already tracked — reuse it without paying for the spawn lock.
+  // Records are per bundle, so another install's server is neither considered
+  // nor disturbed (see stateFileForBundle, reusableHandle).
   const fast = await reusableHandle(
     await readState(paths.bundlePath),
     paths.bundlePath,
@@ -921,23 +892,21 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     ) {
       await terminatePid(state.pid, () => processCommandMatches(state.pid, state.bundlePath));
     }
-    // Retire only OUR OWN record (per-bundle file, plus a legacy-format record
-    // for our bundle) — another install's record must survive so its server
-    // stays reachable by its owner. Also sweep per-bundle files whose pid is
-    // gone, so retired installs don't accumulate junk in ~/.argent.
+    // Retire only OUR OWN record — another install's must survive so its
+    // server stays reachable by its owner. Also sweep per-bundle files whose
+    // pid is gone, so retired installs don't accumulate junk in ~/.argent.
     await clearToolsServerState(paths.bundlePath);
     await sweepDeadStateFiles();
 
     // Spawn a new server with a fresh token. Auto-spawned servers always
     // authenticate (the token is local to this user and persisted 0600).
     //
-    // Read the disk version BEFORE spawning — recording what we're about to
-    // execute, not the caller's import-time version (a stale caller recording
-    // its own version would make the next disk-vs-state comparison kill the
-    // healthy server it just spawned). Reading BEFORE also keeps an in-place
-    // bump that lands mid-spawn on the safe side: the record carries the
-    // pre-bump version, so the next call sees a disk mismatch and retires the
-    // old-code server — one redundant respawn at worst, never a stale reuse.
+    // Record the disk version, not the caller's import-time one (a stale
+    // caller recording its own version would make the next disk-vs-state
+    // comparison kill the server it just spawned). Reading BEFORE the spawn
+    // keeps a mid-spawn in-place bump safe: the record carries the pre-bump
+    // version, so the next call retires the old-code server — one redundant
+    // respawn at worst, never a stale reuse.
     const diskVersion = readBundlePackageVersion(paths.bundlePath) ?? paths.version;
     const token = generateToken();
     const port = await findFreePort();

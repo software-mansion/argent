@@ -3,12 +3,10 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-// The launcher's version gate decides reuse-vs-respawn from the CURRENT
-// ON-DISK bundle version (read fresh from the package.json above the bundle),
-// not from the caller's import-time version. These tests stage a real package
-// layout (<pkg>/package.json + <pkg>/dist/tool-server.cjs) so the disk read
-// resolves, and cover the three directions the frozen-caller rule got wrong:
-// downgrades, prerelease bumps, and a stale caller vs. a current server.
+// The version gate decides reuse-vs-respawn from the CURRENT on-disk bundle
+// version (the package.json above the bundle), not the caller's import-time
+// version. A real package layout is staged so the disk read resolves; tests
+// cover downgrades, prerelease bumps, and a stale caller vs. a current server.
 let launcher: typeof import("../src/launcher.js");
 let TEST_HOME: string;
 
@@ -87,10 +85,9 @@ describe("ensureToolsServer — disk-version gate", () => {
     "retires the tracked server after an on-disk DOWNGRADE, even though the caller is not newer",
     { timeout: 30_000 },
     async () => {
-      // A team downgrades away from a bad release (--ignore-scripts, so no
-      // postinstall kill). The tracked 2.0.0 server must be retired: the code
-      // it runs no longer exists on disk. The caller is ALSO frozen at 2.0.0,
-      // so the old caller-is-newer rule would have kept reusing the bad server.
+      // Downgrade away from a bad release with --ignore-scripts (no postinstall
+      // kill): the tracked 2.0.0 server's code no longer exists on disk, so it
+      // must be retired even though the caller (also 2.0.0) is not newer.
       stageDiskVersion("1.0.0");
       const old = await spawnTracked("2.0.0");
 
@@ -129,10 +126,9 @@ describe("ensureToolsServer — disk-version gate", () => {
     "reuses a current server even when THIS caller is frozen at an older version",
     { timeout: 30_000 },
     async () => {
-      // A long-lived MCP session that started before the bump: the disk and the
-      // tracked server agree (2.0.0), only the caller is stale (1.0.0). Reuse —
-      // both sessions read the same disk, so neither tears the other down (the
-      // ping-pong the old rule guarded against, now without going version-blind).
+      // A long-lived MCP session frozen at 1.0.0 while disk and tracked server
+      // agree on 2.0.0: reuse — both sessions read the same disk, so neither
+      // tears the other down (no ping-pong, without going version-blind).
       stageDiskVersion("2.0.0");
       const current = await spawnTracked("2.0.0");
 

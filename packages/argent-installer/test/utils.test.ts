@@ -748,11 +748,9 @@ describe("getLocalArgentBinRelPath", () => {
   it.skipIf(process.platform === "win32")(
     "commits the stable node_modules path, not the pnpm version-pinned store dir",
     () => {
-      // Mimic pnpm: the real package lives in a version-suffixed .pnpm store dir
-      // and node_modules/<pkg> is a symlink to it. Node's module resolution
-      // returns the realpath (the store dir); committing that would bake the
-      // version into the MCP command and break on the next bump. The committed
-      // path must be the stable symlink path instead.
+      // pnpm layout: node_modules/<pkg> symlinks into a version-suffixed .pnpm
+      // store dir, and module resolution returns that realpath. Committing it
+      // would bake the version into the MCP command; the stable symlink path wins.
       const storeDir = path.join(
         tmpDir,
         "node_modules",

@@ -34,9 +34,7 @@ import {
 } from "./init-telemetry.js";
 
 // Step 0 — ensure argent is installed for the chosen mode and return the
-// resolved version. Local: add the devDependency (or reuse an existing one).
-// Global: install if missing, reinstall from --from, or offer an interactive
-// update. Exits the process on a fatal install failure or a cancelled
+// resolved version. Exits the process on a fatal install failure or a cancelled
 // global-install prompt (each emitting its own terminal telemetry first).
 export async function runInstall(args: {
   installMode: InstallMode;
@@ -79,11 +77,9 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   }
 
   // Reuse only when the project's OWN package.json declares the dep AND it is
-  // present on disk. Gating on mere resolvability (isLocallyInstalled) would
-  // treat a hoisted workspace copy or a transitive dep as "already set up" and
-  // skip the add — committing a local-mode config the manifest never backs, so
-  // teammates' `npm install` wouldn't reliably get argent. If declared but not
-  // yet materialized, fall through and install so node_modules is populated.
+  // on disk. Mere resolvability (isLocallyInstalled) could be a hoisted or
+  // transitive copy the manifest never backs — teammates' `npm install`
+  // wouldn't get argent. Declared but not materialized falls through to install.
   if (isDeclaredLocally(projectRoot) && isLocallyInstalled(projectRoot) && !fromTar) {
     const startedAt = performance.now();
     p.log.info(`${PACKAGE_NAME} is already a devDependency ${pc.dim(`(${projectRoot})`)}.`);
@@ -93,10 +89,9 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
 
   const pm = detectProjectPackageManager(projectRoot);
   const installTarget = fromTar ?? PACKAGE_NAME;
-  // Declared in the manifest but not materialized (a fresh clone): run the
-  // plain project install, which honors the COMMITTED version pin. The `add`
-  // form would resolve the bare package name to @latest and silently rewrite
-  // the team's pin — the exact mutation `update` refuses on principle.
+  // Declared but not materialized (fresh clone): run the plain project install,
+  // which honors the committed version pin — `add` would resolve to @latest and
+  // silently rewrite the team's pin.
   const materializeOnly = isDeclaredLocally(projectRoot) && !fromTar;
   const cmd = materializeOnly ? projectInstallCommand(pm) : localInstallCommand(pm, installTarget);
   const cmdStr = formatShellCommand(cmd);
@@ -108,12 +103,9 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   );
   const startedAt = performance.now();
   // Success is decided from the DISK, not the exit code (see runTrustingDisk —
-  // pnpm 10+ exits non-zero on blocked build scripts). The probe: whether the
-  // package is present after the run. isLocallyInstalled is PnP-aware (a Yarn
-  // PnP project has no node_modules but declares the dep in-manifest); the
-  // extra isYarnPnp keeps that leniency. A non-PnP layout with no node_modules
-  // entry means the add really failed (a bad spec, ERR_PNPM_ADDING_TO_ROOT, a
-  // network error) — don't write a config that runs a missing binary.
+  // pnpm 10+ exits non-zero on blocked build scripts). isYarnPnp covers PnP
+  // layouts with no node_modules; otherwise a missing node_modules entry means
+  // the add really failed — don't write a config that runs a missing binary.
   const { landed, exitError: installError } = await runTrustingDisk(
     () => runShellCommand(cmd, { cwd: projectRoot }),
     () => isLocallyInstalled(projectRoot) || isYarnPnp(projectRoot)
@@ -141,9 +133,8 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   );
 
   if (installError) {
-    // Installed, but the package manager still exited non-zero — almost always
-    // pnpm's blocked build scripts. Say so plainly, and point pnpm users at the
-    // optional approve-builds step for the native-only extras.
+    // Installed, but the package manager exited non-zero — almost always pnpm's
+    // blocked build scripts; point pnpm users at the optional approve-builds step.
     p.log.warn(pc.dim(`${pm} exited non-zero but ${PACKAGE_NAME} is installed — continuing.`));
     if (pm === "pnpm") {
       p.log.info(
@@ -249,17 +240,14 @@ async function runGlobal(opts: {
 
   // Already installed → offer an interactive update.
   //
-  // Compare the registry against the GLOBAL install's own version, never the
-  // running package's: under `npx @swmansion/argent init` the running package
-  // is the npx cache — always the latest — which would mask a stale global
-  // binary and skip the update offer while every editor session keeps running
-  // it (the exact bug topology.ts's getGloballyInstalledVersion exists for,
-  // and which `update` already avoids). The resolved global version also
-  // becomes this run's version — it is the install the written configs run.
-  // When that version can't be read (a Windows npm layout whose argent.cmd
-  // wrapper hides the owning package — see getGloballyInstalledPackageRoot),
-  // say so and skip the check rather than silently comparing against the
-  // running package and masking a stale binary all over again.
+  // Compare the registry against the GLOBAL install's version, never the
+  // running package's: under `npx ... init` the running package is the npx
+  // cache — always latest — which would mask a stale global binary (the bug
+  // topology.ts's getGloballyInstalledVersion exists for). That global version
+  // also becomes this run's version — it is the install the written configs
+  // run. If it can't be read (Windows argent.cmd wrapper hides the owning
+  // package — see getGloballyInstalledPackageRoot), say so and skip the check
+  // rather than fall back to the running package's version.
   const globalVersion = getGloballyInstalledVersion();
   version = globalVersion ?? version;
   const packageActionStartedAt = performance.now();
@@ -285,9 +273,8 @@ async function runGlobal(opts: {
     const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
     const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
     if (nonInteractive) {
-      // A --yes/CI install with an available update implicitly skips it.
-      // Emit the same update_decision the interactive and no-update branches
-      // do, so the upgrade funnel isn't blind for non-interactive installs.
+      // A --yes/CI install implicitly skips the update; emit the same
+      // update_decision as the other branches so the upgrade funnel isn't blind.
       track("installation:update_decision", {
         from_major: fromMajor,
         to_major: toMajor,
@@ -331,10 +318,9 @@ async function runGlobal(opts: {
           version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
           await tel.trackPackageAction("init_triggered_update", updateStartedAt, true);
 
-          // The user just bumped to a newer argent. Re-sync and prune argent
-          // skills in every scope that already tracks them — this is the only
-          // point in init where we can surface orphans (skills removed from a
-          // previous argent version) before Step 2's single-scope `skills add`.
+          // Re-sync and prune argent skills in every scope that tracks them —
+          // the only point in init that surfaces orphans from the old version
+          // before Step 2's single-scope `skills add`.
           reportSkillRefresh(resolveProjectRoot(process.cwd()), "installer_skills_refresh");
         } catch (err) {
           updateSpinner.stop(pc.red("Update failed."));

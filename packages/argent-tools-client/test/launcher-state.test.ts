@@ -243,10 +243,9 @@ describe("killToolServerForInstallDir", () => {
   it.skipIf(process.platform === "win32")(
     "keeps the record and signals nothing when a LIVE pid cannot be identified as ours",
     async () => {
-      // Use this test process's own pid: alive, but its command line is the
-      // vitest runner — not `node <bundle> start` — so the identity guard must
-      // refuse to signal it AND must leave the record in place (unlinking would
-      // orphan a live server whose ps output we merely failed to parse).
+      // This process's pid is alive but its command line is the vitest runner,
+      // not `node <bundle> start`: the identity guard must neither signal it nor
+      // unlink the record (that would orphan a live server it failed to parse).
       const installDir = join(TEST_HOME, "proj2", "node_modules", "@swmansion", "argent");
       const ownBundle = join(installDir, "dist", "tool-server.cjs");
       await launcher.writeToolsServerState({

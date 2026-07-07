@@ -246,12 +246,10 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
     }
   );
 
-  // Committable / repo-local install mode: distinct argent installs (global vs a
-  // repo-local devDependency, or two repos pinning different versions) each have
-  // a distinct bundlePath. A client must only ever reuse a server running ITS
-  // OWN bundle — otherwise it silently runs the wrong version — and must NOT kill
-  // the other (a different session may be using it; the tools-client doesn't
-  // recover from a killed server).
+  // Committable / repo-local install mode: distinct installs (global vs a
+  // repo-local devDependency) have distinct bundlePaths. A client must only
+  // reuse a server running ITS OWN bundle, and must not kill another install's
+  // server — a different session may be using it and can't recover from a kill.
   it(
     "does not reuse a healthy server from a DIFFERENT bundle; spawns its own and leaves the other alive",
     { timeout: 30_000 },
@@ -288,10 +286,9 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
       expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", state!.port));
       expect(handle.url).not.toBe(launcher.formatToolsServerUrl("127.0.0.1", other.port));
 
-      // And the other install's record SURVIVES — before the per-bundle
-      // registry, our spawn overwrote the single-slot state file, leaving the
-      // other server running but untracked (unreachable by `argent server
-      // stop`, killToolServer, or the postinstall kill).
+      // The other install's record SURVIVES — a single shared slot would leave
+      // that server running but untracked (unreachable by `argent server stop`,
+      // killToolServer, or the postinstall kill).
       const otherState = await launcher.readToolsServerState(
         "/some/OTHER/install/dist/tool-server.cjs"
       );
@@ -361,10 +358,9 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
     "respawns when the SAME bundle is tracked under a different version (in-place devDep bump self-heals, no postinstall needed)",
     { timeout: 30_000 },
     async () => {
-      // A healthy server is running from this bundle, but recorded under an older
-      // version — the shape after a local `argent update` (or teammate `npm
-      // install`) rewrites tool-server.cjs in place. The next call must retire it
-      // and spawn the new version, without relying on the postinstall kill.
+      // A healthy server recorded under an older version — the shape after
+      // `argent update` rewrites tool-server.cjs in place. The next call must
+      // retire it and spawn the new version, without the postinstall kill.
       const old = await launcher.spawnToolsServer(fakePaths(), await launcher.findFreePort(), {
         token: "old-token",
       });
@@ -398,12 +394,10 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
     "reuses a NEWER same-bundle server instead of killing it (no version ping-pong across live sessions)",
     { timeout: 30_000 },
     async () => {
-      // The inverse of the self-heal case: a server is already running the bumped
-      // bundle, recorded under a NEWER version, while THIS caller is still frozen
-      // at the old version — a second long-lived MCP session that started before
-      // the bump. It must REUSE the newer healthy server, not tear it down.
-      // Killing on any mismatch is what makes two sessions ping-pong SIGTERMs,
-      // each frozen at its own startup version.
+      // Inverse of the self-heal case: the server already runs the bumped bundle
+      // (recorded 2.0.0) while THIS caller is frozen at 1.0.0 — a second
+      // long-lived MCP session. It must REUSE the newer healthy server: killing
+      // on any mismatch makes two sessions ping-pong SIGTERMs.
       const newer = await launcher.spawnToolsServer(fakePaths(), await launcher.findFreePort(), {
         token: "newer-token",
       });

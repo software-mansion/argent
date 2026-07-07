@@ -73,9 +73,8 @@ export interface InstallationAllowlistDecisionProps {
   is_enabled: boolean;
 }
 
-// Stale argent config found (and removed or flagged) by the post-write sweep
-// in init/update — entries in other scopes that would shadow or block the one
-// just written.
+// Stale argent config (entries in other scopes that would shadow or block the
+// one just written) removed or flagged by the post-write sweep in init/update.
 export interface InstallationStaleConfigCleanupProps {
   removed_count: number;
   warned_count: number;

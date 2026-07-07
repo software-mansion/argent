@@ -3,9 +3,9 @@ import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 import type { InstallMode } from "./install-record.js";
 
-// Centralizes init's terminal-telemetry bookkeeping so the orchestrator and the
-// step modules (notably install-runner) share one source of truth for the
-// install-mode dimension, the editor count, and the finalize-once guard.
+// Centralizes init's terminal-telemetry bookkeeping so the orchestrator and
+// step modules (notably install-runner) share the install-mode dimension,
+// editor count, and finalize-once guard.
 
 export type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
 
@@ -30,10 +30,9 @@ export const INSTALL_LOCAL_PRECONDITION_FAILED: InstallerFailureSignal = {
   error_kind: "validation",
 };
 
-// `--local` and `--global` passed together — an argument-parse error, distinct
-// from a failed local-install precondition. Kept separate so the local-install
-// failure funnel isn't polluted with flag-usage mistakes (which never attempted
-// an install and carry no meaningful install_mode).
+// `--local` and `--global` passed together. Kept distinct from the local
+// precondition failure so the local-install failure funnel isn't polluted with
+// flag-usage mistakes (no install attempted, no meaningful install_mode).
 export const INSTALL_MODE_FLAG_CONFLICT: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_MODE_FLAG_CONFLICT,
   failure_stage: "installer_install_mode_flag_conflict",

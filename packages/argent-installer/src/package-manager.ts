@@ -48,14 +48,12 @@ function pmFromLockfile(dir: string): PackageManager | null {
   return null;
 }
 
-// Detect the package manager a *project* uses: the package.json `packageManager`
-// (corepack) field first, then lockfiles, walking up ancestor directories —
-// workspaces keep the single lockfile at the monorepo root, which may sit above
-// the resolved project root. The walk stops at the repo boundary (.git). Only
-// then fall back to the runner-based detectPackageManager(); that heuristic
-// reads npm_config_user_agent, which reflects whoever launched `argent` (often
-// npx / npm), not the host project — wrong for the local-install commands, which
-// must match the project's own lockfile so the right one is updated.
+// Detect the package manager the *project* uses: the `packageManager`
+// (corepack) field first, then lockfiles, walking up ancestors (workspaces keep
+// the single lockfile at the monorepo root) and stopping at the repo boundary
+// (.git). Only then fall back to detectPackageManager(): npm_config_user_agent
+// reflects whoever launched `argent` (often npx), not the host project, and the
+// local-install commands must update the project's own lockfile.
 export function detectProjectPackageManager(projectRoot: string): PackageManager {
   let dir = path.resolve(projectRoot);
   for (;;) {
@@ -96,11 +94,9 @@ export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCo
 }
 
 // ── Local (repo-local / committable) install commands ─────────────────────────
-// The committable install mode adds @swmansion/argent to the project's
-// devDependencies instead of installing it globally, and commits MCP configs
-// that run the project-local copy. These are the local-mode siblings of the
-// global-* commands above; every command that mutates the project's package
-// manifest MUST run with `cwd` set to the project root.
+// Local mode adds @swmansion/argent to the project's devDependencies and
+// commits MCP configs that run the project-local copy. Every command that
+// mutates the project's manifest MUST run with `cwd` set to the project root.
 
 export function localInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
@@ -115,10 +111,9 @@ export function localInstallCommand(pm: PackageManager, pkg: string): ShellComma
   }
 }
 
-// Materialize the project's DECLARED dependencies (`npm install` & friends)
-// without touching any version pin. This is the right move when the manifest
-// already declares argent but node_modules is empty (a fresh clone): running
-// the `add` form there would rewrite the team's committed pin to @latest.
+// Materialize the project's DECLARED dependencies without touching any pin —
+// for when the manifest declares argent but node_modules is empty (a fresh
+// clone), where the `add` form would rewrite the committed pin to @latest.
 export function projectInstallCommand(pm: PackageManager): ShellCommand {
   switch (pm) {
     case "yarn":

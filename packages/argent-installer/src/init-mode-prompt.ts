@@ -2,12 +2,10 @@ import * as p from "@clack/prompts";
 import { InitCancelled } from "./init-args.js";
 import type { InstallMode } from "./install-record.js";
 
-// Step-0 interactive selector: global (default) vs local (committable
-// devDependency). Used only when neither --local/--global nor --yes fixed the
-// mode. `defaultMode` seeds the highlighted option — passed the committed
-// record's mode when the project already opted into one, so re-running init in a
-// local repo defaults to keeping it local. Throws InitCancelled("install_mode")
-// on cancel.
+// Step-0 selector: global (default) vs local (committable devDependency). Used
+// only when neither --local/--global nor --yes fixed the mode. `defaultMode`
+// seeds the highlight (the committed record's mode, so re-running init in a
+// local repo stays local). Throws InitCancelled("install_mode") on cancel.
 export async function promptInstallMode(defaultMode: InstallMode = "global"): Promise<InstallMode> {
   const modeChoice = await p.select({
     message: "How should argent be installed?",

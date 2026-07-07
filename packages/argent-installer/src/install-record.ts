@@ -53,12 +53,10 @@ export function removeInstallRecord(projectRoot: string): boolean {
   }
 }
 
-// Effective install mode for a project: the committed record wins; otherwise
-// infer local only from a dependency the project's own package.json declares —
-// a copy that merely exists in node_modules (hoisted transitive dep, workspace
-// symlink) is not intent, and acting on it would rewrite a manifest the user
-// never opted into. Default global (every pre-record install predates this
-// feature and was global).
+// Effective install mode: the committed record wins; otherwise infer local
+// only from a dep the project's own package.json declares — a copy merely in
+// node_modules (hoisted/transitive) is not intent. Default global (all
+// pre-record installs were global).
 export function resolveInstallMode(projectRoot: string): InstallMode {
   const record = readInstallRecord(projectRoot);
   if (record) return record.mode;
@@ -67,17 +65,13 @@ export function resolveInstallMode(projectRoot: string): InstallMode {
 
 export class InstallModeFlagError extends Error {}
 
-// Resolve the install mode from `argent init` flags. Returns "global"/"local"
-// when fixed by a flag or the non-interactive default; null means "ask the user
+// Resolve the install mode from `argent init` flags; null means "ask the user
 // interactively". Throws InstallModeFlagError on conflicting flags.
 //
-// `recordedMode` is the mode the project already opted into: a committed
-// .argent/install.json, or — absent a record — a dependency the project's own
-// manifest declares (init seeds it that way; see init.ts). A non-interactive
-// run honors it so `argent init -y` in a repo the team already set up as local
-// doesn't silently convert it back to global (deleting the committed marker
-// and rewriting the project MCP entry to the bare `argent` command). Explicit
-// flags still win.
+// `recordedMode` is the mode the project already opted into (committed
+// .argent/install.json, or a manifest-declared dep — see init.ts). A
+// non-interactive run honors it so `argent init -y` in a local-mode repo
+// doesn't silently convert it back to global. Explicit flags still win.
 export function resolveInstallModeFromFlags(opts: {
   local: boolean;
   global: boolean;

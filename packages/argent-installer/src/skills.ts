@@ -175,11 +175,10 @@ export function summarizeSkillRefreshForTelemetry(
 
 // ── Refresh + report ──────────────────────────────────────────────────────────
 
-// The two flows that re-sync argent skills after a version bump — the
-// init-triggered update and `argent update` — differ only in the
-// failure_stage naming the flow. Single owner of the "Skills Updated" note,
-// the skill_refresh_result event, and the INSTALL_SKILLS_REFRESH_FAILED
-// signal (previously duplicated once per flow with drifting stage strings).
+// Single owner of the "Skills Updated" note, the skill_refresh_result event,
+// and the INSTALL_SKILLS_REFRESH_FAILED signal for both post-bump re-sync
+// flows — init-triggered update and `argent update` — which differ only in
+// the failure_stage naming the flow.
 export type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_refresh";
 
 export function reportSkillRefresh(projectRoot: string, stage: SkillRefreshStage): void {

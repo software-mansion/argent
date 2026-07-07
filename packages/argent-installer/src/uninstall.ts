@@ -381,22 +381,20 @@ export async function uninstall(args: string[]): Promise<void> {
     installMode = resolveInstallMode(projectRoot);
 
     // ── Choose which install(s) to remove ───────────────────────────────────────
-    // Decide this up front (before any config is touched) so an invalid flag or a
-    // cancelled coexistence prompt aborts without mutating anything. Package
-    // removal is scoped to the target(s); config/content cleanup follows an
-    // explicitly narrowed target too (see scopesToClean below) and is otherwise
-    // workspace-wide as before.
+    // Decided up front so an invalid flag or cancelled coexistence prompt aborts
+    // before anything is mutated. Package removal is scoped to the target(s);
+    // config/content cleanup follows a narrowed target too (see scopesToClean
+    // below) and is otherwise workspace-wide as before.
     const uninstallLocalProbe = probeLocalInstall(projectRoot);
     const globalPresent = isGloballyInstalled();
     const localPresent = installMode === "local" && uninstallLocalProbe.installed;
     const targetFlags = parseTargetFlags(args);
     // Default to the install that is actually PRESENT: a local-mode record whose
     // devDependency isn't materialized (fresh clone) must not shadow a present
-    // global install — main's behavior in that directory was to offer the global
-    // package for removal. When both coexist non-interactively, only the local
-    // devDep is removed: unlike `update -y` (which safely acts on both),
-    // removal is destructive and the global install is shared with other
-    // projects, so nuking it needs an explicit --global.
+    // global install. When both coexist non-interactively, only the local devDep
+    // is removed (unlike `update -y`, which acts on both): removal is destructive
+    // and the global install is shared with other projects, so nuking it needs
+    // an explicit --global.
     const defaultUninstallTarget: InstallMode = localPresent
       ? "local"
       : globalPresent
@@ -429,17 +427,13 @@ export async function uninstall(args: string[]): Promise<void> {
       removeTargets = targetDecision.targets;
     }
 
-    // Which config scopes the entry/allowlist/content removal may touch. Clean
-    // everything EXCEPT the scopes that keep a RETAINED install wired up —
-    // regardless of whether the narrowing came from an explicit flag, the
-    // coexistence prompt, or the implicit single-present default:
-    //   - a present global install not being removed keeps its global-scope
-    //     entries (and, in global mode, its project-scope entries too — those
-    //     run the bare `argent` command);
-    //   - a local-mode project keeps its project-scope entries (committed team
-    //     files) unless the local install itself is being removed.
-    // With a single install and nothing retained this cleans both scopes — the
-    // historical workspace-wide behavior.
+    // Which config scopes the entry/allowlist/content removal may touch: clean
+    // everything EXCEPT the scopes that keep a RETAINED install wired up. A kept
+    // global install keeps its global-scope entries (and, in global mode, its
+    // project-scope entries too — those run the bare `argent` command); a
+    // local-mode project keeps its project-scope entries (committed team files)
+    // unless the local install itself is being removed. With nothing retained
+    // this cleans both scopes — the historical workspace-wide behavior.
     const scopesToClean = new Set<"local" | "global">(["local", "global"]);
     if (globalPresent && !removeTargets.includes("global")) {
       scopesToClean.delete("global");
@@ -620,11 +614,10 @@ export async function uninstall(args: string[]): Promise<void> {
     }
 
     // ── Uninstall the package(s) ─────────────────────────────────────────────────
-    // Removal is scoped to the target(s) chosen above. A local-mode uninstall
-    // removes the repo-local devDependency and never reaches out to the shared
-    // GLOBAL install unless the user explicitly asked (a --global flag or the
-    // coexistence prompt). The tool-server teardown is likewise scoped to each
-    // install's own dir — a server for the OTHER install may be serving another
+    // Scoped to the target(s) chosen above: a local-mode uninstall never touches
+    // the shared GLOBAL install unless explicitly asked (--global flag or the
+    // coexistence prompt). Tool-server teardown is likewise scoped to each
+    // install's own dir — the OTHER install's server may be serving another
     // editor session and must be left alone.
 
     interface RemovableInstall {
@@ -632,13 +625,11 @@ export async function uninstall(args: string[]): Promise<void> {
       cmd: ShellCommand;
       cwd?: string;
       prompt: string;
-      // Interactive default when auto-selected: a local devDep in the project the
-      // user ran uninstall in is likely meant to go; a global install is shared,
-      // so default off (preserves the prior global-mode behavior).
+      // Interactive default when auto-selected: a local devDep in this project is
+      // likely meant to go; a shared global install defaults off (prior behavior).
       defaultRemove: boolean;
-      // Install dir the package manager is about to delete — the scope for the
-      // tool-server teardown below. Null when unresolvable (Yarn PnP), which
-      // simply skips the kill.
+      // Install dir the package manager is about to delete — the tool-server
+      // teardown scope. Null when unresolvable (Yarn PnP), which skips the kill.
       installDir: string | null;
     }
 
@@ -647,12 +638,11 @@ export async function uninstall(args: string[]): Promise<void> {
         // PnP-aware probe: a Yarn PnP project has no node_modules but the local
         // devDependency is still there to remove.
         if (!uninstallLocalProbe.installed) return null;
-        // Resolvable is not enough: a hoisted transitive dep or a workspace
-        // symlink the project never opted into — no committed .argent record,
-        // no declaration in its own manifest — is not this project's install
-        // (install-record.ts's intent rule), and running the package-manager
-        // remove against it would rewrite a manifest/lockfile the user never
-        // opted into, pruning a copy other packages depend on.
+        // Resolvable is not enough: a hoisted transitive dep or workspace symlink
+        // with no .argent record and no manifest declaration is not this
+        // project's install (install-record.ts's intent rule); removing it would
+        // rewrite a manifest/lockfile the user never opted into and prune a copy
+        // other packages depend on.
         if (installMode !== "local" && !isDeclaredLocally(projectRoot)) {
           p.log.info(
             pc.dim(
@@ -727,10 +717,9 @@ export async function uninstall(args: string[]): Promise<void> {
         hasUninstalledPackage = true;
         if (removable.kind === "global") hasUninstalledGlobalPackage = true;
 
-        // The local install is gone — the committed mode marker must go with it
-        // even when the user declined the content-pruning step above, or a
-        // stale mode:"local" record would keep `update`/`uninstall` targeting a
-        // devDependency that no longer exists.
+        // The committed mode marker must go with the install even when content
+        // pruning was declined, or a stale mode:"local" record would keep
+        // `update`/`uninstall` targeting a devDependency that no longer exists.
         if (removable.kind === "local" && removeInstallRecord(projectRoot)) {
           p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
         }
@@ -747,11 +736,9 @@ export async function uninstall(args: string[]): Promise<void> {
 
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
     // Reset the machine-wide local telemetry state when the GLOBAL package was
-    // removed, or when a removal left NO global install behind (a local-only
-    // machine whose last known install just went away). What must NOT trigger
-    // it: a local-only removal while a kept global install remains in active
-    // use — clearing state out from under an installation the user kept would
-    // be wrong.
+    // removed, or when a removal left NO global install behind. NOT on a
+    // local-only removal that keeps a global install — clearing state out from
+    // under an installation the user kept would be wrong.
     if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isGloballyInstalled())) {
       try {
         await resetLocalTelemetryState();

@@ -4,9 +4,9 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { update } from "../src/update.js";
 
-// Declining the update prompt must end the run like the pre-multi-target flow
-// did: cancel + exit 0, without the config refresh (entry rewrites, allowlists,
-// the stale-config sweep's removals, rules/agents, skills) running afterwards.
+// Declining the update prompt must cancel + exit 0 without the config refresh
+// (entry rewrites, allowlists, stale-config sweep, rules/agents, skills)
+// running afterwards.
 
 const telemetryMock = vi.hoisted(() => ({
   init: vi.fn(),
@@ -58,9 +58,8 @@ vi.mock("../src/update-target.js", () => ({
     minReleaseAgeMs: 0,
   })),
 }));
-// Mutable install topology the utils mock reads through, so tests can stage
-// "the global install landed at v99" (flip `globalVersion` from the mocked
-// package-manager run) or "no global install at all".
+// Mutable install topology read through the utils mock — tests flip these to
+// stage "the global install landed at v99" or "no global install at all".
 const topologyState = vi.hoisted(() => ({ globalInstalled: true, globalVersion: "1.0.0" }));
 
 vi.mock("../src/utils.js", async (importOriginal) => {
@@ -170,9 +169,8 @@ describe("update — interactive decline", () => {
   it("fails a zero-exit install whose target version never landed on disk", async () => {
     promptsMock.confirm.mockResolvedValueOnce(true);
 
-    // The package manager exits 0 but the resolvable global version stays at
-    // v1.0.0 (an npm-prefix/PATH split). The disk verdict wins: the run must
-    // report failure, not "Update complete".
+    // The package manager exits 0 but the global version stays at v1.0.0 (an
+    // npm-prefix/PATH split); the disk verdict wins — the run must report failure.
     await expect(update([])).rejects.toThrow(ExitSentinel);
 
     expect(exitSpy).toHaveBeenCalledWith(1);
@@ -223,8 +221,7 @@ describe("update — multi-target failure handling", () => {
 
     await expect(update(["--yes"])).rejects.toThrow(ExitSentinel);
 
-    // Both package-manager runs were attempted (the old flow process.exit(1)'d
-    // mid-loop and never reached the local install)...
+    // Both package-manager runs were attempted (no mid-loop exit(1))...
     const pmCalls = npmCalls();
     expect(pmCalls).toHaveLength(2);
     expect(pmCalls.some(([, args]) => args.includes("-g"))).toBe(true);
@@ -241,10 +238,9 @@ describe("update — multi-target failure handling", () => {
 
 describe("update — record-only local project stays updatable", () => {
   it("a committed install record without a manifest declaration still updates the local install", async () => {
-    // Monorepo hygiene: .argent/install.json at the member root, the
-    // declaration hoisted to the workspace root. The record IS the project's
-    // opt-in (install-record.ts's "record wins"), so update must proceed like
-    // it did on HEAD, not print the not-declared guidance.
+    // Monorepo layout: .argent/install.json at the member root, the declaration
+    // hoisted to the workspace root. The record IS the opt-in (install-record.ts's
+    // "record wins"), so update must proceed, not print the not-declared guidance.
     topologyState.globalInstalled = false;
     fs.writeFileSync(path.join(projDir, "package.json"), JSON.stringify({ name: "member" }));
     fs.writeFileSync(path.join(projDir, "package-lock.json"), "{}");
@@ -326,9 +322,8 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
 
     await update(["--yes"]);
 
-    // The customized entry is byte-identical: not rewritten to the stock
-    // command, not removed by the stale-config sweep (which is report-only
-    // for cross-project entries under --yes anyway).
+    // The customized entry is byte-identical: not rewritten to stock, not removed
+    // by the stale-config sweep (report-only for cross-project entries under --yes).
     expect(fs.readFileSync(cursorGlobal, "utf8")).toBe(before);
     expect(telemetryMock.track).toHaveBeenCalledWith(
       "installation:cli_update_complete",
@@ -337,10 +332,9 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
   });
 
   it("repairs a corrupted (unparseable) argent entry instead of skipping it as customized", async () => {
-    // A mangled entry (merge-conflict remnant, hand-edit to an url form)
-    // normalizes to getArgentEntry's { command: "" } sentinel. HEAD's
-    // unconditional refresh restored the working stock command; the
-    // classification must keep doing that, not label it "customized".
+    // A mangled entry (merge-conflict remnant, url form) normalizes to
+    // getArgentEntry's { command: "" } sentinel — the classification must
+    // repair it to the stock command, not label it "customized".
     const mcpJson = path.join(projDir, ".mcp.json");
     fs.writeFileSync(
       mcpJson,

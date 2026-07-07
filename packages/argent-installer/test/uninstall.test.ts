@@ -516,9 +516,8 @@ describe("uninstall — local (committable) mode package removal", () => {
     expect(localCall).toBeTruthy();
     expect(localCall![2]?.cwd).toBeTruthy();
 
-    // The global package is NEVER touched in local mode — even though the
-    // (mocked) PATH probe reports a global install present. This is the guard
-    // against `argent uninstall` in a repo nuking the user's shared global tool.
+    // No -g call even though the mocked PATH probe reports a global install —
+    // local mode must never nuke the user's shared global tool.
     const globalCall = calls.find(([, args]) => Array.isArray(args) && args.includes("-g"));
     expect(globalCall).toBeFalsy();
 
@@ -555,9 +554,8 @@ describe("uninstall — local (committable) mode package removal", () => {
   it("resets the local telemetry state when the removed local install was the last one", async () => {
     stageLocalProject();
     process.chdir(tmpDir);
-    // No global argent anywhere: this local devDependency is the machine's
-    // only known install, so removing it must reset the local telemetry state
-    // like a global uninstall does.
+    // No global argent anywhere: this devDependency is the machine's last known
+    // install, so removing it must reset local telemetry like a global uninstall.
     childProcessMock.execSync.mockImplementation(() => {
       throw new Error("not found");
     });
@@ -572,9 +570,9 @@ describe("uninstall — local (committable) mode package removal", () => {
   });
 
   it("--local skips the package removal when the project never opted into argent", async () => {
-    // A resolvable copy with NO committed record and NO manifest declaration —
-    // a hoisted transitive dep / workspace symlink. Removing it would rewrite
-    // a manifest and lockfile the user never opted into.
+    // Resolvable copy with no committed record or manifest declaration (hoisted
+    // transitive dep / workspace symlink) — removal would rewrite files the user
+    // never opted into.
     fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "host" }));
     fs.writeFileSync(path.join(tmpDir, "package-lock.json"), "{}");
     const pkgDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
@@ -598,10 +596,10 @@ describe("uninstall — local (committable) mode package removal", () => {
 });
 
 // ── Scoped config cleanup (scopesToClean) ─────────────────────────────────────
-// The entry/allowlist/content cleanup protects the scopes that keep a RETAINED
-// install wired up, on implicit defaults as well as explicit flags. HOME is the
-// temp dir; the PROJECT lives in a subdir so project-scope and global-scope
-// config paths never collide (Cursor uses .cursor/mcp.json for both).
+// Cleanup must spare the scopes that keep a RETAINED install wired up, on
+// implicit defaults as well as explicit flags. HOME is the temp dir; the project
+// lives in a subdir so project- and global-scope config paths never collide
+// (Cursor uses .cursor/mcp.json for both).
 
 describe("uninstall — scoped config cleanup", () => {
   let savedHome: string | undefined;

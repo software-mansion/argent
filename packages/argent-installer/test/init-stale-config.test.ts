@@ -120,10 +120,9 @@ describe("claudeAdapter.findShadowingConfigs", () => {
     expect(project.trusted).toBe(true);
   });
 
-  // Only the stock `argent mcp` shape is a provable leftover. Anything the
-  // user customized — command, args, env — may be a deliberate override that
-  // outranks the committed entry BY DESIGN (a dev-checkout `claude mcp add`),
-  // so it must never be auto-removed, especially by `argent update --yes`.
+  // Only the stock `argent mcp` shape is a provable leftover. A customized
+  // command/args/env may be a deliberate override that outranks the committed
+  // entry by design, so it must never be auto-removed (esp. by `update --yes`).
   it("reports a custom-command local-scope entry as NOT auto-removable", () => {
     writeJsonFile(claudeJsonPath(), {
       projects: {
@@ -210,8 +209,6 @@ describe("claudeAdapter.findShadowingConfigs", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0].remove()).toBe(true);
 
-    // The file survives, the user's empty scaffolding survives, only the list
-    // entry is gone.
     expect(fs.existsSync(settingsPath)).toBe(true);
     const after = readJsonFile(settingsPath);
     expect(after.disabledMcpjsonServers).toBeUndefined();
@@ -285,9 +282,8 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("keeps a custom-command Claude local-scope override (warns instead of removing)", async () => {
-    // A deliberate dev override registered via `claude mcp add argent -- node
-    // ~/dev/checkout/cli.js mcp`. Local scope outranking the committed entry is
-    // the point of that override — the sweep must flag it, never delete it.
+    // A deliberate dev override (`claude mcp add`): local scope outranking the
+    // committed entry is its point — the sweep must flag it, never delete it.
     globallyInstalled = true;
     writeJsonFile(claudeJsonPath(), {
       projects: {

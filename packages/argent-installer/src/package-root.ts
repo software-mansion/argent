@@ -1,21 +1,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-// Leaf module with no local imports: both utils.ts (which computes
-// PACKAGE_ROOT at module init) and topology.ts depend on this, and utils.ts
-// re-exports topology — importing resolvePackageRoot from utils there created
-// a genuine ESM cycle that only worked because the function was called lazily.
+// Leaf module with no local imports: utils.ts (which computes PACKAGE_ROOT at
+// module init) and topology.ts both depend on this, and utils.ts re-exports
+// topology — housing resolvePackageRoot in utils created an ESM cycle.
 
-// At runtime this package ships in two shapes:
-//   - tsc-compiled in the monorepo: packages/argent-installer/dist/*.js
-//   - bundled into the published package: <pkg>/dist/installer.mjs
-// Walking up to the nearest package.json works for both layouts and any
-// future repacking, instead of hard-coding a "two levels up" assumption.
+// The package ships in two shapes — tsc-compiled (packages/argent-installer/
+// dist/*.js) and bundled (<pkg>/dist/installer.mjs) — so walk up to the nearest
+// package.json rather than hard-coding a "two levels up" assumption.
 
 /**
- * Given a starting dirname, walk up until the first directory containing a
- * package.json. Falls back to the starting directory if none found. Exported
- * so it can be tested against simulated directory structures.
+ * Walk up from `dirname` to the first directory containing a package.json;
+ * falls back to the starting directory when none is found.
  */
 export function resolvePackageRoot(dirname: string): string {
   let current = path.resolve(dirname);

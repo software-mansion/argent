@@ -9,12 +9,10 @@ export interface AdapterSelection {
   detected: McpConfigAdapter[];
 }
 
-// Step 1a — choose which editors to configure. Local install mode commits
-// project files only, so editors without a project-level config are excluded
-// up front (with a note) rather than offered and then silently dropped at
-// write time. Non-interactive falls back to the detected set (or all eligible
-// adapters when nothing is detected). Throws InitCancelled("editors") on
-// cancel.
+// Step 1a — choose which editors to configure. Local mode commits project
+// files only, so editors without a project-level config are excluded up front
+// rather than silently dropped at write time. Non-interactive falls back to
+// the detected set, or all eligible. Throws InitCancelled("editors") on cancel.
 export async function chooseAdapters(opts: {
   nonInteractive: boolean;
   installMode: InstallMode;

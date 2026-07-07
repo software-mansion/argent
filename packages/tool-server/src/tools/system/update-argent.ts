@@ -5,11 +5,10 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { getUpdateState } from "../../utils/update-checker";
 
-// The CLI entrypoint shipped alongside this tool-server bundle (dist/cli.js next
-// to dist/tool-server.cjs). Spawning it directly — rather than a bare `argent`
-// on PATH — updates the SAME install that is serving this session and works in
-// local (committable) mode, where `argent` is not on PATH at all. Null when it
-// can't be located (unbundled dev layout); the caller falls back to `argent`.
+// dist/cli.js shipped next to this bundle. Spawning it — not a bare `argent` on
+// PATH — updates the SAME install serving this session and works in local
+// (committable) mode, where `argent` isn't on PATH. Null when not found
+// (unbundled dev layout); the caller falls back to `argent`.
 function resolveCliEntry(): string | null {
   try {
     const entry = path.join(__dirname, "cli.js");
@@ -21,26 +20,17 @@ function resolveCliEntry(): string | null {
 
 const PACKAGE_NAME = "@swmansion/argent";
 
-// Which install is serving THIS session — the global PATH install or a project's
-// committable local devDependency, and (for local) WHICH project? Spawning our
-// own cli.js is not enough: the `update` command re-resolves its target project
-// from ITS cwd, so without an explicit flag — and, for a local target, an
-// explicit cwd — a global server running inside a repo that ALSO declares
-// argent locally would update the local devDep instead of itself, and a
-// detached updater inheriting this server's editor-chosen cwd (often `/` or
-// `$HOME`) would bind to the wrong directory entirely.
-//
-// The authoritative signals are ARGENT_INSTALL_KIND / ARGENT_PROJECT_ROOT,
-// classified by the spawning package at process start — the moment cwd is
-// trustworthy (a committed local MCP command only resolves with cwd at the
-// project root) — and forwarded by the launcher. Fallback for servers spawned
-// by older argent versions: the tool-server bundle lives in the argent
-// package's dist/; if that package root sits inside a project's node_modules
-// it is the local install of THAT project, otherwise the global one. We walk
-// up from cwd so hoisted-workspace / pnpm layouts (bundle under a parent
-// node_modules or a .pnpm store) still classify correctly — though this
-// server's own cwd is editor-chosen, which is exactly why the env signals take
-// precedence.
+// Which install serves THIS session — the global PATH install or a project's
+// local devDependency — and, for local, WHICH project. The `update` command
+// re-resolves its target from ITS cwd, and the detached updater inherits this
+// server's editor-chosen cwd (often `/` or `$HOME`), so the target must be
+// pinned explicitly. Authoritative signals: ARGENT_INSTALL_KIND /
+// ARGENT_PROJECT_ROOT, classified by the launcher at process start while cwd
+// is still trustworthy (see argent's bundled-paths.ts). Fallback for servers
+// spawned by older argent versions: if this package root sits inside a
+// node_modules reached by walking up from cwd (covers hoisted-workspace /
+// pnpm layouts) it is that project's local install, otherwise global — but
+// that cwd is editor-chosen, which is why the env signals take precedence.
 function classifyRunningInstall(): { kind: "global" | "local"; projectRoot: string | null } {
   const envKind = process.env.ARGENT_INSTALL_KIND;
   const envRoot = process.env.ARGENT_PROJECT_ROOT;
@@ -70,13 +60,11 @@ function classifyRunningInstall(): { kind: "global" | "local"; projectRoot: stri
   return { kind: "global", projectRoot: null };
 }
 
-// Last-resort project root for a local-targeted update when the running
-// install carries none (a global server asked to update the project's local
-// install): the nearest ancestor of cwd that PROVABLY hosts a local argent
-// install — a committed .argent/install.json or a package.json declaring the
-// dependency. A bare package.json is deliberately not enough; with an
-// editor-chosen cwd of `$HOME`, a stray home-dir manifest must not become the
-// update target.
+// Last-resort project root when a global server is asked to update a local
+// install: the nearest ancestor of cwd that PROVABLY hosts one — a committed
+// .argent/install.json or a manifest declaring the dependency. A bare
+// package.json is deliberately not enough; with an editor-chosen cwd of
+// `$HOME`, a stray home-dir manifest must not become the update target.
 function findDeclaringProjectRoot(startDir: string): string | null {
   let dir: string;
   try {
@@ -142,23 +130,19 @@ export const updateArgentTool: ToolDefinition<{
     const { updateAvailable, updateInstallable, currentVersion, installableVersion } =
       getUpdateState();
 
-    // Resolve the target BEFORE the availability gates so a target covering an
-    // install OTHER than the running one is never refused on the running
-    // install's version. getUpdateState only knows the RUNNING install: "we are
-    // current" says nothing about the other install being current, so for a
-    // cross-install (or 'both') target the spawned installer — which re-checks
-    // each target against the registry — gets the final word.
+    // Resolve the target BEFORE the availability gates: getUpdateState only
+    // knows the RUNNING install, so a cross-install (or 'both') target must not
+    // be refused on its version — the spawned installer re-checks each target
+    // against the registry and gets the final word.
     const requested = params?.target ?? "auto";
     const running = classifyRunningInstall();
     const resolved = requested === "auto" ? running.kind : requested;
 
-    // A local-targeted update needs a project to bind to: the spawned updater
-    // must not re-derive the project itself — its inherited cwd is this
-    // detached server's editor-chosen (often `/` or `$HOME`) cwd. Pin the
-    // proven root explicitly. The recorded root is re-validated on disk (the
-    // project may have been deleted/renamed since this server started); when
-    // no root can be proven, refuse the local part instead of "initiating" an
-    // update that would no-op or bind to the wrong project.
+    // A local-targeted update needs an explicitly pinned project root: the
+    // spawned updater must not re-derive it from its inherited (editor-chosen)
+    // cwd. Re-validate the recorded root on disk (the project may be gone
+    // since this server started); if no root can be proven, refuse the local
+    // part rather than bind an update to the wrong project.
     let projectRoot: string | null = null;
     let effectiveTarget = resolved;
     if (resolved === "local" || resolved === "both") {
@@ -180,9 +164,8 @@ export const updateArgentTool: ToolDefinition<{
     }
 
     // Gates come AFTER the 'both' → 'global' degradation: a degraded target IS
-    // the running install, and skipping the gates for it would spawn a
-    // pointless updater plus a false "will restart" promise when everything is
-    // already current.
+    // the running install, and skipping its gates would spawn a pointless
+    // updater and falsely promise a restart when everything is current.
     const targetsOnlyRunningInstall = effectiveTarget === running.kind;
 
     if (targetsOnlyRunningInstall) {
@@ -223,18 +206,15 @@ export const updateArgentTool: ToolDefinition<{
     // the response to reach the MCP server before that happens.
     setTimeout(() => {
       const cliEntry = resolveCliEntry();
-      // Pin --version only when the target IS the running install — the pinned
-      // version came from ITS update state. For a cross-install target the
-      // installer resolves the right version per target itself.
+      // Pin --version only when the target IS the running install — it came
+      // from ITS update state; cross-install targets resolve their own.
       const updateArgs = ["update", "--yes", ...targetFlags];
       if (targetsOnlyRunningInstall && installableVersion) {
         updateArgs.push("--version", installableVersion);
       }
-      // Pin WHERE via an explicit flag, not the child's cwd: the installer's
-      // own root derivation (resolveProjectRoot) walks editor/.git markers and
-      // can resolve a DIFFERENT ancestor than the manifest-proven root in
-      // monorepos — and a cwd that vanished since this server started would
-      // fail the spawn outright.
+      // Pin WHERE via a flag, not the child's cwd: the installer's
+      // resolveProjectRoot walks editor/.git markers and can pick a DIFFERENT
+      // ancestor in monorepos — and a vanished cwd would fail the spawn.
       const spawnRoot =
         projectRoot ??
         (running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null);
@@ -246,17 +226,15 @@ export const updateArgentTool: ToolDefinition<{
         stdio: "ignore",
         env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
       });
-      // A detached child with no error listener turns a spawn failure (ENOENT
-      // when `argent` isn't on PATH — the norm in local mode) into an
-      // unhandled 'error' event that crashes the whole tool-server. Swallow it:
-      // the update simply doesn't happen and the next notification re-offers it.
+      // Without an error listener, a spawn failure (ENOENT when `argent` isn't
+      // on PATH — the norm in local mode) crashes the whole tool-server.
+      // Swallow it; the next update notification re-offers.
       child.on("error", (err) => {
         console.error(`[update-argent] failed to spawn updater: ${err}`);
         updateScheduled = false;
       });
-      // The updater exited without killing this server — it declined or
-      // no-op'd (target already current, nothing to update). Unblock future
-      // calls; a successful update restarts this server anyway.
+      // Updater exited without killing this server (declined or no-op'd) —
+      // unblock future calls; a successful update restarts this server anyway.
       child.on("exit", () => {
         updateScheduled = false;
       });

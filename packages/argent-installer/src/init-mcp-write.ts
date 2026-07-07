@@ -17,10 +17,9 @@ export interface McpWriteResult {
   lines: string[];
 }
 
-// Step 1c — write the MCP config files. In local mode, drops global-only
-// adapters (no project config file) with a note and points the command at the
-// repo-local copy (node + relative path / yarn for PnP / npx fallback); global
-// mode and global scope keep the bare `argent` command.
+// Step 1c — write the MCP config files. Local mode points the command at the
+// repo-local copy (node + relative path / yarn for PnP / npx fallback) and
+// drops global-only adapters; global mode/scope keep the bare `argent` command.
 export function writeMcpConfigs(args: {
   selectedAdapters: McpConfigAdapter[];
   installMode: InstallMode;
@@ -32,10 +31,9 @@ export function writeMcpConfigs(args: {
   let adapters = args.selectedAdapters;
   const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
 
-  // Local mode writes project-scoped entries that run the repo-local argent.
-  // Global-only adapters (no project config file) can't carry that, so drop
-  // them with a note rather than writing a global `argent` entry that would
-  // depend on the global install the user opted out of.
+  // Global-only adapters (no project config file) can't carry a project-scoped
+  // entry, so drop them with a note rather than writing a global `argent` entry
+  // that would depend on the global install the user opted out of.
   let localCmdMode: McpCommandMode | null = null;
   if (installMode === "local") {
     localCmdMode = resolveLocalCommandMode(effectiveRoot);

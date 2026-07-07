@@ -42,12 +42,11 @@ export interface McpServerEntry {
   env?: Record<string, string>;
 }
 
-// A same-named argent config found somewhere OTHER than the entry init just
-// wrote — a hidden scope the client resolves ahead of it (Claude Code's
-// per-project section of ~/.claude.json, VS Code's user-profile mcp.json), or
-// recorded client state that blocks the written entry from loading (Claude
-// Code's disabledMcpjsonServers). The shared cleanup step in
-// init-stale-config.ts decides removal vs. warning; adapters only report.
+// A same-named argent config in a hidden scope the client resolves ahead of
+// the entry init just wrote (e.g. Claude Code's per-project section of
+// ~/.claude.json), or client state that blocks it from loading
+// (disabledMcpjsonServers). Adapters only report; init-stale-config.ts
+// decides removal vs. warning.
 export interface ShadowingConfigFinding {
   /** Human-readable location, e.g. `~/.claude.json (project-local scope)`. */
   location: string;
@@ -56,11 +55,10 @@ export interface ShadowingConfigFinding {
   /** The conflicting entry when parseable; null for non-entry state (a block list). */
   entry: McpServerEntry | null;
   /**
-   * Set by the adapter when removal needs no further policy checks — the state
-   * is keyed to this project root, or removing it only re-enables prompting.
-   * When false, the shared policy in init-stale-config.ts removes the finding
-   * only if it is provably dead (a bare `argent` entry with no global install)
-   * and warns otherwise.
+   * True when removal needs no further policy checks (state keyed to this
+   * project root, or removal only re-enables prompting). When false,
+   * init-stale-config.ts removes the finding only if provably dead and warns
+   * otherwise.
    */
   autoRemove: boolean;
   /** Remove the conflicting state. Returns true if something was removed. */
@@ -79,11 +77,10 @@ export interface McpConfigAdapter {
   // configs for any editor whose dir happens to exist on the user's machine
   // (issue #195). Implementations must read the same key `remove()` checks.
   hasArgentEntry(configPath: string): boolean;
-  // The argent entry in normalized command/args form, or null when the config
-  // has none. A present-but-unrecognizable entry comes back as
-  // { command: "", args: [] } so callers can tell "absent" from "unreadable"
-  // (hasArgentEntry must stay true for it). The stale-config cleanup uses the
-  // command shape to judge whether an entry from a previous install is dead.
+  // The argent entry in normalized command/args form, or null when absent. A
+  // present-but-unrecognizable entry comes back as { command: "", args: [] }
+  // so callers can tell "absent" from "unreadable" (hasArgentEntry must stay
+  // true for it).
   getArgentEntry(configPath: string): McpServerEntry | null;
   // Report argent state in config locations OUTSIDE the projectPath/globalPath
   // pair that the client resolves ahead of (or gates) the entry written at
@@ -108,14 +105,13 @@ type CodexConfig = {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-// How the committed MCP entry should locate the argent executable.
-//   global     → bare PATH `argent` (the default; a global install).
-//   local-node → `node <project-relative bin path>` (committable repo-local
-//                install on a normal node_modules layout: npm/yarn-classic/pnpm).
-//   local-pnp  → `yarn argent` (Yarn Plug'n'Play, which has no node_modules).
-//   local-npx  → `npx --no-install argent` (fallback when the local bin path
-//                can't be verified; never bare `npx`/`-y`, which can hang a
-//                TTY-less stdio server or silently network-install).
+// How the committed MCP entry locates the argent executable.
+//   global     → bare PATH `argent` (the default).
+//   local-node → `node <project-relative bin path>` (normal node_modules layout).
+//   local-pnp  → `yarn argent` (Yarn Plug'n'Play; no node_modules).
+//   local-npx  → `npx --no-install argent` (bin path unverifiable; never bare
+//                `npx`/`-y`, which can hang a TTY-less stdio server or
+//                silently network-install).
 export type McpCommandMode =
   | { kind: "global" }
   | { kind: "local-node"; binRelPath: string }
@@ -128,10 +124,9 @@ function buildMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServerEntr
   // keep this generated config portable — see issue #238.
   switch (mode.kind) {
     case "local-node":
-      // `node` (not the .bin/argent shim) is Windows-safe — it spawns the real
-      // node binary instead of a .cmd/.ps1 shim. The relative path resolves
-      // against the client's cwd, which for a committed project-scope config is
-      // the project root.
+      // `node` (not the .bin/argent .cmd/.ps1 shim) is Windows-safe. The
+      // relative path resolves against the client's cwd — the project root
+      // for a committed project-scope config.
       return { command: "node", args: [mode.binRelPath, "mcp"] };
     case "local-pnp":
       return { command: "yarn", args: ["argent", "mcp"] };
@@ -147,8 +142,7 @@ export function getMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServe
 }
 
 // Resolve the MCP command shape for a committable (local) install rooted at
-// `root`: Yarn-PnP form, the node+relative-path form, or the npx fallback when
-// the local bin path can't be verified.
+// `root`.
 export function resolveLocalCommandMode(root: string): McpCommandMode {
   if (isYarnPnp(root)) return { kind: "local-pnp" };
   const binRelPath = getLocalArgentBinRelPath(root);
@@ -157,9 +151,8 @@ export function resolveLocalCommandMode(root: string): McpCommandMode {
 }
 
 // Single owner of the mode-and-scope → MCP command decision, shared by `init`
-// and `update` so both always write the same command shape for a project: only
-// a local-mode PROJECT-scope entry runs the repo-local copy; global scope (and
-// global install mode) keeps the bare `argent` command.
+// and `update`: only a local-mode PROJECT-scope entry runs the repo-local
+// copy; everything else keeps the bare `argent` command.
 export function getMcpEntryForScope(
   installMode: "global" | "local",
   configScope: "local" | "global",
@@ -207,13 +200,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // Normalize a raw config-file server entry into McpServerEntry shape.
-// `undefined`/absent → null; anything present but unrecognizable → the
-// { command: "" } sentinel (see McpConfigAdapter.getArgentEntry).
-// Env vars ride along (opencode spells the key `environment`): they mark a
-// hand-tuned entry, and — an nvm PATH being the classic case — can make a
-// command resolvable in the client even when this shell's probe misses it, so
-// classification (isArgentManagedEntry, the stale sweep's dead check) must see
-// them.
+// Absent → null; present but unrecognizable → the { command: "" } sentinel
+// (see McpConfigAdapter.getArgentEntry). Env vars ride along (opencode spells
+// the key `environment`): they mark a hand-tuned entry and can make a command
+// resolvable in the client when this shell's probe misses it (nvm PATH), so
+// classification must see them.
 function normalizeServerEntry(raw: unknown): McpServerEntry | null {
   if (raw === undefined || raw === null) return null;
   if (isRecord(raw)) {
@@ -238,15 +229,11 @@ function normalizeServerEntry(raw: unknown): McpServerEntry | null {
 }
 
 // True when `entry` is a shape argent itself writes — one of the four
-// buildMcpEntry command modes, exact args, no env. Anything else (a dev
-// checkout's `node ~/dev/argent/cli.js mcp`, extra args, env vars, the
-// unreadable-entry sentinel) is a deliberate or unknown customization that
-// refresh/cleanup flows must not rewrite or remove. The node form is accepted
-// for any RELATIVE path into a node_modules copy of the package — that covers
-// everything getLocalArgentBinRelPath can emit (the stable
-// `node_modules/<pkg>/...` path, a hoisted-workspace `../../node_modules/...`
-// path, a pnpm store path with its inner node_modules) — while an absolute or
-// out-of-tree path is a hand-tuned override even though the command is `node`.
+// buildMcpEntry command modes, exact args, no env. Anything else is a
+// deliberate or unknown customization that refresh/cleanup flows must not
+// rewrite or remove. The node form accepts any RELATIVE path into a
+// node_modules copy of the package (everything getLocalArgentBinRelPath can
+// emit); an absolute or out-of-tree path is a hand-tuned override.
 export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
   if (entry === null || hasEnv(entry)) return false;
   const { command, args } = entry;
@@ -418,10 +405,9 @@ function claudeDisabledListFinding(
       if (idx === -1) return false;
       list.splice(idx, 1);
       if (list.length === 0) delete config.disabledMcpjsonServers;
-      // Plain write — settings.json is the USER'S file, not an argent-owned
-      // config shell. writeJsonOrRemove would prune every other empty structure
-      // in it and delete the whole file (and an emptied .claude dir) when only
-      // empty scaffolding remains; dropping one list entry must never do that.
+      // Plain write — settings.json is the USER'S file. writeJsonOrRemove
+      // would prune other empty structures and could delete the whole file;
+      // dropping one list entry must never do that.
       writeJson(settingsPath, config);
       return true;
     },
@@ -483,13 +469,11 @@ const claudeAdapter: McpConfigAdapter = {
   },
 
   // Claude Code's scope precedence is local > project (.mcp.json) > user
-  // (~/.claude.json top-level), whole-entry, matched by name. "Local scope"
-  // lives in a location the projectPath/globalPath pair doesn't cover:
-  // projects["<abs path>"].mcpServers in ~/.claude.json (the default target of
-  // `claude mcp add`). A stale entry there — typically `argent mcp` from a
-  // pre-committable global install — outranks BOTH scopes init can write, so
-  // the fresh install shows no tools and no error. Also reports recorded
-  // .mcp.json rejections (see claudeDisabledListFinding).
+  // (~/.claude.json top-level). "Local scope" lives outside the
+  // projectPath/globalPath pair: projects["<abs path>"].mcpServers in
+  // ~/.claude.json (the default target of `claude mcp add`). A stale entry
+  // there outranks BOTH scopes init can write — no tools, no error. Also
+  // reports recorded .mcp.json rejections (see claudeDisabledListFinding).
   findShadowingConfigs(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[] {
     const findings: ShadowingConfigFinding[] = [];
     const claudeJsonPath = path.join(homedir(), ".claude.json");
@@ -503,11 +487,10 @@ const claudeAdapter: McpConfigAdapter = {
         const raw = servers[MCP_SERVER_KEY];
         const entry = normalizeServerEntry(raw);
         // Auto-remove ONLY the stock shape a previous install left behind:
-        // bare `argent mcp`, no env. Anything else — a custom command pointing
-        // at a dev checkout, extra args, env vars — is a deliberate hand-tuned
-        // override that outranks the committed entry BY DESIGN. Report it so
-        // the shared policy warns (or, when provably dead, asks first); never
-        // delete it silently — `argent update --yes` runs this sweep too.
+        // bare `argent mcp`, no env. Anything else may be a deliberate
+        // override that outranks the committed entry BY DESIGN — report it so
+        // the shared policy warns or asks; never delete silently (`argent
+        // update --yes` runs this sweep too).
         const hasCustomEnv = isRecord(raw) && isRecord(raw.env) && Object.keys(raw.env).length > 0;
         const isStockShape =
           entry !== null &&
@@ -528,8 +511,8 @@ const claudeAdapter: McpConfigAdapter = {
           remove: (): boolean => {
             // Re-read at removal time and bail unless the entry is still
             // there: readJson yields {} on a parse failure, and writing that
-            // back would destroy unrelated state (~/.claude.json also holds
-            // OAuth sessions and trust decisions).
+            // back would destroy unrelated state (OAuth sessions, trust
+            // decisions).
             const config = readJson(claudeJsonPath);
             const liveProjects = config.projects;
             if (!isRecord(liveProjects) || !isRecord(liveProjects[key])) return false;
@@ -624,12 +607,11 @@ const vscodeAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  // VS Code has a scope the projectPath/globalPath pair doesn't cover: the
-  // user-profile mcp.json (MCP: Open User Configuration). User-vs-workspace
-  // precedence for a same-named server is undocumented (observed: silent
-  // single-winner, direction not guaranteed), so a stale `argent` entry there
-  // can shadow a fresh .vscode/mcp.json entry. Report it; the shared policy
-  // removes it only when provably dead. Insiders keeps a sibling profile dir.
+  // The user-profile mcp.json is a scope the projectPath/globalPath pair
+  // doesn't cover. User-vs-workspace precedence is undocumented (observed:
+  // silent single-winner), so a stale entry there can shadow a fresh
+  // .vscode/mcp.json entry. Report it; the shared policy removes it only when
+  // provably dead.
   findShadowingConfigs(_root: string, _writtenScope: "local" | "global"): ShadowingConfigFinding[] {
     const findings: ShadowingConfigFinding[] = [];
     for (const userDir of vscodeUserDirs()) {

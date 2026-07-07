@@ -2,12 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolsServerPaths } from "@argent/tools-client";
 
-// The installed package version, read from the shipped package.json (one level
-// up from dist/). Lets the launcher detect a stale tool-server after an in-place
-// version bump (a local devDependency update rewrites tool-server.cjs at the same
-// path) and respawn the new one — WITHOUT depending on the postinstall script,
-// which is frequently disabled (--ignore-scripts, pnpm onlyBuiltDependencies,
-// Yarn PnP, locked-down CI).
+// Installed package version, read from the shipped package.json. Lets the
+// launcher detect a stale tool-server after an in-place version bump (a local
+// devDependency update rewrites tool-server.cjs at the same path) and respawn
+// it — without relying on the postinstall script, which is frequently disabled
+// (--ignore-scripts, pnpm onlyBuiltDependencies, Yarn PnP, locked-down CI).
 function readPackageVersion(): string | undefined {
   try {
     const pkg = JSON.parse(
@@ -19,26 +18,13 @@ function readPackageVersion(): string | undefined {
   }
 }
 
-// Which install topology this running package belongs to: a project's local
-// devDependency (its root sits inside a node_modules reachable by walking up
-// from cwd) or the global PATH install — and, for a local install, WHICH
-// project: the directory whose node_modules the package root sits under.
-// Classified HERE, at process start, because this is the moment cwd is
-// trustworthy: a committed local MCP command (`node node_modules/.../cli.js
-// mcp`) only resolves when the client set cwd to the project root. The
-// launcher forwards both to the tool-server (ARGENT_INSTALL_KIND /
-// ARGENT_PROJECT_ROOT) so update-argent doesn't have to re-infer them from the
-// detached server's own (editor-chosen, possibly `/`) cwd — the kind pins
-// WHICH install an agent-triggered update targets, the root pins WHERE.
 const PACKAGE_NAME = "@swmansion/argent";
 
 // The project a local install belongs to: the nearest ancestor of cwd that
 // DECLARES the package (any dependency field, matching the installer's
-// readManifestDeclaration) or carries a committed .argent/install.json. This
-// can sit BELOW the directory whose node_modules physically holds the package
-// — npm workspaces hoist a member's devDependency to the workspace root, but
-// update/uninstall must act on the declaring member, whose manifest is the one
-// that records the pin.
+// readManifestDeclaration) or carries a committed .argent/install.json. Can
+// sit BELOW the physical hoist root — npm workspaces hoist a member's
+// devDependency, but update/uninstall must act on the declaring member.
 function findDeclaringRoot(startDir: string): string | null {
   let dir = startDir;
   for (;;) {
@@ -65,6 +51,13 @@ function findDeclaringRoot(startDir: string): string | null {
   }
 }
 
+// Install topology of this running package: a project's local devDependency
+// (package root inside a node_modules found by walking up from cwd) or the
+// global PATH install — and, for local, WHICH project. Classified at process
+// start, the moment cwd is trustworthy (a committed local MCP command only
+// resolves with cwd at the project root); the launcher forwards both as
+// ARGENT_INSTALL_KIND / ARGENT_PROJECT_ROOT so update-argent doesn't re-infer
+// them from the detached server's editor-chosen cwd.
 function classifyInstall(): { kind: "global" | "local"; projectRoot?: string } {
   let packageRoot: string;
   let dir: string;
@@ -83,9 +76,8 @@ function classifyInstall(): { kind: "global" | "local"; projectRoot?: string } {
       const nmReal = fs.realpathSync(path.join(dir, "node_modules"));
       if (packageRoot === nmReal || packageRoot.startsWith(nmReal + path.sep)) {
         // Local install. Prefer the DECLARING root over this physical hoist
-        // root: in a hoisted workspace, cwd (the committed MCP command only
-        // resolves with cwd at the member root) or an ancestor below `dir`
-        // holds the manifest that actually declares the package.
+        // root: in a hoisted workspace the declaring manifest sits at cwd
+        // (the member root) or an ancestor below `dir`.
         return { kind: "local", projectRoot: findDeclaringRoot(cwd) ?? dir };
       }
     } catch {

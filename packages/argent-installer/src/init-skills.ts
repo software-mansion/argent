@@ -112,9 +112,8 @@ export async function runSkillsStep(args: {
     }
 
     const baseArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
-    // The spawned command carries `--force` to soften the host project's npm
-    // engine gate (see withNpmForce / issue #298). The displayed and
-    // manual-fallback commands stay clean so users see the real `npx skills`.
+    // `--force` softens the host project's npm engine gate (see withNpmForce /
+    // issue #298); the displayed and manual-fallback commands stay clean.
     const npxArgs = withNpmForce(baseArgs);
 
     p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(baseArgs.join(" "))}`);

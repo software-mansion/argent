@@ -24,8 +24,7 @@ const STATE_DIR = path.join(homedir(), ".argent");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
 
 // State records are tracked per argent install (per tool-server bundle), so
-// status/stop always target the server belonging to THIS binary — never a
-// different install's server that happens to be running on the same machine.
+// status/stop target THIS binary's server, never another install's.
 
 /** One-line hint when other installs' servers are alive but ours is not. */
 async function describeForeignServers(ownBundlePath?: string): Promise<string | null> {
@@ -284,11 +283,9 @@ async function ensureNoExistingServer(force: boolean, paths: ToolsServerPaths): 
   const state = await readToolsServerState(paths.bundlePath);
   if (!state) return;
   const alive = isToolsServerProcessAlive(state.pid);
-  // Pass the recorded token: auto-spawned servers (and CLI-started ones without
-  // --no-auth) require `Authorization: Bearer <token>`, so a tokenless probe of
-  // a live server returns 401 → reads as unhealthy → its state gets cleared and
-  // the running server is orphaned instead of triggering the "already running"
-  // guard below.
+  // Pass the recorded token: authed servers 401 a tokenless probe, which reads
+  // as unhealthy — clearing the state and orphaning a live server instead of
+  // triggering the "already running" guard below.
   const healthy = alive
     ? await isToolsServerHealthy(state.port, state.host ?? "127.0.0.1", 2000, state.token)
     : false;

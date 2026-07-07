@@ -21,8 +21,6 @@ export async function chooseScope(opts: {
   nonInteractive: boolean;
 }): Promise<ScopeChoice> {
   if (opts.installMode === "local") {
-    // Local mode commits project files; a global-scope MCP config makes no
-    // sense for a repo-local install, so the project root is always the target.
     return { scope: "local" };
   }
   if (opts.nonInteractive) {

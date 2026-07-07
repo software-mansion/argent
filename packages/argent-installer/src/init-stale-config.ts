@@ -12,9 +12,8 @@ export interface StaleConfigCleanupResult {
 
 // A planned removal that reaches beyond this project (a dead entry in a
 // GLOBAL config file). Collected first, executed only after the caller's
-// one-shot confirmation — the "dead" verdict comes from a PATH probe in the
-// shell running init, and version managers (nvm) can make that probe miss a
-// binary other environments still resolve.
+// one-shot confirmation — the "dead" verdict is a PATH probe in this shell,
+// which version managers (nvm) can fool.
 interface PendingCrossProjectRemoval {
   adapterName: string;
   location: string;
@@ -23,34 +22,30 @@ interface PendingCrossProjectRemoval {
 }
 
 // Step 1d — sweep for argent config the entries just written do NOT replace:
-// same-named entries in other scopes left behind by a previous install (most
-// often a global-mode install this project just migrated away from), and
+// same-named entries in other scopes from a previous install, plus
 // hidden-scope state only the adapter knows about (Claude Code's local scope,
 // VS Code's user-profile mcp.json, recorded .mcp.json rejections).
 //
-// Why removal instead of trusting scope precedence: no client guarantees the
-// fresh entry wins. Claude Code's local scope outranks everything init can
-// write; Cursor and VS Code don't document same-name precedence at all; Codex
-// and opencode deep-merge per KEY, so fields of a stale entry (env, enabled,
-// timeouts) leak into the merged server even when the project command wins;
-// Zed ignores project settings entirely until the worktree is trusted.
+// Scope precedence can't be trusted to make the fresh entry win: Claude
+// Code's local scope outranks everything init can write; Cursor and VS Code
+// leave same-name precedence undocumented; Codex and opencode deep-merge per
+// KEY, leaking a stale entry's fields (env, enabled, timeouts) even when the
+// project command wins; Zed ignores project settings until the worktree is
+// trusted.
 //
-// Removal policy, most conservative that still fixes the failure:
-//   - hidden-scope findings marked autoRemove by the adapter (state keyed to
-//     this project, or state whose removal only re-enables prompting) — remove;
-//   - any entry that runs the bare `argent` command when no global argent is
-//     on PATH — dead in every environment that resolves PATH the way this
-//     shell does — remove, behind one confirmation (see
-//     confirmCrossProjectRemovals);
-//   - anything else that could interfere — warn with the exact location, never
-//     touch it (it may be hand-tuned or backed by a working global install).
+// Policy, most conservative that still fixes the failure: remove hidden-scope
+// findings the adapter marks autoRemove; remove bare-`argent` entries when no
+// global argent is on PATH, behind one confirmation (see
+// confirmCrossProjectRemovals); warn with the exact location about anything
+// else, never touch it (may be hand-tuned or backed by a working global
+// install).
 export async function cleanupStaleMcpConfigs(args: {
   /** Adapters whose configs this run wrote (shadow findings target these). */
   writtenAdapters: McpConfigAdapter[];
   /**
    * Adapters detected on this machine — the dead-global sweep covers these
-   * too, so a client dropped from a local-mode install (Windsurf, Hermes have
-   * no project config) still gets its dead `argent` entry pruned.
+   * too, so a client with no project config (Windsurf, Hermes) still gets its
+   * dead `argent` entry pruned.
    */
   detectedAdapters: McpConfigAdapter[];
   installMode: "global" | "local";
@@ -59,14 +54,12 @@ export async function cleanupStaleMcpConfigs(args: {
   /**
    * Asked ONCE, with one "<client>: <path>" line per planned removal that
    * reaches beyond this project (dead entries in global config files), before
-   * any of them is executed. Project-confined removals never prompt. Omit for
-   * non-interactive runs — the removals are then SKIPPED, each reported as a
-   * warning line: the "dead" verdict is a PATH probe in this shell, a version
-   * manager (nvm) can make it miss a binary other environments still resolve,
-   * and a --yes run (including the agent-triggered `update --yes`) gives no
-   * human the chance to catch that. Cross-project state is only ever removed
-   * with an explicit confirmation. Returning false likewise leaves every
-   * listed entry in place.
+   * any is executed; project-confined removals never prompt. Omit for
+   * non-interactive runs — those removals are then SKIPPED and reported as
+   * warnings: the "dead" verdict is a PATH probe in this shell, which a
+   * version manager (nvm) can fool, and a --yes run gives no human the chance
+   * to catch that. Returning false likewise leaves every listed entry in
+   * place.
    */
   confirmCrossProjectRemovals?: (items: string[]) => Promise<boolean>;
 }): Promise<StaleConfigCleanupResult> {
@@ -78,10 +71,9 @@ export async function cleanupStaleMcpConfigs(args: {
   // is false.
   const globalArgentOnPath = isGloballyInstalled();
 
-  // Bare `argent` command, nothing on PATH, and no env vars that could make it
-  // resolvable inside the client anyway (a custom PATH is exactly what an nvm
-  // user adds to a hand-tuned entry) — dead in every environment that resolves
-  // PATH the way this shell does.
+  // Bare `argent` command, nothing on PATH, and no env vars that could make
+  // it resolvable inside the client (a custom PATH is exactly what an nvm
+  // user adds) — dead in every environment that resolves PATH like this shell.
   const isProvablyDead = (entry: McpServerEntry | null): boolean =>
     entry !== null &&
     entry.command === MCP_BINARY_NAME &&
@@ -141,10 +133,9 @@ export async function cleanupStaleMcpConfigs(args: {
 
   // ── Cross-scope leftovers of a previous install ─────────────────────────────
   if (installMode === "local" && scope === "local") {
-    // Migrating to a committable install: a global-scope `argent` entry from
-    // the previous global install stays behind in every client. Sweep the
-    // DETECTED set, not just the written one — clients without a project
-    // config (dropped from local mode) hold dead entries too.
+    // Migrating to a committable install leaves the previous global-scope
+    // `argent` entry behind in every client. Sweep the DETECTED set, not just
+    // the written one — clients without a project config hold dead entries too.
     const sweep = new Map<string, McpConfigAdapter>();
     for (const adapter of [...writtenAdapters, ...detectedAdapters]) {
       sweep.set(adapter.name, adapter);
@@ -167,10 +158,9 @@ export async function cleanupStaleMcpConfigs(args: {
           exec: () => adapter.remove(globalPath),
         });
       } else if (entry.command !== MCP_BINARY_NAME) {
-        // A custom or unrecognizable global entry — possibly a hand-tuned dev
-        // setup, possibly a leftover local-command entry from another project.
-        // Not ours to judge: several clients (Codex, opencode) merge its
-        // fields into the project entry, so surface it.
+        // A custom global entry may be a hand-tuned dev setup or a leftover
+        // from another project — not ours to judge, but some clients (Codex,
+        // opencode) merge its fields into the project entry, so surface it.
         warned(
           adapter.name,
           globalPath,
@@ -178,10 +168,9 @@ export async function cleanupStaleMcpConfigs(args: {
             "if it is a leftover, remove it or its settings may leak into this install"
         );
       } else if (!globalArgentOnPath) {
-        // Bare `argent` with env vars, not on PATH here (an env-less entry
-        // would have been provably dead above): the env — an nvm PATH being
-        // the classic case — may well make it work inside the client, so
-        // never remove it, but say what it is accurately.
+        // Bare `argent` with env vars, not on PATH here: the env (an nvm
+        // PATH, classically) may make it work inside the client, so never
+        // remove it — just say what it is accurately.
         warned(
           adapter.name,
           globalPath,
@@ -221,10 +210,9 @@ export async function cleanupStaleMcpConfigs(args: {
   }
 
   // ── Execute the cross-project removals ──────────────────────────────────────
-  // Only ever with an explicit confirmation. A non-interactive run (no
-  // confirmer) reports the findings and touches nothing — deleting state that
-  // reaches beyond this project on the strength of a fallible PATH probe is
-  // not a decision --yes may make on the user's behalf.
+  // Only ever with explicit confirmation — deleting cross-project state on a
+  // fallible PATH probe is not a decision --yes may make on the user's
+  // behalf. A run with no confirmer reports the findings and touches nothing.
   if (pending.length > 0) {
     if (!args.confirmCrossProjectRemovals) {
       for (const item of pending) {
