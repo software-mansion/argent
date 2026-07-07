@@ -29,7 +29,12 @@ const previewOpenedCalls = () =>
 beforeEach(() => {
   mockTrack.mockClear();
   // The store is a process singleton; clear any round state a prior test left so
-  // each case starts from an empty, uncompleted round.
+  // each case starts from an empty, uncompleted round. `reset()` deliberately
+  // does NOT clear `cliSession`, so drop a leaked CLI session too — otherwise a
+  // prior CLI test could make a "bare load, no CLI" case emit via the cliSession
+  // disjunct under --sequence.shuffle. Neither call routes through `track`, so
+  // the mockClear above stays effective.
+  variantProposalStore.setCliSession(false, []);
   variantProposalStore.reset();
 });
 
@@ -183,5 +188,109 @@ describe("GET /preview/ — lens:preview_opened telemetry", () => {
     });
 
     variantProposalStore.setCliSession(false, []); // don't leak session state to later tests
+  });
+});
+
+describe("GET /preview/variants — per-round lens:preview_opened in a reused window", () => {
+  // In an `argent lens` CLI session the preview window is opened ONCE up front and
+  // reused: the UI swaps rounds client-side off the /variants poll (~1.2s) without
+  // ever re-loading `/`, and `await_user_selection` is hidden so the window is
+  // never re-foregrounded. `GET /` therefore fires exactly once for the whole
+  // session, so the open leg is counted off the poll instead. These cases pin that
+  // per-round emission and its cross-surface dedup with `GET /`.
+
+  it("emits for each new round observed via the poll (the reused-window CLI path)", async () => {
+    const a = app();
+    // CLI session begins → window opens up front; `GET /` counts round 1's open.
+    variantProposalStore.setCliSession(true, []);
+    const round1 = variantProposalStore.snapshot().round;
+    await request(a).get("/");
+    expect(previewOpenedCalls()).toHaveLength(1);
+    expect(previewOpenedCalls()[0]![1]).toMatchObject({ round: round1, is_cli_session: true });
+
+    // The reused window keeps polling /variants for round 1 — same round, no
+    // re-emit (the `GET /` above already claimed it via `lastOpenedRound`).
+    await request(a).get("/variants");
+    await request(a).get("/variants");
+    expect(previewOpenedCalls()).toHaveLength(1);
+
+    // Human submits round 1, then the agent proposes round 2. In a CLI session the
+    // window is NOT re-loaded, so `/` never fires again — only the poll observes
+    // round 2. Without the /variants emission this round's open would be lost and
+    // the funnel would show more decisions than opens.
+    variantProposalStore.proposeVariant({
+      element: "Foo",
+      variant: { name: "Bold", summary: "s" },
+    });
+    const foo = variantProposalStore.snapshot().proposals[0]!;
+    variantProposalStore.submitSelection({
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+    });
+    variantProposalStore.proposeVariant({
+      element: "Bar",
+      variant: { name: "Ghost", summary: "s" },
+    });
+    const round2 = variantProposalStore.snapshot().round;
+    expect(round2).toBe(round1 + 1);
+
+    await request(a).get("/variants");
+    const calls = previewOpenedCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]![1]).toMatchObject({
+      round: round2,
+      element_count: 1,
+      variant_count: 1,
+      is_cli_session: true,
+    });
+
+    variantProposalStore.setCliSession(false, []); // don't leak session state to later tests
+  });
+
+  it("counts the open from the poll alone when the page load didn't fire it", async () => {
+    const a = app();
+    // Proposals are live but the human's open reaches the router only as a
+    // /variants poll (e.g. the reused window was already loaded before this round).
+    variantProposalStore.proposeVariant({
+      element: "Foo",
+      variant: { name: "Bold", summary: "s" },
+    });
+    const round = variantProposalStore.snapshot().round;
+
+    await request(a).get("/variants");
+
+    const calls = previewOpenedCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1]).toMatchObject({
+      round,
+      element_count: 1,
+      variant_count: 1,
+      is_cli_session: false,
+    });
+  });
+
+  it("dedups across surfaces — a `GET /` then repeated /variants polls count once", async () => {
+    const a = app();
+    variantProposalStore.proposeVariant({
+      element: "Foo",
+      variant: { name: "Bold", summary: "s" },
+    });
+
+    await request(a).get("/"); // page load claims the round
+    await request(a).get("/variants");
+    await request(a).get("/variants");
+
+    // The MCP path both loads `/` and polls /variants for the same round; the
+    // shared `lastOpenedRound` guard must keep that to a single event.
+    expect(previewOpenedCalls()).toHaveLength(1);
+  });
+
+  it("does NOT emit for a poll with nothing staged and no CLI session", async () => {
+    const a = app();
+    // A stray poll of an empty preview (no proposals, no CLI session) is not a
+    // real "opened" signal, exactly as for a bare `GET /`.
+    const res = await request(a).get("/variants");
+
+    expect(res.status).toBe(200);
+    expect(previewOpenedCalls()).toHaveLength(0);
   });
 });

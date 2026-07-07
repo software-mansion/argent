@@ -12,6 +12,7 @@ import { shutdownDevice } from "./utils/device-shutdown";
 import { listDevicesTool } from "./tools/devices/list-devices";
 import {
   variantProposalStore,
+  type StoreSnapshot,
   type SubmittedSelection,
   type ElementAnnotation,
   type VariantMatch,
@@ -58,12 +59,41 @@ function wsUrlFromHttp(httpUrl: string): string {
 export function createPreviewRouter(registry: Registry): Router {
   const router = express.Router();
 
-  // Last proposal round for which we emitted `lens:preview_opened`. The UI polls
-  // /variants (~1.2s) and /describe (~3x/s) but hits `/` only on a page load, so
-  // deduping the open signal per round collapses a browser refresh within a round
-  // to one event while still counting each new round's first view. Round numbers
-  // only ever increase (the store bumps on reset), so "!= last" is sufficient.
+  // Last proposal round for which we emitted `lens:preview_opened`. Shared by the
+  // two emit surfaces below (`GET /` and the `/variants` poll — see
+  // `trackPreviewOpenedOnce`): it both collapses repeated views of one round to a
+  // single event (a browser refresh, or the ~1.2s poll) AND serializes the two
+  // surfaces so a round is counted once no matter which observes it first. Round
+  // numbers only ever increase (the store bumps on reset), so "!= last" suffices.
   let lastOpenedRound = -1;
+
+  // Emit `lens:preview_opened` at most once per proposal round. Called from BOTH
+  // `GET /` (a fresh page load) and the `/variants` poll, because the two human
+  // surfaces reach a new round differently:
+  //   - MCP path: each round respawns the preview window, so `GET /` fires per
+  //     round on its own.
+  //   - `argent lens` CLI path: the window is opened ONCE up front and reused for
+  //     the whole session — the UI swaps rounds client-side off the `/variants`
+  //     poll without ever re-loading `/`, and `await_user_selection` is hidden so
+  //     the window is never re-foregrounded. `GET /` alone would then emit once
+  //     per session while `round_completed`/`round_abandoned` fire once per round,
+  //     making the open-to-decision funnel show more decisions than opens for any
+  //     2+-round session. Emitting from the poll the reused window DOES make (one
+  //     that only an open window issues — the agent never speaks HTTP) restores a
+  //     per-round open. The shared `lastOpenedRound` guard keeps the two call
+  //     sites idempotent: whichever surface first observes a round emits, the
+  //     other no-ops, so a round is never double-counted.
+  const trackPreviewOpenedOnce = (snap: StoreSnapshot): void => {
+    if (!(snap.proposals.length > 0 || snap.cliSession) || snap.round === lastOpenedRound) return;
+    lastOpenedRound = snap.round;
+    track("lens:preview_opened", {
+      round: snap.round,
+      element_count: snap.proposals.length,
+      variant_count: snap.proposals.reduce((n, p) => n + p.variants.length, 0),
+      is_cli_session: snap.cliSession,
+      platform: snap.device ? classifyDevice(snap.device) : undefined,
+    });
+  };
 
   // The lens-specific routes below (cli-session / cli-agent / boot / shutdown)
   // are tokenless like the rest of /preview but STATE-CHANGING — they open the
@@ -263,7 +293,13 @@ export function createPreviewRouter(registry: Registry): Router {
   // Live proposal state for the UI to poll. Invisible to MCP (only /tools).
   router.get("/variants", (_req: Request, res: Response) => {
     res.set("Cache-Control", "no-store");
-    res.json(variantProposalStore.snapshot());
+    // This poll is only ever issued by an OPEN preview window (the agent mutates
+    // the store in-process and never speaks HTTP), so a poll observing a new
+    // round is the reused CLI window's per-round "opened" signal. Count it here;
+    // the `lastOpenedRound` dedup keeps it exclusive with the `GET /` emission.
+    const snap = variantProposalStore.snapshot();
+    trackPreviewOpenedOnce(snap);
+    res.json(snap);
   });
 
   // ── CLI-driven Lens session (`argent lens`) ──────────────────────────
@@ -699,18 +735,10 @@ export function createPreviewRouter(registry: Registry): Router {
     // issuing no HTTP). So this is the "a human opened the preview" signal the
     // generic tool:* path can't give us. Gated on a live round (staged proposals,
     // or a CLI session whose window opens up front) so a stray load of an empty
-    // preview isn't counted, and deduped per round (see `lastOpenedRound`).
-    const snap = variantProposalStore.snapshot();
-    if ((snap.proposals.length > 0 || snap.cliSession) && snap.round !== lastOpenedRound) {
-      lastOpenedRound = snap.round;
-      track("lens:preview_opened", {
-        round: snap.round,
-        element_count: snap.proposals.length,
-        variant_count: snap.proposals.reduce((n, p) => n + p.variants.length, 0),
-        is_cli_session: snap.cliSession,
-        platform: snap.device ? classifyDevice(snap.device) : undefined,
-      });
-    }
+    // preview isn't counted, and deduped per round (see `trackPreviewOpenedOnce`).
+    // In a reused CLI window `GET /` fires only once for the whole session; the
+    // `/variants` poll picks up each subsequent round's open.
+    trackPreviewOpenedOnce(variantProposalStore.snapshot());
     serveUiFile(res, p, "text/html");
   });
 
