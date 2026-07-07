@@ -3,6 +3,7 @@ import { fetchTree } from "../../utils/ui-tree-match";
 import { queryFullHierarchyTree } from "./flow-ios-tree";
 import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { queryChromiumTree } from "./flow-chromium-tree";
+import { queryVegaTree } from "./flow-vega-tree";
 import type { DescribeTreeData } from "../describe/contract";
 
 /**
@@ -15,8 +16,10 @@ import type { DescribeTreeData } from "../describe/contract";
  * raw View tree is only reachable in-process there and the a11y tree is the
  * only cross-process source. On Chromium the CDP DOM walker's tree already has
  * full selector coverage, so it is only re-shaped (flattened + text hoisted)
- * into the same flow contract. Platforms with no flow-specific source (vega)
- * use the shared `fetchTree` — their only tree source — directly.
+ * into the same flow contract. Vega's toolkit page source is likewise its only
+ * tree source and gets the same re-shaping (`flow-vega-tree`) — the toolkit
+ * puts text on child `text` nodes, so without the hoist a `text` assert
+ * against a wrapping testID container would read its own (empty) text.
  *
  * There is deliberately NO fallback from the iOS/Android full-hierarchy source
  * to the trimmed AX/uiautomator tree. The trimmed tree lacks the testID nodes
@@ -42,5 +45,10 @@ export async function fetchFlowTree(
   if (device.platform === "chromium") {
     return queryChromiumTree(registry, device);
   }
+  if (device.platform === "vega") {
+    return queryVegaTree(device);
+  }
+  // No remaining platform has flow support — fetchTree throws its
+  // not-supported error, naming the platform.
   return fetchTree(registry, device);
 }

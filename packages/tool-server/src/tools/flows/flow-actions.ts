@@ -80,9 +80,9 @@ const TYPE_FOCUS_SETTLE_MS = 500;
 const TYPE_FOCUS_TIMEOUT_MS = 3000;
 
 // Tree sources that surface `focused` (see flow-ios-tree / flow-android-tree /
-// the chromium DOM walker). A source outside this set (e.g. a platform served
-// by the shared `fetchTree`) never reports it, so polling would burn the whole
-// timeout on every type step — skip the focus wait there instead.
+// the chromium DOM walker). A source outside this set (e.g. Vega's toolkit
+// page source) never reports it, so polling would burn the whole timeout on
+// every type step — skip the focus wait there instead.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
   "native-devtools",
   "android-devtools",

@@ -102,10 +102,14 @@ function isInteractive(attrs: Record<string, string>): boolean {
 // flattening: auto ids must not make a bare wrapper meaningful (they'd disable
 // flattening entirely), but an authored testID is a deliberate selector target
 // — e.g. a plain container View a flow asserts on — so it earns a node even
-// with no role/interactivity/text.
+// with no role/interactivity/text. The flow adapter (`flow-vega-tree`) leans on
+// the same split for text hoisting: only an authored testID shields.
+export function isAuthoredVegaTestId(testId: string | undefined): boolean {
+  return Boolean(testId && !/^\d+$/.test(testId));
+}
+
 function hasAuthoredTestId(attrs: Record<string, string>): boolean {
-  const t = attrs.test_id;
-  return Boolean(t) && !/^\d+$/.test(t);
+  return isAuthoredVegaTestId(attrs.test_id);
 }
 
 // A node's own text: its inline text plus the text of its direct `<text>`
