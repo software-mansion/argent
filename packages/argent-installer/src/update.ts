@@ -2,7 +2,7 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import * as path from "node:path";
 import semver from "semver";
-import { init as telemetryInit, track } from "@argent/telemetry";
+import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
@@ -533,6 +533,14 @@ export async function update(args: string[]): Promise<void> {
     // surface the notice. update never prompts — it often runs from the old
     // binary or non-TTY contexts where the init consent step can't apply.
     await resolveTelemetryConsent({ nonInteractive: true, disableFlag: noTelemetry });
+
+    // Establish the identity before the first event so cli_update_start carries
+    // the stable per-machine fingerprint instead of the fallback id the
+    // background upgrade would only migrate to afterward — see the matching note
+    // in init.ts before cli_init_start. SYNC by design (the async warm awaits an
+    // unref'd resolver that would exit a short-lived CLI). Bounded, best-effort,
+    // consent-gated.
+    warmTelemetryIdentitySync();
 
     track("installation:cli_update_start", {});
 

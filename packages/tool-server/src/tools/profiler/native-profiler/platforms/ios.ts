@@ -1,4 +1,4 @@
-import { spawn, execSync, type ChildProcess } from "child_process";
+import { spawn, execFileSync, type ChildProcess } from "child_process";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
@@ -10,6 +10,7 @@ import {
   type NotifyHandle,
 } from "../../../../utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
+import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
@@ -41,9 +42,17 @@ function resolveDefaultTemplatePath(): string {
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
-  throw new Error(
+  throw new FailureError(
     `Argent.tracetemplate not found. Looked in:\n${candidates.map((c) => `  - ${c}`).join("\n")}\n` +
-      `Pass template_path explicitly, or rebuild so the template is copied into place.`
+      `Pass template_path explicitly, or rebuild so the template is copied into place.`,
+    {
+      // A required bundled asset is absent — a packaging/build problem, not a
+      // device or subprocess failure — so dependency_missing with no command.
+      error_code: FAILURE_CODES.NATIVE_PROFILER_TRACE_TEMPLATE_MISSING,
+      failure_stage: "ios_native_profiler_template_resolve",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+    }
   );
 }
 const STARTUP_TIMEOUT_MS = 10_000;
@@ -84,12 +93,14 @@ interface DetectedApp {
  * its host PID. The PID is the leading column of `launchctl list`; apps that are
  * registered but not running carry `-` there and are skipped.
  */
-function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
+// Exported for the shell-injection regression test (native-profiler-ios-shell-injection.test.ts).
+export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
   let launchctlOutput: string;
   try {
-    launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
+    launchctlOutput = execFileSync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -131,9 +142,24 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
 
   let listAppsOutput: string;
   try {
-    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+    // Two stages, piped in code rather than by /bin/sh, so the udid is never
+    // interpreted by a shell. Stage 1: ask simctl for the OpenStep plist of
+    // installed apps. Stage 2: feed it to plutil over stdin to get JSON.
+    //
+    // A shell pipe streamed the intermediate plist at the OS level; capturing
+    // each stage's stdout in-process instead means both inherit Node's 1 MiB
+    // default maxBuffer, so a large `listapps` (many installed apps) would throw
+    // ENOBUFS where the pipe succeeded. Match run-with-timeout.ts's 256 MiB.
+    const rawPlist = execFileSync("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
+    });
+    listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+      encoding: "utf-8",
+      input: rawPlist,
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -485,7 +511,10 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
         error_code: FAILURE_CODES.NATIVE_PROFILER_NO_ACTIVE_SESSION,
         failure_stage: "native_profiler_stop_session_state",
         failure_area: "tool_server",
-        error_kind: "validation",
+        // Internal session-state, not caller input — matches the react twin
+        // REACT_PROFILER_NO_ACTIVE_SESSION (not_found) and the Android site so the
+        // "no active session" family carries one consistent kind.
+        error_kind: "not_found",
       }
     );
   }
@@ -544,8 +573,12 @@ export async function analyzeNativeProfilerIos(
   api: NativeProfilerSessionApi
 ): Promise<NativeProfilerAnalyzeResult> {
   if (!api.exportedFiles) {
+    // Same logical failure as the Android analyze guard — keep them on one code
+    // so telemetry doesn't split "analyze called before stop" by platform.
+    // PROFILER_NATIVE_TRACE_MISSING stays reserved for a trace file missing on
+    // disk (see profiler-load).
     throw new FailureError("No exported trace data found. Call native-profiler-stop first.", {
-      error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
+      error_code: FAILURE_CODES.NATIVE_PROFILER_NO_EXPORTED_TRACE,
       failure_stage: "native_profiler_analyze_load_exports",
       failure_area: "tool_server",
       error_kind: "validation",

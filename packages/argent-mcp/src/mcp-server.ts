@@ -304,8 +304,28 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
       const udid = getUdidFromArgs(params.arguments);
       if (autoScreenshotOn && udid && shouldAutoScreenshot(params.name)) {
-        const delayMs = getAutoScreenshotDelayMs(params.name);
-        if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+        // Wait until the screen has settled before capturing, bounded by the
+        // per-tool budget. Replaces a blind `setTimeout(delayMs)`: the
+        // `await-screen-idle` tool polls the AX tree server-side and returns as
+        // soon as the screen renders and holds still, so a relaunch that used to
+        // always cost the full 3000ms usually returns in a fraction of it. The
+        // per-tool delay is now the cap. If the tool is unavailable (older or
+        // remote tool-server), fall back to the previous fixed settle.
+        const maxWaitMs = getAutoScreenshotDelayMs(params.name);
+        if (maxWaitMs > 0) {
+          try {
+            const idle = await callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs });
+            await spyLog({
+              ts: new Date().toISOString(),
+              event: "auto_screenshot_readiness",
+              name: params.name,
+              maxWaitMs,
+              ...(idle.result as Record<string, unknown>),
+            });
+          } catch {
+            await new Promise((r) => setTimeout(r, maxWaitMs));
+          }
+        }
 
         try {
           const screenshotResult = await callTool("screenshot", { udid });

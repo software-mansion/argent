@@ -4,6 +4,7 @@ import {
   attachRegistryTelemetry,
   track as telemetryTrack,
   shutdown as telemetryShutdown,
+  warmTelemetryIdentity,
   aiTelemetryFromMeta,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
@@ -126,6 +127,22 @@ export function start(): void {
   // Tool events use the queued client; shutdown gets a bounded final flush.
   telemetryInit("tool_server");
   const telemetryHandle = attachRegistryTelemetry(registry);
+
+  // Establish the telemetry identity OFF the accept path: this resolves the host
+  // fingerprint asynchronously (no event-loop stall) and persists it before we
+  // advertise readiness, so `toolserver:start` and every inbound request find
+  // the stable id already on disk instead of a blocking spawn in the listen()
+  // callback. Runs concurrently with the watcher below — never throws.
+  const identityWarm = warmTelemetryIdentity();
+  // The fingerprint resolve's internal timeout watchdog is unref'd (so it never
+  // holds a short-lived CLI open at exit). During startup the server has no work
+  // of its own yet, so hold the loop open with a ref'd handle until warm-up
+  // settles — otherwise, if the binary wedged, the process could exit before
+  // listen() ever binds. Self-clearing and a no-op once warm-up (usually <100ms,
+  // capped at the resolve timeout) settles; makes readiness independent of any
+  // incidental liveness from the watcher.
+  const warmKeepAlive = setInterval(() => {}, 1_000);
+  void identityWarm.finally(() => clearInterval(warmKeepAlive));
   const serverStartedAt = Date.now();
   let shutdownReason: "idle" | "signal" | "crash" = "signal";
   let shutdownFailureSignal: FailureSignal | null = null;
@@ -302,8 +319,10 @@ export function start(): void {
 
   // Block advertising readiness until the first watcher poll completes — this
   // guarantees DYLD_INSERT_LIBRARIES is set in launchd for all currently-booted
-  // simulators before any agent tool call (e.g. launch-app) can arrive.
-  watcherReady
+  // simulators before any agent tool call (e.g. launch-app) can arrive. Also
+  // wait for the identity warm-up (started above, runs concurrently) so the
+  // fingerprint resolve is done before the accept path opens, never on it.
+  Promise.all([watcherReady, identityWarm])
     .then(() => {
       server = httpHandle.app.listen(PORT, HOST, () => {
         const addr = server!.address();

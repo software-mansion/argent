@@ -3,7 +3,7 @@ import pc from "picocolors";
 import { parse as parseYaml } from "yaml";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { init as telemetryInit, track, forget as telemetryForget } from "@argent/telemetry";
+import { init as telemetryInit, track, resetLocalTelemetryState } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
@@ -746,17 +746,17 @@ export async function uninstall(args: string[]): Promise<void> {
     }
 
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
-    // Erase the machine-wide anonymous telemetry id when the GLOBAL package
-    // was removed, or when a removal left NO global install behind (a
-    // local-only machine whose last known install just went away). What must
-    // NOT trigger it: a local-only removal while a kept global install remains
-    // in active use — severing its identity and issuing an erasure for an
-    // installation the user kept would be wrong.
+    // Reset the machine-wide local telemetry state when the GLOBAL package was
+    // removed, or when a removal left NO global install behind (a local-only
+    // machine whose last known install just went away). What must NOT trigger
+    // it: a local-only removal while a kept global install remains in active
+    // use — clearing state out from under an installation the user kept would
+    // be wrong.
     if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isGloballyInstalled())) {
       try {
-        await telemetryForget({ disableConsent: false });
+        await resetLocalTelemetryState();
       } catch {
-        /* swallow — uninstall must succeed even if forget fails */
+        /* swallow — uninstall must succeed even if the reset fails */
       }
     }
 

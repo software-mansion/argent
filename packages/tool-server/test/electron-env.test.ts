@@ -1,0 +1,70 @@
+import { describe, it, expect, afterEach } from "vitest";
+import { electronGuiChildEnv } from "../src/utils/electron-env";
+
+describe("electronGuiChildEnv", () => {
+  const prev = process.env.ELECTRON_RUN_AS_NODE;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+    else process.env.ELECTRON_RUN_AS_NODE = prev;
+  });
+
+  it("removes ELECTRON_RUN_AS_NODE inherited from the parent env", () => {
+    process.env.ELECTRON_RUN_AS_NODE = "1";
+    expect(electronGuiChildEnv().ELECTRON_RUN_AS_NODE).toBeUndefined();
+  });
+
+  it("is a no-op for that key when the parent never set it", () => {
+    delete process.env.ELECTRON_RUN_AS_NODE;
+    expect("ELECTRON_RUN_AS_NODE" in electronGuiChildEnv()).toBe(false);
+  });
+
+  it("layers overrides on top and never lets an override re-introduce Node mode", () => {
+    process.env.ELECTRON_RUN_AS_NODE = "1";
+    // The delete runs AFTER the overrides spread, so even an override that
+    // explicitly re-sets the flag cannot bring Node mode back. This asserts the
+    // ordering, not just the parent-env strip.
+    const env = electronGuiChildEnv({
+      ARGENT_PREVIEW_URL: "http://x/preview/",
+      ELECTRON_RUN_AS_NODE: "1",
+    });
+    expect(env.ARGENT_PREVIEW_URL).toBe("http://x/preview/");
+    expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+  });
+
+  it("preserves other inherited env vars", () => {
+    process.env.__ARGENT_ENV_TEST__ = "keep-me";
+    try {
+      expect(electronGuiChildEnv().__ARGENT_ENV_TEST__).toBe("keep-me");
+    } finally {
+      delete process.env.__ARGENT_ENV_TEST__;
+    }
+  });
+
+  it("strips the flag regardless of key casing (Windows env is case-insensitive)", () => {
+    // On Windows the OS environment is case-insensitive, so a host may surface
+    // the flag under non-canonical casing (e.g. `Electron_Run_As_Node`). The
+    // plain object spread from process.env preserves that casing, and a
+    // case-sensitive delete of the canonical name would miss it — leaking the
+    // flag into the cross-platform boot-electron child, which then boots in Node
+    // mode with no CDP endpoint.
+    delete process.env.ELECTRON_RUN_AS_NODE;
+    process.env.Electron_Run_As_Node = "1";
+    try {
+      const env = electronGuiChildEnv();
+      const leaked = Object.keys(env).filter((k) => k.toLowerCase() === "electron_run_as_node");
+      expect(leaked).toEqual([]);
+    } finally {
+      delete process.env.Electron_Run_As_Node;
+    }
+  });
+
+  it("does not mutate the caller's process.env", () => {
+    // The flag must be stripped from a COPY only. Deleting it from the real
+    // process.env would permanently disable Node mode for the tool-server
+    // process itself — invisible to every other case here because each restores
+    // the global in afterEach.
+    process.env.ELECTRON_RUN_AS_NODE = "1";
+    electronGuiChildEnv();
+    expect(process.env.ELECTRON_RUN_AS_NODE).toBe("1");
+  });
+});

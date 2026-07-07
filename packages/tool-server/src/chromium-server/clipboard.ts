@@ -51,6 +51,11 @@ export async function setClipboardText(cdp: CDPClient, text: string): Promise<vo
   )) as { result?: { value?: { ok?: boolean; error?: string } }; exceptionDetails?: unknown };
   const result = out.result?.value;
   if (!result?.ok) {
+    // Plain Error, not a classified FailureError: setClipboardText is only
+    // reached via the chromium-server Express route (POST /api/clipboard/text),
+    // which catches this and responds `res.status(500).json({ error })` — the
+    // structured signal is dropped before any registry boundary, so a code here
+    // could never reach telemetry.
     throw new Error(
       `Chromium clipboard set failed: ${result?.error ?? "renderer rejected the write"}`
     );

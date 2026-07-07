@@ -11,6 +11,7 @@ import { update } from "../src/update.js";
 const telemetryMock = vi.hoisted(() => ({
   init: vi.fn(),
   track: vi.fn(),
+  warmTelemetryIdentitySync: vi.fn(),
 }));
 
 const childProcessMock = vi.hoisted(() => ({

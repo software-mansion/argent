@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
@@ -77,7 +78,12 @@ Returns { cookies, count } for get, or a small status object ({ set } / { delete
       }
       case "set": {
         if (!params.name || params.value == null) {
-          throw new Error("`set` requires `name` and `value`.");
+          throw new FailureError("`set` requires `name` and `value`.", {
+            error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
+            failure_stage: "chromium_cookie_set_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         const set = await setCookie(cdp, {
           name: params.name,
@@ -93,7 +99,13 @@ Returns { cookies, count } for get, or a small status object ({ set } / { delete
         return { set };
       }
       case "delete": {
-        if (!params.name) throw new Error("`delete` requires `name`.");
+        if (!params.name)
+          throw new FailureError("`delete` requires `name`.", {
+            error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
+            failure_stage: "chromium_cookie_delete_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         await deleteCookies(cdp, {
           name: params.name,
           url: params.url,

@@ -382,9 +382,19 @@ export function spawnToolsServer(
       if (match) {
         const actualPort = parseInt(match[1]!, 10);
         rl.close();
-        // Resume stdout so the pipe stays open and the child's console.log calls
-        // don't fail with EPIPE once the readline interface stops consuming it.
+        // Resume stdout so the pipe keeps draining and the child's console.log
+        // calls don't back up once the readline interface stops consuming it.
         child.stdout?.resume();
+        // ...but unref the pipe socket so it does NOT keep OUR event loop alive.
+        // `child.unref()` only detaches the process handle; the stdout pipe is a
+        // separate ref'd handle. Without this, a short-lived caller like
+        // `argent run <tool>` would print its result and then hang forever
+        // waiting on the drained-but-open pipe. A long-lived caller (the MCP
+        // launcher) keeps its loop alive by other means, so it still drains
+        // normally; and the tool-server tolerates the eventual EPIPE when we exit.
+        // (stdio "pipe" makes this a net.Socket at runtime, which has unref();
+        // the ChildProcess type widens it to Readable, so narrow before calling.)
+        (child.stdout as { unref?: () => void } | null)?.unref?.();
         settle(() => resolve({ port: actualPort, pid }));
       }
     });

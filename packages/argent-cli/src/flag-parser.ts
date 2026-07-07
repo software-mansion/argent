@@ -11,6 +11,12 @@
 //   --args '<json>'       (whole-payload escape hatch; merges with parsed flags)
 //   --args -              (read whole-payload JSON from stdin)
 //
+// Exception: when the tool's own schema declares a property named `args` (e.g.
+// flow-add-step, whose `args` is a JSON string of the step's tool arguments),
+// `--args <value>` is treated as that per-field value — coerced by its declared
+// type, exactly like any other field — NOT the whole-payload escape hatch. Such
+// a tool has no whole-payload shortcut; use individual flags / --<field>-json.
+//
 // Scalar field types come from JSON Schema: string, number, integer, boolean, enum.
 // Array fields: items.type must be a scalar to get a repeatable flag.
 // Object fields and arrays of objects fall through to --field-json.
@@ -85,6 +91,13 @@ function parseJsonOrThrow(raw: string, label: string): unknown {
  */
 export function parseFlags(argv: string[], schema: JsonSchema | undefined): FlagParseResult {
   const properties = schema?.properties ?? {};
+  // The whole-payload `--args '<json>'` escape hatch only exists when the tool
+  // does NOT declare its own `args` field. When it does (e.g. flow-add-step),
+  // `--args` is that per-field flag, so the "or --args '<json>'" fallback the
+  // error messages suggest would be a dead end — that form re-enters per-field
+  // handling instead of the hatch, and only `--<field>-json` works. Emit the
+  // suggestion only when the hatch is actually available.
+  const argsHatchHint = properties.args === undefined ? " or --args '<json>'" : "";
   const args: Record<string, unknown> = {};
   const positional: string[] = [];
   let helpRequested = false;
@@ -138,7 +151,11 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
     }
 
     // ── Whole-payload escape hatch ──
-    if (flag === "args") {
+    //
+    // Skipped when the tool declares its own `args` field: then `--args` is a
+    // normal per-field flag (handled below) and wins over the escape hatch, so
+    // the field's value isn't silently swallowed as the whole payload.
+    if (flag === "args" && properties.args === undefined) {
       const { value, nextIndex } =
         inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, "args");
       rawArgs = value;
@@ -155,7 +172,7 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
         // A prior --${fieldName} (scalar-array form) already populated this
         // field; overwriting it here would silently discard those values.
         throw new FlagParseException(
-          `--${fieldName} and --${flag} cannot be mixed for the same field; pass it entirely as --${flag} '<json>' or --args '<json>'`
+          `--${fieldName} and --${flag} cannot be mixed for the same field; pass it entirely as --${flag} '<json>'${argsHatchHint}`
         );
       }
       args[fieldName] = parseJsonOrThrow(value, `--${flag}`);
@@ -199,7 +216,7 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       const itemType = propSchema.items?.type;
       if (!isScalarType(itemType)) {
         throw new FlagParseException(
-          `--${flag} is an array of objects; pass it as --${flag}-json '<json>' or --args '<json>'`
+          `--${flag} is an array of objects; pass it as --${flag}-json '<json>'${argsHatchHint}`
         );
       }
       const { value, nextIndex } =
@@ -213,7 +230,7 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
         // a scalar-coercion error — matching the --field-json branch above,
         // which checks mixing before parsing the JSON.
         throw new FlagParseException(
-          `--${flag} and --${flag}-json cannot be mixed for the same field; pass it entirely as --${flag}-json '<json>' or --args '<json>'`
+          `--${flag} and --${flag}-json cannot be mixed for the same field; pass it entirely as --${flag}-json '<json>'${argsHatchHint}`
         );
       }
       const coerced = coerceScalar(value, itemType, flag);
@@ -230,7 +247,7 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
     // ── Object field: must use --field-json ──
     if (propSchema?.type === "object") {
       throw new FlagParseException(
-        `--${flag} is an object; pass it as --${flag}-json '<json>' or --args '<json>'`
+        `--${flag} is an object; pass it as --${flag}-json '<json>'${argsHatchHint}`
       );
     }
 

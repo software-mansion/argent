@@ -4,10 +4,26 @@
 import type { FailureSignal } from "@argent/registry";
 import type { AiTelemetryProps } from "./ai-identity.js";
 
-// Single source of truth for the device platform enum: the TS union below and
-// sanitize.ts's runtime allowlist both derive from this tuple, so adding a
-// platform can't silently drift the two apart.
-export const PLATFORMS = ["ios", "ios-remote", "android", "chromium", "vega"] as const;
+// Single source of truth for the telemetry device-platform enum: the TS union
+// below and sanitize.ts's runtime allowlist both derive from this tuple, so
+// adding a platform can't silently drift the two apart.
+//
+// This is the *telemetry* platform, deliberately a superset of the tool-server's
+// device `Platform` (@argent/registry): `tvos` and `android-tv` have no
+// standalone device platform there — a TV is a `runtimeKind` ("tv") layered on
+// an `ios`/`android` device, not its own platform, so capability gating and
+// dispatch stay TV-agnostic. Telemetry splits them out only for reporting: the
+// inference in tool-server/http.ts maps `ios`->`tvos` / `android`->`android-tv`
+// when a device's cached runtime kind is "tv".
+export const PLATFORMS = [
+  "ios",
+  "ios-remote",
+  "android",
+  "chromium",
+  "vega",
+  "tvos",
+  "android-tv",
+] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 // Installation events
