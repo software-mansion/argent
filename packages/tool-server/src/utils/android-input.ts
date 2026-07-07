@@ -111,9 +111,10 @@ const ADB_INPUT_TIMEOUT_MS = 15_000;
 /** Type text into the focused field via `adb shell input text`. No-op for "". */
 export async function injectAndroidText(serial: string, text: string): Promise<void> {
   assertTypeableAndroidText(text);
-  if (text.length === 0) return;
   // One `input text` per segment so a `%` never precedes an `s` on the device (see
-  // `splitForVerbatimPercent`); `%`-free text is a single call, as before.
+  // `splitForVerbatimPercent`); `%`-free text is a single call, as before. An
+  // empty string yields no segments (`splitForVerbatimPercent("")` → []), so this
+  // is a no-op for "" without a separate guard.
   for (const segment of splitForVerbatimPercent(text)) {
     await adbShell(serial, `input text ${shellQuote(segment)}`, {
       timeoutMs: ADB_INPUT_TIMEOUT_MS,

@@ -25,6 +25,19 @@ const { typeTv } = vi.hoisted(() => ({
 }));
 vi.mock("../src/tools/keyboard/platforms/tv", () => ({ typeTv }));
 
+// `dispatchByPlatform` preflights the android branch's declared `requires`
+// (`["adb"]`) via `ensureDeps` BEFORE the handler runs. Stub it so it resolves
+// by default (this file's handler-level tests never reach it); the preflight
+// test below overrides it to reject. Keep `DependencyMissingError` real via the
+// spread so `instanceof` works.
+const { ensureDeps } = vi.hoisted(() => ({
+  ensureDeps: vi.fn(async (_deps: readonly string[]): Promise<void> => {}),
+}));
+vi.mock("../src/utils/check-deps", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/check-deps")>()),
+  ensureDeps,
+}));
+
 import {
   ANDROID_NAMED_KEYCODES,
   ANDROID_BUTTON_KEYCODES,
@@ -35,6 +48,8 @@ import {
 import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { makeAndroidImpl } from "../src/tools/keyboard/platforms/android";
+import { createKeyboardTool } from "../src/tools/keyboard";
+import { DependencyMissingError } from "../src/utils/check-deps";
 import type { KeyboardParams } from "../src/tools/keyboard/types";
 import { BUTTONS_BY_PLATFORM } from "../src/tools/button";
 
@@ -327,5 +342,46 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     // pair would miss the reorder.
     const cmds = adbShell.mock.calls.map((c) => c[1]);
     expect(cmds).toEqual(["input keyevent 66", "input text 'abc'"]); // KEYCODE_ENTER, then text
+  });
+});
+
+// The routing/injection tests above call `makeAndroidImpl().handler` directly,
+// which bypasses `dispatchByPlatform`'s host-binary preflight — so nothing there
+// pins the `requires: ["adb"]` on the android branch. Drive the tool's real
+// `execute` (which IS `dispatchByPlatform`) so removing that declaration is a red
+// test rather than a silent regression to a deep ENOENT on an adb-less host.
+describe("keyboard tool — android adb preflight (via dispatchByPlatform)", () => {
+  beforeEach(() => {
+    adbShell.mockClear();
+    ensureDeps.mockClear();
+    ensureDeps.mockResolvedValue(undefined);
+    isAndroidTv.mockReset();
+    isAndroidTv.mockResolvedValue(false);
+  });
+
+  it("preflights `adb` before the handler; a missing binary fails closed as a DependencyMissingError", async () => {
+    ensureDeps.mockRejectedValueOnce(
+      new DependencyMissingError(["adb"], "install android-platform-tools")
+    );
+    const tool = createKeyboardTool(new Registry());
+    await expect(tool.execute({}, { udid: SERIAL, text: "hi" })).rejects.toBeInstanceOf(
+      DependencyMissingError
+    );
+    // The preflight ran with the android branch's declared dep...
+    expect(ensureDeps).toHaveBeenCalledWith(["adb"]);
+    // ...and fails closed: no `adb input` is issued when the preflight rejects.
+    // (Dropping `requires: ["adb"]` skips the preflight, the handler runs, and
+    //  this `input text` fires — turning the assertions above red.)
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("runs the handler over adb once the preflight passes", async () => {
+    const tool = createKeyboardTool(new Registry());
+    await expect(tool.execute({}, { udid: SERIAL, text: "hi" })).resolves.toEqual({
+      typed: "hi",
+      keys: 2,
+    });
+    expect(ensureDeps).toHaveBeenCalledWith(["adb"]);
+    expect(adbShell).toHaveBeenCalledWith(SERIAL, "input text 'hi'", expect.anything());
   });
 });

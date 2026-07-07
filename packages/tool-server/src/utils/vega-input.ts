@@ -17,6 +17,7 @@
  */
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { adbShell, shellQuote } from "./adb";
+import { InvalidToolInputError } from "./capability";
 import { emulatorSerial } from "./vega-automation";
 
 // TV-remote button → Linux input KEY_ name accepted by `inputd-cli button_press`.
@@ -161,7 +162,9 @@ export async function injectVegaButtons(buttons: RemoteButton[]): Promise<void> 
 export async function injectVegaNamedKey(name: string): Promise<void> {
   const code = NAMED_KEYCODES[name.toLowerCase()];
   if (!code) {
-    throw new Error(
+    // Well-typed but unusable input (`key` is a free string) — a caller mistake
+    // mapped to 400, matching the Android path, not a 500.
+    throw new InvalidToolInputError(
       `Unknown Vega key "${name}". Supported: ${Object.keys(NAMED_KEYCODES).join(", ")}`
     );
   }
@@ -171,9 +174,10 @@ export async function injectVegaNamedKey(name: string): Promise<void> {
 /** Type text into the focused field via `inputd-cli send_text`. */
 export async function injectVegaText(text: string): Promise<void> {
   // send_text reads the rest of the line, so an embedded newline would truncate
-  // it; reject newlines rather than silently dropping the tail.
+  // it; reject newlines rather than silently dropping the tail. A caller input
+  // error (→400), matching the Android path, not an internal fault (→500).
   if (/[\n\r]/.test(text)) {
-    throw new Error("Vega keyboard text must not contain newlines");
+    throw new InvalidToolInputError("Vega keyboard text must not contain newlines");
   }
   await injectViaInputd([`send_text ${shellQuote(text)}`]);
 }

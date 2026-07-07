@@ -1,6 +1,7 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
+import { InvalidToolInputError } from "../../utils/capability";
 import type { KeyboardParams, KeyboardResult } from "./types";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,7 +38,10 @@ export async function typeSimulatorServer(
   if (params.key) {
     const code = NAMED_KEYS[params.key.toLowerCase()];
     if (code == null) {
-      throw new Error(
+      // Well-typed but unusable input (the schema's `key` is a free string) — a
+      // caller mistake, so InvalidToolInputError (→400), matching the Android
+      // path. A plain Error would surface as a 500 and diverge by platform.
+      throw new InvalidToolInputError(
         `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`
       );
     }
@@ -47,7 +51,9 @@ export async function typeSimulatorServer(
   if (params.text) {
     for (const char of params.text) {
       const press = charToKeyPress(char);
-      if (!press) throw new Error(`No keycode for character "${char}"`);
+      // A character with no keycode can't be typed on this backend — a caller
+      // input error (→400), not an internal fault (500).
+      if (!press) throw new InvalidToolInputError(`No keycode for character "${char}"`);
       await pressKeyCode(press.keyCode, press.withShift);
       await sleep(delay);
     }

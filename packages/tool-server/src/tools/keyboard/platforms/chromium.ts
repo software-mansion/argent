@@ -1,6 +1,7 @@
 import type { Registry } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../../blueprints/chromium-cdp";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { InvalidToolInputError } from "../../../utils/capability";
 import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "../chromium-keys";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
@@ -13,7 +14,9 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
   if (params.key) {
     const named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
     if (!named) {
-      throw new Error(
+      // Well-typed but unusable input (`key` is a free string) — a caller
+      // mistake mapped to 400, matching the Android path, not a 500.
+      throw new InvalidToolInputError(
         `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`
       );
     }
@@ -37,7 +40,9 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
     for (const char of params.text) {
       const desc = charToChromiumKey(char);
       if (!desc) {
-        throw new Error(`No CDP key descriptor for character "${char}"`);
+        // A character with no CDP descriptor can't be typed — caller input
+        // error (→400), not an internal fault (→500).
+        throw new InvalidToolInputError(`No CDP key descriptor for character "${char}"`);
       }
       await api.dispatchKeyEvent({
         type: "keyDown",

@@ -46,9 +46,10 @@ describe("button tool — per-platform validation", () => {
     ).rejects.toBeInstanceOf(UnsupportedOperationError);
   });
 
-  it("accepts `back` on Android and injects KEYCODE_BACK over adb", async () => {
+  it("accepts `back` on Android and injects KEYCODE_BACK over adb (never the sim-server HID path)", async () => {
     vi.mocked(injectAndroidKeycode).mockClear();
     vi.mocked(ensureDep).mockClear();
+    vi.mocked(sendCommand).mockClear();
     await expect(
       buttonTool.execute(services, { udid: androidUdid, button: "back" })
     ).resolves.toEqual({ pressed: "back" });
@@ -57,6 +58,13 @@ describe("button tool — per-platform validation", () => {
     // adb is preflighted so a missing binary fails with a 424 install hint
     // rather than a generic 500 from deeper in the adb path.
     expect(ensureDep).toHaveBeenCalledWith("adb");
+    // The mirror of the iOS test's `injectAndroidKeycode not called`: the Android
+    // press must NOT go over the simulator-server HID transport. Without this,
+    // dropping the android branch's `return` (so control falls through to the
+    // sim-server Down/Up path) would double-inject yet still resolve `{ pressed }`
+    // and stay green — silently moving the press back onto the transport #449
+    // exists to leave.
+    expect(sendCommand).not.toHaveBeenCalled();
   });
 
   it("injects the matching keycode for EVERY Android button, not a hardcoded one", async () => {
@@ -66,6 +74,7 @@ describe("button tool — per-platform validation", () => {
     // test while silently misfiring home / power / volume / appSwitch.
     for (const button of BUTTONS_BY_PLATFORM.android) {
       vi.mocked(injectAndroidKeycode).mockClear();
+      vi.mocked(sendCommand).mockClear();
       await expect(buttonTool.execute(services, { udid: androidUdid, button })).resolves.toEqual({
         pressed: button,
       });
@@ -73,6 +82,8 @@ describe("button tool — per-platform validation", () => {
         androidUdid,
         ANDROID_BUTTON_KEYCODES[button]
       );
+      // Every Android button goes over adb only — never the sim-server HID path.
+      expect(sendCommand).not.toHaveBeenCalled();
     }
   });
 
