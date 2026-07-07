@@ -605,6 +605,33 @@ describe("VariantProposalStore — roundCompleted telemetry event", () => {
     assertPrivacySafe(stats[0]);
   });
 
+  it("counts element_comment_count and skipped_comment_count independently (chosen-with-comment vs skipped-with-comment)", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ element_comment_count: number; skipped_comment_count: number }> = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    s.proposeVariant({ element: "Bar", variant: variant("Large") });
+    const foo = s.snapshot().proposals.find((p) => p.element === "Foo")!;
+    const bar = s.snapshot().proposals.find((p) => p.element === "Bar")!;
+
+    s.submitSelection({
+      selections: [
+        { elementId: foo.id, variantId: foo.variants[0]!.id, comment: "keep this" }, // CHOSEN + comment
+        { elementId: bar.id, variantId: null, comment: "needs work" }, // SKIPPED + comment
+      ],
+    });
+
+    expect(stats).toHaveLength(1);
+    // Both elements carry a per-element comment (element_comment_count = 2), but
+    // only the skipped one is a skip-comment (skipped_comment_count = 1). The two
+    // counts MUST differ here — if the two filters (chosen vs skipped) were
+    // swapped or aliased, this asymmetric case fails, unlike a 1/1 case where a
+    // swap is invisible. So chosen-with-comment = 2 - 1 = 1 is pinned.
+    expect(stats[0]!.element_comment_count).toBe(2);
+    expect(stats[0]!.skipped_comment_count).toBe(1);
+  });
+
   it("does NOT re-emit on a resubmit of the same round", () => {
     const s = new VariantProposalStore();
     let count = 0;

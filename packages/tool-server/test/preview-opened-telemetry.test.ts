@@ -47,14 +47,28 @@ describe("GET /preview/ — lens:preview_opened telemetry", () => {
     expect(res.status).toBe(200);
     const calls = previewOpenedCalls();
     expect(calls).toHaveLength(1);
-    // No udid was bound, so platform is omitted (undefined); toEqual ignores it.
-    expect(calls[0]![1]).toEqual({
+    const payload = calls[0]![1] as Record<string, unknown>;
+    // This test binds no udid, but the store `device` is a process singleton NOT
+    // cleared by reset() (see variant-proposals.ts), so `platform` can carry over
+    // from an earlier test (e.g. under --sequence.shuffle). Assert only the fields
+    // this test controls, and separately pin the exact key set so an unexpected
+    // field still can't leak in — rather than a `platform: undefined` toEqual that
+    // is order-fragile. (A fresh-store test pins platform=undefined directly.)
+    expect(payload).toMatchObject({
       round,
       element_count: 1,
       variant_count: 1,
       is_cli_session: false,
-      platform: undefined,
     });
+    expect(Object.keys(payload).sort()).toEqual([
+      "element_count",
+      "is_cli_session",
+      "platform",
+      "round",
+      "variant_count",
+    ]);
+    // Any carried-over platform must still be a known-safe enum, never content.
+    expect(payload.platform === undefined || typeof payload.platform === "string").toBe(true);
   });
 
   it("reports variant_count and platform from the bound device", async () => {
@@ -94,6 +108,46 @@ describe("GET /preview/ — lens:preview_opened telemetry", () => {
     await request(a).get("/"); // refresh, same round
 
     expect(previewOpenedCalls()).toHaveLength(1);
+  });
+
+  it("re-emits on the FIRST load of a NEW round (dedup is per-round, not once-ever)", async () => {
+    const a = app();
+    // Round N: stage a proposal and open the preview — first emit.
+    variantProposalStore.proposeVariant({
+      element: "Foo",
+      variant: { name: "Bold", summary: "s" },
+    });
+    const roundN = variantProposalStore.snapshot().round;
+    await request(a).get("/");
+    expect(previewOpenedCalls()).toHaveLength(1);
+
+    // Finalize round N, then propose again — proposeVariant auto-rolls into a
+    // fresh round N+1 once the prior round is completed.
+    const foo = variantProposalStore.snapshot().proposals[0]!;
+    variantProposalStore.submitSelection({
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+    });
+    variantProposalStore.proposeVariant({
+      element: "Bar",
+      variant: { name: "Ghost", summary: "s" },
+    });
+    const roundNext = variantProposalStore.snapshot().round;
+    expect(roundNext).toBe(roundN + 1);
+
+    // The first load of the NEW round MUST emit again. A regression to a
+    // fire-once boolean (instead of the `round !== lastOpenedRound` guard) would
+    // wrongly suppress this and leave the count at 1.
+    await request(a).get("/");
+    const calls = previewOpenedCalls();
+    expect(calls).toHaveLength(2);
+    // platform is intentionally not asserted: the store `device` is a process
+    // singleton not cleared by reset(), so it can carry over from a prior test.
+    expect(calls[1]![1]).toMatchObject({
+      round: roundNext,
+      element_count: 1,
+      variant_count: 1,
+      is_cli_session: false,
+    });
   });
 
   it("does NOT emit for a bare load with nothing staged and no CLI session", async () => {
