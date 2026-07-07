@@ -13,6 +13,7 @@ import {
   findConfiguredAdapterScopes,
   getManagedContentTargets,
   injectCodexRules,
+  pruneStaleArgentRules,
   removeCodexRules,
 } from "../src/mcp-configs.js";
 
@@ -1337,6 +1338,88 @@ describe("copyRulesAndAgents", () => {
     const content = fs.readFileSync(configPath, "utf8");
     expect(content).toContain("argent rules");
     expect(content).toContain("developer_instructions");
+  });
+
+  it("prunes stale argent.md when the bundled rules directory is empty", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const emptyRulesDir = path.join(tmpDir, "empty-rules");
+    fs.mkdirSync(emptyRulesDir, { recursive: true });
+    const rulesTarget = path.join(tmpDir, ".claude", "rules");
+    fs.mkdirSync(rulesTarget, { recursive: true });
+    fs.writeFileSync(path.join(rulesTarget, "argent.md"), "# stale rule");
+    fs.writeFileSync(path.join(rulesTarget, "custom.md"), "# keep me");
+
+    const results = copyRulesAndAgents(
+      [claudeAdapter],
+      tmpDir,
+      "local",
+      emptyRulesDir,
+      agentsDir
+    );
+
+    expect(results.some((r) => r.includes("Removed stale argent.md"))).toBe(true);
+    expect(fs.existsSync(path.join(rulesTarget, "argent.md"))).toBe(false);
+    expect(fs.existsSync(path.join(rulesTarget, "custom.md"))).toBe(true);
+  });
+});
+
+// ── pruneStaleArgentRules ─────────────────────────────────────────────────────
+
+describe("pruneStaleArgentRules", () => {
+  let agentsDir: string;
+
+  beforeEach(() => {
+    agentsDir = path.join(tmpDir, "src-agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+  });
+
+  it("removes stale argent.md from editor rule targets but keeps other rules", () => {
+    const cursorAdapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const rulesTarget = path.join(tmpDir, ".cursor", "rules");
+    fs.mkdirSync(rulesTarget, { recursive: true });
+    fs.writeFileSync(path.join(rulesTarget, "argent.md"), "# stale");
+    fs.writeFileSync(path.join(rulesTarget, "team-style.md"), "# keep");
+
+    const results = pruneStaleArgentRules([cursorAdapter], tmpDir, "local");
+
+    expect(results).toEqual(["Removed stale argent.md from .cursor/rules"]);
+    expect(fs.existsSync(path.join(rulesTarget, "argent.md"))).toBe(false);
+    expect(fs.existsSync(path.join(rulesTarget, "team-style.md"))).toBe(true);
+  });
+
+  it("removes an empty rules directory after deleting argent.md", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const rulesTarget = path.join(tmpDir, ".claude", "rules");
+    fs.mkdirSync(rulesTarget, { recursive: true });
+    fs.writeFileSync(path.join(rulesTarget, "argent.md"), "# stale");
+
+    const results = pruneStaleArgentRules([claudeAdapter], tmpDir, "local");
+
+    expect(results[0]).toContain("removed empty rules directory");
+    expect(fs.existsSync(rulesTarget)).toBe(false);
+  });
+
+  it("removes injected Codex developer_instructions", () => {
+    const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const rulesDir = path.join(tmpDir, "src-rules");
+    fs.mkdirSync(rulesDir, { recursive: true });
+    fs.writeFileSync(path.join(rulesDir, "argent.md"), "Use argent tools.");
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'developer_instructions = "Keep me."\n');
+    injectCodexRules(configPath, rulesDir);
+
+    const results = pruneStaleArgentRules([codexAdapter], tmpDir, "local");
+
+    expect(results).toEqual(["Removed stale argent rules from .codex/config.toml"]);
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("Keep me.");
+    expect(content).not.toContain("argent rules");
+  });
+
+  it("returns no results when nothing stale is present", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    expect(pruneStaleArgentRules([claudeAdapter], tmpDir, "local")).toEqual([]);
   });
 });
 
