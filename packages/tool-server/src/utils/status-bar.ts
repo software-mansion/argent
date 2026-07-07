@@ -9,12 +9,18 @@ const execFileAsync = promisify(execFile);
  * Pin the device status bar to fixed values for the duration of a flow run so
  * its clock / battery / signal never drive a screenshot diff. iOS uses
  * `simctl status_bar override`; Android uses SystemUI demo mode. Best-effort:
- * any failure is swallowed (returns false) so a flow never aborts because the
- * status bar could not be normalized.
+ * failures are swallowed so a flow never aborts because the status bar could
+ * not be normalized.
  */
 
 const DEMO_BROADCAST = "am broadcast -a com.android.systemui.demo";
 
+/**
+ * Returns whether the caller must schedule a run-end {@link restoreStatusBar}:
+ * true when the override applied — and also when a failed pin's partial
+ * override could not be undone here, so the teardown restore gets another
+ * chance rather than leaving demo mode (frozen clock/battery) on the device.
+ */
 export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
   try {
     if (device.platform === "ios") {
@@ -56,19 +62,34 @@ export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
     // applied (e.g. Android demo mode entered but a later broadcast failed).
     // The caller sees `false` and never restores, so undo here; both cleanup
     // commands are harmless no-ops when nothing was applied.
-    await restoreStatusBar(device);
-    return false;
+    const restored = await restoreStatusBar(device);
+    // iOS's single override command applies atomically, so a failed pin left
+    // nothing behind. Android may be stuck mid-demo-mode: when even the undo
+    // failed (transient adb), report `true` so the caller's run-end restore
+    // still fires instead of leaving the frozen clock/battery applied.
+    return device.platform === "android" && !restored;
   }
 }
 
-export async function restoreStatusBar(device: DeviceInfo): Promise<void> {
+/**
+ * Clear any status-bar override. Never throws; returns false when a command
+ * failed and the override may still be applied.
+ */
+export async function restoreStatusBar(device: DeviceInfo): Promise<boolean> {
   try {
     if (device.platform === "ios") {
       await execFileAsync("xcrun", ["simctl", "status_bar", device.id, "clear"]);
     } else if (device.platform === "android") {
-      await adbShell(device.id, `${DEMO_BROADCAST} -e command exit`);
+      try {
+        await adbShell(device.id, `${DEMO_BROADCAST} -e command exit`);
+      } finally {
+        // Also undo the pin's settings write — attempted even when the exit
+        // broadcast fails, so demo mode isn't left permitted on the device.
+        await adbShell(device.id, "settings put global sysui_demo_allowed 0");
+      }
     }
+    return true;
   } catch {
-    // best-effort restore
+    return false; // best-effort restore
   }
 }

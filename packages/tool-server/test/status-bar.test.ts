@@ -27,7 +27,7 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { pinStatusBar } from "../src/utils/status-bar";
+import { pinStatusBar, restoreStatusBar } from "../src/utils/status-bar";
 
 const ANDROID_DEVICE: DeviceInfo = {
   id: "emulator-5554",
@@ -66,9 +66,14 @@ describe("pinStatusBar (android)", () => {
 
     expect(await pinStatusBar(ANDROID_DEVICE)).toBe(false);
     expect(shellCalls().some((c) => c.includes("command exit"))).toBe(true);
+    expect(shellCalls().some((c) => c.includes("sysui_demo_allowed 0"))).toBe(true);
   });
 
-  it("still returns false when the cleanup exit broadcast fails too", async () => {
+  it("reports pinned when the cleanup exit broadcast fails too, so the run-end restore fires", async () => {
+    // Demo mode was entered and could not be exited (transient adb). Returning
+    // false here would tell the caller nothing needs restoring, leaving the
+    // frozen clock/battery applied after the run — so report `true` instead
+    // and let the caller's teardown restore retry.
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       const shell = args[3] ?? "";
       if (shell.includes("command clock") || shell.includes("command exit"))
@@ -76,6 +81,29 @@ describe("pinStatusBar (android)", () => {
       return { stdout: "", stderr: "" };
     });
 
-    await expect(pinStatusBar(ANDROID_DEVICE)).resolves.toBe(false);
+    await expect(pinStatusBar(ANDROID_DEVICE)).resolves.toBe(true);
+  });
+});
+
+describe("restoreStatusBar (android)", () => {
+  it("exits demo mode and resets sysui_demo_allowed", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    expect(await restoreStatusBar(ANDROID_DEVICE)).toBe(true);
+    expect(shellCalls()).toEqual([
+      "am broadcast -a com.android.systemui.demo -e command exit",
+      "settings put global sysui_demo_allowed 0",
+    ]);
+  });
+
+  it("still resets sysui_demo_allowed when the exit broadcast fails, and reports failure", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      const shell = args[3] ?? "";
+      if (shell.includes("command exit")) return new Error("adb: device offline");
+      return { stdout: "", stderr: "" };
+    });
+
+    expect(await restoreStatusBar(ANDROID_DEVICE)).toBe(false);
+    expect(shellCalls().some((c) => c.includes("sysui_demo_allowed 0"))).toBe(true);
   });
 });
