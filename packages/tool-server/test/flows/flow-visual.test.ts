@@ -117,6 +117,7 @@ describe("runSnapshot baselines", () => {
       hostPath: baselinePath(),
       mimeType: "image/png",
     });
+    expect(r.snapshotKey).toBe("home__ios-390x844");
   });
 
   it("refreshes an existing baseline under updateBaselines", async () => {
@@ -140,6 +141,7 @@ describe("runSnapshot baselines", () => {
     // A clean pass carries no artifacts — there is nothing to look at, and
     // handles would make renderers fetch two full-res PNGs just to print paths.
     expect(r.artifacts).toBeUndefined();
+    expect(r.snapshotKey).toBeUndefined();
   });
 
   it("fails a dimension-mismatch bail instead of passing its 0% mismatch", async () => {
@@ -170,6 +172,8 @@ describe("runSnapshot baselines", () => {
 
     expect(r.status).toBe("fail");
     expect(r.reason).toContain("diff 3.10% > 0.5%");
+    // The key an exporter (CLI --output) names the three roles by.
+    expect(r.snapshotKey).toBe("home__ios-390x844");
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
     expect(r.artifacts?.diff).toMatchObject({

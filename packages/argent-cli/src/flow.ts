@@ -1,3 +1,4 @@
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import {
   createToolsClient,
@@ -26,6 +27,8 @@ export interface StepReport {
   message?: string;
   /** Human-readable step target (selector / snapshot name), set by the runner. */
   target?: string;
+  /** Baseline key stem (`<name>__<platform>-WxH`) on artifact-bearing snapshot steps. */
+  snapshotKey?: string;
   /**
    * Snapshot-step artifacts keyed by role (baseline/current/diff). The wire
    * value is an artifact handle; materializeArtifacts has already rewritten
@@ -69,12 +72,15 @@ Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
   --platform <p>         ios | android | chromium | vega — narrow auto-detection
   --update-baselines     Write/refresh screenshot baselines instead of diffing
+  --output <dir>         Also write failed snapshot images (baseline/current/diff)
+                         under <dir>/<flow>/ — a stable path for CI artifact upload
   --json                 Print the raw JSON report
   --help, -h             Show this help
 
 Examples:
   argent flow run checkout --platform ios
   argent flow run checkout --device <UDID> --update-baselines
+  argent flow run checkout --output flow-artifacts --json
 `);
 }
 
@@ -82,6 +88,7 @@ export function parseRunArgs(argv: string[]): {
   name?: string;
   device?: string;
   platform?: string;
+  output?: string;
   updateBaselines: boolean;
   json: boolean;
 } {
@@ -104,6 +111,7 @@ export function parseRunArgs(argv: string[]): {
     else if (tok === "--json") out.json = true;
     else if (tok === "--device") out.device = takeValue("--device");
     else if (tok === "--platform") out.platform = takeValue("--platform");
+    else if (tok === "--output") out.output = takeValue("--output");
     else if (!tok.startsWith("-") && !out.name) out.name = tok;
   }
   return out;
@@ -147,6 +155,53 @@ export function renderArtifactLines(report: FlowReport): string[] {
   return lines;
 }
 
+/**
+ * Copy each failed snapshot's materialized artifacts into a durable, globbable
+ * location — `<outputDir>/<flow>/<key>-<role>.png`, where `<key>` is the
+ * snapshot's baseline key (`name__platform-WxH`), so a run that hits several
+ * flows/snapshots can't clobber itself. Rewrites each copied role's path in the
+ * report so the renderers and `--json` print the durable location instead of a
+ * temp path. Failure-only: a clean pass carries no artifacts, and a seeded
+ * baseline is already durable under `__baselines__/`. Best-effort per file — a
+ * copy error warns on stderr and leaves the temp path in place; artifact export
+ * must never change a run's verdict.
+ */
+export async function exportFailureArtifacts(
+  report: FlowReport,
+  outputDir: string
+): Promise<void> {
+  for (const s of report.steps) {
+    if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
+    const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
+    if (!key) continue;
+    const dir = path.join(outputDir, report.flow);
+    for (const [role, value] of Object.entries(s.artifacts)) {
+      if (typeof value !== "string") continue; // null = failed materialization
+      const dest = path.join(dir, `${key}-${role}.png`);
+      try {
+        await fsp.mkdir(dir, { recursive: true });
+        await fsp.copyFile(value, dest);
+        s.artifacts[role] = dest;
+      } catch (err) {
+        console.error(
+          `warning: could not write ${dest}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Fallback for a pre-`snapshotKey` tool-server: the baseline artifact is the
+ * baseline file itself (or a download named after it), so its basename IS the
+ * key.
+ */
+function keyFromBaselinePath(artifacts: Record<string, unknown>): string | null {
+  const baseline = artifacts.baseline;
+  if (typeof baseline !== "string") return null;
+  return path.basename(baseline).replace(/\.png$/, "");
+}
+
 export function renderReport(report: FlowReport): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}" on ${report.device}`);
@@ -188,10 +243,9 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 
   if (sub === "list") {
-    const fs = await import("node:fs/promises");
     const dir = path.join(process.cwd(), ".argent", "flows");
     try {
-      const entries = await fs.readdir(dir);
+      const entries = await fsp.readdir(dir);
       const names = entries.filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, ""));
       if (names.length === 0) console.log("No flows found in .argent/flows");
       else console.log(names.join("\n"));
@@ -272,6 +326,11 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     console.error(`"${flowName}" did not produce a run report.`);
     process.exit(2);
   }
+
+  // Durable diff output: copy failed-snapshot images out of the temp cache
+  // before any renderer prints paths, so every output mode shows the durable
+  // location.
+  if (args.output) await exportFailureArtifacts(report, path.resolve(args.output));
 
   if (args.json) {
     console.log(JSON.stringify(report, null, 2));

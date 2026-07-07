@@ -111,6 +111,12 @@ export interface StepReport {
    * not a bare `tap`. Display-only; derived from the step definition.
    */
   target?: string;
+  /**
+   * Baseline key stem (`<name>__<platform>-WxH`) for snapshot steps that carry
+   * artifacts — clients exporting them to a durable location (the CLI's
+   * `--output`) name files by it.
+   */
+  snapshotKey?: string;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
 }
@@ -777,6 +783,7 @@ async function execLeafStep(
           ...base,
           status: r.status,
           reason: r.reason,
+          snapshotKey: r.snapshotKey,
           artifacts: r.artifacts,
         };
       } catch (err) {

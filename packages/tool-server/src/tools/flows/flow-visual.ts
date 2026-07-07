@@ -27,6 +27,13 @@ export interface SnapshotArtifacts {
 export interface VisualOutcome {
   status: "pass" | "fail" | "skip";
   reason?: string;
+  /**
+   * Baseline key stem (`<name>__<platform>-WxH`) — present whenever
+   * `artifacts` is, so a consumer exporting the files to a durable location
+   * (the CLI's `--output`) can name them by the same collision-free key the
+   * baseline store uses.
+   */
+  snapshotKey?: string;
   artifacts?: SnapshotArtifacts;
 }
 
@@ -105,7 +112,8 @@ export async function runSnapshot(
   const currentPath = shot.image.hostPath;
 
   const { w, h } = await pngDimensions(currentPath);
-  const key = `${opts.name}__${env.device.platform}-${w}x${h}.png`;
+  const snapshotKey = `${opts.name}__${env.device.platform}-${w}x${h}`;
+  const key = `${snapshotKey}.png`;
   const dir = baselineDir(opts.flowsDir, opts.flowName);
   const baselinePath = path.join(dir, key);
 
@@ -121,6 +129,7 @@ export async function runSnapshot(
     return {
       status: "pass",
       reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
+      snapshotKey,
       artifacts: { baseline },
     };
   }
@@ -135,6 +144,7 @@ export async function runSnapshot(
         `no baseline for "${opts.name}" on this device class — expected ${baselinePath}, ` +
         `nothing was compared. Run with updateBaselines (--update-baselines) to adopt the ` +
         `current screen, then review and commit it`,
+      snapshotKey,
       artifacts: { current: shot.image },
     };
   }
@@ -160,6 +170,7 @@ export async function runSnapshot(
         reason:
           `baseline is ${expected.width}x${expected.height} but the capture is ` +
           `${actual.width}x${actual.height} (${key}) — nothing was compared`,
+        snapshotKey,
         artifacts: {
           baseline: await store.register(baselinePath, { mimeType: "image/png" }),
           current: shot.image,
@@ -183,11 +194,11 @@ export async function runSnapshot(
     if (result.contextDiffPath) {
       artifacts.diff = await store.register(result.contextDiffPath, {
         mimeType: "image/png",
-        filename: `${key.replace(/\.png$/, "")}-diff.png`,
+        filename: `${snapshotKey}-diff.png`,
       });
       keepInOutputDir = result.contextDiffPath;
     }
-    return { status: "fail", reason, artifacts };
+    return { status: "fail", reason, snapshotKey, artifacts };
   } finally {
     await cleanupDiffDir(outputDir, keepInOutputDir);
   }
