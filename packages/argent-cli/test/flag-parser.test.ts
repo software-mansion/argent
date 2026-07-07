@@ -186,6 +186,70 @@ describe("parseFlags — schema-aware --args", () => {
   });
 });
 
+// A hypothetical future tool that OWNS its top-level `args` field but as an
+// object / array of objects (flow-add-step's is a string). The whole-payload
+// `--args '<json>'` hatch is disabled for any tool that owns `args`, so the
+// error text must NOT suggest that dead-end form — only `--<field>-json` works.
+const objectArgsSchema: JsonSchema = {
+  type: "object",
+  properties: { args: { type: "object" } },
+};
+const arrayArgsSchema: JsonSchema = {
+  type: "object",
+  properties: { args: { type: "array", items: { type: "object" } } },
+};
+// A control tool that does NOT own `args`, with an object field. Here the
+// whole-payload hatch exists, so the "or --args '<json>'" suggestion must stay.
+const objectFieldSchema: JsonSchema = {
+  type: "object",
+  properties: { filter: { type: "object" } },
+};
+
+describe("parseFlags — error hints omit the whole-payload --args form when the tool owns `args`", () => {
+  it("object `args`: suggests only --args-json, not the dead-end --args '<json>'", () => {
+    let err: unknown;
+    try {
+      parseFlags(["--args", '{"a":1}'], objectArgsSchema);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(FlagParseException);
+    const msg = (err as Error).message;
+    expect(msg).toBe("--args is an object; pass it as --args-json '<json>'");
+    // The whole-payload form no longer routes to the hatch for this tool, so it
+    // must not be advertised as a fallback (it would just re-enter this branch).
+    expect(msg).not.toContain("or --args '<json>'");
+  });
+
+  it("array-of-objects `args`: suggests only --args-json, not the dead-end --args '<json>'", () => {
+    let err: unknown;
+    try {
+      parseFlags(["--args", '[{"a":1}]'], arrayArgsSchema);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(FlagParseException);
+    const msg = (err as Error).message;
+    expect(msg).toBe("--args is an array of objects; pass it as --args-json '<json>'");
+    expect(msg).not.toContain("or --args '<json>'");
+  });
+
+  it("still suggests --args '<json>' for an object field on a tool WITHOUT its own `args`", () => {
+    // Control: dropping the whole-payload suggestion is scoped to tools that own
+    // `args`; for everyone else the hatch exists and stays advertised.
+    let err: unknown;
+    try {
+      parseFlags(["--filter", '{"a":1}'], objectFieldSchema);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(FlagParseException);
+    expect((err as Error).message).toBe(
+      "--filter is an object; pass it as --filter-json '<json>' or --args '<json>'"
+    );
+  });
+});
+
 describe("parseFlags — whole-payload --args (no own `args` field)", () => {
   it("keeps --args as the whole-payload escape hatch", () => {
     const result = parseFlags(["--args", '{"udid":"X","x":0.5,"y":0.5}'], gestureTapSchema);
