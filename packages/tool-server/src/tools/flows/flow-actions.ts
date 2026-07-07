@@ -35,7 +35,17 @@ export interface ActionEnv {
 export interface DirectiveOutcome {
   ok: boolean;
   reason?: string;
+  /** The run was cancelled mid-step — reported as a skip, not a step failure. */
+  aborted?: boolean;
 }
+
+/**
+ * The uniform outcome for a directive cut short by run cancellation. The runner
+ * reports it as skip + "run aborted" (matching the pre-step guard and `wait`) —
+ * an aborted run says nothing about the app, so it must never read as a genuine
+ * step failure with a misleading reason.
+ */
+const ABORTED_OUTCOME: DirectiveOutcome = { ok: false, aborted: true, reason: "run aborted" };
 
 /** The selector-acting steps {@link runDirective} handles. */
 export type DirectiveStep = Extract<
@@ -242,23 +252,27 @@ export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefin
 /**
  * Poll until a visible element matches the selector, resolving against a
  * *settled* tree each round so the returned frame is stable. Returns the frame,
- * or undefined if the deadline passes / the run is aborted.
+ * undefined once the deadline passes, or "aborted" when the run was cancelled —
+ * the two misses must stay distinguishable, or a cancelled `tap`/`type` would
+ * be reported as a genuine "element not found" failure.
  */
 async function waitForFrame(
   env: ActionEnv,
   selector: FlowSelector
-): Promise<DescribeFrame | undefined> {
+): Promise<DescribeFrame | "aborted" | undefined> {
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
   for (;;) {
-    if (env.signal?.aborted) return undefined;
+    if (env.signal?.aborted) return "aborted";
     const tree = await settleTree(env);
     if (tree) {
       const frame = flowSelectorToFrame(tree, selector);
       if (frame) return frame;
+    } else if (env.signal?.aborted) {
+      return "aborted"; // settleTree bailed on the abort, not on a blank read
     }
     if (Date.now() >= deadline) return undefined;
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
-    if (!(await sleepOrAbort(sleepMs, env.signal))) return undefined;
+    if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
   }
 }
 
@@ -311,6 +325,8 @@ interface ScrollResolve {
   frame?: DescribeFrame;
   /** Why the scroll stopped without finding the target. */
   reason?: string;
+  /** The run was cancelled mid-scroll. */
+  aborted?: boolean;
 }
 
 /**
@@ -397,10 +413,10 @@ async function scrollToVisible(
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
-    if (env.signal?.aborted) return { reason: "scroll cancelled" };
+    if (env.signal?.aborted) return { aborted: true };
 
     const tree = await settleTree(env);
-    if (!tree) return { reason: "scroll cancelled" };
+    if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
     // Anchor the gesture inside the container (so the right nested scroller
     // moves), or over the whole screen when none is named. Its frame is also the
@@ -459,11 +475,12 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     case "type":
       return runType(env, step);
     case "await":
-      return waitForCondition(env, step, step.timeout ?? DEFAULT_ACTION_TIMEOUT_MS, "await");
+      return waitForCondition(env, step, step.timeout ?? DEFAULT_ACTION_TIMEOUT_MS);
     case "assert":
-      return waitForCondition(env, step, DEFAULT_ASSERT_TIMEOUT_MS, "assertion");
+      return waitForCondition(env, step, DEFAULT_ASSERT_TIMEOUT_MS);
     case "scroll-to": {
       const r = await scrollToVisible(env, step.target, step.direction, step.within);
+      if (r.aborted) return ABORTED_OUTCOME;
       return { ok: Boolean(r.frame), reason: r.reason };
     }
   }
@@ -481,6 +498,7 @@ async function runTap(
   let point: { x: number; y: number };
   if (target.selector) {
     const frame = await waitForFrame(env, target.selector);
+    if (frame === "aborted") return ABORTED_OUTCOME;
     if (!frame) {
       return { ok: false, reason: offscreenHint(target.selector) };
     }
@@ -506,6 +524,7 @@ async function runType(
   step: { into: FlowSelector; text: string; submit?: boolean }
 ): Promise<DirectiveOutcome> {
   const frame = await waitForFrame(env, step.into);
+  if (frame === "aborted") return ABORTED_OUTCOME;
   if (!frame) {
     return { ok: false, reason: offscreenHint(step.into) };
   }
@@ -513,11 +532,17 @@ async function runType(
   // Keys are injected at the HID level and go to whatever holds focus, so the
   // tap→type gap must cover the app's focus round-trip (see the constants).
   if (!(await sleepOrAbort(TYPE_FOCUS_SETTLE_MS, env.signal))) {
-    return { ok: false, reason: "run aborted" };
+    return ABORTED_OUTCOME;
   }
   await waitForFocus(env, step.into, frame);
+  // waitForFocus returns void on abort as well as on focus/timeout — re-check
+  // before every keyboard dispatch (the keyboard tool has no abort handling of
+  // its own), so a cancelled run can never type into, or submit, whatever the
+  // app has focused after the caller gave up.
+  if (env.signal?.aborted) return ABORTED_OUTCOME;
   await invokeOnDevice(env, "keyboard", { text: step.text });
   if (step.submit !== false) {
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
     // Press Enter as a separate keyboard call — the tool dispatches `key`
     // before `text`, so a combined `{ text, key }` would submit before typing.
     await invokeOnDevice(env, "keyboard", { key: "enter" });
@@ -555,8 +580,7 @@ async function waitForCondition(
     expectedText?: string;
     textMatch?: TextMatchMode;
   },
-  timeoutMs: number,
-  what: "await" | "assertion"
+  timeoutMs: number
 ): Promise<DirectiveOutcome> {
   const deadline = Date.now() + timeoutMs;
 
@@ -567,7 +591,7 @@ async function waitForCondition(
   let finalPoll = false;
 
   for (;;) {
-    if (env.signal?.aborted) return { ok: false, reason: `${what} cancelled` };
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
       const data = await fetchFlowTree(env.registry, env.device);
       lastMatches = flowFindAll(data.tree, step.selector);
@@ -592,7 +616,7 @@ async function waitForCondition(
     }
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, env.signal))) {
-      return { ok: false, reason: `${what} cancelled` };
+      return ABORTED_OUTCOME;
     }
   }
 

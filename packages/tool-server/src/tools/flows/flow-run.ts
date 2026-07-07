@@ -679,6 +679,9 @@ async function execLeafStep(
       // structured report rather than abort the whole run unreported.
       try {
         const r = await runDirective(state, step);
+        // A run cancelled mid-directive is a skip (matching the pre-step guard
+        // and `wait`), never a step failure — the app did nothing wrong.
+        if (r.aborted) return { ...base, status: "skip", reason: r.reason };
         return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
