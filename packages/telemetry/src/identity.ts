@@ -42,7 +42,7 @@ const UPGRADE_COOLDOWN_MS = 60_000;
 const UPGRADE_MAX_ATTEMPTS = 3;
 
 /**
- * Resolve the anonymous telemetry id.
+ * Resolve the telemetry id.
  *
  * When a host fingerprint is available, the id IS that fingerprint — the 64-hex
  * one-way hash emitted by `simulator-server fingerprint`, used verbatim so
@@ -158,9 +158,7 @@ export function scheduleFingerprintUpgrade(
   const finalPath = identityFilePath();
 
   // Already have the fingerprint (cached or persisted) → nothing to upgrade.
-  if (cached && cached.path === finalPath && FINGERPRINT_PATTERN.test(cached.id)) return;
-  const stored = tryReadId(finalPath);
-  if (stored && FINGERPRINT_PATTERN.test(stored)) return;
+  if (servedFingerprintId(finalPath)) return;
 
   if (upgradeAttempts >= UPGRADE_MAX_ATTEMPTS) return;
   const now = Date.now();
@@ -203,15 +201,8 @@ export async function warmIdentity(
   resolveFingerprintAsync?: () => Promise<string | null>
 ): Promise<string> {
   const finalPath = identityFilePath();
-
-  if (cached && cached.path === finalPath && FINGERPRINT_PATTERN.test(cached.id)) {
-    return cached.id;
-  }
-  const stored = tryReadId(finalPath);
-  if (stored && FINGERPRINT_PATTERN.test(stored)) {
-    cached = { path: finalPath, id: stored };
-    return stored;
-  }
+  const served = servedFingerprintId(finalPath);
+  if (served) return served;
 
   if (resolveFingerprintAsync) {
     let raw: string | null = null;
@@ -233,6 +224,68 @@ export async function warmIdentity(
   // fast path (no truly-fresh resolve), and scheduleFingerprintUpgrade keeps
   // retrying the fingerprint in the background.
   return readOrCreateAnonId();
+}
+
+/**
+ * Establish the id BEFORE the first event, for a SHORT-LIVED entry point (the
+ * installer CLI) that can afford to block briefly but must NOT await the async
+ * resolver.
+ *
+ * Why sync, not `warmIdentity`: resolveHostFingerprintAsync unrefs its child,
+ * stdout pipe, and watchdog so a background probe never holds a CLI open — which
+ * means awaiting it as the only pending work in a short-lived process leaves the
+ * promise unsettled and the process EXITS (Node drains the loop past the unref'd
+ * handles). A short-lived caller therefore cannot reliably await it. This variant
+ * resolves SYNCHRONOUSLY (execFileSync, SIGKILL-bounded) instead, so it always
+ * returns without an exit hazard.
+ *
+ * Unlike readOrCreateAnonId — which serves a fallback id already on disk WITHOUT
+ * resolving (the hot-path contract that keeps the tool-server's accept path from
+ * blocking) — this DELIBERATELY forces the sync resolve and migrates a
+ * legacy/fresh fallback to the fingerprint up front, so the first tracked event
+ * carries the stable per-machine id rather than the id the background upgrade
+ * would only migrate to AFTER that first event. On resolve failure it falls back
+ * to readOrCreateAnonId (keep/mint a fallback) and the caller's per-event
+ * scheduleFingerprintUpgrade retries in the background. Best-effort; the only
+ * throw path is minting onto a wedged disk, which the wrapper catches.
+ */
+export function warmIdentitySync(resolveFingerprint?: () => string | null): string {
+  const finalPath = identityFilePath();
+  const served = servedFingerprintId(finalPath);
+  if (served) return served;
+
+  // Force the (memoized, at-most-once) sync resolve even over a legacy fallback,
+  // then migrate on-disk + cache so the next readOrCreateAnonId hits fast path.
+  const fp = resolveFingerprintOnce(resolveFingerprint);
+  if (fp) {
+    adoptFingerprint(fp);
+    return fp;
+  }
+
+  return readOrCreateAnonId();
+}
+
+/**
+ * Return an already-established FINGERPRINT id — authoritative in the cache, or
+ * persisted on disk (refreshing the cache) — or null if none is established yet.
+ *
+ * A 64-hex fingerprint is the terminal, per-machine id: any path that finds one
+ * is done and returns it WITHOUT resolving the binary. This is the shared
+ * fast-path prologue of the two warm entry points and scheduleFingerprintUpgrade.
+ * readOrCreateAnonId deliberately inlines the same two checks instead of calling
+ * this, because it also needs the non-fingerprint `stored` value afterward for
+ * its serve-the-fallback branch — routing through here would re-read the file.
+ */
+function servedFingerprintId(finalPath: string): string | null {
+  if (cached && cached.path === finalPath && FINGERPRINT_PATTERN.test(cached.id)) {
+    return cached.id;
+  }
+  const stored = tryReadId(finalPath);
+  if (stored && FINGERPRINT_PATTERN.test(stored)) {
+    cached = { path: finalPath, id: stored };
+    return stored;
+  }
+  return null;
 }
 
 /** Validate and normalize a raw resolver output to a canonical 64-hex id. */
@@ -431,7 +484,7 @@ function mintRandomId(finalPath: string): string {
       }
     }
   }
-  throw new Error("telemetry: failed to create anonymous identity after retries");
+  throw new Error("telemetry: failed to create identity after retries");
 }
 
 // Clear a non-id occupant squatting the identity path during a mint retry,
@@ -472,7 +525,7 @@ function claimCorruptOccupant(finalPath: string): string | null {
   return grabbed;
 }
 
-/** Read the anonymous id without creating one. Returns null if absent. */
+/** Read the id without creating one. Returns null if absent. */
 export function peekAnonId(): string | null {
   return tryReadId(identityFilePath());
 }

@@ -3,7 +3,7 @@ import pc from "picocolors";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { init as telemetryInit, track } from "@argent/telemetry";
+import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   detectAdapters,
@@ -168,6 +168,19 @@ export async function init(args: string[]): Promise<void> {
       p.cancel("Initialization cancelled.");
       process.exit(0);
     }
+
+    // Establish the telemetry identity (resolve + persist the host fingerprint)
+    // BEFORE the first tracked event. readOrCreateAnonId serves a fallback id
+    // already on disk WITHOUT a blocking fingerprint resolve (the hot-path
+    // contract), so without this the very first event — cli_init_start — would
+    // carry the legacy/fresh fallback id while the background upgrade only
+    // migrates the on-disk id to the real fingerprint DURING the rest of the run,
+    // leaving cli_init_start orphaned under a random distinct_id and every later
+    // event on the fingerprint. The SYNC warm is deliberate: the async variant
+    // awaits an unref'd resolver that, as a short-lived CLI's only pending work,
+    // never settles (the process would exit mid-init). Bounded, best-effort,
+    // consent-gated, never throws; a fast cached/disk read on a warm machine.
+    warmTelemetryIdentitySync();
 
     track("installation:cli_init_start", {
       package_manager: detectPackageManager(),

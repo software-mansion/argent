@@ -5,6 +5,7 @@ import {
   readOrCreateAnonId,
   scheduleFingerprintUpgrade,
   warmIdentity,
+  warmIdentitySync,
   deleteAnonId,
   _resetIdentityCacheForTest,
 } from "../src/identity.js";
@@ -624,6 +625,54 @@ describe("identity – async fingerprint upgrade & recovery (review C1/C2)", () 
 
   it("warmIdentity swallows a rejecting resolver and still establishes a fallback id", async () => {
     const id = await warmIdentity(() => Promise.reject(new Error("no binary")));
+    expect(versionNibble(id)).toBe("4");
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
+  });
+
+  // warmIdentitySync is the SHORT-LIVED-CLI (installer) counterpart of
+  // warmIdentity: it establishes the fingerprint BEFORE the first event without
+  // awaiting the async resolver (whose unref'd child would let a short-lived
+  // process exit mid-await). Its load-bearing difference from readOrCreateAnonId
+  // is that it MIGRATES a fallback id up front instead of serving it as-is.
+  it("warmIdentitySync migrates a legacy fallback id to the fingerprint synchronously (the cli_init_start fix)", () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
+
+    // readOrCreateAnonId would return the legacy id (hot-path contract). The sync
+    // warm forces the resolve+migrate so the very first event carries the
+    // fingerprint, and it persists it for every later run.
+    const id = warmIdentitySync(() => FP);
+    expect(id).toBe(FP);
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(FP);
+    // The subsequent (first tracked) event now serves the fingerprint via fast path.
+    expect(readOrCreateAnonId(() => FP)).toBe(FP);
+  });
+
+  it("warmIdentitySync resolves and persists the fingerprint on a fresh machine", () => {
+    const id = warmIdentitySync(() => FP);
+    expect(id).toBe(FP);
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(FP);
+  });
+
+  it("warmIdentitySync keeps an already-stored fingerprint without re-resolving (no spawn)", () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), FP, { mode: 0o600 });
+    const resolver = vi.fn(() => FP_OTHER);
+    expect(warmIdentitySync(resolver)).toBe(FP);
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it("warmIdentitySync keeps the legacy fallback and never throws when the fingerprint can't be resolved", () => {
+    fs.mkdirSync(`${tmp()}/.argent`, { recursive: true });
+    fs.writeFileSync(identityFilePath(), LEGACY_V4, { mode: 0o600 });
+    // Resolver yields nothing (cold/absent binary): degrade to the stored fallback,
+    // exactly as before the fix — the background upgrade retries later.
+    expect(warmIdentitySync(() => null)).toBe(LEGACY_V4);
+    expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(LEGACY_V4);
+  });
+
+  it("warmIdentitySync mints a fallback when nothing is stored and no fingerprint resolves", () => {
+    const id = warmIdentitySync(() => null);
     expect(versionNibble(id)).toBe("4");
     expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(id);
   });

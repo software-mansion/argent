@@ -8,7 +8,8 @@ import {
   markEnabled,
   writeConsentFlag,
   warmTelemetryIdentity,
-  forget,
+  warmTelemetryIdentitySync,
+  resetLocalTelemetryState,
   init,
   isEnabled,
   status,
@@ -234,6 +235,49 @@ describe("telemetry public surface", () => {
     expect(status().hasAnonIdOnDisk).toBe(false);
   });
 
+  // The SHORT-LIVED-CLI (installer) counterpart of warmTelemetryIdentity, wired
+  // into `argent init`/`update` so the very first event (cli_init_start) carries
+  // the stable fingerprint instead of a random fallback the background upgrade
+  // would only migrate to afterward.
+  it("warmTelemetryIdentitySync migrates a legacy fallback to the fingerprint before the first event (the cli_init_start fix)", () => {
+    const LEGACY = "11111111-1111-4111-8111-111111111111";
+    const FP = "f".repeat(64);
+    fs.mkdirSync(path.join(tmp(), ".argent"), { recursive: true });
+    fs.writeFileSync(idFile(), LEGACY, { mode: 0o600 });
+
+    // Without the sync warm, track() would serve the legacy fallback (hot-path
+    // contract). The warm forces the resolve+migrate up front...
+    warmTelemetryIdentitySync();
+    expect(readId()).toBe(FP);
+
+    // ...so the first tracked event already carries the fingerprint.
+    track("installation:cli_init_start", {
+      package_manager: "npm",
+      is_non_interactive: false,
+    });
+    const client = posthogMock.instances[0]!;
+    expect((client.capture.mock.calls[0]![0] as { distinctId: string }).distinctId).toBe(FP);
+  });
+
+  it("warmTelemetryIdentitySync mints no identity when telemetry is disabled", () => {
+    writeConsentFlag(false);
+    _resetConsentCacheForTest();
+    expect(isEnabled()).toBe(false);
+    warmTelemetryIdentitySync();
+    expect(readId()).toBeNull();
+    expect(status().hasAnonIdOnDisk).toBe(false);
+  });
+
+  it("warmTelemetryIdentitySync provisions no identity when the PostHog key is unusable", () => {
+    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "";
+    resetClient();
+    _resetConsentCacheForTest();
+    expect(isEnabled()).toBe(true);
+    warmTelemetryIdentitySync();
+    expect(readId()).toBeNull();
+    expect(status().hasAnonIdOnDisk).toBe(false);
+  });
+
   it("captures events in CI and annotates payloads with is_ci", () => {
     const restore = snapshotEnv(["CI"]);
     try {
@@ -269,11 +313,11 @@ describe("telemetry public surface", () => {
     expect(client.shutdown).toHaveBeenCalledTimes(1);
   });
 
-  it("forget does not send delete-person and performs local cleanup by default", async () => {
+  it("resetLocalTelemetryState removes local state without a delete-person event and leaves consent untouched", async () => {
     track("toolserver:start", {});
     expect(status().hasAnonIdOnDisk).toBe(true);
 
-    const result = await forget();
+    const result = await resetLocalTelemetryState();
     const client = posthogMock.instances[0]!;
 
     expect(posthogMock.instances).toHaveLength(1);
@@ -283,64 +327,63 @@ describe("telemetry public surface", () => {
     expect(client.flush).not.toHaveBeenCalled();
     expect(client.shutdown).not.toHaveBeenCalled();
     expect(result.localIdRemoved).toBe(true);
-    expect(result.consentDisabled).toBe(true);
+    expect(result.noticeReset).toBe(true);
     expect(status().hasAnonIdOnDisk).toBe(false);
-    expect(isEnabled()).toBe(false);
+    // Consent is deliberately left untouched — a lasting opt-out is `markDisabled()`.
+    expect(isEnabled()).toBe(true);
   });
 
-  it("forget removes the local telemetry id file without creating consent config, but the deterministic id re-derives on the next event while consent stays enabled", async () => {
+  it("removes the local telemetry id file but the deterministic id re-derives on the next event while consent stays enabled", async () => {
     fs.unlinkSync(configFilePath());
     _resetConsentCacheForTest();
     track("toolserver:start", {});
     const derivedId = readId();
 
-    const result = await forget({ disableConsent: false });
+    const result = await resetLocalTelemetryState();
 
     const client = posthogMock.instances[0]!;
     expect(client.capture).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "$delete_person" })
     );
     expect(result.localIdRemoved).toBe(true);
-    expect(result.consentDisabled).toBe(false);
     expect(status().hasAnonIdOnDisk).toBe(false);
+    // No config file is created just to clear a marker that was never set.
     expect(fs.existsSync(configFilePath())).toBe(false);
     expect(isEnabled()).toBe(true);
 
     // Deleting the id file with consent still enabled is a LOCAL removal, not a
     // permanent erasure: the fingerprint-derived id is re-created identically on
     // the next tracked event. A genuine reset comes from the opt-out path
-    // (forget's default disableConsent / markDisabled), covered above.
+    // (`markDisabled()` / `argent telemetry disable`).
     track("toolserver:start", {});
     expect(status().hasAnonIdOnDisk).toBe(true);
     expect(readId()).toBe(derivedId);
   });
 
-  it("forget without consent changes preserves an explicit opt-out", async () => {
+  it("leaves an explicit opt-out untouched", async () => {
     fs.writeFileSync(configFilePath(), JSON.stringify({ telemetry: { enabled: false } }) + "\n");
     _resetConsentCacheForTest();
 
-    const result = await forget({ disableConsent: false });
+    await resetLocalTelemetryState();
 
-    expect(result.consentDisabled).toBe(false);
     expect(getConsentState({}).enabled).toBe(false);
     expect(getConsentState({}).source.source).toBe("config_file");
   });
 
-  it("forget without consent changes preserves an explicit opt-in", async () => {
+  it("leaves an explicit opt-in untouched", async () => {
     markEnabled();
 
-    const result = await forget({ disableConsent: false });
+    await resetLocalTelemetryState();
 
-    expect(result.consentDisabled).toBe(false);
     expect(getConsentState({}).enabled).toBe(true);
     expect(getConsentState({}).source.source).toBe("config_file");
   });
 
-  it("forget without consent changes still removes the local telemetry id", async () => {
+  it("removes the local telemetry id", async () => {
     track("toolserver:start", {});
     expect(status().hasAnonIdOnDisk).toBe(true);
 
-    const result = await forget({ disableConsent: false });
+    const result = await resetLocalTelemetryState();
 
     expect(result.localIdRemoved).toBe(true);
     expect(status().hasAnonIdOnDisk).toBe(false);

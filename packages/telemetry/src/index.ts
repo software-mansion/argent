@@ -14,17 +14,18 @@ import {
   readOrCreateAnonId,
   scheduleFingerprintUpgrade,
   warmIdentity,
+  warmIdentitySync,
   peekAnonId,
 } from "./identity.js";
 import { resolveHostFingerprint, resolveHostFingerprintAsync } from "./fingerprint.js";
 import { isEnabled, writeConsentFlag, getConsentState } from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
-import { forget as forgetImpl, type ForgetOptions, type ForgetResult } from "./erasure.js";
 import type { EventName, EventPropertyMap } from "./events.js";
 
 export type { EventName, EventPropertyMap } from "./events.js";
 export type { Runtime } from "./base-props.js";
-export type { ForgetOptions, ForgetResult } from "./erasure.js";
+export type { TelemetryResetResult } from "./uninstall-reset.js";
+export { resetLocalTelemetryState } from "./uninstall-reset.js";
 export type { ConsentState, ConsentSource } from "./consent.js";
 export { attachRegistryTelemetry } from "./registry-listener.js";
 export { POSTHOG_HOST, resolveConfig } from "./posthog.js";
@@ -104,6 +105,35 @@ export async function warmTelemetryIdentity(): Promise<void> {
     await warmIdentity(resolveHostFingerprintAsync);
   } catch (err) {
     emitDebugError("warmTelemetryIdentity failed", err);
+  }
+}
+
+/**
+ * Establish the telemetry identity BEFORE the first tracked event, for a
+ * SHORT-LIVED entry point (the installer CLI: `argent init` / `argent update`).
+ *
+ * The async warmTelemetryIdentity() is UNSAFE here: it awaits
+ * resolveHostFingerprintAsync, whose child/stdout/watchdog are unref'd so a
+ * background probe never holds a CLI open — awaited as the only pending work in a
+ * short-lived process, that promise never settles and the process exits. This
+ * variant resolves the fingerprint SYNCHRONOUSLY (bounded execFileSync) and
+ * migrates any legacy/fresh fallback id to it, so the very first event carries
+ * the stable per-machine distinct_id instead of a fallback the background upgrade
+ * would only migrate to afterward (splitting the machine across two ids).
+ *
+ * Blocks briefly (a fast cached/disk read on a warm machine; a bounded one-time
+ * spawn on a cold/fresh one) — acceptable for a CLI about to do far slower work.
+ * Respects consent (a disabled machine mints no identity) and never throws.
+ */
+export function warmTelemetryIdentitySync(): void {
+  try {
+    if (!isEnabled()) return;
+    // Mirror warmTelemetryIdentity/track: don't provision a durable id for events
+    // that can never be transmitted (no usable PostHog key).
+    if (!getClient()) return;
+    warmIdentitySync(resolveHostFingerprint);
+  } catch (err) {
+    emitDebugError("warmTelemetryIdentitySync failed", err);
   }
 }
 
@@ -240,10 +270,6 @@ export async function markDisabled(): Promise<void> {
   } catch (err) {
     emitDebugError("markDisabled failed", err);
   }
-}
-
-export async function forget(options?: ForgetOptions): Promise<ForgetResult> {
-  return forgetImpl(options);
 }
 
 /** Status payload for `argent telemetry status`; does not create a client. */

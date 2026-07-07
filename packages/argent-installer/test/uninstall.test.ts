@@ -19,9 +19,9 @@ import {
 const telemetryMock = vi.hoisted(() => ({
   init: vi.fn(),
   track: vi.fn(),
-  forget: vi.fn().mockResolvedValue({
+  resetLocalTelemetryState: vi.fn().mockResolvedValue({
     localIdRemoved: true,
-    consentDisabled: false,
+    noticeReset: true,
   }),
   shutdown: vi.fn().mockResolvedValue(undefined),
 }));
@@ -111,7 +111,7 @@ describe("uninstall — telemetry consent preservation", () => {
       has_pruned_content: false,
       has_uninstalled_package: false,
     });
-    expect(telemetryMock.forget).not.toHaveBeenCalled();
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
   });
 
   it("resets uninstall telemetry identity without persisting a consent opt-out after global package uninstall", async () => {
@@ -124,7 +124,7 @@ describe("uninstall — telemetry consent preservation", () => {
       expect.arrayContaining(["uninstall", "-g", "@swmansion/argent"]),
       expect.any(Object)
     );
-    expect(telemetryMock.forget).toHaveBeenCalledWith({ disableConsent: false });
+    expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
   });
 
   it("drains queued uninstall telemetry before deleting the local telemetry id", async () => {
@@ -138,8 +138,8 @@ describe("uninstall — telemetry consent preservation", () => {
     });
 
     const shutdownOrder = telemetryMock.shutdown.mock.invocationCallOrder[0]!;
-    const forgetOrder = telemetryMock.forget.mock.invocationCallOrder[0]!;
-    expect(shutdownOrder).toBeLessThan(forgetOrder);
+    const resetOrder = telemetryMock.resetLocalTelemetryState.mock.invocationCallOrder[0]!;
+    expect(shutdownOrder).toBeLessThan(resetOrder);
   });
 
   it("does not delete the local telemetry id when global package uninstall fails", async () => {
@@ -159,7 +159,7 @@ describe("uninstall — telemetry consent preservation", () => {
         has_uninstalled_package: false,
       })
     );
-    expect(telemetryMock.forget).not.toHaveBeenCalled();
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
   });
 
   it("drains uninstall telemetry when package shutdown throws before uninstalling", async () => {
@@ -177,7 +177,7 @@ describe("uninstall — telemetry consent preservation", () => {
       })
     );
     expect(telemetryMock.shutdown).toHaveBeenCalledOnce();
-    expect(telemetryMock.forget).not.toHaveBeenCalled();
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
   });
 
   it("drains uninstall telemetry on an unclassified throw outside the classified paths", async () => {
@@ -199,7 +199,7 @@ describe("uninstall — telemetry consent preservation", () => {
       })
     );
     expect(telemetryMock.shutdown).toHaveBeenCalledOnce();
-    expect(telemetryMock.forget).not.toHaveBeenCalled();
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
   });
 });
 
