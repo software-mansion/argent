@@ -1,6 +1,6 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { execFileSync } from "node:child_process";
+import * as path from "node:path";
 import semver from "semver";
 import { init as telemetryInit, track } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
@@ -9,6 +9,7 @@ import {
   detectAdapters,
   findConfiguredAdapterScopes,
   getMcpEntryForScope,
+  isArgentManagedEntry,
   resolveLocalCommandMode,
   copyRulesAndAgents,
   type McpConfigAdapter,
@@ -37,7 +38,7 @@ import {
   type InstallMode,
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
-import { runTrustingDisk } from "./shell.js";
+import { execShellCommandSync, runTrustingDisk } from "./shell.js";
 import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
@@ -53,6 +54,24 @@ function getRequestedVersion(args: string[]): string | null {
     }
     if (arg?.startsWith("--version=")) {
       return arg.slice("--version=".length) || null;
+    }
+  }
+  return null;
+}
+
+// Explicit project pin used by the agent-triggered update-argent tool. The
+// tool proves WHICH project's local install it targets by walking manifests /
+// install records; re-deriving here via resolveProjectRoot (editor-dir/.git
+// markers only) can resolve a DIFFERENT ancestor in monorepos and silently
+// no-op the update the tool already reported as initiated.
+function getProjectRootOverride(args: string[]): string | null {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--project-root") {
+      return args[i + 1] ?? null;
+    }
+    if (arg?.startsWith("--project-root=")) {
+      return arg.slice("--project-root=".length) || null;
     }
   }
   return null;
@@ -168,16 +187,18 @@ export async function update(args: string[]): Promise<void> {
   };
 
   // Version-check + install for ONE install target (global PATH binary or the
-  // project's local devDependency). Hard failures finalize telemetry and
-  // process.exit — aborting the whole command; soft outcomes return so a
-  // multi-target run can move on to the next target. The returned outcome
-  // ("updated" / "declined" / "noop") lets the caller decide whether the run
-  // earned the config refresh: a run where the only prompt was answered "no"
-  // must end like the old single-target flow did — cancel, touch nothing.
+  // project's local devDependency). EVERY outcome returns — a hard failure on
+  // one target must not abort the run mid-loop (a global EACCES would silently
+  // skip a local update that would have succeeded, plus the refresh). The
+  // caller aggregates: "failed" carries the failure signal for the terminal
+  // telemetry event and the final exit code; "updated" / "declined" / "noop"
+  // decide whether the run earned the config refresh — a run where the only
+  // prompt was answered "no" must end like the old single-target flow did:
+  // cancel, touch nothing.
   const applyUpdateForTarget = async (
     mode: InstallMode,
     projectRoot: string
-  ): Promise<"updated" | "declined" | "noop"> => {
+  ): Promise<"updated" | "declined" | "noop" | { failed: InstallerFailureSignal }> => {
     // Disclose which install we're about to act on before any mutation.
     if (mode === "local") {
       p.log.info(
@@ -211,9 +232,32 @@ export async function update(args: string[]): Promise<void> {
         false,
         UPDATE_INSTALLED_VERSION_DETECT_FAILED
       );
-      await failUpdateTelemetry(UPDATE_INSTALLED_VERSION_DETECT_FAILED);
       p.log.error("Could not determine installed version.");
-      process.exit(1);
+      return { failed: UPDATE_INSTALLED_VERSION_DETECT_FAILED };
+    }
+
+    // A resolvable copy the project never opted into — no committed .argent
+    // record (installMode would be "local"), no declaration in its own
+    // manifest — is not this project's install (install-record.ts's intent
+    // rule, same gate uninstall applies). Running the package-manager add here
+    // would ADD a devDependency and rewrite a lockfile the user never opted
+    // into. Yarn PnP probes already imply a declaration.
+    if (
+      mode === "local" &&
+      localProbe?.installed &&
+      installMode !== "local" &&
+      !isDeclaredLocally(projectRoot)
+    ) {
+      p.log.warn(
+        `${PACKAGE_NAME} is resolvable from this project but is not declared in its package.json.`
+      );
+      p.log.info(
+        `A hoisted or transitive copy is not this project's install. Run ` +
+          `${pc.cyan("argent init --local")} to adopt it as a devDependency, or ` +
+          `${pc.cyan("argent update --global")} for the global install.`
+      );
+      await trackPackageAction("no_update", updateStartTime, true);
+      return "noop";
     }
 
     // Local mode, but nothing is in node_modules — a fresh clone before the
@@ -256,18 +300,7 @@ export async function update(args: string[]): Promise<void> {
     let minReleaseAgeMs = 0;
 
     if (requestedVersion !== null) {
-      if (!semver.valid(requestedVersion) || semver.prerelease(requestedVersion)) {
-        spinner.stop(pc.red("Invalid update target."));
-        await trackPackageAction(
-          "update_failed",
-          updateStartTime,
-          false,
-          UPDATE_INVALID_TARGET_VERSION
-        );
-        await failUpdateTelemetry(UPDATE_INVALID_TARGET_VERSION);
-        p.log.error(`Requested version is not a stable semver: ${requestedVersion}`);
-        process.exit(1);
-      }
+      // Validated once, before the target loop.
       target = requestedVersion;
     } else {
       let resolved;
@@ -281,9 +314,8 @@ export async function update(args: string[]): Promise<void> {
           false,
           UPDATE_REGISTRY_CHECK_FAILED
         );
-        await failUpdateTelemetry(UPDATE_REGISTRY_CHECK_FAILED);
         p.log.error(`Failed to check registry: ${err}`);
-        process.exit(1);
+        return { failed: UPDATE_REGISTRY_CHECK_FAILED };
       }
 
       if (resolved === null) {
@@ -294,9 +326,8 @@ export async function update(args: string[]): Promise<void> {
           false,
           UPDATE_REGISTRY_CHECK_FAILED
         );
-        await failUpdateTelemetry(UPDATE_REGISTRY_CHECK_FAILED);
         p.log.error("Failed to determine the latest Argent release from the registry.");
-        process.exit(1);
+        return { failed: UPDATE_REGISTRY_CHECK_FAILED };
       }
 
       latest = resolved.latestVersion;
@@ -392,9 +423,8 @@ export async function update(args: string[]): Promise<void> {
           false,
           UPDATE_TOOLSERVER_STOP_FAILED
         );
-        await failUpdateTelemetry(UPDATE_TOOLSERVER_STOP_FAILED);
         p.log.error(`Could not stop the running tool server: ${err}`);
-        process.exit(1);
+        return { failed: UPDATE_TOOLSERVER_STOP_FAILED };
       }
 
       const packageAction = resolveUpdatePackageAction(
@@ -408,8 +438,7 @@ export async function update(args: string[]): Promise<void> {
       let landedVersion: string | null = null;
       const { landed: reachedTarget, exitError: installError } = await runTrustingDisk(
         () => {
-          execFileSync(cmd.bin, cmd.args, {
-            stdio: "inherit",
+          execShellCommandSync(cmd, {
             env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
             // Local installs must rewrite the project's manifest/lockfile.
             ...(mode === "local" ? { cwd: projectRoot } : {}),
@@ -436,15 +465,34 @@ export async function update(args: string[]): Promise<void> {
             false,
             UPDATE_PACKAGE_ACTION_FAILED
           );
-          await failUpdateTelemetry(UPDATE_PACKAGE_ACTION_FAILED);
           p.log.error(`${installed ? "Update" : "Install"} failed: ${installError}`);
-          process.exit(1);
+          return { failed: UPDATE_PACKAGE_ACTION_FAILED };
         }
         p.log.warn(
           pc.dim(
             `Your package manager exited non-zero but ${PACKAGE_NAME}@${landedVersion} is installed — continuing.`
           )
         );
+      } else if (landedVersion !== null && !reachedTarget) {
+        // The disk verdict cuts BOTH ways: a clean exit whose target version
+        // did not land (an nvm/prefix split — npm installed into a prefix the
+        // PATH's `argent` doesn't resolve) is a failure, not an update. Only a
+        // null landedVersion (unreadable, e.g. Yarn PnP) leaves the exit code
+        // authoritative.
+        await trackPackageAction(
+          packageAction,
+          packageActionStartedAt,
+          false,
+          UPDATE_PACKAGE_ACTION_FAILED
+        );
+        p.log.error(
+          `${installed ? "Update" : "Install"} reported success but v${landedVersion} is still ` +
+            `what resolves for the ${mode} install (expected v${target}). ` +
+            (mode === "global"
+              ? `Check that your package manager's global prefix matches the \`argent\` on your PATH.`
+              : `Check the project's node_modules layout.`)
+        );
+        return { failed: UPDATE_PACKAGE_ACTION_FAILED };
       }
       await trackPackageAction(packageAction, packageActionStartedAt, true);
       return "updated";
@@ -488,11 +536,32 @@ export async function update(args: string[]): Promise<void> {
 
     track("installation:cli_update_start", {});
 
+    // Validate a --version request once, up front: it applies to every target
+    // alike, so it must fail the run before any target acts on it rather than
+    // aborting a multi-target loop halfway through.
+    if (
+      requestedVersion !== null &&
+      (!semver.valid(requestedVersion) || semver.prerelease(requestedVersion))
+    ) {
+      await trackPackageAction(
+        "update_failed",
+        updateStartTime,
+        false,
+        UPDATE_INVALID_TARGET_VERSION
+      );
+      await failUpdateTelemetry(UPDATE_INVALID_TARGET_VERSION);
+      p.log.error(`Requested version is not a stable semver: ${requestedVersion}`);
+      process.exit(1);
+    }
+
     // The committed .argent/install.json (else a manifest declaration) decides
     // the project's mode; it keys the config refresh below and the telemetry
     // funnel. Which install(s) to actually update is a separate choice — see the
     // target selection next.
-    const projectRoot = resolveProjectRoot(process.cwd());
+    const rootOverride = getProjectRootOverride(args);
+    const projectRoot = rootOverride
+      ? path.resolve(rootOverride)
+      : resolveProjectRoot(process.cwd());
     installMode = resolveInstallMode(projectRoot);
 
     // Target selection: explicit flags win; a lone PRESENT install is used
@@ -548,9 +617,16 @@ export async function update(args: string[]): Promise<void> {
       }
     }
 
-    const outcomes: Array<"updated" | "declined" | "noop"> = [];
+    const outcomes: Array<"updated" | "declined" | "noop" | "failed"> = [];
+    let firstFailure: InstallerFailureSignal | null = null;
     for (const mode of targets) {
-      outcomes.push(await applyUpdateForTarget(mode, projectRoot));
+      const outcome = await applyUpdateForTarget(mode, projectRoot);
+      if (typeof outcome === "object") {
+        firstFailure ??= outcome.failed;
+        outcomes.push("failed");
+      } else {
+        outcomes.push(outcome);
+      }
     }
 
     // "No" means no: when at least one target's prompt was declined and nothing
@@ -560,10 +636,20 @@ export async function update(args: string[]): Promise<void> {
     // mutate files the user just refused to have touched. A partial run (one
     // declined, another updated) still refreshes: the applied update needs its
     // configuration re-emitted.
-    if (outcomes.includes("declined") && !outcomes.includes("updated")) {
+    if (outcomes.includes("declined") && !outcomes.includes("updated") && !firstFailure) {
       await completeUpdateTelemetry();
       p.cancel("Update cancelled.");
       process.exit(0);
+    }
+
+    // Nothing was updated and at least one target hard-failed: end like the old
+    // single-target flow did — failure telemetry, exit 1, no refresh. (A partial
+    // run with an "updated" target falls through: that update still needs its
+    // configuration re-emitted; the failure resurfaces in the exit code below.)
+    if (firstFailure && !outcomes.includes("updated")) {
+      await failUpdateTelemetry(firstFailure);
+      p.outro(pc.red("Update failed."));
+      process.exit(1);
     }
 
     // ── Refresh configuration ───────────────────────────────────────────────────
@@ -601,17 +687,42 @@ export async function update(args: string[]): Promise<void> {
         ["global", new Set()],
       ]);
 
+      // Detect first, then apply. Each configured entry is read and classified
+      // BEFORE anything is written: an entry argent didn't author (a custom
+      // command pointing at a dev checkout, extra args, env vars) is a
+      // deliberate override — rewriting it to the stock command would destroy
+      // the customization AND launder it into a bare shape the stale-config
+      // sweep below could then judge dead and delete. Everything else is
+      // rewritten unconditionally, like the pre-classification refresh did:
+      // the write also REPAIRS state the normalized view can't see — an
+      // opencode entry left `enabled: false`, or an entry so mangled that
+      // getArgentEntry returns its unreadable sentinel ({ command: "" }).
       for (const { adapter, scope, configPath } of configuredScopes) {
         const normScope = scope === "project" ? "local" : "global";
-        if (!(skipEntryRewrite && normScope === "local")) {
-          try {
-            adapter.write(configPath, entryFor(normScope));
-            results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
-          } catch {
-            // Skip paths that can't be written.
-          }
-        }
+        // Allowlists and rules still refresh for this adapter either way — only
+        // the MCP entry itself is protected.
         adaptersByScope.get(normScope)!.add(adapter);
+        if (skipEntryRewrite && normScope === "local") continue;
+        let existing: McpServerEntry | null;
+        try {
+          existing = adapter.getArgentEntry(configPath);
+        } catch {
+          continue;
+        }
+        const isUnreadableSentinel =
+          existing !== null && existing.command === "" && existing.args.length === 0;
+        if (existing !== null && !isUnreadableSentinel && !isArgentManagedEntry(existing)) {
+          results.push(
+            `${pc.yellow("!")} ${adapter.name} left a customized entry untouched ${pc.dim(configPath)}`
+          );
+          continue;
+        }
+        try {
+          adapter.write(configPath, entryFor(normScope));
+          results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
+        } catch {
+          // Skip paths that can't be written.
+        }
       }
       if (skipEntryRewrite && configuredScopes.some(({ scope }) => scope === "project")) {
         p.log.info(
@@ -662,7 +773,9 @@ export async function update(args: string[]): Promise<void> {
         scope: localAdapters.length > 0 ? "local" : "global",
         effectiveRoot: projectRoot,
         // Same one-shot confirmation init uses for removals that reach beyond
-        // this project; --yes proceeds without it.
+        // this project. --yes passes no confirmer, which makes the sweep
+        // report-only for those entries — the agent-triggered `update --yes`
+        // must never delete cross-project state on a fallible PATH probe.
         confirmCrossProjectRemovals: nonInteractive
           ? undefined
           : async (items) => {
@@ -691,6 +804,14 @@ export async function update(args: string[]): Promise<void> {
       }
 
       reportSkillRefresh(projectRoot, "installer_update_skills_refresh");
+    }
+
+    if (firstFailure) {
+      // Partial run: one target updated (its refresh just ran), another hard-
+      // failed. The exit code and terminal telemetry must not read as success.
+      await failUpdateTelemetry(firstFailure);
+      p.outro(pc.yellow("Update finished with errors — see above."));
+      process.exit(1);
     }
 
     await completeUpdateTelemetry();

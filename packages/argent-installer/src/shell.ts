@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import type { ShellCommand } from "./package-manager.js";
 
 export interface TrustDiskOutcome {
@@ -27,6 +27,27 @@ export async function runTrustingDisk(
     exitError = err instanceof Error ? err : new Error(String(err));
   }
   return { landed: landedOnDisk(), exitError };
+}
+
+// Synchronous package-manager run with inherited stdio, for the interactive
+// update/uninstall flows where the user should see the package manager's own
+// output. On Windows the command runs through a shell with its BARE name:
+// npm/yarn/pnpm installed via npm are .cmd shims, which Node
+// (post-CVE-2024-27980) refuses to spawn without a shell — while bun or pnpm
+// from their native installers are real .exe files with no .cmd shim at all.
+// cmd.exe's PATHEXT resolution handles both, where hardcoding a `.cmd` suffix
+// would break the .exe-based managers. Throws the execFileSync error on
+// non-zero exit, like execFileSync itself.
+export function execShellCommandSync(
+  cmd: ShellCommand,
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
+): void {
+  execFileSync(cmd.bin, cmd.args, {
+    stdio: "inherit",
+    shell: process.platform === "win32",
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    ...(opts.env ? { env: opts.env } : {}),
+  });
 }
 
 // Run a package-manager command, capturing stderr for the rejection message.

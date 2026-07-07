@@ -3,7 +3,6 @@ import pc from "picocolors";
 import { parse as parseYaml } from "yaml";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
 import { init as telemetryInit, track, forget as telemetryForget } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
@@ -20,6 +19,7 @@ import {
   getGloballyInstalledPackageRoot,
   globalUninstallCommand,
   localUninstallCommand,
+  isDeclaredLocally,
   isGloballyInstalled,
   probeLocalInstall,
   resolveInstallMode,
@@ -30,6 +30,7 @@ import {
   type InstallMode,
   type ShellCommand,
 } from "./utils.js";
+import { execShellCommandSync } from "./shell.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
@@ -356,6 +357,7 @@ export async function uninstall(args: string[]): Promise<void> {
   let shouldPrune = nonInteractive;
   let hasPrunedContent = false;
   let hasUninstalledPackage = false;
+  let hasUninstalledGlobalPackage = false;
 
   try {
     p.intro(pc.bgRed(pc.white(" argent uninstall ")));
@@ -645,6 +647,21 @@ export async function uninstall(args: string[]): Promise<void> {
         // PnP-aware probe: a Yarn PnP project has no node_modules but the local
         // devDependency is still there to remove.
         if (!uninstallLocalProbe.installed) return null;
+        // Resolvable is not enough: a hoisted transitive dep or a workspace
+        // symlink the project never opted into — no committed .argent record,
+        // no declaration in its own manifest — is not this project's install
+        // (install-record.ts's intent rule), and running the package-manager
+        // remove against it would rewrite a manifest/lockfile the user never
+        // opted into, pruning a copy other packages depend on.
+        if (installMode !== "local" && !isDeclaredLocally(projectRoot)) {
+          p.log.info(
+            pc.dim(
+              `${PACKAGE_NAME} is resolvable from this project but not declared in its ` +
+                `package.json — skipping the local package removal.`
+            )
+          );
+          return null;
+        }
         return {
           kind: "local",
           cmd: localUninstallCommand(detectProjectPackageManager(projectRoot), PACKAGE_NAME),
@@ -705,12 +722,10 @@ export async function uninstall(args: string[]): Promise<void> {
 
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
-        execFileSync(removable.cmd.bin, removable.cmd.args, {
-          stdio: "inherit",
-          ...(removable.cwd ? { cwd: removable.cwd } : {}),
-        });
+        execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
         p.log.success(`Removed ${removable.kind} package.`);
         hasUninstalledPackage = true;
+        if (removable.kind === "global") hasUninstalledGlobalPackage = true;
 
         // The local install is gone — the committed mode marker must go with it
         // even when the user declined the content-pruning step above, or a
@@ -731,7 +746,13 @@ export async function uninstall(args: string[]): Promise<void> {
     }
 
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
-    if (hasUninstalledPackage) {
+    // Erase the machine-wide anonymous telemetry id when the GLOBAL package
+    // was removed, or when a removal left NO global install behind (a
+    // local-only machine whose last known install just went away). What must
+    // NOT trigger it: a local-only removal while a kept global install remains
+    // in active use — severing its identity and issuing an erasure for an
+    // installation the user kept would be wrong.
+    if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isGloballyInstalled())) {
       try {
         await telemetryForget({ disableConsent: false });
       } catch {

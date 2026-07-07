@@ -3,6 +3,7 @@ import pc from "picocolors";
 import { track } from "@argent/telemetry";
 import {
   getInstalledVersion,
+  getGloballyInstalledVersion,
   getLatestVersion,
   isNewerVersion,
   detectPackageManager,
@@ -207,7 +208,7 @@ async function runGlobal(opts: {
     try {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed globally."));
-      version = getInstalledVersion() ?? version;
+      version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
       await tel.trackPackageAction("fresh_install", packageActionStartedAt, true);
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
@@ -235,7 +236,7 @@ async function runGlobal(opts: {
     try {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed from tarball."));
-      version = getInstalledVersion() ?? version;
+      version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
@@ -247,6 +248,20 @@ async function runGlobal(opts: {
   }
 
   // Already installed → offer an interactive update.
+  //
+  // Compare the registry against the GLOBAL install's own version, never the
+  // running package's: under `npx @swmansion/argent init` the running package
+  // is the npx cache — always the latest — which would mask a stale global
+  // binary and skip the update offer while every editor session keeps running
+  // it (the exact bug topology.ts's getGloballyInstalledVersion exists for,
+  // and which `update` already avoids). The resolved global version also
+  // becomes this run's version — it is the install the written configs run.
+  // When that version can't be read (a Windows npm layout whose argent.cmd
+  // wrapper hides the owning package — see getGloballyInstalledPackageRoot),
+  // say so and skip the check rather than silently comparing against the
+  // running package and masking a stale binary all over again.
+  const globalVersion = getGloballyInstalledVersion();
+  version = globalVersion ?? version;
   const packageActionStartedAt = performance.now();
   track("installation:global_install_decision", { decision: "already_installed" });
   await tel.trackPackageAction("already_installed", packageActionStartedAt, true);
@@ -260,7 +275,13 @@ async function runGlobal(opts: {
   }
   spinner.stop(pc.dim("Version check complete."));
 
-  if (latest && isNewerVersion(latest, version)) {
+  if (latest && globalVersion === null) {
+    p.log.warn(
+      `Could not determine the global install's version — skipping the update check. ` +
+        `Run ${pc.cyan("argent update")} to check for updates.`
+    );
+    await tel.trackPackageAction("no_update", packageActionStartedAt, true);
+  } else if (latest && isNewerVersion(latest, version)) {
     const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
     const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
     if (nonInteractive) {
@@ -307,7 +328,7 @@ async function runGlobal(opts: {
         try {
           await runShellCommand(cmd);
           updateSpinner.stop(pc.green(`Updated to v${latest}.`));
-          version = getInstalledVersion() ?? version;
+          version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
           await tel.trackPackageAction("init_triggered_update", updateStartedAt, true);
 
           // The user just bumped to a newer argent. Re-sync and prune argent

@@ -536,6 +536,65 @@ describe("uninstall — local (committable) mode package removal", () => {
 
     expect(fs.existsSync(path.join(tmpDir, ".argent", "install.json"))).toBe(false);
   });
+
+  it("keeps the machine-wide telemetry identity on a local-only removal", async () => {
+    stageLocalProject();
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    // The local devDependency was removed, but the global install (and other
+    // projects) remain in use — the anonymous id must not be erased.
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({ has_uninstalled_package: true })
+    );
+    expect(telemetryMock.forget).not.toHaveBeenCalled();
+  });
+
+  it("erases the telemetry identity when the removed local install was the last one", async () => {
+    stageLocalProject();
+    process.chdir(tmpDir);
+    // No global argent anywhere: this local devDependency is the machine's
+    // only known install, so removing it must erase the anonymous id like a
+    // global uninstall does.
+    childProcessMock.execSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    await uninstall(["--yes"]);
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({ has_uninstalled_package: true })
+    );
+    expect(telemetryMock.forget).toHaveBeenCalledWith({ disableConsent: false });
+  });
+
+  it("--local skips the package removal when the project never opted into argent", async () => {
+    // A resolvable copy with NO committed record and NO manifest declaration —
+    // a hoisted transitive dep / workspace symlink. Removing it would rewrite
+    // a manifest and lockfile the user never opted into.
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "host" }));
+    fs.writeFileSync(path.join(tmpDir, "package-lock.json"), "{}");
+    const pkgDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--local"]);
+
+    const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
+    expect(calls.some(([, args]) => Array.isArray(args) && args.includes("uninstall"))).toBe(false);
+    expect(fs.existsSync(path.join(pkgDir, "package.json"))).toBe(true);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({ has_uninstalled_package: false })
+    );
+  });
 });
 
 // ── Scoped config cleanup (scopesToClean) ─────────────────────────────────────
