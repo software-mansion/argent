@@ -204,13 +204,13 @@ describe("vscodeAdapter.findShadowingConfigs", () => {
 // ── Shared cleanup policy ─────────────────────────────────────────────────────
 
 describe("cleanupStaleMcpConfigs", () => {
-  it("auto-removes a Claude local-scope entry even when argent is on PATH", () => {
+  it("auto-removes a Claude local-scope entry even when argent is on PATH", async () => {
     globallyInstalled = true;
     writeJsonFile(claudeJsonPath(), {
       projects: { [root]: { mcpServers: { argent: ARGENT_GLOBAL_ENTRY } } },
     });
 
-    const result = cleanupStaleMcpConfigs({
+    const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [claude],
       detectedAdapters: [claude],
       installMode: "local",
@@ -224,12 +224,12 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(project.mcpServers).toBeUndefined();
   });
 
-  it("removes a dead bare-argent global entry on a local install", () => {
+  it("removes a dead bare-argent global entry on a local install", async () => {
     globallyInstalled = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
-    const result = cleanupStaleMcpConfigs({
+    const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [cursor],
       detectedAdapters: [cursor],
       installMode: "local",
@@ -242,12 +242,12 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(fs.existsSync(cursorGlobal)).toBe(false);
   });
 
-  it("leaves a working bare-argent global entry alone, silently", () => {
+  it("leaves a working bare-argent global entry alone, silently", async () => {
     globallyInstalled = true;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
-    const result = cleanupStaleMcpConfigs({
+    const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [cursor],
       detectedAdapters: [cursor],
       installMode: "local",
@@ -259,14 +259,14 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(fs.existsSync(cursorGlobal)).toBe(true);
   });
 
-  it("warns about (but never removes) a custom-command global entry", () => {
+  it("warns about (but never removes) a custom-command global entry", async () => {
     globallyInstalled = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, {
       mcpServers: { argent: { command: "node", args: ["/old/checkout/cli.js", "mcp"] } },
     });
 
-    const result = cleanupStaleMcpConfigs({
+    const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [cursor],
       detectedAdapters: [cursor],
       installMode: "local",
@@ -279,14 +279,14 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(readJsonFile(cursorGlobal).mcpServers).toBeDefined();
   });
 
-  it("sweeps dead global entries of detected-but-not-written adapters", () => {
+  it("sweeps dead global entries of detected-but-not-written adapters", async () => {
     // Windsurf has no project config, so local mode drops it from the written
     // set — its dead global entry must still be pruned via the detected set.
     globallyInstalled = false;
     const windsurfGlobal = path.join(home, ".codeium", "windsurf", "mcp_config.json");
     writeJsonFile(windsurfGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
-    const result = cleanupStaleMcpConfigs({
+    const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [],
       detectedAdapters: [windsurf],
       installMode: "local",
@@ -298,12 +298,12 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(fs.existsSync(windsurfGlobal)).toBe(false);
   });
 
-  it("does not sweep global entries on a global-mode install", () => {
+  it("does not sweep global entries on a global-mode install", async () => {
     globallyInstalled = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
-    const result = cleanupStaleMcpConfigs({
+    const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [cursor],
       detectedAdapters: [cursor],
       installMode: "global",
@@ -315,13 +315,13 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(fs.existsSync(cursorGlobal)).toBe(true);
   });
 
-  it("warns when a local-command project entry outranks a fresh global write", () => {
+  it("warns when a local-command project entry outranks a fresh global write", async () => {
     const cursorProject = path.join(root, ".cursor", "mcp.json");
     writeJsonFile(cursorProject, {
       mcpServers: { argent: { command: "node", args: ["node_modules/x/cli.js", "mcp"] } },
     });
 
-    const result = cleanupStaleMcpConfigs({
+    const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [cursor],
       detectedAdapters: [cursor],
       installMode: "global",
@@ -335,11 +335,11 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(readJsonFile(cursorProject).mcpServers).toBeDefined();
   });
 
-  it("stays silent about a bare-argent project entry under a global write", () => {
+  it("stays silent about a bare-argent project entry under a global write", async () => {
     const cursorProject = path.join(root, ".cursor", "mcp.json");
     writeJsonFile(cursorProject, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
-    const result = cleanupStaleMcpConfigs({
+    const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [cursor],
       detectedAdapters: [cursor],
       installMode: "global",
@@ -350,7 +350,7 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(result.lines).toHaveLength(0);
   });
 
-  it("survives an adapter whose shadow probe throws", () => {
+  it("survives an adapter whose shadow probe throws", async () => {
     const throwing = {
       ...claude,
       findShadowingConfigs: () => {
@@ -358,7 +358,7 @@ describe("cleanupStaleMcpConfigs", () => {
       },
     };
 
-    const result = cleanupStaleMcpConfigs({
+    const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [throwing],
       detectedAdapters: [],
       installMode: "local",
@@ -368,5 +368,103 @@ describe("cleanupStaleMcpConfigs", () => {
 
     expect(result.warnedCount).toBe(1);
     expect(result.removedCount).toBe(0);
+  });
+
+  it("asks once before cross-project removals, listing each entry", async () => {
+    globallyInstalled = false;
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
+    const windsurfGlobal = path.join(home, ".codeium", "windsurf", "mcp_config.json");
+    writeJsonFile(windsurfGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
+
+    const confirm = vi.fn(async (items: string[]) => {
+      expect(items).toHaveLength(2);
+      expect(items.join("\n")).toContain(cursorGlobal);
+      expect(items.join("\n")).toContain(windsurfGlobal);
+      return true;
+    });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor, windsurf],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: confirm,
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(result.removedCount).toBe(2);
+    expect(fs.existsSync(cursorGlobal)).toBe(false);
+    expect(fs.existsSync(windsurfGlobal)).toBe(false);
+  });
+
+  it("keeps every dead global entry when the confirmation is declined", async () => {
+    globallyInstalled = false;
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => false,
+    });
+
+    expect(result.removedCount).toBe(0);
+    expect(result.warnedCount).toBe(1);
+    expect(readJsonFile(cursorGlobal).mcpServers).toBeDefined();
+  });
+
+  it("never prompts for project-confined removals", async () => {
+    // Claude's local-scope entry is keyed to this project; removing it cannot
+    // affect other workspaces, so it must not be gated on the confirmation.
+    globallyInstalled = true;
+    writeJsonFile(claudeJsonPath(), {
+      projects: { [root]: { mcpServers: { argent: ARGENT_GLOBAL_ENTRY } } },
+    });
+    const confirm = vi.fn(async () => true);
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [claude],
+      detectedAdapters: [claude],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: confirm,
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(result.removedCount).toBe(1);
+  });
+
+  it("gates a dead VS Code user-profile entry behind the confirmation", async () => {
+    globallyInstalled = false;
+    const base =
+      process.platform === "darwin"
+        ? path.join(home, "Library", "Application Support")
+        : process.platform === "win32"
+          ? process.env.APPDATA!
+          : path.join(home, ".config");
+    const userMcpJson = path.join(base, "Code", "User", "mcp.json");
+    writeJsonFile(userMcpJson, {
+      servers: { argent: { type: "stdio", command: "argent", args: ["mcp"] } },
+    });
+    const confirm = vi.fn(async () => true);
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [vscode],
+      detectedAdapters: [vscode],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: confirm,
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(result.removedCount).toBe(1);
+    expect(fs.existsSync(userMcpJson)).toBe(false);
   });
 });

@@ -155,12 +155,33 @@ export async function init(args: string[]): Promise<void> {
     // the entries just written (a leftover `claude mcp add` local-scope entry,
     // a dead global entry after migrating to a committable install, a recorded
     // .mcp.json rejection). See init-stale-config.ts for the policy.
-    const staleCleanup = cleanupStaleMcpConfigs({
+    const staleCleanup = await cleanupStaleMcpConfigs({
       writtenAdapters,
       detectedAdapters: detected,
       installMode: tel.installMode,
       scope: normalizedScope,
       effectiveRoot,
+      // Removals that reach beyond this project (dead entries in global
+      // config files) get one confirmation. The "dead" verdict is a PATH
+      // probe in THIS shell — a version-manager split (nvm) could hide a
+      // binary other environments still resolve, so a human gets the last
+      // word when there is one. Non-interactive runs proceed without it.
+      confirmCrossProjectRemovals: parsed.nonInteractive
+        ? undefined
+        : async (items) => {
+            p.log.warn(
+              `Dead argent entries from a previous global install were found in\n` +
+                `  global (cross-project) config files:\n` +
+                items.map((item) => `    ${pc.cyan(item)}`).join("\n")
+            );
+            const choice = await p.confirm({
+              message: "Remove these dead global entries? - recommended",
+              initialValue: true,
+            });
+            // A cancelled prompt declines the removal rather than aborting
+            // init — the install itself is already written and working.
+            return !p.isCancel(choice) && choice === true;
+          },
     });
     if (staleCleanup.lines.length > 0) {
       p.note(staleCleanup.lines.join("\n"), "Stale Config Cleanup");

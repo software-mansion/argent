@@ -633,12 +633,28 @@ export async function update(args: string[]): Promise<void> {
       // refresh above did not rewrite can still shadow or block the refreshed
       // entries (a `claude mcp add` local-scope leftover, a dead global entry
       // after a global→local migration, a recorded .mcp.json rejection).
-      const staleCleanup = cleanupStaleMcpConfigs({
+      const staleCleanup = await cleanupStaleMcpConfigs({
         writtenAdapters: [...new Set([...localAdapters, ...globalAdapters])],
         detectedAdapters: detectAdapters(),
         installMode,
         scope: localAdapters.length > 0 ? "local" : "global",
         effectiveRoot: projectRoot,
+        // Same one-shot confirmation init uses for removals that reach beyond
+        // this project; --yes proceeds without it.
+        confirmCrossProjectRemovals: nonInteractive
+          ? undefined
+          : async (items) => {
+              p.log.warn(
+                `Dead argent entries from a previous global install were found in\n` +
+                  `  global (cross-project) config files:\n` +
+                  items.map((item) => `    ${pc.cyan(item)}`).join("\n")
+              );
+              const choice = await p.confirm({
+                message: "Remove these dead global entries? - recommended",
+                initialValue: true,
+              });
+              return !p.isCancel(choice) && choice === true;
+            },
       });
       if (staleCleanup.lines.length > 0) {
         p.note(staleCleanup.lines.join("\n"), "Stale Config Cleanup");

@@ -10,6 +10,18 @@ export interface StaleConfigCleanupResult {
   warnedCount: number;
 }
 
+// A planned removal that reaches beyond this project (a dead entry in a
+// GLOBAL config file). Collected first, executed only after the caller's
+// one-shot confirmation — the "dead" verdict comes from a PATH probe in the
+// shell running init, and version managers (nvm) can make that probe miss a
+// binary other environments still resolve.
+interface PendingCrossProjectRemoval {
+  adapterName: string;
+  location: string;
+  what: string;
+  exec(): boolean;
+}
+
 // Step 1d — sweep for argent config the entries just written do NOT replace:
 // same-named entries in other scopes left behind by a previous install (most
 // often a global-mode install this project just migrated away from), and
@@ -27,10 +39,12 @@ export interface StaleConfigCleanupResult {
 //   - hidden-scope findings marked autoRemove by the adapter (state keyed to
 //     this project, or state whose removal only re-enables prompting) — remove;
 //   - any entry that runs the bare `argent` command when no global argent is
-//     on PATH — provably dead everywhere, for every project — remove;
+//     on PATH — dead in every environment that resolves PATH the way this
+//     shell does — remove, behind one confirmation (see
+//     confirmCrossProjectRemovals);
 //   - anything else that could interfere — warn with the exact location, never
 //     touch it (it may be hand-tuned or backed by a working global install).
-export function cleanupStaleMcpConfigs(args: {
+export async function cleanupStaleMcpConfigs(args: {
   /** Adapters whose configs this run wrote (shadow findings target these). */
   writtenAdapters: McpConfigAdapter[];
   /**
@@ -42,7 +56,17 @@ export function cleanupStaleMcpConfigs(args: {
   installMode: "global" | "local";
   scope: "local" | "global";
   effectiveRoot: string;
-}): StaleConfigCleanupResult {
+  /**
+   * Asked ONCE, with one "<client>: <path>" line per planned removal that
+   * reaches beyond this project (dead entries in global config files), before
+   * any of them is executed. Project-confined removals never prompt. Omit for
+   * non-interactive runs — the removals then proceed (the entries failed the
+   * PATH probe, so they are dead in this environment and, barring a version-
+   * manager PATH split, everywhere else). Returning false leaves every listed
+   * entry in place, each reported as a warning line.
+   */
+  confirmCrossProjectRemovals?: (items: string[]) => Promise<boolean>;
+}): Promise<StaleConfigCleanupResult> {
   const { writtenAdapters, detectedAdapters, installMode, scope, effectiveRoot } = args;
   const lines: string[] = [];
   let removedCount = 0;
@@ -63,6 +87,8 @@ export function cleanupStaleMcpConfigs(args: {
     lines.push(`${pc.yellow("!")} ${adapterName}: ${why} ${pc.dim(`(${location})`)}`);
   };
 
+  const pending: PendingCrossProjectRemoval[] = [];
+
   // ── Hidden scopes the adapters know about ──────────────────────────────────
   // A malformed config file must not abort init (same stance as
   // findConfiguredAdapterScopes) — a throwing probe is reported and skipped.
@@ -76,7 +102,7 @@ export function cleanupStaleMcpConfigs(args: {
       continue;
     }
     for (const finding of findings) {
-      if (finding.autoRemove || isProvablyDead(finding.entry)) {
+      if (finding.autoRemove) {
         try {
           if (finding.remove()) {
             removed(adapter.name, finding.location, "a stale entry that would shadow this install");
@@ -88,6 +114,15 @@ export function cleanupStaleMcpConfigs(args: {
             `found a shadowing entry but could not remove it: ${err}`
           );
         }
+      } else if (isProvablyDead(finding.entry)) {
+        // Dead, but living outside the project (e.g. VS Code's user-profile
+        // mcp.json) — queue behind the one-shot confirmation.
+        pending.push({
+          adapterName: adapter.name,
+          location: finding.location,
+          what: "a dead entry that could shadow this install",
+          exec: () => finding.remove(),
+        });
       } else {
         warned(adapter.name, finding.location, finding.reason);
       }
@@ -115,21 +150,12 @@ export function cleanupStaleMcpConfigs(args: {
       }
       if (entry === null) continue;
       if (isProvablyDead(entry)) {
-        try {
-          if (adapter.remove(globalPath)) {
-            removed(
-              adapter.name,
-              globalPath,
-              `a dead global entry (runs \`${MCP_BINARY_NAME}\`, which is no longer on PATH)`
-            );
-          }
-        } catch (err) {
-          warned(
-            adapter.name,
-            globalPath,
-            `found a dead global entry but could not remove it: ${err}`
-          );
-        }
+        pending.push({
+          adapterName: adapter.name,
+          location: globalPath,
+          what: `a dead global entry (runs \`${MCP_BINARY_NAME}\`, which is no longer on PATH)`,
+          exec: () => adapter.remove(globalPath),
+        });
       } else if (entry.command !== MCP_BINARY_NAME) {
         // A custom or unrecognizable global entry — possibly a hand-tuned dev
         // setup, possibly a leftover local-command entry from another project.
@@ -167,6 +193,32 @@ export function cleanupStaleMcpConfigs(args: {
           projectPath,
           "a project-scope entry takes precedence over the global entry in this project; " +
             "if you are migrating away from a local install, remove it (argent uninstall)"
+        );
+      }
+    }
+  }
+
+  // ── Execute the cross-project removals ──────────────────────────────────────
+  if (pending.length > 0) {
+    const proceed = args.confirmCrossProjectRemovals
+      ? await args.confirmCrossProjectRemovals(
+          pending.map((item) => `${item.adapterName}: ${item.location}`)
+        )
+      : true;
+    for (const item of pending) {
+      if (!proceed) {
+        warned(item.adapterName, item.location, `kept ${item.what} at your request`);
+        continue;
+      }
+      try {
+        if (item.exec()) {
+          removed(item.adapterName, item.location, item.what);
+        }
+      } catch (err) {
+        warned(
+          item.adapterName,
+          item.location,
+          `found ${item.what} but could not remove it: ${err}`
         );
       }
     }
