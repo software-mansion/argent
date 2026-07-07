@@ -643,6 +643,51 @@ describe("native-profiler-start malloc_stack_logging", () => {
     }
   });
 
+  it("quotes the operator's literal ARGENT_IOS_CAPTURE value (alias/mixed-case) in the override refusal", async () => {
+    // parseEnvOverride accepts the `all_processes`/`allprocesses` aliases and lower-cases
+    // input, so the canonical strategy name ("all-processes") diverges from what the user
+    // set. The refusal must echo the LITERAL value they configured, not the canonical name,
+    // otherwise it tells them to fix a variable that reads differently from what they typed.
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    process.env.ARGENT_IOS_CAPTURE = "All_Processes"; // alias + mixed case
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      const execSyncFn = vi.fn(() => "");
+      const execFileSyncFn = makeExecFileSyncFn();
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_MALLOC_STRATEGY_OVERRIDE
+      );
+      const msg = err instanceof Error ? err.message : String(err);
+      // Echoes the operator's literal value (case preserved, trimmed)...
+      expect(msg).toContain(`ARGENT_IOS_CAPTURE="All_Processes"`);
+      // ...while still naming the canonical strategy it resolved to.
+      expect(msg).toContain(`forces the "all-processes" capture`);
+      // Regression guard: must NOT quote the canonical name as if it were the env value.
+      expect(msg).not.toContain(`ARGENT_IOS_CAPTURE="all-processes"`);
+      // Refused up front — the healthy app is untouched.
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
   it("throws LAUNCH_APP_NOT_FOUND when a malloc app_process matches no installed user app", async () => {
     const prev = process.env.ARGENT_IOS_CAPTURE;
     delete process.env.ARGENT_IOS_CAPTURE;

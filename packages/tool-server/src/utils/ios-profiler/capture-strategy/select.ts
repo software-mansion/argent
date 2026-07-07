@@ -30,7 +30,14 @@ interface XcodeVersion {
  * always a degraded Xcode.
  */
 export type CaptureStrategyReason =
-  | { kind: "env-override"; strategyName: IosCaptureStrategy["name"] }
+  | {
+      kind: "env-override";
+      strategyName: IosCaptureStrategy["name"];
+      /** The literal ARGENT_IOS_CAPTURE value the operator set (trimmed, case preserved),
+       *  which may be an alias/mixed-case form of `strategyName` — quote THIS when echoing
+       *  the override back to the user so the message names what they actually set. */
+      rawValue: string;
+    }
   | { kind: "degraded-xcode"; major: number; minor: number }
   | { kind: "default" };
 
@@ -42,19 +49,22 @@ export interface CaptureStrategyDecision {
 }
 
 type OverrideParse =
-  | { kind: "device" }
-  | { kind: "all-processes" }
+  | { kind: "device"; raw: string }
+  | { kind: "all-processes"; raw: string }
   | { kind: "none" }
   | { kind: "invalid"; raw: string };
 
 function parseEnvOverride(): OverrideParse {
-  const raw = process.env[ENV_OVERRIDE]?.trim().toLowerCase();
-  if (!raw) return { kind: "none" };
-  if (raw === "device") return { kind: "device" };
+  // Keep the original (trimmed, case-preserved) value so callers can echo exactly
+  // what the operator set; classify on a lower-cased copy so aliases/case still match.
+  const original = process.env[ENV_OVERRIDE]?.trim();
+  if (!original) return { kind: "none" };
+  const raw = original.toLowerCase();
+  if (raw === "device") return { kind: "device", raw: original };
   if (raw === "all-processes" || raw === "all_processes" || raw === "allprocesses") {
-    return { kind: "all-processes" };
+    return { kind: "all-processes", raw: original };
   }
-  return { kind: "invalid", raw };
+  return { kind: "invalid", raw: original };
 }
 
 function readActiveXcodeVersion(): XcodeVersion | null {
@@ -100,13 +110,17 @@ export function resolveIosCaptureStrategy(): CaptureStrategyDecision {
   if (override.kind === "device") {
     return {
       strategy: deviceStrategy,
-      reason: { kind: "env-override", strategyName: deviceStrategy.name },
+      reason: { kind: "env-override", strategyName: deviceStrategy.name, rawValue: override.raw },
     };
   }
   if (override.kind === "all-processes") {
     return {
       strategy: allProcessesStrategy,
-      reason: { kind: "env-override", strategyName: allProcessesStrategy.name },
+      reason: {
+        kind: "env-override",
+        strategyName: allProcessesStrategy.name,
+        rawValue: override.raw,
+      },
     };
   }
 

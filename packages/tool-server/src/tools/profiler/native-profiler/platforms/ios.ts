@@ -401,7 +401,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
   if (reason.kind === "env-override") {
     return new FailureError(
       `malloc_stack_logging must cold-launch the app under \`xctrace --device\`, but ` +
-        `ARGENT_IOS_CAPTURE="${reason.strategyName}" forces the "${reason.strategyName}" capture ` +
+        `ARGENT_IOS_CAPTURE="${reason.rawValue}" forces the "${reason.strategyName}" capture ` +
         `strategy, which attaches host-wide and cannot \`--launch\` a cold start. Unset ` +
         `ARGENT_IOS_CAPTURE (or set it to "device") to use malloc_stack_logging, or re-run without ` +
         `malloc_stack_logging (leaks are still detected, just unattributed).`,

@@ -40,7 +40,8 @@ const zodSchema = z.object({
         "adds memory/CPU overhead, and makes the app noticeably slow to launch (every startup " +
         "allocation records a backtrace), so leave it off for pure CPU/hang profiling. Requires a " +
         "non-degraded Xcode: on Xcode 26.4 and later the cold-launch path is broken, so the call is " +
-        "rejected up front (re-run without the flag, or set ARGENT_IOS_CAPTURE=device to override). " +
+        "rejected up front (re-run without the flag, or set ARGENT_IOS_CAPTURE=device to override if the " +
+        "device path works on your host). " +
         "Ignored on Android."
     ),
 });
