@@ -4,7 +4,7 @@ import { parse as parseYaml } from "yaml";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { init as telemetryInit, track, forget as telemetryForget } from "@argent/telemetry";
+import { init as telemetryInit, track, resetLocalTelemetryState } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
@@ -561,9 +561,9 @@ export async function uninstall(args: string[]): Promise<void> {
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
     if (hasUninstalledPackage) {
       try {
-        await telemetryForget({ disableConsent: false });
+        await resetLocalTelemetryState();
       } catch {
-        /* swallow — uninstall must succeed even if forget fails */
+        /* swallow — uninstall must succeed even if the reset fails */
       }
     }
 

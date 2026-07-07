@@ -8,7 +8,7 @@ import {
   status as telemetryStatus,
 } from "@argent/telemetry";
 
-// Consent-management subcommands for anonymous telemetry.
+// Consent-management subcommands for opt-out telemetry.
 export async function telemetry(args: string[]): Promise<void> {
   const sub = args[0];
   telemetryInit("cli");
@@ -42,7 +42,7 @@ export async function telemetry(args: string[]): Promise<void> {
 
 function printUsage(): void {
   console.log(`Usage:
-  argent telemetry status    Show telemetry state and anonymous id
+  argent telemetry status    Show telemetry state and device id
   argent telemetry enable    Enable telemetry
   argent telemetry disable   Disable telemetry
 `);
@@ -51,15 +51,15 @@ function printUsage(): void {
 function printStatus(): void {
   const s = telemetryStatus();
 
-  const anonLabel = s.anonIdPrefix
+  const idLabel = s.anonIdPrefix
     ? `${s.anonIdPrefix}...`
     : s.hasAnonIdOnDisk
       ? "present"
       : "not created";
 
   console.log("telemetry:");
-  console.log(`  state:   ${s.enabled ? "enabled" : "disabled"}`);
-  console.log(`  anon id: ${anonLabel}`);
+  console.log(`  state:     ${s.enabled ? "enabled" : "disabled"}`);
+  console.log(`  device id: ${idLabel}`);
 }
 
 async function cmdEnable(): Promise<void> {

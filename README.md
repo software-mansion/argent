@@ -133,7 +133,7 @@ argent init
 | `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                                                                                                                    |
 | `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                                                                                                              |
 | `argent flags`     | List available feature flags and their state                                                                                                                                                              |
-| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`                                                                                                                                               |
+| `argent telemetry` | Manage telemetry: `status` / `enable` / `disable`                                                                                                                                                         |
 
 ## Supported Editors
 
@@ -154,7 +154,7 @@ argent init
 
 ## Privacy
 
-Argent collects anonymous, opt-out usage and diagnostic telemetry to help us prioritise features and fix what breaks. It is minimal by design.
+Argent collects opt-out usage and diagnostic telemetry to help us prioritise features and fix what breaks.
 
 You can opt out at any time:
 
