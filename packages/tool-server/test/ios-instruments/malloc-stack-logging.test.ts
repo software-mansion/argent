@@ -222,6 +222,94 @@ describe("native-profiler-start malloc_stack_logging", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
+  it("does not terminate the app if the .app bundle path can't be resolved (malloc mode)", async () => {
+    // getAppBundlePath (simctl get_app_container) runs BEFORE the destructive terminate,
+    // exactly like the debug-dir mkdir guard above — so a failed container resolution must
+    // leave the running app untouched, never killed-without-relaunch. Also pins the
+    // FailureError code so a reachable user-facing failure stays telemetry-classified.
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      const execSyncFn = vi.fn(() => "");
+      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
+        // resolveAppForLaunch succeeds (valid listapps) so we reach getAppBundlePath...
+        if (bin === "plutil") return LISTAPPS_JSON;
+        if (args.includes("listapps")) return "<plist/>";
+        // ...where get_app_container fails BEFORE any terminate.
+        if (args.includes("get_app_container")) throw new Error("No such file or directory");
+        if (args.includes("terminate")) return "";
+        return "";
+      });
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_APP_BUNDLE_PATH_FAILED
+      );
+      // Bundle-path resolution failed BEFORE the destructive terminate → app untouched.
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("rejects an empty resolved .app bundle path before terminating (malloc mode)", async () => {
+    // simctl returning a blank container path must be refused up front (otherwise the argv
+    // becomes `xctrace --launch -- ""`), and — like the throw case — before the terminate.
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      const execSyncFn = vi.fn(() => "");
+      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
+        if (bin === "plutil") return LISTAPPS_JSON;
+        if (args.includes("listapps")) return "<plist/>";
+        // Whitespace-only container path → empty after the .trim() in getAppBundlePath.
+        if (args.includes("get_app_container")) return "  \n";
+        if (args.includes("terminate")) return "";
+        return "";
+      });
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_APP_BUNDLE_PATH_FAILED
+      );
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
   it("attaches (no launch/env) by default", async () => {
     const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
     applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
