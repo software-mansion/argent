@@ -71,6 +71,20 @@ describe("gesture-scroll", () => {
     expect(api.server.sendWheel).not.toHaveBeenCalled();
   });
 
+  it("proceeds with the scroll when the visibility probe itself rejects", async () => {
+    // A failed read proves nothing: a Runtime.evaluate rejected mid-navigation
+    // (execution context destroyed) must not fail the scroll — the wheel
+    // dispatch needs no JS context. Only an explicit "hidden" refuses.
+    const api = fakeChromiumApi();
+    api.cdp.send = vi.fn().mockRejectedValue(new Error("Execution context was destroyed"));
+    const result = await gestureScrollTool.execute(
+      { chromium: api } as never,
+      { udid: "chromium-cdp-19222", x: 0.5, y: 0.5, deltaY: 0.25, durationMs: 32 } as never
+    );
+    expect(result.scrolled).toBe(true);
+    expect(api.server.sendWheel).toHaveBeenCalled();
+  });
+
   it("schema rejects a scroll with no delta", () => {
     const parsed = gestureScrollTool.zodSchema!.safeParse({
       udid: "chromium-cdp-19222",

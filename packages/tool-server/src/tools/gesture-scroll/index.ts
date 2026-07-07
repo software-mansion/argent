@@ -15,10 +15,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * nothing, and the scroll itself will surface a real transport error.
  */
 async function assertWindowVisible(chromium: ChromiumCdpApi): Promise<void> {
-  const raw = (await chromium.cdp.send("Runtime.evaluate", {
-    expression: "document.visibilityState",
-    returnByValue: true,
-  })) as { result?: { value?: unknown } };
+  let raw: { result?: { value?: unknown } };
+  try {
+    raw = (await chromium.cdp.send("Runtime.evaluate", {
+      expression: "document.visibilityState",
+      returnByValue: true,
+    })) as { result?: { value?: unknown } };
+  } catch {
+    // A rejected evaluate (most plausibly the JS execution context being torn
+    // down mid-navigation) proves nothing about visibility — and the wheel
+    // dispatch needs no JS context — so proceed; a genuine transport failure
+    // surfaces on the scroll itself.
+    return;
+  }
   if (raw.result?.value === "hidden") {
     throw new FailureError(
       "Cannot scroll: the Chromium window is hidden (minimized or fully occluded), so the renderer will not process input events. Bring the window to the foreground and retry.",
