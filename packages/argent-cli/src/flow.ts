@@ -10,7 +10,7 @@ export interface FlowCommandOptions {
   paths: ToolsServerPaths;
 }
 
-interface StepReport {
+export interface StepReport {
   index: number;
   kind: string;
   status: "pass" | "fail" | "skip" | "error";
@@ -32,7 +32,7 @@ interface StepReport {
   artifacts?: Record<string, unknown>;
 }
 
-interface FlowReport {
+export interface FlowReport {
   flow: string;
   device: string;
   executionPrerequisite?: string;
@@ -107,7 +107,44 @@ export function parseRunArgs(argv: string[]): {
   return out;
 }
 
-function renderReport(report: FlowReport): string {
+export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
+  const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
+  const label = s.tool ? `${s.kind} ${s.tool}` : s.kind;
+  const reason = s.reason ? ` — ${s.reason}` : "";
+  const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
+  return `  ${glyph} ${String(n).padStart(2)} ${label}${where}${reason}`;
+}
+
+export function renderSummary(report: FlowReport, opts: { withDevice?: boolean } = {}): string {
+  const warnings = report.steps.filter((s) => s.warning).length;
+  const warningsNote = warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : "";
+  // The live renderer prints its header before the runner has resolved a
+  // device, so its summary carries the device instead.
+  const where = opts.withDevice ? ` on ${report.device}` : "";
+  return `${report.ok ? "PASS" : "FAIL"}${where} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped${warningsNote}`;
+}
+
+/**
+ * Artifact paths for the live renderer, which prints step lines before any
+ * path exists (paths are materialized only from the final report). Labeled by
+ * step number since they no longer sit under their step line.
+ */
+export function renderArtifactLines(report: FlowReport): string[] {
+  const lines: string[] = [];
+  let n = 0;
+  for (const s of report.steps) {
+    if (s.kind === "echo") continue;
+    n++;
+    if (!s.artifacts || typeof s.artifacts !== "object") continue;
+    const entries = Object.entries(s.artifacts).filter(([, v]) => typeof v === "string");
+    if (entries.length === 0) continue;
+    lines.push(`  ${s.kind} (step ${n}):`);
+    for (const [k, v] of entries) lines.push(`       ${k}: ${v}`);
+  }
+  return lines;
+}
+
+export function renderReport(report: FlowReport): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}" on ${report.device}`);
   // A fragment runs against the device's current state — remind the operator
@@ -125,11 +162,7 @@ function renderReport(report: FlowReport): string {
       continue;
     }
     n++;
-    const where = s.flow && s.flow !== report.flow ? ` [${s.flow}]` : "";
-    const label = s.tool ? `${s.kind} ${s.tool}` : s.kind;
-    const reason = s.reason ? ` — ${s.reason}` : "";
-    const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-    lines.push(`  ${glyph} ${String(n).padStart(2)} ${label}${where}${reason}`);
+    lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(`       ⚠ ${s.warning}`);
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
@@ -137,11 +170,7 @@ function renderReport(report: FlowReport): string {
       }
     }
   }
-  const warnings = report.steps.filter((s) => s.warning).length;
-  const warningsNote = warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : "";
-  lines.push(
-    `\n${report.ok ? "PASS" : "FAIL"} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped${warningsNote}`
-  );
+  lines.push(`\n${renderSummary(report)}`);
   return lines.join("\n");
 }
 
@@ -190,9 +219,10 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     printHelp();
     process.exit(2);
   }
+  const flowName = args.name;
 
   const payload: Record<string, unknown> = {
-    name: args.name,
+    name: flowName,
     project_root: process.cwd(),
     // Headless runs never block on the LLM prerequisite handshake.
     prerequisiteAcknowledged: true,
@@ -201,9 +231,32 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   if (args.platform) payload.platform = args.platform;
   if (args.updateBaselines) payload.updateBaselines = true;
 
+  // Live rendering: with a streaming server each step line prints the moment
+  // the step completes. A pre-streaming server ignores the request and no
+  // events fire, so `liveSteps` doubles as the mode detector — zero means the
+  // buffered renderer below owns the whole report.
+  let liveSteps = 0;
+  let liveIndex = 0;
+  const onStepReport = (event: unknown): void => {
+    const s = event as StepReport;
+    if (liveSteps === 0) console.log(`Flow "${flowName}"`);
+    liveSteps++;
+    if (s.kind === "echo") {
+      if (s.message) console.log(`  › ${s.message}`);
+      return;
+    }
+    liveIndex++;
+    console.log(renderStepLine(s, liveIndex, flowName));
+    if (s.warning) console.log(`       ⚠ ${s.warning}`);
+  };
+
   let report: FlowReport;
   try {
-    const resp = await callTool("flow-execute", payload);
+    const resp = await callTool(
+      "flow-execute",
+      payload,
+      args.json ? undefined : { onProgress: onStepReport }
+    );
     const { url, token } = await baseUrl();
     const materialized = await materializeArtifacts(resp.data, { toolsUrl: url, authToken: token });
     report = materialized.result as FlowReport;
@@ -213,12 +266,18 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   }
 
   if (!report || !("steps" in report)) {
-    console.error(`"${args.name}" did not produce a run report.`);
+    console.error(`"${flowName}" did not produce a run report.`);
     process.exit(2);
   }
 
   if (args.json) {
     console.log(JSON.stringify(report, null, 2));
+  } else if (liveSteps > 0) {
+    // Steps already printed live — emit only what the final report knows:
+    // the prerequisite note, materialized artifact paths, and the summary.
+    if (report.executionPrerequisite) console.log(`  assumes: ${report.executionPrerequisite}`);
+    for (const line of renderArtifactLines(report)) console.log(line);
+    console.log(`\n${renderSummary(report, { withDevice: true })}`);
   } else {
     console.log(renderReport(report));
   }

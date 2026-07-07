@@ -90,6 +90,23 @@ function findDependencyMissing(err: unknown): DependencyMissingError | null {
   return findErrorInCauseChain(err, DependencyMissingError);
 }
 
+/**
+ * Flatten a tool failure to the message the status-mapped JSON response would
+ * have carried — for the NDJSON streaming mode, where the 200 and headers are
+ * already on the wire and the status-code channel is gone, so the error must
+ * travel in-band as the stream's terminal line.
+ */
+function streamErrorMessage(err: unknown): string {
+  if (err instanceof ToolNotFoundError) return err.message;
+  const depErr = findDependencyMissing(err);
+  if (depErr) return depErr.message;
+  const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
+  if (unsupportedErr) return unsupportedErr.message;
+  const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
+  if (notImplementedErr) return notImplementedErr.message;
+  return formatErrorForAgent(err);
+}
+
 function findErrorInCauseChain<T extends Error>(
   err: unknown,
   ctor: new (...args: never[]) => T
@@ -712,12 +729,31 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
       }
 
+      // Progress streaming, opted into per request: a client that accepts
+      // NDJSON gets each `ctx.emitProgress` event as its own line the moment
+      // the tool emits it, then a terminal `result` (or in-band `error`) line.
+      // The gates above still answer with their plain-JSON status codes — the
+      // response only commits to streaming here, after every gate has passed.
+      const wantsStream = Boolean(req.headers.accept?.includes("application/x-ndjson"));
+      const writeLine = (payload: unknown): void => {
+        res.write(`${JSON.stringify(payload)}\n`);
+      };
+      if (wantsStream) {
+        res.writeHead(200, {
+          "Content-Type": "application/x-ndjson",
+          "Cache-Control": "no-cache",
+        });
+      }
+
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
+          ...(wantsStream
+            ? { emitProgress: (event: unknown) => writeLine({ event: "progress", data: event }) }
+            : {}),
         });
         // Gate on `updateInstallable` (not `updateAvailable`) and advertise the
         // version the resolver would install — both account for the release-age policy.
@@ -732,13 +768,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             // ignore
           }
         }
-        res.json({
-          data,
-          ...(shouldNotify
-            ? { note: buildUpdateNote(currentVersion, installableVersion ?? "unknown") }
-            : {}),
-        });
+        const notePayload = shouldNotify
+          ? { note: buildUpdateNote(currentVersion, installableVersion ?? "unknown") }
+          : {};
+        if (wantsStream) {
+          writeLine({ event: "result", data, ...notePayload });
+          res.end();
+        } else {
+          res.json({ data, ...notePayload });
+        }
       } catch (err: unknown) {
+        if (wantsStream) {
+          writeLine({ event: "error", error: streamErrorMessage(err) });
+          res.end();
+          return;
+        }
         if (err instanceof ToolNotFoundError) {
           res.status(404).json({ error: err.message });
           return;

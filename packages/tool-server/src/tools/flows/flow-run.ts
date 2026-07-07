@@ -338,6 +338,8 @@ interface ExecState extends ActionEnv {
   pinned: boolean;
   /** True when the runner booted the chromium app for this run (and owns its teardown). */
   chromiumBooted: boolean;
+  /** Live progress hook: receives every report the moment it is appended. */
+  onStepReport?: (report: StepReport) => void;
 }
 
 /** A chromium instance the runner booted and must tear down after the run. */
@@ -421,6 +423,7 @@ returns a notice with the prerequisite instead of running.`,
         stopped: false,
         pinned: statusBarPinned,
         chromiumBooted: resolved.booted !== null,
+        ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
       };
 
       try {
@@ -575,6 +578,16 @@ function summarize(
   };
 }
 
+/**
+ * Append a report to the run and hand it to any live progress consumer. The
+ * single choke point for every report — a push site that bypasses it would
+ * silently drop steps from the progress stream.
+ */
+function pushReport(state: ExecState, report: StepReport): void {
+  state.reports.push(report);
+  state.onStepReport?.(report);
+}
+
 /** Execute a list of steps, appending reports to state. Honors hard-stop + abort. */
 async function execSteps(
   state: ExecState,
@@ -586,12 +599,12 @@ async function execSteps(
     const index = state.reports.length;
 
     if (state.stopped) {
-      state.reports.push({ index, kind: step.kind, status: "skip", flow: sourceFlow });
+      pushReport(state, { index, kind: step.kind, status: "skip", flow: sourceFlow });
       continue;
     }
     if (state.signal?.aborted) {
       state.stopped = true;
-      state.reports.push({
+      pushReport(state, {
         index,
         kind: step.kind,
         status: "skip",
@@ -607,7 +620,7 @@ async function execSteps(
     }
 
     const report = await execLeafStep(state, step, index, sourceFlow);
-    state.reports.push(report);
+    pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
 }
@@ -621,7 +634,7 @@ async function execRunStep(
   const target = step.flow;
 
   const fail = (reason: string): void => {
-    state.reports.push({ index, kind: "run", status: "error", flow: target, reason });
+    pushReport(state, { index, kind: "run", status: "error", flow: target, reason });
     state.stopped = true;
   };
 
@@ -648,7 +661,7 @@ async function execRunStep(
   }
 
   // Marker for the composition point, then expand the fragment's steps inline.
-  state.reports.push({ index, kind: "run", status: "pass", flow: target });
+  pushReport(state, { index, kind: "run", status: "pass", flow: target });
   await execSteps(state, fragment.steps, target, [...runStack, target]);
 }
 
