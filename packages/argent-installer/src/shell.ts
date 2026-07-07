@@ -47,15 +47,16 @@ export function execShellCommandSync(
 }
 
 // Run a package-manager command, capturing stderr for the rejection message.
-// On Windows the bin gets a `.cmd` suffix and a shell so the npm/yarn/pnpm/bun
-// wrappers resolve. Local-install commands require `opts.cwd` so they mutate
-// the project's manifest, not whatever cwd argent runs in.
+// Windows handling mirrors execShellCommandSync: the BARE bin name through a
+// shell, so PATHEXT resolves both .cmd shims (npm/yarn) and native .exe
+// managers (bun, standalone pnpm) — a hardcoded `.cmd` suffix breaks the
+// latter. Local-install commands require `opts.cwd` so they mutate the
+// project's manifest, not whatever cwd argent runs in.
 export function runShellCommand(cmd: ShellCommand, opts: { cwd?: string } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
-    const isWin = process.platform === "win32";
-    const child = spawn(isWin ? `${cmd.bin}.cmd` : cmd.bin, cmd.args, {
+    const child = spawn(cmd.bin, cmd.args, {
       stdio: ["ignore", "pipe", "pipe"],
-      shell: isWin,
+      shell: process.platform === "win32",
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
     });
 

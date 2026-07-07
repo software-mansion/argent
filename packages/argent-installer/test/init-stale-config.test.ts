@@ -215,6 +215,19 @@ describe("claudeAdapter.findShadowingConfigs", () => {
     expect(after.permissions).toEqual({ allow: [] });
   });
 
+  it("never auto-removes the machine-wide disabled-list rejection", () => {
+    // ~/.claude/settings.json reaches every project on the machine — with
+    // enableAllProjectMcpServers it can be the only thing keeping argent
+    // entries off. Cross-project state needs a human, even under --yes.
+    const settingsPath = path.join(home, ".claude", "settings.json");
+    writeJsonFile(settingsPath, { disabledMcpjsonServers: ["argent"] });
+
+    const findings = claude.findShadowingConfigs!(root, "local");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].autoRemove).toBe(false);
+    expect(findings[0].reason).toContain("machine-wide");
+  });
+
   it("checks rejections only for a project-scope write", () => {
     const settingsPath = path.join(root, ".claude", "settings.local.json");
     writeJsonFile(settingsPath, { disabledMcpjsonServers: ["argent"] });
@@ -368,6 +381,35 @@ describe("cleanupStaleMcpConfigs", () => {
     // Legitimate coexistence — same silence as an env-less working entry.
     expect(result.lines).toHaveLength(0);
     expect(fs.existsSync(cursorGlobal)).toBe(true);
+  });
+
+  it("treats a legacy ARGENT_MCP_LOG-only entry as argent's own (removable when dead)", async () => {
+    globallyInstalled = false;
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    // The shape argent <= 0.9.x wrote: a log path cannot make the dead
+    // command resolvable, so it must go through the dead-confirm queue like
+    // an env-less stock entry — not be misread as a customization.
+    writeJsonFile(cursorGlobal, {
+      mcpServers: {
+        argent: {
+          command: "argent",
+          args: ["mcp"],
+          env: { ARGENT_MCP_LOG: "/Users/old/.argent/mcp-calls.log" },
+        },
+      },
+    });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
+    });
+
+    expect(result.removedCount).toBe(1);
+    expect(fs.existsSync(cursorGlobal)).toBe(false);
   });
 
   it("never treats an env-carrying bare-argent entry as provably dead", async () => {

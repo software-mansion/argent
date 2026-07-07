@@ -58,7 +58,11 @@ function findDeclaringRoot(startDir: string): string | null {
 // resolves with cwd at the project root); the launcher forwards both as
 // ARGENT_INSTALL_KIND / ARGENT_PROJECT_ROOT so update-argent doesn't re-infer
 // them from the detached server's editor-chosen cwd.
-function classifyInstall(): { kind: "global" | "local"; projectRoot?: string } {
+function classifyInstall(): {
+  kind: "global" | "local";
+  projectRoot?: string;
+  stablePackageDir?: string;
+} {
   let packageRoot: string;
   let dir: string;
   let cwd: string;
@@ -78,7 +82,21 @@ function classifyInstall(): { kind: "global" | "local"; projectRoot?: string } {
         // Local install. Prefer the DECLARING root over this physical hoist
         // root: in a hoisted workspace the declaring manifest sits at cwd
         // (the member root) or an ancestor below `dir`.
-        return { kind: "local", projectRoot: findDeclaringRoot(cwd) ?? dir };
+        //
+        // Also capture the conventional node_modules path when it resolves to
+        // the running package: unlike import.meta's realpath — which under
+        // pnpm is the version-pinned .pnpm store dir a version bump PRUNES —
+        // the symlink path stays valid across bumps, so runtime paths derived
+        // from it keep working (and re-resolve to the NEW version) after an
+        // in-place update.
+        const stable = path.join(dir, "node_modules", PACKAGE_NAME);
+        let stablePackageDir: string | undefined;
+        try {
+          if (fs.realpathSync(stable) === packageRoot) stablePackageDir = stable;
+        } catch {
+          // conventional path absent (exotic layout) — fall back to realpath
+        }
+        return { kind: "local", projectRoot: findDeclaringRoot(cwd) ?? dir, stablePackageDir };
       }
     } catch {
       // no node_modules at this level — keep walking up
@@ -87,17 +105,28 @@ function classifyInstall(): { kind: "global" | "local"; projectRoot?: string } {
     if (parent === dir) break;
     dir = parent;
   }
+  // Yarn PnP local installs have no node_modules anywhere: the package runs
+  // from the project's .yarn dir (unplugged/cache). Falling through to
+  // "global" would make the agent-triggered update target a global install
+  // the user may not even have.
+  if (packageRoot.includes(`${path.sep}.yarn${path.sep}`)) {
+    const declRoot = findDeclaringRoot(cwd);
+    if (declRoot) return { kind: "local", projectRoot: declRoot };
+  }
   return { kind: "global" };
 }
 
 const classifiedInstall = classifyInstall();
 
-// __dirname in ESM (compiled from TS) will be dist/.
-// Bundle artifacts ship next to the compiled launcher.
+// __dirname in ESM (compiled from TS) will be dist/. Bundle artifacts ship
+// next to the compiled launcher; prefer the version-stable package dir when
+// the classification found one (see classifyInstall).
+const packageDir = classifiedInstall.stablePackageDir ?? path.join(import.meta.dirname, "..");
+
 export const BUNDLED_RUNTIME_PATHS: ToolsServerPaths = {
-  bundlePath: path.join(import.meta.dirname, "tool-server.cjs"),
-  simulatorServerDir: path.join(import.meta.dirname, "..", "bin"),
-  nativeDevtoolsDir: path.join(import.meta.dirname, "..", "dylibs"),
+  bundlePath: path.join(packageDir, "dist", "tool-server.cjs"),
+  simulatorServerDir: path.join(packageDir, "bin"),
+  nativeDevtoolsDir: path.join(packageDir, "dylibs"),
   version: readPackageVersion(),
   installKind: classifiedInstall.kind,
   installProjectRoot: classifiedInstall.projectRoot,

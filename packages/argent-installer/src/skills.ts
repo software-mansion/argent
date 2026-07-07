@@ -77,8 +77,20 @@ function getScopeSpecs(projectRoot: string): ScopeSpec[] {
 // behavior we want after `npm i -g @swmansion/argent@new`.
 export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   const bundled = new Set(listBundledSkills());
+  // An empty bundled set means THIS package's skills dir is unreadable — a
+  // pruned pnpm store dir mid-update, a broken install — never "argent ships
+  // no skills". Acting on it would classify every tracked skill as orphaned
+  // and prune them all from both scopes; skip the refresh entirely instead.
+  if (bundled.size === 0) return [];
   const results: SkillScopeResult[] = [];
   const primarySource = buildArgentSkillsSource(getInstalledVersion());
+  // Project-scope `skills` commands act on their cwd, and this can run as a
+  // detached updater whose inherited cwd is the tool-server's editor-chosen
+  // one (often `/` or `$HOME`) — pin every run to the project.
+  const execOpts = { stdio: ["ignore", "pipe", "pipe"] as const, cwd: projectRoot } as {
+    stdio: ["ignore", "pipe", "pipe"];
+    cwd: string;
+  };
 
   for (const spec of getScopeSpecs(projectRoot)) {
     const tracked = listArgentSkillsInLock(spec.lockPath);
@@ -93,37 +105,27 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
       pruneError: null,
     };
 
-    if (bundled.size > 0) {
-      try {
-        execFileSync("npx", withNpmForce(spec.buildAddArgs(primarySource)), {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        result.synced = bundled.size;
-      } catch (primaryErr) {
-        if (primarySource === SKILLS_DIR) {
+    try {
+      execFileSync("npx", withNpmForce(spec.buildAddArgs(primarySource)), execOpts);
+      result.synced = bundled.size;
+    } catch (primaryErr) {
+      if (primarySource === SKILLS_DIR) {
+        result.syncError =
+          primaryErr instanceof Error ? primaryErr.message.split("\n")[0] : String(primaryErr);
+      } else {
+        try {
+          execFileSync("npx", withNpmForce(spec.buildAddArgs(SKILLS_DIR)), execOpts);
+          result.synced = bundled.size;
+        } catch (fallbackErr) {
           result.syncError =
-            primaryErr instanceof Error ? primaryErr.message.split("\n")[0] : String(primaryErr);
-        } else {
-          try {
-            execFileSync("npx", withNpmForce(spec.buildAddArgs(SKILLS_DIR)), {
-              stdio: ["ignore", "pipe", "pipe"],
-            });
-            result.synced = bundled.size;
-          } catch (fallbackErr) {
-            result.syncError =
-              fallbackErr instanceof Error
-                ? fallbackErr.message.split("\n")[0]
-                : String(fallbackErr);
-          }
+            fallbackErr instanceof Error ? fallbackErr.message.split("\n")[0] : String(fallbackErr);
         }
       }
     }
 
     if (orphaned.length > 0) {
       try {
-        execFileSync("npx", withNpmForce([...spec.removeArgs, ...orphaned]), {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+        execFileSync("npx", withNpmForce([...spec.removeArgs, ...orphaned]), execOpts);
         result.pruned = orphaned;
       } catch (err) {
         result.pruneError = err instanceof Error ? err.message.split("\n")[0] : String(err);

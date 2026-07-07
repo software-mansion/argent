@@ -898,6 +898,17 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     await clearToolsServerState(paths.bundlePath);
     await sweepDeadStateFiles();
 
+    // A bundle that no longer exists cannot be spawned: the install serving
+    // this session was replaced by a layout that changes dirs across versions
+    // (pnpm store prune) or removed outright. Fail with guidance instead of a
+    // cryptic "exited before becoming ready" timeout.
+    if (!fs.existsSync(paths.bundlePath)) {
+      throw new Error(
+        `The argent install serving this session is gone from disk (${paths.bundlePath}) — ` +
+          `it was likely updated or removed. Restart the editor's MCP connection to reconnect.`
+      );
+    }
+
     // Spawn a new server with a fresh token. Auto-spawned servers always
     // authenticate (the token is local to this user and persisted 0600).
     //

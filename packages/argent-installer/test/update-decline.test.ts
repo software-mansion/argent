@@ -43,6 +43,7 @@ vi.mock("@argent/telemetry", () => telemetryMock);
 vi.mock("node:child_process", () => childProcessMock);
 vi.mock("@clack/prompts", () => promptsMock);
 vi.mock("@argent/tools-client", () => ({
+  killToolServer: vi.fn().mockResolvedValue(undefined),
   killToolServerForInstallDir: vi.fn().mockResolvedValue(0),
 }));
 vi.mock("../src/first-run-notice.js", () => ({
@@ -193,6 +194,29 @@ function npmCalls(): Array<[string, string[]]> {
     ([bin]) => bin === "npm"
   );
 }
+
+describe("update — agent-triggered runs never install a missing global", () => {
+  it("mcp_update trigger no-ops a --global target when no global install exists", async () => {
+    // The agent-triggered updater acts on an UPDATE consent, never an install
+    // consent — a degraded 'both' or explicit 'global' target must not mutate
+    // the machine's global prefix with a fresh install nobody had.
+    topologyState.globalInstalled = false;
+    const savedTrigger = process.env.ARGENT_UPDATE_TRIGGER;
+    process.env.ARGENT_UPDATE_TRIGGER = "mcp_update";
+    try {
+      await update(["--yes", "--global"]);
+    } finally {
+      if (savedTrigger === undefined) delete process.env.ARGENT_UPDATE_TRIGGER;
+      else process.env.ARGENT_UPDATE_TRIGGER = savedTrigger;
+    }
+
+    expect(npmCalls()).toHaveLength(0);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_update_complete",
+      expect.anything()
+    );
+  });
+});
 
 describe("update — multi-target failure handling", () => {
   it("a failing first target does not abort the loop — the second target still updates", async () => {

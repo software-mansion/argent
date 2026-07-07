@@ -2,11 +2,13 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import {
   getMcpEntryForScope,
+  isArgentManagedEntry,
   resolveLocalCommandMode,
   type McpConfigAdapter,
   type McpCommandMode,
   type McpServerEntry,
 } from "./mcp-configs.js";
+import { MCP_BINARY_NAME } from "./constants.js";
 import type { InstallMode } from "./install-record.js";
 import type { Scope } from "./init-scope.js";
 
@@ -69,6 +71,25 @@ export function writeMcpConfigs(args: {
   const entryFor = (configScope: "local" | "global"): McpServerEntry =>
     getMcpEntryForScope(installMode, configScope, localCmdMode);
 
+  // A committed local-mode entry in a PROJECT config must survive a
+  // coexisting `init --global` run: the same run keeps .argent/install.json
+  // and reports the project stays in local mode, so clobbering the team's
+  // committed node-path command with the bare `argent` one (dead for every
+  // teammate without a global install) would contradict that — the same
+  // committed-file protection update's refresh applies.
+  const keepsCommittedLocalEntry = (adapter: McpConfigAdapter, configPath: string): boolean => {
+    if (installMode !== "global") return false;
+    let existing: McpServerEntry | null;
+    try {
+      existing = adapter.getArgentEntry(configPath);
+    } catch {
+      return false;
+    }
+    return (
+      existing !== null && existing.command !== MCP_BINARY_NAME && isArgentManagedEntry(existing)
+    );
+  };
+
   const lines: string[] = [];
 
   for (const adapter of adapters) {
@@ -78,6 +99,12 @@ export function writeMcpConfigs(args: {
     if (!configPath) {
       if (scope === "global" && adapter.projectPath(projectRoot)) {
         const fallback = adapter.projectPath(projectRoot)!;
+        if (keepsCommittedLocalEntry(adapter, fallback)) {
+          lines.push(
+            `${pc.yellow("!")} ${adapter.name} kept the committed local-mode entry ${pc.dim(fallback)}`
+          );
+          continue;
+        }
         try {
           adapter.write(fallback, entryFor("local"));
           lines.push(`${pc.green("+")} ${adapter.name} ${pc.dim(`(local fallback: ${fallback})`)}`);
@@ -102,6 +129,12 @@ export function writeMcpConfigs(args: {
       continue;
     }
 
+    if (scope !== "global" && keepsCommittedLocalEntry(adapter, configPath)) {
+      lines.push(
+        `${pc.yellow("!")} ${adapter.name} kept the committed local-mode entry ${pc.dim(configPath)}`
+      );
+      continue;
+    }
     try {
       adapter.write(configPath, entryFor(normalizedScope));
       lines.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);

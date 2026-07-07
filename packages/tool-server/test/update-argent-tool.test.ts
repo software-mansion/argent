@@ -136,22 +136,40 @@ describe("update-argent tool", () => {
     );
   });
 
-  it("pins --local (no --version) and --project-root when targeting the other install", async () => {
-    // Cross-install target: the --version pin describes the RUNNING install, so
-    // the installer resolves the version itself. The project is bound via an
-    // explicit flag, not cwd — the spawned updater inherits the server's
-    // editor-chosen cwd, and a cwd pin would fail the spawn if the dir vanished.
+  it("a global-serving server refuses a local target instead of guessing the project", async () => {
+    // A global server is shared across every project of that install and its
+    // cwd is frozen at whatever session spawned it FIRST — walking it could
+    // pin a different project than the caller's and rewrite that project's
+    // manifest. Refuse with CLI guidance, even when cwd looks plausible.
     const projDir = stageDeclaringProject();
     process.chdir(projDir);
 
-    await updateArgentTool.execute({}, { target: "local" }, undefined);
+    const result = await updateArgentTool.execute({}, { target: "local" }, undefined);
+
+    expect((result as { message: string }).message).toContain("Could not determine which project");
+    vi.advanceTimersByTime(5000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("pins --global (no --version) and --project-root when a local-serving server targets the global install", async () => {
+    // Cross-install direction that IS provable: the running local install
+    // knows its own project, and the --version pin describes the RUNNING
+    // install, so the installer resolves the global target's version itself.
+    const projDir = stageDeclaringProject();
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.env.ARGENT_PROJECT_ROOT = projDir;
+
+    const result = await updateArgentTool.execute({}, { target: "global" }, undefined);
     vi.advanceTimersByTime(2000);
 
     expect(mockSpawn).toHaveBeenCalledWith(
       "argent",
-      ["update", "--yes", "--local", "--project-root", fs.realpathSync(projDir)],
+      ["update", "--yes", "--global", "--project-root", projDir],
       expect.not.objectContaining({ cwd: expect.anything() })
     );
+    // Honest restart semantics: the running (local) server is not the target.
+    expect((result as { message: string }).message).toContain("not affected");
+    expect((result as { message: string }).message).not.toContain("will stop and restart");
   });
 
   it("pins --version and the recorded project root when the running install IS the local target", async () => {
@@ -190,18 +208,21 @@ describe("update-argent tool", () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
-  it("pins both --global and --local when target is 'both' and a project is locatable", async () => {
+  it("pins both --global and --local when a local-serving server targets 'both'", async () => {
     const projDir = stageDeclaringProject();
-    process.chdir(projDir);
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.env.ARGENT_PROJECT_ROOT = projDir;
 
-    await updateArgentTool.execute({}, { target: "both" }, undefined);
+    const result = await updateArgentTool.execute({}, { target: "both" }, undefined);
     vi.advanceTimersByTime(2000);
 
     expect(mockSpawn).toHaveBeenCalledWith(
       "argent",
-      ["update", "--yes", "--global", "--local", "--project-root", fs.realpathSync(projDir)],
+      ["update", "--yes", "--global", "--local", "--project-root", projDir],
       expect.not.objectContaining({ cwd: expect.anything() })
     );
+    // 'both' covers the running install — the restart promise holds.
+    expect((result as { message: string }).message).toContain("will stop and restart");
   });
 
   it("degrades 'both' to --global (and says so) when no project is locatable", async () => {
@@ -242,7 +263,9 @@ describe("update-argent tool", () => {
     const flags = args.filter((a) => a === "--global" || a === "--local");
     expect(flags).toHaveLength(1);
     // ...and hint at the OTHER install so the agent can offer to update it too.
-    expect((result as { message: string }).message).toMatch(/call this tool again with target/);
+    // The global->local direction goes through the CLI, which can bind the
+    // right project — the hint must say so.
+    expect((result as { message: string }).message).toMatch(/argent update --local/);
   });
 
   it("does NOT spawn before 2 seconds have elapsed", async () => {
@@ -324,30 +347,34 @@ describe("update-argent tool", () => {
   });
 
   it("a cross-install target bypasses the running install's up-to-date gate", async () => {
-    // The update state describes only the RUNNING (global) install — it says
-    // nothing about the local devDependency; the installer gets the final word.
+    // The update state describes only the RUNNING (local) install — it says
+    // nothing about the global install; the installer gets the final word.
     mockGetUpdateState.mockReturnValue(stateUpToDate());
     const projDir = stageDeclaringProject();
-    process.chdir(projDir);
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.env.ARGENT_PROJECT_ROOT = projDir;
 
-    const result = await updateArgentTool.execute({}, { target: "local" }, undefined);
+    const result = await updateArgentTool.execute({}, { target: "global" }, undefined);
     vi.advanceTimersByTime(2000);
 
     expect((result as { message: string }).message).toContain("update initiated");
     expect(mockSpawn).toHaveBeenCalledWith(
       "argent",
-      ["update", "--yes", "--local", "--project-root", fs.realpathSync(projDir)],
+      ["update", "--yes", "--global", "--project-root", projDir],
       expect.not.objectContaining({ cwd: expect.anything() })
     );
   });
 
-  it("accepts an optionalDependencies declaration when proving the project", async () => {
+  it("accepts an optionalDependencies declaration when re-proving a local server's project", async () => {
+    // A local-serving server spawned by an older argent (no ARGENT_PROJECT_ROOT
+    // recorded): the cwd-walk fallback applies — its cwd IS its project.
     const projDir = path.join(tmpDir, "opt-proj");
     fs.mkdirSync(projDir, { recursive: true });
     fs.writeFileSync(
       path.join(projDir, "package.json"),
       JSON.stringify({ name: "opt", optionalDependencies: { "@swmansion/argent": "^1.0.0" } })
     );
+    process.env.ARGENT_INSTALL_KIND = "local";
     process.chdir(projDir);
 
     const result = await updateArgentTool.execute({}, { target: "local" }, undefined);
@@ -356,7 +383,15 @@ describe("update-argent tool", () => {
     expect((result as { message: string }).message).toContain("update initiated");
     expect(mockSpawn).toHaveBeenCalledWith(
       "argent",
-      ["update", "--yes", "--local", "--project-root", fs.realpathSync(projDir)],
+      [
+        "update",
+        "--yes",
+        "--local",
+        "--version",
+        "99.0.0",
+        "--project-root",
+        fs.realpathSync(projDir),
+      ],
       expect.anything()
     );
   });

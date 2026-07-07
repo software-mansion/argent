@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import { MCP_BINARY_NAME } from "./constants.js";
 import { isGloballyInstalled } from "./utils.js";
-import type { McpConfigAdapter, McpServerEntry } from "./mcp-configs.js";
+import { hasCustomizingEnv, type McpConfigAdapter, type McpServerEntry } from "./mcp-configs.js";
 
 export interface StaleConfigCleanupResult {
   /** One summary line per removed entry or warning; empty when nothing found. */
@@ -71,14 +71,16 @@ export async function cleanupStaleMcpConfigs(args: {
   // is false.
   const globalArgentOnPath = isGloballyInstalled();
 
-  // Bare `argent` command, nothing on PATH, and no env vars that could make
-  // it resolvable inside the client (a custom PATH is exactly what an nvm
-  // user adds) — dead in every environment that resolves PATH like this shell.
+  // Bare `argent` command, nothing on PATH, and no CUSTOMIZING env vars that
+  // could make it resolvable inside the client (a custom PATH is exactly what
+  // an nvm user adds) — dead in every environment that resolves PATH like
+  // this shell. A legacy argent-authored ARGENT_MCP_LOG env doesn't count
+  // (see hasCustomizingEnv).
   const isProvablyDead = (entry: McpServerEntry | null): boolean =>
     entry !== null &&
     entry.command === MCP_BINARY_NAME &&
     !globalArgentOnPath &&
-    !(entry.env && Object.keys(entry.env).length > 0);
+    !hasCustomizingEnv(entry);
 
   const removed = (adapterName: string, location: string, what: string): void => {
     removedCount += 1;

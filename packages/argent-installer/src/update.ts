@@ -42,7 +42,7 @@ import { execShellCommandSync, runTrustingDisk } from "./shell.js";
 import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
-import { killToolServerForInstallDir } from "@argent/tools-client";
+import { killToolServer, killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
 
@@ -284,6 +284,16 @@ export async function update(args: string[]): Promise<void> {
       return "noop";
     }
 
+    // The agent-triggered updater acts on an UPDATE consent, never an install
+    // consent: a missing global install is not updated into existence (a
+    // degraded 'both' target, or an explicit 'global' one, must not mutate
+    // the machine's global prefix with a fresh install nobody had).
+    if (trigger === "mcp_update" && mode === "global" && !globallyInstalled) {
+      p.log.warn(`${PACKAGE_NAME} is not installed globally — nothing to update.`);
+      await trackPackageAction("no_update", updateStartTime, true);
+      return "noop";
+    }
+
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
@@ -405,7 +415,16 @@ export async function update(args: string[]): Promise<void> {
       const installDirToStop =
         mode === "local" ? localProbe!.packageDir : getGloballyInstalledPackageRoot();
       try {
-        if (installDirToStop) await killToolServerForInstallDir(installDirToStop);
+        if (installDirToStop) {
+          await killToolServerForInstallDir(installDirToStop);
+        } else if (mode === "global") {
+          // The global package root can be unresolvable (Windows .cmd-wrapper
+          // layouts — see getGloballyInstalledPackageRoot). Fall back to
+          // main's legacy kill: the single-slot state file is only written by
+          // pre-branch argent, whose server is necessarily the global
+          // install's, so this cannot hit another install's server.
+          await killToolServer();
+        }
       } catch (err) {
         await trackPackageAction(
           "update_failed",

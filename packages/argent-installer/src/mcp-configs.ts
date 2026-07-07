@@ -167,6 +167,17 @@ function hasEnv(entry: McpServerEntry): entry is McpServerEntry & { env: Record<
   return entry.env != null && Object.keys(entry.env).length > 0;
 }
 
+// Env keys argent itself wrote historically: entries from argent <= 0.9.x
+// carry ARGENT_MCP_LOG (dropped in 0.10.0 by #238). An entry whose env holds
+// nothing else is still argent-authored — classification must not read it as
+// a user customization, or those legacy entries would never be repaired to
+// the clean env-less shape (the refresh was the #238 rollout vehicle).
+const LEGACY_ARGENT_ENV_KEYS = new Set(["ARGENT_MCP_LOG"]);
+
+export function hasCustomizingEnv(entry: McpServerEntry): boolean {
+  return Object.keys(entry.env ?? {}).some((key) => !LEGACY_ARGENT_ENV_KEYS.has(key));
+}
+
 function removeDirIfEmpty(dirPath: string): void {
   try {
     if (!fs.existsSync(dirPath)) return;
@@ -235,7 +246,7 @@ function normalizeServerEntry(raw: unknown): McpServerEntry | null {
 // node_modules copy of the package (everything getLocalArgentBinRelPath can
 // emit); an absolute or out-of-tree path is a hand-tuned override.
 export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
-  if (entry === null || hasEnv(entry)) return false;
+  if (entry === null || hasCustomizingEnv(entry)) return false;
   const { command, args } = entry;
   switch (command) {
     case MCP_BINARY_NAME:
@@ -344,7 +355,11 @@ const cursorAdapter: McpConfigAdapter = {
     }
   },
 
-  removeAllowlist(): void {
+  removeAllowlist(_root: string, scope: "local" | "global"): void {
+    // Cursor's allowlist lives ONLY in the machine-global permissions file.
+    // A scope-"local" cleanup (an uninstall retaining the global install)
+    // must not strip a file that install still depends on.
+    if (scope !== "global") return;
     const permPath = path.join(homedir(), ".cursor", "permissions.json");
     if (!fs.existsSync(permPath)) return;
     const config = readJson(permPath);
@@ -385,18 +400,24 @@ function claudeProjectKeysForRoot(projects: Record<string, unknown>, root: strin
 // before this init would keep the fresh project-scope entry from ever loading.
 function claudeDisabledListFinding(
   settingsPath: string,
-  label: string
+  label: string,
+  projectConfined: boolean
 ): ShadowingConfigFinding | null {
   if (!fs.existsSync(settingsPath)) return null;
   const disabled = readJson(settingsPath).disabledMcpjsonServers;
   if (!Array.isArray(disabled) || !disabled.includes(MCP_SERVER_KEY)) return null;
   return {
     location: label,
-    reason: `a recorded "reject" in disabledMcpjsonServers blocks the .mcp.json entry from loading`,
+    reason: projectConfined
+      ? `a recorded "reject" in disabledMcpjsonServers blocks the .mcp.json entry from loading`
+      : `a machine-wide "reject" in disabledMcpjsonServers blocks .mcp.json argent entries in ` +
+        `every project; if that is not deliberate, remove "argent" from the list`,
     entry: null,
-    // Removing the rejection only lets Claude Code prompt for approval again —
-    // running `argent init` is that consent.
-    autoRemove: true,
+    // Removing a PROJECT-confined rejection only lets Claude Code prompt for
+    // approval again — running `argent init` is that consent. The user-global
+    // list (~/.claude/settings.json) reaches every project on the machine, so
+    // it is never auto-removed; the shared policy warns instead.
+    autoRemove: projectConfined,
     remove: (): boolean => {
       const config = readJson(settingsPath);
       const list = config.disabledMcpjsonServers;
@@ -453,7 +474,16 @@ const claudeAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    if (configPath === this.globalPath()) {
+      // ~/.claude.json is the user's primary Claude config (OAuth state,
+      // per-project trust/history) — never route it through the prune-and-
+      // delete path, which strips every unrelated empty structure. Drop only
+      // our key and write the rest back verbatim.
+      if (Object.keys(servers).length === 0) delete config.mcpServers;
+      writeJson(configPath, config);
+    } else {
+      writeJsonOrRemove(configPath, config);
+    }
     return true;
   },
 
@@ -529,13 +559,13 @@ const claudeAdapter: McpConfigAdapter = {
       }
     }
     if (writtenScope === "local") {
-      const candidates: Array<[string, string]> = [
-        [path.join(root, ".claude", "settings.json"), ".claude/settings.json"],
-        [path.join(root, ".claude", "settings.local.json"), ".claude/settings.local.json"],
-        [path.join(homedir(), ".claude", "settings.json"), "~/.claude/settings.json"],
+      const candidates: Array<[string, string, boolean]> = [
+        [path.join(root, ".claude", "settings.json"), ".claude/settings.json", true],
+        [path.join(root, ".claude", "settings.local.json"), ".claude/settings.local.json", true],
+        [path.join(homedir(), ".claude", "settings.json"), "~/.claude/settings.json", false],
       ];
-      for (const [settingsPath, label] of candidates) {
-        const finding = claudeDisabledListFinding(settingsPath, label);
+      for (const [settingsPath, label, projectConfined] of candidates) {
+        const finding = claudeDisabledListFinding(settingsPath, label, projectConfined);
         if (finding) findings.push(finding);
       }
     }
@@ -715,7 +745,11 @@ const windsurfAdapter: McpConfigAdapter = {
     writeJson(configPath, config);
   },
 
-  removeAllowlist(): void {
+  removeAllowlist(_root: string, scope: "local" | "global"): void {
+    // Windsurf is a global-only client — same rule as Cursor's allowlist: a
+    // scope-"local" cleanup must not touch the machine-global config a
+    // retained global install depends on.
+    if (scope !== "global") return;
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     if (!fs.existsSync(configPath)) return;
     const config = readJson(configPath);

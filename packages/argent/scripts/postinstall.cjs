@@ -32,13 +32,29 @@ function sameBundle(recorded) {
   }
 }
 
+function shouldKill(recorded) {
+  if (!recorded) return false;
+  if (sameBundle(recorded)) return true;
+  // A recorded bundle whose file is GONE can never serve again: pnpm/yarn
+  // global layouts keep the package in a version-pinned dir, so an upgrade
+  // replaces the dir instead of rewriting it in place and sameBundle never
+  // matches. No live install's server can be running from a nonexistent
+  // path, so retiring it is safe for every other session.
+  try {
+    fs.accessSync(recorded);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 try {
   for (const name of fs.readdirSync(stateDir)) {
     if (!/^tool-server(-[0-9a-f]{12})?\.json$/.test(name)) continue;
     const stateFile = path.join(stateDir, name);
     try {
       const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-      if (state && state.pid && sameBundle(state.bundlePath)) {
+      if (state && state.pid && shouldKill(state.bundlePath)) {
         try {
           process.kill(state.pid, "SIGTERM");
         } catch {

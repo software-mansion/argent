@@ -115,6 +115,15 @@ describe("isArgentManagedEntry", () => {
       })
     ).toBe(true);
     expect(isArgentManagedEntry({ command: "yarn", args: ["argent", "mcp"] })).toBe(true);
+    // The shape argent itself wrote up to v0.9.x (env dropped in 0.10 by
+    // #238): still argent-authored, still repairable.
+    expect(
+      isArgentManagedEntry({
+        command: "argent",
+        args: ["mcp"],
+        env: { ARGENT_MCP_LOG: "/Users/someone/.argent/mcp-calls.log" },
+      })
+    ).toBe(true);
     expect(isArgentManagedEntry({ command: "npx", args: ["--no-install", "argent", "mcp"] })).toBe(
       true
     );
@@ -139,6 +148,55 @@ describe("isArgentManagedEntry", () => {
     expect(isArgentManagedEntry({ command: "", args: [] })).toBe(false);
     expect(isArgentManagedEntry(null)).toBe(false);
     expect(isArgentManagedEntry({ command: "docker", args: ["run", "argent", "mcp"] })).toBe(false);
+  });
+});
+
+// ── claudeAdapter.remove on the user-global file ─────────────────────────────
+
+describe("claudeAdapter.remove on ~/.claude.json", () => {
+  it("drops only the argent key and never prunes unrelated empty structures", () => {
+    homedirOverride = tmpDir;
+    const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const globalPath = path.join(tmpDir, ".claude.json");
+    fs.writeFileSync(
+      globalPath,
+      JSON.stringify({
+        oauthAccount: { email: "user@example.com" },
+        projects: { "/work/app": { allowedTools: [], history: [] } },
+        mcpServers: { argent: { command: "argent", args: ["mcp"] } },
+      })
+    );
+
+    expect(claude.remove(globalPath)).toBe(true);
+
+    const after = JSON.parse(fs.readFileSync(globalPath, "utf8"));
+    expect(after.mcpServers).toBeUndefined();
+    // The user's empty scaffolding survives — pruneEmptyConfig must not run
+    // against their primary Claude config.
+    expect(after.projects["/work/app"]).toEqual({ allowedTools: [], history: [] });
+    expect(after.oauthAccount).toEqual({ email: "user@example.com" });
+    homedirOverride = undefined;
+  });
+});
+
+// ── Allowlist scope on global-only clients ────────────────────────────────────
+
+describe("global-only allowlists honor the cleanup scope", () => {
+  it("Cursor's removeAllowlist no-ops for scope 'local'", () => {
+    homedirOverride = tmpDir;
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const permPath = path.join(tmpDir, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(permPath, JSON.stringify({ mcpAllowlist: ["argent:*"] }));
+
+    // A local-only uninstall retaining the global install must not strip the
+    // machine-global file that install depends on.
+    cursor.removeAllowlist!(tmpDir, "local");
+    expect(JSON.parse(fs.readFileSync(permPath, "utf8")).mcpAllowlist).toEqual(["argent:*"]);
+
+    cursor.removeAllowlist!(tmpDir, "global");
+    expect(fs.existsSync(permPath)).toBe(false);
+    homedirOverride = undefined;
   });
 });
 

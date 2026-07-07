@@ -148,7 +148,13 @@ export const updateArgentTool: ToolDefinition<{
     if (resolved === "local" || resolved === "both") {
       const recordedRoot =
         running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null;
-      projectRoot = recordedRoot ?? findDeclaringProjectRoot(process.cwd());
+      // The cwd-walk fallback is only meaningful for a LOCAL-serving server,
+      // whose cwd is its own project. A global-serving server is shared
+      // across every project of that install and its cwd is frozen at
+      // whatever session spawned it FIRST — walking it could pin a different
+      // project than the caller's and rewrite that project's manifest.
+      projectRoot =
+        recordedRoot ?? (running.kind === "local" ? findDeclaringProjectRoot(process.cwd()) : null);
       if (!projectRoot) {
         if (resolved === "local") {
           return {
@@ -245,12 +251,15 @@ export const updateArgentTool: ToolDefinition<{
       effectiveTarget === "both"
         ? "global and project-local installs"
         : `${effectiveTarget} install`;
-    // When we auto-updated only one of two possible installs, hint at the flag
-    // for the other so the agent can offer it if the user also has that one.
+    // When we auto-updated only one of two possible installs, hint at how to
+    // update the other. A local-serving server can target the global install
+    // through this tool; the reverse needs the CLI (a shared global server
+    // cannot prove WHICH project's local install the caller means).
     const otherHint =
       requested === "auto" && resolved !== "both"
-        ? ` If you also have a ${resolved === "local" ? "global" : "project-local"} install, ` +
-          `call this tool again with target "${resolved === "local" ? "global" : "local"}" to update it too.`
+        ? resolved === "local"
+          ? ` If you also have a global install, call this tool again with target "global" to update it too.`
+          : ` If you also have a project-local install, run \`argent update --local\` in that project to update it too.`
         : "";
     const bothDegradedNote =
       resolved === "both" && effectiveTarget === "global"
@@ -264,12 +273,22 @@ export const updateArgentTool: ToolDefinition<{
       ? ""
       : " The installer checks each targeted install against the registry and no-ops if it is already current.";
 
+    // Only a target covering the RUNNING install restarts this session's
+    // server; promising a restart for a cross-install update would leave the
+    // agent waiting for a reconnect that never happens.
+    const coversRunningInstall = targetsOnlyRunningInstall || effectiveTarget === "both";
+    const restartNote = coversRunningInstall
+      ? ` The tool server will stop and restart automatically once the update is installed. ` +
+        `Subsequent tool calls will reconnect to the updated server.`
+      : ` This session's tool server is not affected and keeps running; the update applies only ` +
+        `to the targeted install.`;
+
     return {
       message:
         `Argent update initiated ${versionInfo}for the ${targetLabel}.` +
         crossTargetNote +
-        ` The tool server will stop and restart automatically once the update is installed. ` +
-        `Subsequent tool calls will reconnect to the updated server.${otherHint}${bothDegradedNote}`,
+        restartNote +
+        `${otherHint}${bothDegradedNote}`,
     };
   },
 };
