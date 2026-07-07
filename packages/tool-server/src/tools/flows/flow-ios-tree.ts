@@ -246,7 +246,8 @@ export async function queryFullHierarchyTree(
     nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
   } catch (err) {
     throw new Error(
-      `native devtools is unavailable (${errMsg(err)}) — flows resolve selectors against the full view hierarchy it serves`
+      `native devtools is unavailable (${errMsg(err)}) — flows resolve selectors against the full view hierarchy it serves`,
+      { cause: err }
     );
   }
   // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
