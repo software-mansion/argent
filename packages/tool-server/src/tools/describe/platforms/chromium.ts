@@ -457,15 +457,22 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (isChecked(el)) node.checked = true;
     if (isPassword(el)) node.password = true;
     if (scrollable) node.scrollable = true;
-    // Input focus: el is its document's activeElement. The body is excluded —
-    // it's the default holder when nothing is focused, and its screen-spanning
-    // frame would satisfy any overlap check. Per-document, so a focused input
-    // inside a same-origin iframe reports too (its host iframe element also
-    // does, via the outer document — harmless for a frame-overlap consumer).
+    // Input focus: el is its document's activeElement. Deliberately emitted to
+    // EVERY describe consumer (the agent-facing tool as much as the flow type
+    // directive's focus wait) — where the caret is is useful targeting info.
+    // The body is excluded — it's the default holder when nothing is focused,
+    // and its screen-spanning frame would satisfy any overlap check. A host
+    // <iframe>/<frame> is excluded too: it is the outer document's
+    // activeElement whenever focus merely sits inside its subdocument, and the
+    // inner element (that document's own activeElement, checked per-document)
+    // is the one that carries the flag — flagging both would double-report.
     if (!invisibleSelf) {
-      const doc = getOwnerDocument.call(el);
-      if (doc && getActiveElement.call(doc) === el && getDocBody.call(doc) !== el) {
-        node.focused = true;
+      const tag = getTagName.call(el);
+      if (tag !== "IFRAME" && tag !== "FRAME") {
+        const doc = getOwnerDocument.call(el);
+        if (doc && getActiveElement.call(doc) === el && getDocBody.call(doc) !== el) {
+          node.focused = true;
+        }
       }
     }
     return node;

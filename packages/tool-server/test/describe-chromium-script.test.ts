@@ -836,6 +836,41 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(unfocusedTree, "the-body")!.focused).toBeUndefined();
   });
 
+  it("flags a focused input inside a same-origin iframe once — never its host <iframe>", () => {
+    // Focus inside a subdocument makes BOTH activeElements point at it: the
+    // inner document's is the input, the outer document's is the host iframe
+    // element. Only the inner element carries the flag; flagging the host too
+    // would double-report the focus.
+    const innerInput = el({ tag: "input", attrs: { id: "iframe-input" }, rect: BOX });
+    const innerBody = el({
+      tag: "body",
+      rect: { x: 0, y: 0, w: 500, h: 500 },
+      children: [innerInput],
+    });
+    const innerHtml = el({
+      tag: "html",
+      rect: { x: 0, y: 0, w: 500, h: 500 },
+      children: [innerBody],
+    });
+    const innerDoc = { documentElement: innerHtml, activeElement: innerInput, body: innerBody };
+    for (const n of [innerHtml, innerBody, innerInput]) {
+      (n as unknown as Record<string, unknown>).ownerDocument = innerDoc;
+    }
+    const iframe = el({
+      tag: "iframe",
+      attrs: { id: "the-iframe" },
+      rect: { x: 0, y: 0, w: 500, h: 500 },
+    });
+    (iframe as unknown as Record<string, unknown>).contentDocument = innerDoc;
+    // The outer document reports the host iframe as ITS activeElement.
+    const outerDoc = { activeElement: iframe, body: null };
+    (iframe as unknown as Record<string, unknown>).ownerDocument = outerDoc;
+
+    const { tree } = run([iframe]);
+    expect(findById(tree, "iframe-input")!.focused).toBe(true);
+    expect(findById(tree, "the-iframe")!.focused).toBeUndefined();
+  });
+
   // ---- a missing captured accessor must degrade, not abort the whole describe ----
   it("degrades instead of aborting when a captured prototype accessor is absent", () => {
     // scrollHeight is read only for overflow:auto/scroll nodes. Removing its prototype
