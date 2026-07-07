@@ -60,7 +60,14 @@ function projectChromiumNode(node: DescribeNode): FlatNode<DescribeNode> {
  */
 export function adaptChromiumTreeForFlows(tree: DescribeNode): DescribeNode {
   const children: DescribeNode[] = [];
-  flattenHoisting(tree, projectChromiumNode, children);
+  // Children only, never the root — matching the iOS/Android adapters. The
+  // walker reads id/data-testid off every element including <html>, so
+  // projecting the root would turn a page whose root carries one into an
+  // addressable full-screen leaf that shields and aggregates the whole page's
+  // text, letting a broad assert pass spuriously.
+  for (const child of tree.children) {
+    flattenHoisting(child, projectChromiumNode, children);
+  }
   return parseDescribeResult({
     role: "Screen",
     frame: { x: 0, y: 0, width: 1, height: 1 },

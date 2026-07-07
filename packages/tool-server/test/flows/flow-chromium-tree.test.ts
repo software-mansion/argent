@@ -98,6 +98,19 @@ describe("adaptChromiumTreeForFlows", () => {
     expect(assertText(form[0]!)).not.toContain("hunter2");
   });
 
+  it("never emits the root as a leaf, even when <html> carries an identifier", () => {
+    // The walker reads id/data-testid off every element including <html>; the
+    // iOS/Android adapters iterate children only and never project their root.
+    // A projected root would be a full-screen leaf shielding the whole page's
+    // text, so a broad assert could pass spuriously.
+    const root = screen();
+    root.identifier = "app-root";
+    const tree = adaptChromiumTreeForFlows(root);
+    expect(findAll(tree, { identifier: "app-root" })).toHaveLength(0);
+    // The root's descendants still flatten normally.
+    expect(findAll(tree, { identifier: "log-box" })).toHaveLength(1);
+  });
+
   it("drops pure scaffolding but keeps addressable descendants", () => {
     const tree = adaptChromiumTreeForFlows(screen());
     // Root wrapper: flat leaves under one synthetic Screen node.
