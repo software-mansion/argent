@@ -24,10 +24,10 @@
  * cases (missing field, NaN, Infinity).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ArtifactStore } from "@argent/registry";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { artifactContext } from "../artifact-context";
 
 // Stub ONLY the Perfetto engine boundary. The pipeline, render, and the entire
 // freshness chain run for real against the empty .pftrace fixture.
@@ -170,7 +170,7 @@ describe("native-profiler freshness flagging — real analyze/render path", () =
     const result = await nativeProfilerAnalyzeTool.execute(
       { session: api } as never,
       { device_id: SERIAL },
-      { artifacts: new ArtifactStore() } as never
+      artifactContext(nativeProfilerAnalyzeTool) as never
     );
     return result.report;
   }
@@ -250,7 +250,7 @@ describe("native-profiler freshness flagging — real analyze/render path", () =
     const result = await nativeProfilerAnalyzeTool.execute(
       { session: api } as never,
       { device_id: SERIAL },
-      { artifacts: new ArtifactStore() } as never
+      artifactContext(nativeProfilerAnalyzeTool) as never
     );
     console.log(
       `[freshness E2E] wallClockStartMs=NaN → ${staleLine(result.report) ?? "(no stale flag — guarded)"}`
@@ -263,7 +263,7 @@ describe("native-profiler freshness flagging — real analyze/render path", () =
     const result2 = await nativeProfilerAnalyzeTool.execute(
       { session: api } as never,
       { device_id: SERIAL },
-      { artifacts: new ArtifactStore() } as never
+      artifactContext(nativeProfilerAnalyzeTool) as never
     );
     console.log(
       `[freshness E2E] wallClockStartMs=Infinity → ${staleLine(result2.report) ?? "(no stale flag — guarded)"}`

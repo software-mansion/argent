@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArtifactStore } from "@argent/registry";
 import { createScreenshotTool } from "../src/tools/screenshot";
+import { artifactContext } from "./artifact-context";
 
 describe("screenshot tool", () => {
   afterEach(() => {
@@ -35,12 +35,13 @@ describe("screenshot tool", () => {
     };
     screenshotTool.zodSchema!.parse(params);
 
-    const result = await screenshotTool.execute({}, params, { artifacts: new ArtifactStore() });
+    const result = await screenshotTool.execute({}, params, artifactContext(screenshotTool));
 
     // The PNG is returned as an artifact handle the MCP client materializes —
     // the unreachable `127.0.0.1` media URL is no longer surfaced.
     expect(result.image).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot",
       filename: "screenshot.png",
       mimeType: "image/png",
       hostPath: "/tmp/screenshot.png",

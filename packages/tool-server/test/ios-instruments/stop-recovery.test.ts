@@ -25,10 +25,10 @@ import {
   type IosStopArtifacts,
 } from "../../src/tools/profiler/native-profiler/native-profiler-stop";
 import { handleXctraceExit } from "../../src/tools/profiler/native-profiler/native-profiler-start";
-import { ArtifactStore } from "@argent/registry";
+import { artifactContext } from "../artifact-context";
 
 // Tool context the registry would inject; stop registers its trace/exports here.
-const STOP_CTX = { artifacts: new ArtifactStore() };
+const STOP_CTX = artifactContext(nativeProfilerStopTool);
 
 const mockedExport = vi.mocked(exportIosTraceData);
 
@@ -137,15 +137,21 @@ describe("native-profiler-stop recovery branch", () => {
 
     expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
     // exportedFiles are now artifact handles (materialized client-side), not raw paths.
-    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true, filename: "cpu.xml" });
+    expect(result.exportedFiles.cpu).toMatchObject({
+      __argentArtifact: true,
+      kind: "native-profile-cpu",
+      filename: "cpu.xml",
+    });
     expect(result.exportedFiles.hangs).toMatchObject({
       __argentArtifact: true,
+      kind: "native-profile-hangs",
       filename: "hangs.xml",
     });
     // The .trace bundle is now a downloadable artifact (delivered as tar.gz
     // on demand), not a "stays on the host" note.
     expect(result.traceFile).toMatchObject({
       __argentArtifact: true,
+      kind: "native-profile-trace",
       archive: "tar.gz",
       filename: "ios-profiler-20260101-000000.trace",
     });
@@ -241,7 +247,10 @@ describe("native-profiler-stop recovery branch", () => {
     const result = await promise;
 
     expect(result.warning).toBeUndefined();
-    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true });
+    expect(result.exportedFiles.cpu).toMatchObject({
+      __argentArtifact: true,
+      kind: "native-profile-cpu",
+    });
     expect(api.profilingActive).toBe(false);
     expect(api.captureProcess).toBeNull();
     expect(api.recordingExitedUnexpectedly).toBe(false);

@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
 import { run, type RunCommandOptions } from "../src/run.js";
-import { ARTIFACT_MARKER, artifactsRoot, type ArtifactHandle } from "@argent/tools-client";
+import { artifactsRoot } from "@argent/tools-client";
+import { ARTIFACT_MARKER, type ArtifactHandle } from "@argent/artifacts";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x11, 0x22, 0x33]);
 
@@ -129,6 +130,7 @@ describe("CLI run — artifact materialization end-to-end", () => {
     return {
       [ARTIFACT_MARKER]: true,
       id: "loc-1",
+      kind: "screenshot",
       filename: "shot.png",
       mimeType: "image/png",
       size: st.size,
@@ -159,6 +161,7 @@ describe("CLI run — artifact materialization end-to-end", () => {
       image: {
         [ARTIFACT_MARKER]: true,
         id: "rem-1",
+        kind: "screenshot",
         filename: "shot.png",
         mimeType: "image/png",
         size: PNG.length,

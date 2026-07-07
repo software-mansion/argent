@@ -18,11 +18,13 @@ export type {
   ToolCapability,
   ToolDependency,
 } from "./types";
-export { ArtifactStore, ARTIFACT_MARKER } from "./artifacts";
+export { ArtifactStore, createArtifactRegistrar } from "./artifacts";
 export type {
-  ArtifactHandle,
   ArtifactEntry,
   ArtifactListItem,
+  ArtifactRegistrar,
+  RegisteredArtifactHandle,
+  RegisterArtifactFileOptions,
   RegisterArtifactOptions,
 } from "./artifacts";
 export {

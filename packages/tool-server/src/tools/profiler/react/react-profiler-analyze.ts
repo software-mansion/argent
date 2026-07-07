@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { promises as fsPromises } from "fs";
-import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  type ToolDefinition,
+} from "@argent/registry";
+import type { ArtifactOutputMap } from "@argent/artifacts";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   type ProfilerSessionPaths,
@@ -21,7 +26,24 @@ import {
 } from "../../../utils/react-profiler/debug/dump";
 import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
-import type { ArtifactStore } from "@argent/registry";
+import type { ArtifactRegistrar } from "@argent/registry";
+
+const artifacts = {
+  report: {
+    kind: "react-profile-report",
+    mimeTypes: ["text/markdown"],
+  },
+  cpuProfile: {
+    kind: "react-profile-cpu",
+    mimeTypes: ["application/json"],
+  },
+  commits: {
+    kind: "react-profile-commits",
+    mimeTypes: ["application/json"],
+  },
+} satisfies ArtifactOutputMap;
+
+type ArtifactOutputName = Extract<keyof typeof artifacts, string>;
 
 /**
  * Register a server-side file path as a downloadable artifact (or pass through
@@ -31,10 +53,11 @@ import type { ArtifactStore } from "@argent/registry";
  * path it can't open.
  */
 async function fileArtifact(
-  store: ArtifactStore,
-  p: string | null | undefined
+  artifacts: ArtifactRegistrar<ArtifactOutputName>,
+  p: string | null | undefined,
+  outputName: ArtifactOutputName
 ): Promise<ArtifactHandle | null> {
-  return p ? store.register(p) : null;
+  return p ? artifacts.register(outputName, { hostPath: p }) : null;
 }
 
 const annotationSchema = z.object({
@@ -69,7 +92,8 @@ const zodSchema = z.object({
 
 export const reactProfilerAnalyzeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  Record<string, unknown>
+  Record<string, unknown>,
+  typeof artifacts
 > = {
   id: "react-profiler-analyze",
   description: `Analyze stored profiling data and return a markdown performance report.
@@ -90,6 +114,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
   // RN-only: operates on profiler trace files captured via the React DevTools
   // backend's commit recording, which is not present on Chromium.
   capability: RN_ONLY_TOOL_CAPABILITY,
+  artifacts,
   services: () => ({}),
   async execute(_services, params, ctx) {
     const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(
@@ -227,13 +252,13 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
     const artifacts = requireArtifacts(ctx);
     const result: Record<string, unknown> = {
       report,
-      reportFile: await fileArtifact(artifacts, reportFile),
+      reportFile: await fileArtifact(artifacts, reportFile, "report"),
       hotCommitsTotal,
       hotCommitsShown,
       sessionFiles: {
         sessionId: sessionPaths.sessionId,
-        cpuProfile: await fileArtifact(artifacts, sessionPaths.cpuProfilePath),
-        commits: await fileArtifact(artifacts, sessionPaths.commitsPath),
+        cpuProfile: await fileArtifact(artifacts, sessionPaths.cpuProfilePath, "cpuProfile"),
+        commits: await fileArtifact(artifacts, sessionPaths.commitsPath, "commits"),
       },
     };
 

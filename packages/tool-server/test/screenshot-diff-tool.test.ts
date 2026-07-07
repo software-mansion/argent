@@ -3,8 +3,8 @@ import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
 import { describe, expect, it, vi } from "vitest";
-import { ArtifactStore } from "@argent/registry";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
+import { artifactContext } from "./artifact-context";
 
 describe("screenshotDiffTool", () => {
   it("rejects public tuning options so defaults stay internal", () => {
@@ -80,7 +80,7 @@ describe("screenshotDiffTool", () => {
         udid: "ABC",
         outputDir: dir,
       },
-      { artifacts: new ArtifactStore() }
+      artifactContext(screenshotDiffTool)
     );
 
     // Diff outputs leave as artifact handles so a remote client can download
@@ -88,11 +88,13 @@ describe("screenshotDiffTool", () => {
     expect(result.summary).toContain("Screenshot diff summary");
     expect(result.diffPath).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot-diff",
       hostPath: path.join(dir, "current-diff.png"),
       mimeType: "image/png",
     });
     expect(result.contextDiffPath).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot-diff-context",
       hostPath: path.join(dir, "current-context-diff.png"),
       mimeType: "image/png",
     });
@@ -120,7 +122,7 @@ describe("screenshotDiffTool", () => {
         rotation: "LandscapeLeft",
         outputDir: dir,
       },
-      { signal, artifacts: new ArtifactStore() },
+      { ...artifactContext(screenshotDiffTool), signal },
       captureScreenshot as never
     );
 
@@ -163,7 +165,7 @@ describe("screenshotDiffTool", () => {
     const result = await executeScreenshotDiffTool(
       { simulatorServer: { apiUrl: "http://localhost:4949" } },
       { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
-      { artifacts: new ArtifactStore() },
+      artifactContext(screenshotDiffTool),
       captureScreenshot as never
     );
 
@@ -213,13 +215,13 @@ describe("screenshotDiffTool", () => {
     await executeScreenshotDiffTool(
       { simulatorServer: { apiUrl: "http://localhost:4949" } },
       { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
-      { artifacts: new ArtifactStore() },
+      artifactContext(screenshotDiffTool),
       captureScreenshot as never
     );
     await executeScreenshotDiffTool(
       { simulatorServer: { apiUrl: "http://localhost:4949" } },
       { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
-      { artifacts: new ArtifactStore() },
+      artifactContext(screenshotDiffTool),
       captureScreenshot as never
     );
 

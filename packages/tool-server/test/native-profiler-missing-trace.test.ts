@@ -10,10 +10,10 @@
  * has no findings" and surface the export failure via `exportErrors`.
  */
 import { describe, it, expect, vi } from "vitest";
-import { ArtifactStore } from "@argent/registry";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { artifactContext } from "./artifact-context";
 
 // The analyze tool gates the iOS path behind `ensureDeps(["xcrun"])`, but
 // analyzing an already-exported trace is pure XML parsing — it never shells out
@@ -73,7 +73,7 @@ describe("native-profiler-analyze: missing trace file", () => {
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
         { device_id: "TEST-DEVICE" },
-        { artifacts: new ArtifactStore() }
+        artifactContext(nativeProfilerAnalyzeTool)
       );
 
       // Bug: previously this rendered "All clear" with no warning because

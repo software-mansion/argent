@@ -22,7 +22,12 @@ import { ensureDeps } from "./check-deps";
  * *every* invocation regardless of which platform branch fires (rare — usually
  * only true for analysis / no-device tools).
  */
-export interface PlatformImpl<Services, Params, Result> {
+export interface PlatformImpl<
+  Services,
+  Params,
+  Result,
+  Context extends InvokeToolOptions = InvokeToolOptions,
+> {
   /** Host binaries this branch needs. Probed via `ensureDeps` before `handler` runs. */
   requires?: ToolDependency[];
   /** Implementation function. Receives typed services, params, the resolved device, and invoke options. */
@@ -30,7 +35,7 @@ export interface PlatformImpl<Services, Params, Result> {
     services: Services,
     params: Params,
     device: DeviceInfo,
-    options?: InvokeToolOptions
+    options?: Context
   ) => Promise<Result>;
 }
 
@@ -60,30 +65,31 @@ export function dispatchByPlatform<
   ChromiumServices = Record<string, unknown>,
   VegaServices = unknown,
   IosRemoteServices = IosServices,
+  Context extends InvokeToolOptions = InvokeToolOptions,
 >(opts: {
   toolId: string;
   capability: ToolCapability;
-  ios: PlatformImpl<IosServices, Params, Result>;
-  android: PlatformImpl<AndroidServices, Params, Result>;
+  ios: PlatformImpl<IosServices, Params, Result, Context>;
+  android: PlatformImpl<AndroidServices, Params, Result, Context>;
   /**
    * Optional ios-remote branch. When omitted, an ios-remote device will hit
    * `assertSupported` and fail there if the tool's capability matrix doesn't
    * include `appleRemote` — so adding ios-remote support is two changes (this
    * branch + the matrix), and the absence of either is a clean 400.
    */
-  iosRemote?: PlatformImpl<IosRemoteServices, Params, Result>;
-  chromium?: PlatformImpl<ChromiumServices, Params, Result>;
+  iosRemote?: PlatformImpl<IosRemoteServices, Params, Result, Context>;
+  chromium?: PlatformImpl<ChromiumServices, Params, Result, Context>;
   /**
    * Vega (Fire TV) branch. Optional so existing iOS/Android-only tools compile
    * unchanged. When a tool's capability declares `vega` support but no `vega`
    * branch is wired here, a Vega device dispatch throws
    * `NotImplementedOnPlatformError` (501) rather than silently falling through.
    */
-  vega?: PlatformImpl<VegaServices, Params, Result>;
+  vega?: PlatformImpl<VegaServices, Params, Result, Context>;
 }): (
   services: Record<string, unknown>,
   params: Params,
-  options?: InvokeToolOptions
+  options?: Context
 ) => Promise<Result> {
   return async (services, params, invokeOptions) => {
     const device = resolveDevice(params.udid);

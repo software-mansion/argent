@@ -33,36 +33,9 @@ import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { ARTIFACT_MARKER, type ArtifactHandle } from "@argent/artifacts";
 
 const execFileAsync = promisify(execFile);
-
-/** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
-export const ARTIFACT_MARKER = "__argentArtifact" as const;
-
-export interface ArtifactHandle {
-  [ARTIFACT_MARKER]: true;
-  id: string;
-  filename: string;
-  mimeType: string;
-  size: number;
-  /**
-   * Absolute path of the file on the tool-server host. When the tool-server is
-   * co-located with this client, the file is already on disk here — the gate
-   * reads it directly instead of downloading it over `/artifacts/:id`, avoiding
-   * a redundant second copy. Verified against {@link size}/{@link mtimeMs}
-   * before it is trusted; any mismatch (or a remote host) falls back to the
-   * download path. Absent on older tool-servers that don't emit it.
-   */
-  hostPath?: string;
-  /** mtime of {@link hostPath} (ms) at registration, for the integrity check. */
-  mtimeMs?: number;
-  /**
-   * Present when the artifact is a directory bundle (e.g. an Instruments
-   * `.trace`). Locally the gate uses the directory in place; on a remote miss
-   * the download is a gzipped tar that the client unpacks back into a directory.
-   */
-  archive?: "tar.gz";
-}
 
 export function isArtifactHandle(value: unknown): value is ArtifactHandle {
   return (

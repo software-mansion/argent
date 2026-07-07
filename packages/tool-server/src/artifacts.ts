@@ -21,18 +21,21 @@ import type {
   Registry,
   ArtifactEntry,
   ArtifactListItem,
+  ArtifactRegistrar,
   ArtifactStore,
   ToolContext,
 } from "@argent/registry";
 
 export {
   ArtifactStore,
-  ARTIFACT_MARKER,
-  type ArtifactHandle,
+  createArtifactRegistrar,
   type ArtifactEntry,
   type ArtifactListItem,
+  type ArtifactRegistrar,
+  type RegisterArtifactFileOptions,
   type RegisterArtifactOptions,
 } from "@argent/registry";
+export type { ArtifactHandle } from "@argent/artifacts";
 
 /**
  * Pull the registry-owned artifact store from a tool's `execute` context.
@@ -40,10 +43,12 @@ export {
  * tool's `execute` is called directly (bypassing the registry) without a
  * context — i.e. a misconfigured unit test, not a real invocation.
  */
-export function requireArtifacts(ctx?: Partial<ToolContext>): ArtifactStore {
+export function requireArtifacts<TOutputName extends string = string>(
+  ctx?: Partial<ToolContext<TOutputName>>
+): ArtifactRegistrar<TOutputName> {
   if (!ctx?.artifacts) {
     throw new Error(
-      "Artifact store missing from tool context. Invoke this tool via registry.invokeTool " +
+      "Artifact registrar missing from tool context. Invoke this tool via registry.invokeTool " +
         "(which injects ctx.artifacts), or pass { artifacts } when calling execute directly."
     );
   }

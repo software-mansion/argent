@@ -11,10 +11,10 @@
  * (empty-but-readable) file so the existence guard passes.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ArtifactStore } from "@argent/registry";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { artifactContext } from "./artifact-context";
 
 // Mocking runTpQuery is enough to control the entire Android pipeline output —
 // `runAndroidProfilerPipeline` is just `Promise.allSettled` over three calls
@@ -145,7 +145,7 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
         { device_id: "emulator-5554" },
-        { artifacts: new ArtifactStore() }
+        artifactContext(nativeProfilerAnalyzeTool)
       );
 
       expect(result.status).toBe("ok");
@@ -179,7 +179,7 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
         { device_id: "emulator-5554" },
-        { artifacts: new ArtifactStore() }
+        artifactContext(nativeProfilerAnalyzeTool)
       );
 
       expect(result.status).toBe("analysis_failed");
@@ -230,7 +230,7 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
         { device_id: "emulator-5554" },
-        { artifacts: new ArtifactStore() }
+        artifactContext(nativeProfilerAnalyzeTool)
       );
 
       expect(result.status).toBe("analysis_failed");
@@ -267,7 +267,7 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
         { device_id: "emulator-5554" },
-        { artifacts: new ArtifactStore() }
+        artifactContext(nativeProfilerAnalyzeTool)
       );
 
       expect(result.status).toBe("analysis_failed");

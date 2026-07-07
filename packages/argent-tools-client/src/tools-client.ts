@@ -1,12 +1,14 @@
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import { prepareFileInputs, applyClientFileDirectives, type FileInputSpec } from "./file-inputs.js";
+import type { ArtifactOutputMap } from "@argent/artifacts";
 
 export interface ToolMeta {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
   outputHint?: string;
+  artifacts?: ArtifactOutputMap;
   /** Args that name files on the CALLER's machine — see file-inputs.ts. */
   fileInputs?: FileInputSpec[];
   alwaysLoad?: boolean;

@@ -11,6 +11,9 @@
     "test": "vitest run",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
+  "dependencies": {
+    "@argent/artifacts": "file:../artifacts"
+  },
   "devDependencies": {
     "@types/node": "^26.0.1",
     "typescript": "^6.0.3",

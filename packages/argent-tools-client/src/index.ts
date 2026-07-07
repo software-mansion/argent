@@ -52,11 +52,10 @@ export {
   isArtifactHandle,
   getDeviceIdFromArgs,
   artifactsRoot,
-  ARTIFACT_MARKER,
-  type ArtifactHandle,
   type MaterializeContext,
   type MaterializedImage,
 } from "./artifacts.js";
+export type { ArtifactHandle } from "@argent/artifacts";
 
 export {
   prepareFileInputs,

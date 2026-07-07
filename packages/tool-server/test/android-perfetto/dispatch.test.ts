@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { ArtifactStore } from "@argent/registry";
 import {
   nativeProfilerSessionBlueprint,
   type NativeProfilerSessionApi,
 } from "../../src/blueprints/native-profiler-session";
+import { artifactContext } from "../artifact-context";
 
 // Mock the platform impl modules so we never shell out to xctrace / adb. We
 // only care that the dispatch picks the correct branch given an api.platform.
@@ -96,12 +96,13 @@ describe("native-profiler-* dispatch by session platform", () => {
       {
         device_id: "emulator-5554",
       },
-      { artifacts: new ArtifactStore() }
+      artifactContext(nativeProfilerStopTool)
     );
     // The stop tool wraps the platform's raw path into a downloadable artifact;
     // the filename still proves it routed through the Android (.pftrace) path.
     expect(stop.traceFile).toMatchObject({
       __argentArtifact: true,
+      kind: "native-profile-trace",
       archive: "tar.gz",
       filename: "android.pftrace",
     });

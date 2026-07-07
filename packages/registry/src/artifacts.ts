@@ -25,40 +25,19 @@
 import { stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, extname } from "node:path";
+import {
+  ARTIFACT_MARKER,
+  type ArtifactHandle,
+  type ArtifactKind,
+  type ArtifactOutputMap,
+} from "@argent/artifacts";
 
-/** Discriminant key identifying an artifact handle inside a tool result. */
-export const ARTIFACT_MARKER = "__argentArtifact" as const;
-
-/** Wire contract: what a tool returns in place of a host path. */
-export interface ArtifactHandle {
-  [ARTIFACT_MARKER]: true;
-  id: string;
-  filename: string;
-  mimeType: string;
-  size: number;
-  /**
-   * Absolute path of the file on this (tool-server) host. A co-located client
-   * uses it to read the file directly instead of downloading it over
-   * `/artifacts/:id`. The client verifies it against `size`/`mtimeMs` first, so
-   * a remote client (where the path is meaningless or absent) simply falls back
-   * to the download route.
-   */
-  hostPath: string;
-  /** mtime of `hostPath` (ms) at registration, for the client's integrity check. */
-  mtimeMs?: number;
-  /**
-   * Set when `hostPath` is a directory (e.g. an Instruments `.trace` bundle).
-   * A single file can't represent a directory, so `GET /artifacts/:id` streams
-   * it as a gzipped tar **only when a remote client actually requests it** —
-   * never in local mode, where the client uses the directory in place via the
-   * gate. The client unpacks the tar back into a directory after download.
-   */
-  archive?: "tar.gz";
-}
+export type RegisteredArtifactHandle = ArtifactHandle & { hostPath: string };
 
 /** Internal entry the HTTP route reads to stream a registered artifact. */
 export interface ArtifactEntry {
   path: string;
+  kind: ArtifactKind;
   filename: string;
   mimeType: string;
   size: number;
@@ -68,6 +47,7 @@ export interface ArtifactEntry {
 /** Public metadata returned by the artifact inventory endpoint. */
 export interface ArtifactListItem {
   id: string;
+  kind: ArtifactKind;
   filename: string;
   mimeType: string;
   size: number;
@@ -92,6 +72,10 @@ function inferMimeType(filePath: string): string {
 }
 
 export interface RegisterArtifactOptions {
+  /** Absolute path of the file or directory on the tool-server host. */
+  hostPath: string;
+  /** Semantic category of the artifact, distinct from its MIME type. */
+  kind: ArtifactKind;
   /** Override the basename presented to the client. Defaults to the host basename. */
   filename?: string;
   /** Override the inferred MIME type. */
@@ -104,6 +88,15 @@ export interface RegisterArtifactOptions {
   archive?: "tar.gz";
 }
 
+export type RegisterArtifactFileOptions = Omit<RegisterArtifactOptions, "kind">;
+
+export interface ArtifactRegistrar<TOutputName extends string = string> {
+  register(
+    outputName: TOutputName,
+    opts: RegisterArtifactFileOptions
+  ): Promise<RegisteredArtifactHandle>;
+}
+
 /**
  * Process-scoped artifact store, owned by a {@link Registry}. A tool registers
  * an entry during `execute` and the `/artifacts/:id` route — resolving the same
@@ -112,12 +105,13 @@ export interface RegisterArtifactOptions {
 export class ArtifactStore {
   private readonly entries = new Map<string, ArtifactEntry>();
 
-  async register(hostPath: string, opts?: RegisterArtifactOptions): Promise<ArtifactHandle> {
-    const filename = opts?.filename ?? basename(hostPath);
-    const mimeType = opts?.mimeType ?? inferMimeType(hostPath);
+  async register(opts: RegisterArtifactOptions): Promise<RegisteredArtifactHandle> {
+    const { hostPath } = opts;
+    const filename = opts.filename ?? basename(hostPath);
+    const mimeType = opts.mimeType ?? inferMimeType(hostPath);
     let size = 0;
     let mtimeMs: number | undefined;
-    let isDirectory = opts?.archive === "tar.gz";
+    let isDirectory = opts.archive === "tar.gz";
     try {
       const st = await stat(hostPath);
       size = st.size;
@@ -129,10 +123,18 @@ export class ArtifactStore {
       // they don't match what's on disk at read time.
     }
     const id = randomUUID();
-    this.entries.set(id, { path: hostPath, filename, mimeType, size, isDirectory });
-    const handle: ArtifactHandle = {
+    this.entries.set(id, {
+      path: hostPath,
+      kind: opts.kind,
+      filename,
+      mimeType,
+      size,
+      isDirectory,
+    });
+    const handle: RegisteredArtifactHandle = {
       [ARTIFACT_MARKER]: true,
       id,
+      kind: opts.kind,
       filename,
       mimeType,
       size,
@@ -150,10 +152,27 @@ export class ArtifactStore {
   list(): ArtifactListItem[] {
     return [...this.entries.entries()].map(([id, entry]) => ({
       id,
+      kind: entry.kind,
       filename: entry.filename,
       mimeType: entry.mimeType,
       size: entry.size,
       isDirectory: entry.isDirectory,
     }));
   }
+}
+
+export function createArtifactRegistrar(
+  store: ArtifactStore,
+  outputs: ArtifactOutputMap | undefined,
+  toolId: string
+): ArtifactRegistrar {
+  return {
+    register(outputName, opts) {
+      const output = outputs?.[outputName];
+      if (!output) {
+        throw new Error(`Tool "${toolId}" did not declare artifact output "${outputName}"`);
+      }
+      return store.register({ ...opts, kind: output.kind });
+    },
+  };
 }
