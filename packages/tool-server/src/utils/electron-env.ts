@@ -18,9 +18,21 @@
  * Stripping the variable makes a GUI Electron child boot as a real Electron app
  * regardless of what launched the tool-server. Any per-launch additions (the
  * preview URL, logging flags) are layered on top via `overrides`.
+ *
+ * The strip is case-insensitive: Windows environment variables are
+ * case-insensitive, so a host may surface the flag under non-canonical casing
+ * (e.g. `Electron_Run_As_Node`). The plain object spread from `process.env`
+ * preserves that casing, so a case-sensitive `delete` of the canonical name
+ * would miss it and leak Node mode into the cross-platform `boot-electron`
+ * child. (On macOS/Linux the name is always the exact uppercase form, so the
+ * loop simply matches that one key.)
  */
 export function electronGuiChildEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ...overrides };
-  delete env.ELECTRON_RUN_AS_NODE;
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === "electron_run_as_node") {
+      delete env[key];
+    }
+  }
   return env;
 }
