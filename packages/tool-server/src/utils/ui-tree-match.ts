@@ -215,7 +215,7 @@ export function treeFingerprint(root: DescribeNode): string {
 
 // ── Reverse lookup & selector → frame ──────────────────────────────────────
 
-function frameContains(frame: DescribeFrame, x: number, y: number): boolean {
+export function frameContains(frame: DescribeFrame, x: number, y: number): boolean {
   return x >= frame.x && x <= frame.x + frame.width && y >= frame.y && y <= frame.y + frame.height;
 }
 

@@ -16,7 +16,15 @@ import {
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { resolveDevice } from "../../utils/device-info";
 import { stripDeviceKeys } from "./flow-device";
-import { fetchTree, nodeAtPoint, deriveSelector, type Selector } from "../../utils/ui-tree-match";
+import { fetchFlowTree } from "./flow-tree";
+import type { DescribeSource } from "../describe/contract";
+import {
+  nodeAtPoint,
+  deriveSelector,
+  selectorToFrame,
+  frameContains,
+  type Selector,
+} from "../../utils/ui-tree-match";
 
 const zodSchema = z.object({
   command: z.string().describe('MCP tool name (e.g. "tap", "screenshot", "launch-app")'),
@@ -34,10 +42,41 @@ const zodSchema = z.object({
     .describe("Milliseconds to sleep before executing this step during replay."),
 });
 
+function formatSelector(selector: Selector): string {
+  return Object.entries(selector)
+    .map(([k, v]) => `${k}="${v}"`)
+    .join(" ");
+}
+
+// The full-hierarchy source replay gates on per platform (`treeSourceGate` in
+// flow-run.ts). A capture from the fallback source was derived against a tree
+// the replay will refuse to degrade to, so the selector deserves a caveat even
+// when it derives cleanly. Chromium/Vega have a single source — no caveat.
+const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
+  ios: "native-devtools",
+  android: "android-devtools",
+};
+
+function fallbackSourceWarning(source: DescribeSource, platform: string): string | undefined {
+  const expected = REPLAY_TREE_SOURCES[platform];
+  if (!expected || source === expected) return undefined;
+  return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
+}
+
 /**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
- * Returns the selector, or a warning describing why coordinates were kept.
+ * Returns the selector (possibly with a caveat warning), or a warning
+ * describing why coordinates were kept.
+ *
+ * The lookup reads `fetchFlowTree` — the same tree source the runner resolves
+ * selectors against at replay — NOT the agent-facing describe tree. The two
+ * differ exactly where recording matters: on iOS the AX tree collapses an
+ * `accessible` container into one leaf whose merged label exists on no single
+ * view in the replay hierarchy, and on Android the interactables trim drops
+ * the testID-only containers the replay tree keeps. A selector derived from
+ * the describe tree could fail — or hit a different element — at replay while
+ * recording reported success.
  */
 async function captureTapSelector(
   registry: Registry,
@@ -46,13 +85,24 @@ async function captureTapSelector(
 ): Promise<{ selector?: Selector; warning?: string }> {
   try {
     const device = resolveDevice(udid);
-    const { tree } = await fetchTree(registry, device);
+    const { tree, source } = await fetchFlowTree(registry, device);
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(node);
     if (!selector)
       return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
-    return { selector };
+    // Replay resolves through selectorToFrame, whose ranking (exact match →
+    // smallest frame → reading order) is free to elect a DIFFERENT element
+    // than the tapped one — e.g. the same label on an earlier row. Re-resolve
+    // now and require the winning frame to cover the tapped point; otherwise
+    // the recorded step would silently retarget, and coordinates are safer.
+    const resolved = selectorToFrame(tree, selector);
+    if (!resolved || !frameContains(resolved, point.x, point.y)) {
+      return {
+        warning: `selector ${formatSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
+      };
+    }
+    return { selector, warning: fallbackSourceWarning(source, device.platform) };
   } catch (err) {
     return {
       warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,
@@ -172,6 +222,7 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
       let warning: string | undefined;
       if (captured?.selector) {
         step = { kind: "tap", selector: captured.selector };
+        warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
         // directive so every tap reads uniformly.
