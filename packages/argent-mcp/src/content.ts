@@ -318,47 +318,45 @@ export async function flowRunToMcpContent(
 
 /**
  * Render a step's artifacts (snapshot baseline/current/diff): one text block
- * listing each artifact's materialized local path, plus the annotated diff
- * image inline when the step failed — otherwise the agent has no way to see
- * WHAT differed. Handles resolve through materializeArtifacts, so this works
- * against a remote tool-server; without a context, the handle's hostPath is
- * shown as-is (only meaningful co-located). A legacy string[] (pre-handle
- * tool-servers) renders its paths as plain text.
+ * listing each artifact, plus the annotated diff image inline when the step
+ * failed — otherwise the agent has no way to see WHAT differed. Only that
+ * inlined diff is materialized (local read or remote download); baseline and
+ * current are full-res PNGs nobody renders, so their handles print as
+ * tool-server paths (or filenames) without pulling the bytes over the wire —
+ * the same economy flow-visual.ts applies by omitting artifacts on a clean
+ * pass. A legacy string[] (pre-handle tool-servers) renders its paths as
+ * plain text.
  */
 async function stepArtifactBlocks(
   artifacts: Record<string, unknown>,
   status: string | undefined,
   ctx?: ContentContext
 ): Promise<ContentBlock[]> {
-  const asLines = (entries: [string, string][]): ContentBlock[] =>
+  const failed = status === "fail" || status === "error";
+  const entries: [string, string][] = [];
+  let diffImage: ContentBlock | undefined;
+
+  for (const [k, v] of Object.entries(artifacts)) {
+    if (ctx && failed && k === "diff" && isArtifactHandle(v)) {
+      // The one artifact rendered inline: materialize it so the image works
+      // against a remote tool-server too.
+      const { result, images } = await materializeArtifacts(v, ctx);
+      // A null means the handle couldn't be fetched; say so rather than
+      // rendering a dangling reference.
+      entries.push([k, typeof result === "string" ? result : "(unavailable)"]);
+      const img = images.find((i) => i.localPath === result);
+      if (img) diffImage = imageBlock(img.data, img.mimeType);
+    } else if (isArtifactHandle(v)) {
+      entries.push([k, v.hostPath ?? v.filename]);
+    } else if (typeof v === "string") {
+      entries.push([k, v]);
+    }
+  }
+
+  const blocks: ContentBlock[] =
     entries.length > 0
       ? [{ type: "text", text: entries.map(([k, v]) => `  ${k}: ${v}`).join("\n") }]
       : [];
-
-  if (!ctx) {
-    const entries: [string, string][] = [];
-    for (const [k, v] of Object.entries(artifacts)) {
-      if (isArtifactHandle(v)) entries.push([k, v.hostPath ?? v.filename]);
-      else if (typeof v === "string") entries.push([k, v]);
-    }
-    return asLines(entries);
-  }
-
-  const { result, images } = await materializeArtifacts(artifacts, ctx);
-  const resolved = result as Record<string, unknown>;
-  const entries: [string, string][] = [];
-  for (const k of Object.keys(artifacts)) {
-    const v = resolved[k];
-    // A null means the handle couldn't be fetched; say so rather than
-    // rendering a dangling reference.
-    entries.push([k, typeof v === "string" ? v : "(unavailable)"]);
-  }
-  const blocks = asLines(entries);
-
-  const failed = status === "fail" || status === "error";
-  if (failed && typeof resolved.diff === "string") {
-    const img = images.find((i) => i.localPath === resolved.diff);
-    if (img) blocks.push(imageBlock(img.data, img.mimeType));
-  }
+  if (diffImage) blocks.push(diffImage);
   return blocks;
 }

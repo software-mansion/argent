@@ -369,8 +369,9 @@ describe("flowRunToMcpContent", () => {
     });
   });
 
-  it("materializes snapshot artifacts and inlines the diff image on failure", async () => {
+  it("materializes only the diff and inlines it on failure", async () => {
     const pngBytes = [...PNG_SIGNATURE, 0x02];
+    const fetchImpl = vi.fn(fetchReturning(pngBytes));
     const input: FlowExecuteResult = {
       flow: "checkout",
       steps: [
@@ -389,7 +390,7 @@ describe("flowRunToMcpContent", () => {
     };
     const blocks = await flowRunToMcpContent(input, {
       toolsUrl: "http://remote:3001",
-      fetchImpl: fetchReturning(pngBytes),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     const artifactText = blocks.find(
@@ -403,9 +404,15 @@ describe("flowRunToMcpContent", () => {
     const images = blocks.filter((b) => b.type === "image");
     expect(images).toHaveLength(1);
     expect(images[0]).toMatchObject({ data: Buffer.from(pngBytes).toString("base64") });
+
+    // And exactly one download: baseline/current are referenced by name only,
+    // never pulled over the wire just to print their paths.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("/artifacts/d1");
   });
 
-  it("lists snapshot artifact paths without inlining images when the step passed", async () => {
+  it("lists snapshot artifact paths without fetching anything when the step passed", async () => {
+    const fetchImpl = vi.fn(fetchReturning([...PNG_SIGNATURE, 0x03]));
     const input: FlowExecuteResult = {
       flow: "checkout",
       steps: [
@@ -423,7 +430,7 @@ describe("flowRunToMcpContent", () => {
     };
     const blocks = await flowRunToMcpContent(input, {
       toolsUrl: "http://remote:3001",
-      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x03]),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     expect(blocks.find((b) => b.type === "image")).toBeUndefined();
@@ -431,6 +438,7 @@ describe("flowRunToMcpContent", () => {
       (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("baseline:")
     );
     expect(artifactText?.text).toContain("home-baseline.png");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("falls back to artifact host paths when no materialize context is given", async () => {
