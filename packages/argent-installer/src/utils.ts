@@ -226,13 +226,16 @@ function setJsoncIn(text: string, jsonPath: JSONPath, value: unknown): string {
   return applyJsoncEdits(text, edits);
 }
 
-function readJsoncFileRaw(filePath: string): { text: string; hadBom: boolean } {
-  if (!fs.existsSync(filePath)) return { text: "{}", hadBom: false };
+function readJsoncFileRaw(filePath: string): { text: string; hadBom: boolean; wasEmpty: boolean } {
+  if (!fs.existsSync(filePath)) return { text: "{}", hadBom: false, wasEmpty: true };
   let text = fs.readFileSync(filePath, "utf8");
   const hadBom = text.charCodeAt(0) === 0xfeff;
   if (hadBom) text = text.slice(1);
-  if (text.trim() === "") text = "{}";
-  return { text, hadBom };
+  // A whitespace-only file has no real content whose formatting we'd preserve —
+  // it is substituted with "{}" and synthesized fresh, like a non-existent file.
+  const wasEmpty = text.trim() === "";
+  if (wasEmpty) text = "{}";
+  return { text, hadBom, wasEmpty };
 }
 
 function getAtJsoncPath(value: unknown, jsonPath: JSONPath): unknown {
@@ -297,8 +300,7 @@ export function readJsonc(filePath: string): Record<string, unknown> {
  * when there are no comments to preserve.
  */
 export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unknown): void {
-  const existedBefore = fs.existsSync(filePath);
-  const { text: initial, hadBom } = readJsoncFileRaw(filePath);
+  const { text: initial, hadBom, wasEmpty } = readJsoncFileRaw(filePath);
   let text = setJsoncIn(initial, jsonPath, value);
 
   if (value === undefined) {
@@ -318,11 +320,13 @@ export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unkno
   }
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  // A freshly-created config gets a trailing newline, matching writeJson/TOML
-  // (POSIX text-file convention, avoids a git "\ No newline at end of file").
-  // An existing file's own EOL/formatting is preserved untouched — setJsoncIn
-  // edits in place — so only append when the file did not exist before.
-  const out = !existedBefore && !text.endsWith("\n") ? text + "\n" : text;
+  // A synthesized document — a fresh file, or an existing file that was empty /
+  // whitespace-only and so had no real content to preserve — gets a trailing
+  // newline, matching writeJson/TOML (POSIX text-file convention, avoids a git
+  // "\ No newline at end of file"). An existing file with real content keeps its
+  // own EOL/formatting untouched — setJsoncIn edits in place — so we never
+  // rewrite its trailing byte.
+  const out = wasEmpty && !text.endsWith("\n") ? text + "\n" : text;
   fs.writeFileSync(filePath, (hadBom ? "﻿" : "") + out);
 }
 

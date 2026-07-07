@@ -2010,4 +2010,68 @@ describe("installer preserves foreign MCP config", () => {
     expect(after).not.toHaveProperty("mcpServers"); // emptied container pruned
     expect(after.userThing).toEqual({}); // empty top-level sibling survives
   });
+
+  it("addClaudePermission writes a trailing newline when the existing settings file was empty", () => {
+    // Routing addClaudePermission through editJsoncFile must not regress the
+    // trailing-newline normalization writeJson gave for free: an empty /
+    // whitespace-only existing file has no real content to preserve, so it is
+    // synthesized fresh and gets a final newline (no git "No newline at end of
+    // file"). A file with real content still keeps its own EOL (test above).
+    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, "   \n"); // whitespace-only existing file
+    addClaudePermission(tmpDir, "local");
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    expect(raw.endsWith("\n")).toBe(true);
+    const after = readJsoncFile(settingsPath);
+    expect((after.permissions as Record<string, unknown>).allow).toContain("mcp__argent");
+  });
+
+  it("removeClaudePermission keeps a permissions.deny sibling when argent was the sole allow rule", () => {
+    // The nested-ancestor partial-prune boundary: allow empties and is pruned,
+    // but permissions must be KEPT because a foreign `deny` remains (allow+deny
+    // is a common real Claude config). An over-prune here would silently delete
+    // the user's deny rules.
+    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      `{\n  "permissions": { "allow": ["mcp__argent"], "deny": ["Bash(rm:*)"] }\n}\n`
+    );
+    removeClaudePermission(tmpDir, "local");
+    expect(fs.existsSync(settingsPath)).toBe(true); // deny keeps the file
+    const after = readJsoncFile(settingsPath);
+    const permissions = after.permissions as Record<string, unknown>;
+    expect(permissions).not.toHaveProperty("allow"); // emptied allow pruned
+    expect(permissions.deny).toEqual(["Bash(rm:*)"]); // sibling survives, permissions kept
+  });
+
+  it("addClaudePermission preserves a UTF-8 BOM and foreign keys", () => {
+    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, "﻿" + `{\n  "model": "opus"\n}\n`);
+    addClaudePermission(tmpDir, "local");
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    expect(raw.charCodeAt(0)).toBe(0xfeff); // BOM preserved byte-correct
+    const after = readJsoncFile(settingsPath);
+    expect(after.model).toBe("opus");
+    expect((after.permissions as Record<string, unknown>).allow).toContain("mcp__argent");
+  });
+
+  it("Cursor removeAllowlist prunes an emptied mcpAllowlist but keeps the file for a foreign key", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(
+      permPath,
+      `{\n  "mcpAllowlist": ["argent:*"],\n  "fileAllowlist": ["src/**"]\n}\n`
+    );
+    cursor.removeAllowlist!(tmpDir, "global");
+    expect(fs.existsSync(permPath)).toBe(true); // fileAllowlist keeps the file
+    const after = readJsoncFile(permPath);
+    expect(after).not.toHaveProperty("mcpAllowlist"); // emptied array pruned
+    expect(after.fileAllowlist).toEqual(["src/**"]); // foreign key survives
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
 });
