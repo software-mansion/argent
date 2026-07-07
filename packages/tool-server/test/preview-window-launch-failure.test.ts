@@ -147,6 +147,36 @@ describe("createPreviewWindowManager — onLaunchFailure", () => {
     expect(failures).toHaveLength(0); // launch already succeeded
   });
 
+  it("strips ELECTRON_RUN_AS_NODE from the child env so the child boots as a GUI app", () => {
+    // Regression: an Electron-based MCP host (VS Code / Cursor / Codex desktop)
+    // spawns the tool-server with ELECTRON_RUN_AS_NODE=1. If that leaks into the
+    // preview-window child, the Electron binary boots in Node mode —
+    // `require("electron")` returns the binary path string, `.app` is undefined,
+    // and main.cjs crashes at `app.setName()` (the window never opens).
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const prev = process.env.ELECTRON_RUN_AS_NODE;
+    process.env.ELECTRON_RUN_AS_NODE = "1";
+    try {
+      const mgr = createPreviewWindowManager({
+        electronBinaryPath: "/fake/electron",
+        mainScript: "/fake/main.cjs",
+        onError: () => {},
+      });
+      mgr.ensureOpen("http://127.0.0.1:1234/preview/");
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const spawnEnv = (spawnMock.mock.calls[0]![2] as { env: NodeJS.ProcessEnv }).env;
+      expect(spawnEnv.ELECTRON_RUN_AS_NODE).toBeUndefined();
+      // The per-launch override still comes through.
+      expect(spawnEnv.ARGENT_PREVIEW_URL).toBe("http://127.0.0.1:1234/preview/");
+    } finally {
+      if (prev === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+      else process.env.ELECTRON_RUN_AS_NODE = prev;
+    }
+  });
+
   it("does NOT fire onLaunchFailure when the window is already alive (re-open foregrounds)", () => {
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child);
