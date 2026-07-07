@@ -348,7 +348,7 @@ describe("flowRunToMcpContent", () => {
     expect(blocks.every((b) => b.type !== "text" || typeof b.text === "string")).toBe(true);
   });
 
-  it("surfaces a passed step's warning on its status line", async () => {
+  it("surfaces a legacy passed step's warning on its status line (older tool-servers adopted missing baselines)", async () => {
     const input: FlowExecuteResult = {
       flow: "f",
       steps: [

@@ -12,9 +12,10 @@ export const DEFAULT_MAX_MISMATCH = 0.5;
  * Files a snapshot step produced, keyed by role so a renderer can pick what to
  * surface (e.g. inline only `diff` on failure). Artifact handles — not host
  * paths — so a client on another machine can materialize them. Present only
- * when there is something to look at: a failed comparison (all roles) or a
- * baseline write (`baseline` only) — a clean pass carries none, so renderers
- * never fetch full-res PNGs just to print paths nobody needs.
+ * when there is something to look at: a failed comparison (all roles), a
+ * missing-baseline failure (`current` only), or a baseline write (`baseline`
+ * only) — a clean pass carries none, so renderers never fetch full-res PNGs
+ * just to print paths nobody needs.
  */
 export interface SnapshotArtifacts {
   baseline?: ArtifactHandle;
@@ -26,8 +27,6 @@ export interface SnapshotArtifacts {
 export interface VisualOutcome {
   status: "pass" | "fail" | "skip";
   reason?: string;
-  /** Non-fatal caveat on a passed step. */
-  warning?: string;
   artifacts?: SnapshotArtifacts;
 }
 
@@ -49,9 +48,11 @@ function baselineDir(flowsDir: string, flowName: string): string {
 
 /**
  * Capture the current screen and compare it to a stored baseline keyed by
- * platform + resolution. A missing baseline is written and the step passes:
- * silently under `updateBaselines`, with a `warning` otherwise (nothing was
- * compared).
+ * platform + resolution. A missing baseline FAILS the step — adopting one is
+ * always an explicit `updateBaselines` gesture. The key is derived from the
+ * capture, so any device-class drift (another simulator model, a rotation, an
+ * auto-detected device) lands here too; passing instead would let a CI run go
+ * green having compared nothing.
  */
 export async function runSnapshot(
   env: ActionEnv,
@@ -92,30 +93,52 @@ export async function runSnapshot(
     .then(() => true)
     .catch(() => false);
 
-  if (!exists || opts.updateBaselines) {
+  if (opts.updateBaselines) {
     await fs.mkdir(dir, { recursive: true });
     await fs.copyFile(currentPath, baselinePath);
     const baseline = await store.register(baselinePath, { mimeType: "image/png" });
-    if (opts.updateBaselines) {
-      return {
-        status: "pass",
-        reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
-        artifacts: { baseline },
-      };
-    }
     return {
       status: "pass",
-      reason: `baseline created (${key})`,
-      warning:
-        `no baseline existed for "${opts.name}" on this device class — the current screen was ` +
-        `saved as the new baseline and nothing was compared; review ${baselinePath} before ` +
-        `trusting future runs`,
+      reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
       artifacts: { baseline },
+    };
+  }
+
+  if (!exists) {
+    // Fail WITHOUT seeding: writing here would make this unreviewed capture
+    // the truth a re-run silently passes against, and a workspace that never
+    // persists baselines (ephemeral CI) would gate nothing forever.
+    return {
+      status: "fail",
+      reason:
+        `no baseline for "${opts.name}" on this device class — expected ${baselinePath}, ` +
+        `nothing was compared. Run with updateBaselines (--update-baselines) to adopt the ` +
+        `current screen, then review and commit it`,
+      artifacts: { current: shot.image },
     };
   }
 
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-diff-"));
   const result = await diffPngFiles({ baselinePath, currentPath, outputDir });
+
+  // The differ reports an aspect-ratio bail as mismatchPercentage 0, which the
+  // threshold below would read as a clean pass — but nothing was compared.
+  // Unreachable while the key embeds the capture's dimensions; load-bearing
+  // the moment a baseline file is renamed or the key scheme changes.
+  if (result.dimensionMismatch) {
+    const { expected, actual } = result.dimensionMismatch;
+    return {
+      status: "fail",
+      reason:
+        `baseline is ${expected.width}x${expected.height} but the capture is ` +
+        `${actual.width}x${actual.height} (${key}) — nothing was compared`,
+      artifacts: {
+        baseline: await store.register(baselinePath, { mimeType: "image/png" }),
+        current: shot.image,
+      },
+    };
+  }
+
   const within = result.mismatchPercentage <= opts.maxMismatch;
   const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
   if (within) {

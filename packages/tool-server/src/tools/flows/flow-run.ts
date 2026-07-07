@@ -91,8 +91,6 @@ export interface StepReport {
   status: StepStatus;
   /** Machine-readable explanation when the step did not pass. */
   reason?: string;
-  /** Non-fatal caveat on a passed step (e.g. a snapshot baseline was created, not compared). */
-  warning?: string;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
   /** Tool result for `tool` steps. */
@@ -357,7 +355,8 @@ Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch)
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`type\` resolve a selector to an element and
 act on it; \`scroll-to\` scrolls (momentum-free) until a target is visible; \`await\` waits for a UI
 condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
-diffs a screenshot against a stored baseline; \`echo\` annotates; \`run\` executes a referenced fragment inline.
+diffs a screenshot against a stored baseline (a missing baseline fails the step — set updateBaselines
+to adopt the current screen); \`echo\` annotates; \`run\` executes a referenced fragment inline.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. For a Chromium e2e flow the \`launch\`
@@ -705,7 +704,6 @@ async function execLeafStep(
           ...base,
           status: r.status,
           reason: r.reason,
-          warning: r.warning,
           artifacts: r.artifacts,
         };
       } catch (err) {

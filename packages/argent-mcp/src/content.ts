@@ -210,6 +210,11 @@ export type FlowStepResult = {
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";
   reason?: string;
+  /**
+   * Legacy: older tool-servers passed a snapshot that adopted a missing
+   * baseline and annotated it with this caveat (a missing baseline now fails
+   * the step). Rendered for wire compat with a not-yet-updated server.
+   */
   warning?: string;
   tool?: string;
   message?: string;

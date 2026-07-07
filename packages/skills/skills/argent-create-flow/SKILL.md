@@ -76,7 +76,7 @@ Since a `tv-remote` path is positional (like a coordinate tap), gate each naviga
 
 ### Standalone runner
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`; the status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs.
+`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`, keyed by platform + resolution; a `snapshot` step **fails** when no baseline exists for the run's device class, so seed baselines with `--update-baselines`, review them, and commit `__baselines__/` — and pin the device class in CI (`--device`/`--platform`, same simulator model) so runs compare against the committed key. The status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs.
 
 ## Tools
 
@@ -145,7 +145,7 @@ Then polish the saved file: the two `await-ui-element` steps become `await:` dir
 
 Call `flow-execute` with the flow name (and `project_root`, unless a recording this session already stored it). If the flow has an execution prerequisite, the tool returns a **notice** with the prerequisite text instead of running — verify the prerequisite is met (you can also inspect it beforehand with `flow-read-prerequisite`) and call `flow-execute` again with `prerequisiteAcknowledged: true`. A flow without a prerequisite runs immediately. The run executes all steps in order and returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
 
-**What each step reports.** Raw `tool:` steps include the underlying tool's full `result` (screenshots and other outputs render as usual). The directive steps are summarized: `tap`/`type`/`await`/`assert` report only `status` + `reason`, and `snapshot` adds `artifacts` only when there is something to look at — a failed comparison (baseline/current/diff paths) or a baseline write; a clean pass reports just `status` + `reason`. So converting a `tool: gesture-tap` into a `tap:` directive during cleanup drops only that tap's (uninteresting) raw result — output-bearing tools like `screenshot` have no directive form and stay `tool:` steps, so their results keep flowing through.
+**What each step reports.** Raw `tool:` steps include the underlying tool's full `result` (screenshots and other outputs render as usual). The directive steps are summarized: `tap`/`type`/`await`/`assert` report only `status` + `reason`, and `snapshot` adds `artifacts` only when there is something to look at — a failed comparison (baseline/current/diff paths), a missing-baseline failure (`current` only), or a baseline write; a clean pass reports just `status` + `reason`. So converting a `tool: gesture-tap` into a `tap:` directive during cleanup drops only that tap's (uninteresting) raw result — output-bearing tools like `screenshot` have no directive form and stay `tool:` steps, so their results keep flowing through.
 
 ## Flow file format
 

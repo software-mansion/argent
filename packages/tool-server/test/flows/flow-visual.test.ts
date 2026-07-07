@@ -7,7 +7,15 @@ import { ArtifactStore } from "../../src/artifacts";
 import type { ActionEnv } from "../../src/tools/flows/flow-actions";
 
 // Stub settle + capture so the tests exercise only the baseline write/diff decision.
-const h = vi.hoisted(() => ({ shotPath: "", mismatchPercentage: 0, contextDiffPath: "" }));
+const h = vi.hoisted(() => ({
+  shotPath: "",
+  mismatchPercentage: 0,
+  contextDiffPath: "",
+  dimensionMismatch: null as null | {
+    expected: { width: number; height: number };
+    actual: { width: number; height: number };
+  },
+}));
 
 vi.mock("../../src/tools/flows/flow-actions", () => ({
   settleTree: vi.fn(async () => ({})),
@@ -18,6 +26,7 @@ vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
   diffPngFiles: vi.fn(async () => ({
     mismatchPercentage: h.mismatchPercentage,
     contextDiffPath: h.contextDiffPath || undefined,
+    dimensionMismatch: h.dimensionMismatch ?? undefined,
   })),
 }));
 
@@ -55,6 +64,7 @@ beforeEach(async () => {
   h.shotPath = path.join(tmpDir, "shot.png");
   h.mismatchPercentage = 0;
   h.contextDiffPath = "";
+  h.dimensionMismatch = null;
   await writeFakePng(h.shotPath);
 });
 afterEach(async () => {
@@ -62,13 +72,24 @@ afterEach(async () => {
 });
 
 describe("runSnapshot baselines", () => {
-  it("adopts a missing baseline but passes WITH an explicit warning", async () => {
+  it("fails a missing baseline without seeding one", async () => {
     const r = await runSnapshot(env, opts());
 
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain('no baseline for "home"');
+    expect(r.reason).toContain("--update-baselines");
+    // Nothing written: seeding on failure would make this unreviewed capture
+    // the truth a re-run silently passes against.
+    await expect(fs.access(baselinePath())).rejects.toThrow();
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    expect(r.artifacts?.baseline).toBeUndefined();
+  });
+
+  it("writes a missing baseline and passes under updateBaselines", async () => {
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
     expect(r.status).toBe("pass");
-    expect(r.reason).toContain("baseline created");
-    expect(r.warning).toContain('no baseline existed for "home"');
-    expect(r.warning).toContain("nothing was compared");
+    expect(r.reason).toContain("baseline written");
     await expect(fs.access(baselinePath())).resolves.toBeUndefined();
     // The baseline travels as an artifact handle, not a raw host path.
     expect(r.artifacts?.baseline).toMatchObject({
@@ -78,15 +99,7 @@ describe("runSnapshot baselines", () => {
     });
   });
 
-  it("writes a missing baseline without a warning under updateBaselines", async () => {
-    const r = await runSnapshot(env, opts({ updateBaselines: true }));
-
-    expect(r.status).toBe("pass");
-    expect(r.reason).toContain("baseline written");
-    expect(r.warning).toBeUndefined();
-  });
-
-  it("refreshes an existing baseline without a warning under updateBaselines", async () => {
+  it("refreshes an existing baseline under updateBaselines", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
 
@@ -94,10 +107,9 @@ describe("runSnapshot baselines", () => {
 
     expect(r.status).toBe("pass");
     expect(r.reason).toContain("baseline updated");
-    expect(r.warning).toBeUndefined();
   });
 
-  it("diffs against an existing baseline with no warning", async () => {
+  it("diffs against an existing baseline", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
 
@@ -105,10 +117,27 @@ describe("runSnapshot baselines", () => {
 
     expect(r.status).toBe("pass");
     expect(r.reason).toContain("diff 0.00%");
-    expect(r.warning).toBeUndefined();
     // A clean pass carries no artifacts — there is nothing to look at, and
     // handles would make renderers fetch two full-res PNGs just to print paths.
     expect(r.artifacts).toBeUndefined();
+  });
+
+  it("fails a dimension-mismatch bail instead of passing its 0% mismatch", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    h.dimensionMismatch = {
+      expected: { width: 390, height: 844 },
+      actual: { width: 393, height: 852 },
+    };
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("390x844");
+    expect(r.reason).toContain("393x852");
+    expect(r.reason).toContain("nothing was compared");
+    expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
   });
 
   it("fails an over-threshold diff and exposes the context diff as an artifact", async () => {
