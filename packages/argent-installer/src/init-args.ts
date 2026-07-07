@@ -31,8 +31,9 @@ export function parseInitArgs(args: string[]): InitArgs {
 }
 
 // Telemetry step labels for a cancelled prompt. "global_install" is absent
-// because that cancel is handled inside install-runner (it has its own
-// global_install_decision event to emit alongside).
+// because there is no such prompt anymore: choosing the global install mode
+// (or --global) IS the consent, so a missing global package installs without
+// a second question. The event schema keeps the label for older clients.
 export type CancelStep = "install_mode" | "editors" | "scope" | "allowlist" | "skills";
 
 // Thrown by a step module when the user cancels a prompt (Ctrl-C / Esc). The

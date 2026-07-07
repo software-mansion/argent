@@ -162,31 +162,11 @@ async function runGlobal(opts: {
   const globallyInstalled = isGloballyInstalled();
 
   if (!globallyInstalled) {
-    if (!nonInteractive) {
-      const installChoice = await p.select({
-        message: "Argent is not installed globally. Would you like to install it?",
-        options: [
-          {
-            value: "global" as const,
-            label: "Install globally",
-            hint: "Makes the argent command available everywhere",
-          },
-          {
-            value: "cancel" as const,
-            label: "Cancel installation",
-          },
-        ],
-      });
-
-      if (p.isCancel(installChoice) || installChoice === "cancel") {
-        track("installation:global_install_decision", { decision: "cancel" });
-        track("installation:cli_init_cancel", { step: "global_install" });
-        await tel.finalize();
-        p.cancel("Installation cancelled.");
-        process.exit(0);
-      }
-    }
-
+    // No consent prompt here: the install-mode step directly above is where
+    // the user chose "Globally" (or passed --global), and that choice IS the
+    // consent to install the missing package — a second "install it?" select
+    // reads as the same question asked twice.
+    p.log.info(`Argent is not installed globally — installing.`);
     track("installation:global_install_decision", { decision: "install" });
 
     const pm = detectPackageManager();
