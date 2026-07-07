@@ -4,6 +4,7 @@ import {
   materializeArtifacts,
   type ToolsServerPaths,
 } from "@argent/tools-client";
+import { FlagParseException } from "./flag-parser.js";
 
 export interface FlowCommandOptions {
   paths: ToolsServerPaths;
@@ -75,7 +76,7 @@ Examples:
 `);
 }
 
-function parseRunArgs(argv: string[]): {
+export function parseRunArgs(argv: string[]): {
   name?: string;
   device?: string;
   platform?: string;
@@ -85,10 +86,22 @@ function parseRunArgs(argv: string[]): {
   const out = { updateBaselines: false, json: false } as ReturnType<typeof parseRunArgs>;
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
+    // A value-taking flag must consume a real value. A missing one (the flag is
+    // the final token, or the next token is itself a flag) would otherwise be
+    // dropped silently and the run would fall back to device auto-detection —
+    // running against whatever happens to be booted instead of erroring.
+    const takeValue = (name: string): string => {
+      const v = argv[i + 1];
+      if (v === undefined || v.startsWith("-")) {
+        throw new FlagParseException(`${name} requires a value`);
+      }
+      i += 1;
+      return v;
+    };
     if (tok === "--update-baselines") out.updateBaselines = true;
     else if (tok === "--json") out.json = true;
-    else if (tok === "--device") out.device = argv[++i];
-    else if (tok === "--platform") out.platform = argv[++i];
+    else if (tok === "--device") out.device = takeValue("--device");
+    else if (tok === "--platform") out.platform = takeValue("--platform");
     else if (!tok.startsWith("-") && !out.name) out.name = tok;
   }
   return out;
@@ -161,7 +174,17 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     process.exit(2);
   }
 
-  const args = parseRunArgs(rest);
+  let args: ReturnType<typeof parseRunArgs>;
+  try {
+    args = parseRunArgs(rest);
+  } catch (err) {
+    if (err instanceof FlagParseException) {
+      console.error(`Error: ${err.message}\n`);
+      printHelp();
+      process.exit(2);
+    }
+    throw err;
+  }
   if (!args.name) {
     console.error("argent flow run <name> requires a flow name.");
     printHelp();
