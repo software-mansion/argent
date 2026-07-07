@@ -19,6 +19,13 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   ),
 }));
 
+// Status-bar pinning shells out to `xcrun simctl` per run — irrelevant to what
+// these tests pin, and a source of contention under the parallel test load.
+vi.mock("../../src/utils/status-bar", () => ({
+  pinStatusBar: vi.fn(async () => false),
+  restoreStatusBar: vi.fn(async () => {}),
+}));
+
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
@@ -296,6 +303,57 @@ describe("scroll-to directive", () => {
     expect(result.ok).toBe(true);
     expect(swipes).toHaveLength(1);
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.05, 5);
+  });
+
+  it("detects the end of the scroll despite an animating node outside the container", async () => {
+    // A live ticker outside the `within` container mutates its label between
+    // settles. The end-of-scroll check fingerprints only the container's
+    // region, so the stuck scroller is still detected; a whole-tree fingerprint
+    // would never repeat and the loop would burn all MAX_SCROLL_ITERATIONS
+    // before failing with a misleading "not found after N attempts".
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      return screen([
+        // Ticks every other read: each settle sees a stable pair, but no two
+        // settled trees share the ticker's label (a ~1Hz clock, effectively).
+        n({
+          label: `elapsed ${Math.floor(reads / 2)}s`,
+          frame: { x: 0.1, y: 0.05, width: 0.3, height: 0.05 },
+        }),
+        n({
+          identifier: "list",
+          frame: { x: 0, y: 0.2, width: 1, height: 0.6 },
+          children: [n({ label: "Only row", frame: { x: 0.1, y: 0.25, width: 0.8, height: 0.1 } })],
+        }),
+      ]);
+    };
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("ticker", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Never There" },
+          direction: "down",
+          within: { identifier: "list" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "ticker", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toContain("reached the end of the scroll");
+    // One increment was attempted before the no-progress check stopped it.
+    expect(swipes).toHaveLength(1);
   });
 
   it("fails with a no-progress reason when scrolling reveals nothing new", async () => {

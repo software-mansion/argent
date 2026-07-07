@@ -398,12 +398,13 @@ async function scrollIncrement(
  * then — if it isn't fully in view — does one momentum-free increment. Stopping
  * only once the target has cleared the entry edge (not on the first sliver) is
  * what keeps a following `tap`/`snapshot` off a half-clipped element. If a
- * round's settled tree is identical to the previous round's, the container has
- * hit its end (or the anchor scrolls nothing): the target is then as visible as
- * it will ever be, so it's accepted wherever it landed — the LAST item sits
- * flush against the far edge and can never clear it, and a genuinely stuck
- * partial can't be improved either. A target already fully on screen returns
- * immediately (no scroll).
+ * round's settled tree — fingerprinted within the clip region only — is
+ * identical to the previous round's, the container has hit its end (or the
+ * anchor scrolls nothing): the target is then as visible as it will ever be,
+ * so it's accepted wherever it landed — the LAST item sits flush against the
+ * far edge and can never clear it, and a genuinely stuck partial can't be
+ * improved either. A target already fully on screen returns immediately (no
+ * scroll).
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -429,7 +430,14 @@ async function scrollToVisible(
     const frame = flowSelectorToFrame(tree, target);
     if (frame && axisFullyInside(frame, direction, region)) return { frame };
 
-    const fp = treeFingerprint(tree);
+    // Fingerprint only the region's content: a continuously-animating node
+    // elsewhere on screen (a spinner, a ticking clock) would keep a whole-tree
+    // fingerprint changing on every read, so a container that stopped moving
+    // would never read as "end of scroll" and the loop would burn all its
+    // iterations. Text stays in the fingerprint for nodes inside the region —
+    // a snapping list recycles identical frames with new content, so structure
+    // alone would misread real progress as a stuck scroll.
+    const fp = treeFingerprint(tree, (node) => framesOverlap(node.frame, region));
     if (prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
       if (frame) return { frame };

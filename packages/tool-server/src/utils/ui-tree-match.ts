@@ -197,16 +197,26 @@ export function evaluateCondition(
  * swallow it to halt the scroll) and a resolved frame can't be stale by the time
  * we act on it. Frames are rounded to 1e-3 so sub-pixel jitter does not read as
  * motion.
+ *
+ * The optional `include` predicate restricts the fingerprint to a subset of
+ * nodes (children of an excluded node are still walked) — e.g. the flow
+ * runner's end-of-scroll check fingerprints only the scroll container's region
+ * so an animating node elsewhere on screen never reads as scroll progress.
  */
-export function treeFingerprint(root: DescribeNode): string {
+export function treeFingerprint(
+  root: DescribeNode,
+  include?: (node: DescribeNode) => boolean
+): string {
   const parts: string[] = [];
   const round = (n: number): number => Math.round(n * 1000) / 1000;
   const walk = (node: DescribeNode): void => {
-    const f = node.frame;
-    parts.push(
-      `${node.role}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}` +
-        `|${node.label ?? ""}|${node.value ?? ""}|${node.identifier ?? ""}`
-    );
+    if (!include || include(node)) {
+      const f = node.frame;
+      parts.push(
+        `${node.role}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}` +
+          `|${node.label ?? ""}|${node.value ?? ""}|${node.identifier ?? ""}`
+      );
+    }
     for (const child of node.children) walk(child);
   };
   walk(root);

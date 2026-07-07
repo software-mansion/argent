@@ -174,6 +174,22 @@ describe("ui-tree-match", () => {
     const jittered = node({ frame: { x: 0.10001, y: 0.2, width: 0.3, height: 0.4 } });
     expect(treeFingerprint(a)).toBe(treeFingerprint(jittered));
   });
+
+  it("treeFingerprint with an include filter ignores excluded nodes but still walks their children", () => {
+    const tree = (tick: string) =>
+      node({
+        role: "AXGroup",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          node({ label: tick, frame: { x: 0.1, y: 0.05, width: 0.3, height: 0.05 } }),
+          node({ label: "Row", frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.1 } }),
+        ],
+      });
+    const belowFold = (n: DescribeNode) => n.frame.y >= 0.2;
+    // The ticker (excluded) changed; the filtered fingerprint must not.
+    expect(treeFingerprint(tree("0:01"), belowFold)).toBe(treeFingerprint(tree("0:02"), belowFold));
+    expect(treeFingerprint(tree("0:01"))).not.toBe(treeFingerprint(tree("0:02")));
+  });
 });
 
 describe("identifier matching", () => {
