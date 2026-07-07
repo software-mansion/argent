@@ -67,7 +67,9 @@ Fails if the simulator server is not running for the given UDID or the bundleId 
     // Non-injectable apps (Apple system apps) can never load the dylib no matter
     // how many times they relaunch. Report a terminal state so agents stop
     // looping restart-app → retry: no restart is required and the next launch
-    // will not be injected either. envSetup/appRunning/connected stay measured.
+    // will not be injected either. appRunning/connected are still reported and
+    // envSetup is read from the cached latch — unlike the injectable path below,
+    // there is no point reverifying the env for an app that can never inject.
     if (!injectable) {
       return {
         envSetup: api.isEnvSetup(),

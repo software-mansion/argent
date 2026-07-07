@@ -284,7 +284,7 @@ describe("describe tool", () => {
     // Reached only after describe's own AX path returned empty, so this hint
     // leads with `screenshot` rather than re-recommending `describe`. It still
     // carries the same native-* dead-end warning verbatim as the precheck throw
-    // and the native-devtools-status description (finding #4).
+    // and the native-devtools-status description.
     expect(result.hint).toMatch(/`screenshot`/);
     expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
   });
@@ -316,6 +316,50 @@ describe("describe tool", () => {
     // The degraded re-boot guidance wins over the terminal screenshot hint.
     expect(result.hint).toMatch(/boot-device/i);
     expect(result.hint).not.toContain(NON_INJECTABLE_NATIVE_WARNING);
+  });
+
+  it("returns the real AX tree for a non-injectable system app when AX is non-empty (early return, before the gate)", async () => {
+    // The common case for a com.apple.* app: its accessibility tree is NON-empty
+    // (Settings et al. expose a rich AX tree). describe must return that real
+    // tree via the `tree.children.length > 0` early return, which is reached
+    // BEFORE the injectability gate — the gate only guards the empty-tree native
+    // fallback. If the gate were ever hoisted above the early return it would
+    // silently replace a real system-app tree with the terminal screenshot hint;
+    // the other non-injectable tests use an empty tree and would not catch that,
+    // so this test is the guard for the populated-tree path.
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          label: "General",
+          frame: { x: 0.045, y: 0.337, width: 0.909, height: 0.046 },
+          traits: ["button"],
+        },
+      ],
+    });
+    // requiresRestart:true mirrors a real com.apple.* app (it never connects);
+    // it must stay irrelevant here because the non-empty tree returns before the
+    // native fallback that would ever consult it.
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      requiresRestart: true,
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.description).toMatch(/AXButton\s+"General"/);
+    expect(elementLineCount(result.description)).toBe(1);
+    // The real tree must be returned untouched — no terminal non-injectable hint
+    // clobbering it.
+    expect(result.hint).toBeUndefined();
+    expect(result.description).not.toContain(NON_INJECTABLE_NATIVE_WARNING);
   });
 
   it("returns empty AX result when native-devtools is unavailable", async () => {

@@ -197,6 +197,11 @@ describe("isInjectableBundleId", () => {
   it("treats com.apple.* system apps as non-injectable", () => {
     expect(isInjectableBundleId("com.apple.Preferences")).toBe(false);
     expect(isInjectableBundleId("com.apple.mobilesafari")).toBe(false);
+    // Matched case-insensitively: iOS treats bundle ids case-insensitively and
+    // Apple owns the com.apple namespace in every casing, so a stray mixed-case
+    // id must not slip through as injectable and drop the agent into a restart loop.
+    expect(isInjectableBundleId("com.Apple.Preferences")).toBe(false);
+    expect(isInjectableBundleId("COM.APPLE.PREFERENCES")).toBe(false);
   });
 
   it("treats third-party apps as injectable", () => {
@@ -254,12 +259,12 @@ describe("non-injectable recovery guidance is consistent and points only at work
   });
 
   it("all three surfaces carry the same dead-end warning verbatim", async () => {
-    // Finding #4: the precheck throw, the status description, and the describe
-    // fallback hint used to recommend different tool sets. They now share the
-    // dead-end warning verbatim, so no surface can drift into recommending a
-    // native-* tool. (The describe-fallback hint's copy is asserted in
-    // describe-tool.test.ts.) The pre-describe surfaces additionally share the
-    // full describe/screenshot recommendation.
+    // The precheck throw, the status description, and the describe fallback hint
+    // used to recommend different tool sets. They now share the dead-end warning
+    // verbatim, so no surface can drift into recommending a native-* tool. (The
+    // describe-fallback hint's copy is asserted in describe-tool.test.ts.) The
+    // pre-describe surfaces additionally share the full describe/screenshot
+    // recommendation.
     expect(nativeDevtoolsStatusTool.description).toContain(NON_INJECTABLE_RECOVERY);
 
     let message = "";
@@ -283,7 +288,10 @@ describe("native-* feature tools — the non-injectable throw propagates out of 
   // boundary so that regression can't slip through.
   const U = "44444444-4444-4444-4444-444444444444";
   const SYSTEM_APP = "com.apple.Preferences";
-  const mkApi = () => makeNativeApi({ appRunning: true, connected: false }).api;
+  // The non-injectable throw fires in the precheck before appRunning/connected/
+  // requiresAppRestart are ever consulted, so the mock's device state is inert
+  // here — default it so nothing reads as if the restart logic were exercised.
+  const mkApi = () => makeNativeApi({}).api;
 
   async function expectNotInjectableThrow(run: () => Promise<unknown>): Promise<void> {
     let caught: unknown;

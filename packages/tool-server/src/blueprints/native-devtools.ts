@@ -29,10 +29,14 @@ export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
  * non-injectable gives the native-* tools a terminal signal instead of an
  * unbounded restart-app → retry loop.
  *
- * Bundle ids are case-sensitive, so a case-sensitive prefix check is correct.
+ * The prefix is matched case-insensitively: iOS treats bundle ids
+ * case-insensitively for launch and uniqueness, and Apple reserves the
+ * `com.apple` namespace in every casing, so any casing of `com.apple.` is a
+ * system app. Apple's real ids are canonically lowercase, but a stray
+ * `com.Apple.Preferences` must not slip through as injectable and restart-loop.
  */
 export function isInjectableBundleId(bundleId: string): boolean {
-  return !bundleId.startsWith("com.apple.");
+  return !bundleId.toLowerCase().startsWith("com.apple.");
 }
 
 /**
@@ -40,9 +44,11 @@ export function isInjectableBundleId(bundleId: string): boolean {
  * to fall back to. Shared VERBATIM by every surface that reports this terminal
  * state (this precheck's throw, the `describe` iOS fallback hint, and the
  * `native-devtools-status` description) so none of them can drift into
- * recommending a dead-end. Every native-* tool — notably the two view-at-point
- * tools, which run this same precheck — re-throws this identical error, so
- * pointing an agent at any of them just loops it back here.
+ * recommending a dead-end. Every native-* *feature* tool — notably the two
+ * view-at-point tools, which run this same 3-arg precheck — re-throws this
+ * identical error, so pointing an agent at any of them just loops it back here.
+ * (`native-devtools-status` is the lone exception: it runs the 2-arg precheck
+ * and *reports* `injectable: false` rather than throwing — see the precheck.)
  */
 export const NON_INJECTABLE_NATIVE_WARNING =
   "Do not fall back to the native-* tools — including native-view-at-point and " +
