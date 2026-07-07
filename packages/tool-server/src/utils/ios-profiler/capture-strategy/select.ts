@@ -77,10 +77,11 @@ function readActiveXcodeVersion(): XcodeVersion | null {
 
 /**
  * True for Xcode versions where `xctrace record --device <sim>` deadlocks at the
- * recording-start handshake. Known broken from 26.4 onwards; we conservatively
- * treat ALL of 27+ as broken by default (the regression has shipped across every
- * 26.4–27.0 build tested). When Apple fixes it, narrow this bound — until then,
- * force the original path on a known-good version via ARGENT_IOS_CAPTURE=device.
+ * recording-start handshake. Known broken from 26.4 onwards with no upper bound; we
+ * conservatively treat ALL of 27+ as broken by default (the regression has shipped
+ * across every build tested so far, 26.4 through 27.x). When Apple fixes it, narrow
+ * this bound — until then, force the original path on a known-good version via
+ * ARGENT_IOS_CAPTURE=device.
  */
 function isDegraded({ major, minor }: XcodeVersion): boolean {
   if (major === 26) return minor >= 4;
