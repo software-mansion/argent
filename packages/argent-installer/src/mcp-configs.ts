@@ -9,9 +9,7 @@ import {
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
 import {
-  readJson,
   readJsonc,
-  writeJson,
   dirExists,
   readToml,
   writeToml,
@@ -103,11 +101,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-// After a remover deletes the argent entry, collapse the now-empty container it
-// lived in (e.g. an emptied `mcpServers`) so a config that held only argent
-// reduces to {} and writeJsonOrRemove can delete the file. Only this one key is
-// touched — foreign sibling keys and empty values elsewhere in the tree are
-// preserved byte-for-byte (the contract is "only touch argent").
+// After the Codex remover deletes the argent entry, collapse the now-empty
+// `mcp_servers` table it lived in so a config that held only argent reduces to {}
+// and writeTomlOrRemove can delete the file. Only this one key is touched —
+// foreign sibling keys and empty values elsewhere in the tree are preserved
+// byte-for-byte (the contract is "only touch argent"). The JSON adapters get the
+// same ancestor collapse for free from editJsoncFile.
 function deleteIfEmpty(parent: Record<string, unknown>, key: string): void {
   const value = parent[key];
   if (
@@ -120,27 +119,16 @@ function deleteIfEmpty(parent: Record<string, unknown>, key: string): void {
 
 // Writes `data` unchanged, except: when it has no own keys the file (and an
 // empty parent directory) is removed instead. This deliberately does NOT
-// recursively prune empty objects/arrays — the previous deep-prune silently
-// stripped foreign servers' `args: []` / `env: {}` and deleted any user key
-// holding an empty object/array, violating the "only touch argent" contract.
-// Removers collapse their own emptied argent container via deleteIfEmpty before
-// calling here, so "config held only argent" still results in file deletion.
-function writeJsonOrRemove(filePath: string, data: Record<string, unknown>): void {
-  if (Object.keys(data).length === 0) {
-    fs.rmSync(filePath, { force: true });
-    removeDirIfEmpty(path.dirname(filePath));
-    return;
-  }
-
-  writeJson(filePath, data);
-}
-
-// Writes `data` unchanged, except: when it has no own keys the file (and an
-// empty parent directory) is removed instead. Mirrors writeJsonOrRemove (see
-// its comment above) — this deliberately does NOT recursively prune empty
-// tables/arrays, so a foreign TOML server's `args = []` and any sibling empty
-// value survive. Callers collapse their own emptied argent container via
-// deleteIfEmpty before calling here.
+// recursively prune empty tables/arrays, so a foreign TOML server's `args = []`
+// and any sibling empty value survive — the previous deep-prune silently
+// stripped them, violating the "only touch argent" contract. Callers collapse
+// their own emptied argent container via deleteIfEmpty before calling here, so
+// "config held only argent" still results in file deletion.
+//
+// The JSON adapters achieve the same via editJsoncFile (which prunes only the
+// edited path's empty ancestors and deletes the file when the document
+// collapses to {}); TOML has no comment-preserving editor, so it keeps this
+// parse → mutate → stringify writer.
 function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): void {
   if (Object.keys(data).length === 0) {
     fs.rmSync(filePath, { force: true });
@@ -202,29 +190,32 @@ const cursorAdapter: McpConfigAdapter = {
     return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
+  // Cursor's allowlist lives in a separate ~/.cursor/permissions.json, which —
+  // like every Cursor config — is JSONC (comments, trailing commas) and may
+  // carry the user's own unrelated rules. Route through readJsonc / editJsoncFile
+  // so a hand-commented or multi-rule permissions.json survives: the old readJson
+  // path ran it through `catch { return {} }` and rewrote the whole file with
+  // only { mcpAllowlist }, dropping every foreign rule and comment. Newly matters
+  // because `hasArgentEntry` now reads mcp.json with readJsonc, so `update`
+  // detects a commented config as configured and calls this.
   addAllowlist(): void {
     const permPath = path.join(homedir(), ".cursor", "permissions.json");
-    const config = readJson(permPath);
-    const list = (config.mcpAllowlist ?? []) as string[];
-    if (!list.includes(CURSOR_ALLOWLIST_PATTERN)) {
-      list.push(CURSOR_ALLOWLIST_PATTERN);
-      config.mcpAllowlist = list;
-      writeJson(permPath, config);
-    }
+    const config = readJsonc(permPath);
+    const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : [];
+    if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
+    editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
   },
 
   removeAllowlist(): void {
     const permPath = path.join(homedir(), ".cursor", "permissions.json");
     if (!fs.existsSync(permPath)) return;
-    const config = readJson(permPath);
-    const list = config.mcpAllowlist as string[] | undefined;
-    if (!Array.isArray(list)) return;
-    const idx = list.indexOf(CURSOR_ALLOWLIST_PATTERN);
-    if (idx === -1) return;
-    list.splice(idx, 1);
-    config.mcpAllowlist = list;
-    deleteIfEmpty(config, "mcpAllowlist");
-    writeJsonOrRemove(permPath, config);
+    const config = readJsonc(permPath);
+    const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : undefined;
+    if (!list || !list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
+    const next = list.filter((rule) => rule !== CURSOR_ALLOWLIST_PATTERN);
+    // undefined deletes the emptied key; editJsoncFile prunes it and removes the
+    // file if the document collapses to {} (matching the old writeJsonOrRemove).
+    editJsoncFile(permPath, ["mcpAllowlist"], next.length > 0 ? next : undefined);
   },
 };
 
@@ -1001,15 +992,17 @@ export function addClaudePermission(root: string, scope: "local" | "global"): vo
       ? path.join(homedir(), ".claude", "settings.json")
       : path.join(root, ".claude", "settings.json");
 
-  const config = readJson(settingsPath);
+  // .claude/settings.json is normally strict JSON but is comment-tolerant in
+  // practice; route through readJsonc / editJsoncFile so a hand-added comment
+  // doesn't make readJson's `catch { return {} }` drop the user's other
+  // permissions on write — the same unconditional read-write clobber the mcp.json
+  // adapters were migrated off. editJsoncFile creates the permissions.allow path
+  // if absent and preserves comments and foreign keys.
+  const config = readJsonc(settingsPath);
   const permissions = (config.permissions ?? {}) as Record<string, unknown>;
-  const allow = (permissions.allow ?? []) as string[];
-  if (!allow.includes(PERMISSION_RULE)) {
-    allow.push(PERMISSION_RULE);
-    permissions.allow = allow;
-    config.permissions = permissions;
-    writeJson(settingsPath, config);
-  }
+  const allow = Array.isArray(permissions.allow) ? (permissions.allow as string[]) : [];
+  if (allow.includes(PERMISSION_RULE)) return;
+  editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, PERMISSION_RULE]);
 }
 
 export function removeClaudePermission(root: string, scope: "local" | "global"): void {
@@ -1019,16 +1012,17 @@ export function removeClaudePermission(root: string, scope: "local" | "global"):
       : path.join(root, ".claude", "settings.json");
 
   if (!fs.existsSync(settingsPath)) return;
-  const config = readJson(settingsPath);
+  const config = readJsonc(settingsPath);
   const permissions = config?.permissions as Record<string, unknown> | undefined;
-  const allow = permissions?.allow as string[] | undefined;
+  const allow = permissions?.allow;
   if (!permissions || !Array.isArray(allow)) return;
-  const idx = allow.indexOf(PERMISSION_RULE);
-  if (idx === -1) return;
-  allow.splice(idx, 1);
-  deleteIfEmpty(permissions, "allow");
-  deleteIfEmpty(config, "permissions");
-  writeJsonOrRemove(settingsPath, config);
+  if (!allow.includes(PERMISSION_RULE)) return;
+  const next = (allow as string[]).filter((rule) => rule !== PERMISSION_RULE);
+  // undefined deletes the emptied `allow`; editJsoncFile then prunes an emptied
+  // `permissions` and removes the file if the document collapses to {} (matching
+  // the old deleteIfEmpty + writeJsonOrRemove chain), while a comment or foreign
+  // permission keeps the file and survives byte-intact.
+  editJsoncFile(settingsPath, ["permissions", "allow"], next.length > 0 ? next : undefined);
 }
 
 // ── Rules / Agents copy helpers ───────────────────────────────────────────────
