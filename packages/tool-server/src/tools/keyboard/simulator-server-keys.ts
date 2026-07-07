@@ -6,10 +6,11 @@ import type { KeyboardParams, KeyboardResult } from "./types";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Type text / press named keys over the simulator-server (iOS sim / Android
-// emulator). Characters go through per-platform keycode maps with shift. Shared
-// by the ios and android platform branches — the simulator-server transport is
-// identical for both — so it lives here rather than in either platform file.
+// Type text / press named keys over the simulator-server (iOS simulator) using
+// the HID keycode maps in key-codes.ts (with shift). Only the iOS keyboard
+// branch uses this now — Android phones/tablets inject over `adb shell input`
+// instead (see utils/android-input.ts, issue #449), so despite the shared-
+// looking name this is no longer a shared iOS/Android transport.
 export async function typeSimulatorServer(
   registry: Registry,
   device: DeviceInfo,

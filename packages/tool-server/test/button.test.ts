@@ -100,14 +100,10 @@ describe("button tool — per-platform validation", () => {
   });
 
   it("accepts every iOS-valid button and drives it over the sim-server as Down then Up (not adb)", async () => {
-    for (const button of [
-      "home",
-      "power",
-      "volumeUp",
-      "volumeDown",
-      "appSwitch",
-      "actionButton",
-    ] as const) {
+    // Derive from the SOURCE set (mirroring the Android button test) so a future
+    // iOS button added to BUTTONS_BY_PLATFORM.ios is auto-covered here rather
+    // than silently skipped by a hardcoded list.
+    for (const button of BUTTONS_BY_PLATFORM.ios) {
       vi.mocked(sendCommand).mockClear();
       vi.mocked(injectAndroidKeycode).mockClear();
       await expect(buttonTool.execute(services, { udid: iosUdid, button })).resolves.toEqual({

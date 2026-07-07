@@ -718,10 +718,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.status(400).json({ error: unsupportedErr.message });
           return;
         }
-        // A tool rejecting its arguments (e.g. a newline in Android keyboard
-        // text, an unknown named key) is a client input error, not an internal
-        // fault — surface it as 400, matching the zod-validation path, instead
-        // of a misleading 500.
+        // A tool rejecting its arguments (e.g. an unknown named key on any
+        // keyboard backend, a newline in Android/Vega keyboard text, an
+        // un-typeable character on iOS/chromium) is a client input error, not an
+        // internal fault — surface it as 400, matching the zod-validation path,
+        // instead of a misleading 500.
         //
         // Ordering invariant: this check runs AFTER `findDependencyMissing`
         // above, which walks the entire cause chain. That is unambiguous only

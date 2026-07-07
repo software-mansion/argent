@@ -81,11 +81,12 @@ export class NotImplementedOnPlatformError extends Error {
 /**
  * Thrown when a tool rejects the *arguments* the caller passed — input that is
  * well-typed for the zod schema but that this tool/platform cannot carry out
- * (e.g. a newline in Android `keyboard` text, which `adb input text` can't
- * represent, or an unknown named key). The HTTP dispatcher maps this to `400
- * Bad Request`, matching the zod-validation path: it is a client input error,
- * not an internal fault, so it must not surface as a `500`. The `.message` is
- * the human-friendly reason, safe to bubble straight to the agent.
+ * (e.g. an unknown named key on any keyboard backend, a newline in Android/Vega
+ * `keyboard` text that the on-device `input`/`send_text` can't represent, or a
+ * character with no keycode on iOS/chromium). The HTTP dispatcher maps this to
+ * `400 Bad Request`, matching the zod-validation path: it is a client input
+ * error, not an internal fault, so it must not surface as a `500`. The
+ * `.message` is the human-friendly reason, safe to bubble straight to the agent.
  */
 export class InvalidToolInputError extends Error {
   constructor(message: string) {

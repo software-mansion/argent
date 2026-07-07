@@ -75,4 +75,22 @@ describe("keyboard backends — unknown key is invalid input (400), uniform acro
       typeSimulatorServer(registry, device, { udid: device.id, text: "😀" })
     ).rejects.toBeInstanceOf(InvalidToolInputError);
   });
+
+  it("chromium backend throws InvalidToolInputError for an un-typeable character", async () => {
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue(chromiumApiStub() as never);
+    const impl = makeChromiumImpl(registry);
+    const device = {
+      id: "chromium-cdp-9222",
+      platform: "chromium",
+      kind: "app",
+    } as unknown as DeviceInfo;
+    // An emoji has no CDP key descriptor, so this is a caller input error — the
+    // parity of the iOS `text: "😀"` case above, on the one changed chromium
+    // throw site (`No CDP key descriptor for character`) that was otherwise
+    // untested.
+    await expect(impl.handler({}, { udid: device.id, text: "😀" }, device)).rejects.toBeInstanceOf(
+      InvalidToolInputError
+    );
+  });
 });
