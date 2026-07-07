@@ -63,6 +63,11 @@ describe("renderCombinedMemoryLeaks", () => {
     expect(out).toContain("`<Call stack limit reached>`");
     expect(out).toContain("benign system allocations rather than confirmed app leaks");
 
+    // Nothing attributed → the capture was `--attach` (no malloc history), so the
+    // hint DOES advise capturing with malloc stack logging.
+    expect(out).toContain("capture with malloc");
+    expect(out).toContain("stack logging enabled at launch");
+
     // With no attributed leaks, it says so explicitly.
     expect(out).toContain("No attributed leaks");
   });
@@ -78,6 +83,14 @@ describe("renderCombinedMemoryLeaks", () => {
     expect(out).not.toContain("**`dispatch_mach_msg_t`**");
     expect(out).toContain("🟡");
     expect(out).toContain("1 unattributed leak group(s)");
+
+    // Attributed + unattributed leaks coexist ONLY when malloc stack logging was
+    // active, so the caveat must NOT tell the user to enable the thing they just
+    // used. It names the active malloc capture and drops the "capture with malloc
+    // stack logging enabled at launch" advice.
+    expect(out).toContain("malloc stack logging was active");
+    expect(out).not.toContain("capture with malloc");
+    expect(out).not.toContain("stack logging enabled at launch");
 
     // No "no attributed leaks" line when an attributed leak exists.
     expect(out).not.toContain("No attributed leaks");

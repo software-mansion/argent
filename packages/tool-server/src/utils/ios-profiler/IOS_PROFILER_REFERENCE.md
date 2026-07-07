@@ -79,8 +79,9 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    startup allocation records a backtrace), so it stays opt-in — leave it off for
    pure CPU/hang work, where attach (no relaunch, no overhead) is preferable.
    **Degraded-Xcode guard:** the cold launch needs `xctrace --device`, which is
-   broken on Xcode 26.4–27.0 (the `--device` recording-start handshake records an
-   empty trace). Because the malloc path terminates the running app before
+   broken on Xcode 26.4 and later (the `--device` recording-start handshake records
+   an empty trace — `isDegraded` treats 26.4 and every version from 27 up as broken,
+   with no upper bound). Because the malloc path terminates the running app before
    launching, `native-profiler-start { malloc_stack_logging: true }` is **rejected
    up front** on those versions (before the app is touched) rather than silently
    capturing nothing — re-run without the flag (leaks are still detected, just

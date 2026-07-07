@@ -487,8 +487,8 @@ export async function startNativeProfilerIos(
 
   if (useMallocStackLogging) {
     // malloc_stack_logging must cold-launch the app under `xctrace --device --launch`
-    // (only `--launch` honours `--env MallocStackLogging=1`). On Xcode 26.4–27.0 the
-    // `--device` recording-start handshake is broken (see capture-strategy), so this
+    // (only `--launch` honours `--env MallocStackLogging=1`). On Xcode 26.4 and later
+    // the `--device` recording-start handshake is broken (see capture-strategy), so this
     // would terminate the running app and then capture an empty trace — the opposite
     // of the feature's purpose, surfaced only as a downstream "Analysis failed". Refuse
     // up front, BEFORE touching the running app, unless the operator forces the device
@@ -533,7 +533,7 @@ export async function startNativeProfilerIos(
     // Pick the capture approach for this environment. On Xcode versions where
     // `xctrace --device` works this is the original device/attach path (which
     // attaches by PID — immune to Xcode 26.5's display-name `--attach` matching);
-    // on the 26.4–27.0 regression (where --device deadlocks) it is the host-wide
+    // on the 26.4-and-later regression (where --device deadlocks) it is the host-wide
     // --all-processes fallback, filtered to the app PID. See capture-strategy.
     strategy = selectIosCaptureStrategy();
     // The all-processes fallback records host-wide and isolates the app by PID, so

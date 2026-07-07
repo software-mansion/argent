@@ -244,14 +244,14 @@ describe("native-profiler-start malloc_stack_logging", () => {
     expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
   });
 
-  // A degraded Xcode (26.4–27.0) is reported by `xcodebuild -version`, which the
-  // capture-strategy selector reads. The malloc cold launch needs `--device`,
-  // which is broken on those versions, so the start must be refused UP FRONT —
-  // before the running app is terminated and before any xctrace spawn.
+  // A degraded Xcode (26.4 and later) is reported by `xcodebuild -version`, which the
+  // capture-strategy selector reads. The malloc cold launch needs `--device`, which is
+  // broken on those versions, so the start must be refused UP FRONT — before the running
+  // app is terminated and before any xctrace spawn.
   function mockChildProcessDegraded() {
     const spawnFn = vi.fn(() => new StartFakeChild());
     const execSyncFn = vi.fn(() => "");
-    // A degraded Xcode (26.4–27.0) as reported by the hardened `xcodebuild -version`
+    // A degraded Xcode (26.4 and later) as reported by the hardened `xcodebuild -version`
     // read (execFileSync) that the capture-strategy selector performs.
     const execFileSyncFn = makeExecFileSyncFn({
       xcodebuild: "Xcode 26.5\nBuild version 17F42",
@@ -380,16 +380,13 @@ describe("native-profiler-start malloc_stack_logging", () => {
     delete process.env.ARGENT_IOS_CAPTURE;
     try {
       const spawnFn = vi.fn(() => new StartFakeChild());
-      // Non-degraded Xcode → the guard passes and the path reaches the cold launch.
-      const execSyncFn = vi.fn((cmd: string) => {
-        if (cmd.includes("xcodebuild")) return "Xcode 16.4\nBuild version 16F6";
-        if (cmd.includes("listapps")) return LISTAPPS_JSON;
-        if (cmd.includes("launchctl list"))
-          return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n";
-        return "";
-      });
-      // terminate succeeds (empty return) → the app was running → relaunch is armed.
-      const execFileSyncFn = makeExecFileSyncFn();
+      // Nothing routes through execSync anymore (xcodebuild/listapps/launchctl are all
+      // hardened to execFileSync); a bare stub is all that's needed.
+      const execSyncFn = vi.fn(() => "");
+      // A non-degraded Xcode, read via the hardened execFileSync `xcodebuild -version`
+      // (NOT execSync), so the guard genuinely passes and the path reaches the cold
+      // launch. terminate succeeds (empty return) → the app was running → relaunch armed.
+      const execFileSyncFn = makeExecFileSyncFn({ xcodebuild: "Xcode 16.4\nBuild version 16F6" });
       vi.doMock("child_process", () => ({
         spawn: spawnFn,
         execSync: execSyncFn,
@@ -443,15 +440,22 @@ describe("native-profiler-start malloc_stack_logging", () => {
     delete process.env.ARGENT_IOS_CAPTURE;
     try {
       const spawnFn = vi.fn(() => new StartFakeChild());
-      const execSyncFn = vi.fn((cmd: string) => {
-        if (cmd.includes("xcodebuild")) return "Xcode 16.4\nBuild version 16F6";
-        if (cmd.includes("listapps")) return LISTAPPS_JSON;
-        return "";
-      });
-      const execFileSyncFn = vi.fn((_bin: string, args: string[] = []) => {
-        // Installed but NOT running → terminate fails exactly like real simctl does.
-        if (args.includes("terminate")) throw new Error("found nothing to terminate");
+      const execSyncFn = vi.fn(() => "");
+      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
+        // Non-degraded Xcode (execFileSync `xcodebuild -version`) so the guard passes
+        // and the path actually reaches app resolution + terminate.
+        if (bin === "xcodebuild") return "Xcode 16.4\nBuild version 16F6";
+        // getInstalledApps buffers the listapps plist and runs it through plutil → JSON,
+        // so resolveAppForLaunch finds the installed-but-not-running MyApp and the path
+        // REACHES terminate. Returning "" for listapps/plutil would make getInstalledApps
+        // hit JSON.parse("") and throw SyntaxError before terminate ever ran — which is
+        // exactly the illusory-coverage bug this test must avoid.
+        if (bin === "plutil") return LISTAPPS_JSON;
+        if (args.includes("listapps")) return "<plist/>";
         if (args.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
+        // Installed but NOT running → terminate fails exactly like real simctl does, so
+        // mallocRelaunchBundleId is never armed.
+        if (args.includes("terminate")) throw new Error("found nothing to terminate");
         return "";
       });
       vi.doMock("child_process", () => ({
@@ -486,8 +490,15 @@ describe("native-profiler-start malloc_stack_logging", () => {
         (e: unknown) => e
       );
 
-      // The start failure still surfaces...
+      // The start failure still surfaces — and it is the cold-launch failure, NOT an
+      // earlier resolution error. (With an empty listapps mock, getInstalledApps used to
+      // throw "SyntaxError: Unexpected end of JSON input" before terminate ran, so the
+      // no-op-terminate → no-relaunch scenario named here was never actually exercised.)
       expect(err).toBeTruthy();
+      expect(err).not.toBeInstanceOf(SyntaxError);
+      // The path genuinely reached the (no-op) terminate for the not-running app...
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(true);
       // ...but no best-effort relaunch fired, because we never actually killed it.
       const relaunched = execFileSyncFn.mock.calls.some(
         (c) => Array.isArray(c[1]) && (c[1] as string[]).includes("launch")
@@ -507,13 +518,10 @@ describe("native-profiler-start malloc_stack_logging", () => {
     process.env.ARGENT_IOS_CAPTURE = "all-processes";
     try {
       const spawnFn = vi.fn(() => new StartFakeChild());
-      const execSyncFn = vi.fn((cmd: string) => {
-        if (cmd.includes("xcodebuild")) return "Xcode 16.4\nBuild version 16F6";
-        if (cmd.includes("listapps")) return LISTAPPS_JSON;
-        if (cmd.includes("launchctl list"))
-          return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n";
-        return "";
-      });
+      // ARGENT_IOS_CAPTURE=all-processes short-circuits before any `xcodebuild -version`
+      // read, so the Xcode version is irrelevant here; execSync is unused (every
+      // subprocess goes through execFileSync), so a bare stub suffices.
+      const execSyncFn = vi.fn(() => "");
       const execFileSyncFn = makeExecFileSyncFn();
       applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
 

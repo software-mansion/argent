@@ -371,7 +371,10 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
  * heuristically tied to recently-mounted React components; unattributed leaks
  * (`<Call stack limit reached>` under `xctrace --attach`) are collapsed into one
  * low-confidence YELLOW caveat so the simulator's benign system-allocation noise
- * can't masquerade as a wall of confirmed leaks. Exported for unit testing.
+ * can't masquerade as a wall of confirmed leaks. The caveat's hint is capture-mode
+ * aware (mirroring render.ts): if some leaks WERE attributed, malloc stack logging
+ * was on, so it won't advise enabling the very thing the user just used. Exported
+ * for unit testing.
  */
 export function renderCombinedMemoryLeaks(
   memoryLeaks: MemoryLeak[],
@@ -404,13 +407,26 @@ export function renderCombinedMemoryLeaks(
   if (unattributedLeaks.length > 0) {
     const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
     const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+    // Mirror render.ts's split: when this same capture ALSO produced attributed
+    // leaks, the app was launched under malloc stack logging (the only way a
+    // responsible frame is recorded), so the unattributed remainder is freed-region
+    // reuse / pre-recording noise — telling the user to "re-run with malloc stack
+    // logging" would be advising the thing they just did. Only when nothing is
+    // attributed is the --attach hint apt. Infer capture mode from the attributed
+    // count (the render layer has no direct capture-mode signal).
+    const hint =
+      attributedLeaks.length > 0
+        ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
+          `groups carry no allocation backtrace (freed-region reuse, or allocations from before ` +
+          `recording started) and are most likely benign system allocations rather than confirmed app leaks.`
+        : `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
+          `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
+          `stack logging enabled at launch.`;
     lines.push(
       ``,
       `> 🟡 **${unattributedLeaks.length} unattributed leak group(s)** ` +
         `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
-        `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
-        `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
-        `stack logging enabled at launch.`
+        hint
     );
   }
 

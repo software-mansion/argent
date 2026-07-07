@@ -9,9 +9,9 @@ import { allProcessesStrategy } from "./all-processes";
  * Order of precedence:
  *  1. The `ARGENT_IOS_CAPTURE` env override ("device" | "all-processes") — an
  *     explicit escape hatch for both directions.
- *  2. Active Xcode version: 26.4–27.0 are "degraded" (the `--device` recording
- *     handshake deadlocks) → use the all-processes fallback. Everything else
- *     (≤ 26.3, and whatever fixed version Apple ships) → use the device path.
+ *  2. Active Xcode version: 26.4 and later are "degraded" (the `--device` recording
+ *     handshake deadlocks) → use the all-processes fallback. Only ≤ 26.3 uses the
+ *     device path; when Apple ships a fixed build, narrow isDegraded() to re-enable it.
  *  3. If the version can't be determined, default to the device strategy so the
  *     original behaviour is preserved; force the fallback via the env override.
  */
