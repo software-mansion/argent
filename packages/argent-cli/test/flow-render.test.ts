@@ -9,10 +9,12 @@ import {
 } from "../src/flow";
 
 function mkReport(steps: StepReport[], overrides: Partial<FlowReport> = {}): FlowReport {
-  const passed = steps.filter((s) => s.status === "pass").length;
-  const failed = steps.filter((s) => s.status === "fail").length;
-  const skipped = steps.filter((s) => s.status === "skip").length;
-  const errored = steps.filter((s) => s.status === "error").length;
+  // Mirror the runner's summarize(): echo narration is not a counted step.
+  const counted = steps.filter((s) => s.kind !== "echo");
+  const passed = counted.filter((s) => s.status === "pass").length;
+  const failed = counted.filter((s) => s.status === "fail").length;
+  const skipped = counted.filter((s) => s.status === "skip").length;
+  const errored = counted.filter((s) => s.status === "error").length;
   return {
     flow: "checkout",
     device: "UDID-1",
@@ -29,15 +31,16 @@ function mkReport(steps: StepReport[], overrides: Partial<FlowReport> = {}): Flo
 const STEPS: StepReport[] = [
   { index: 0, kind: "echo", status: "pass", message: "starting" },
   { index: 1, kind: "launch", status: "pass" },
-  { index: 2, kind: "tap", status: "pass", flow: "login" },
+  { index: 2, kind: "tap", status: "pass", flow: "login", target: '"Login"' },
   {
     index: 3,
     kind: "snapshot",
     status: "fail",
     reason: "diff 2.10% > 1%",
+    target: '"home"',
     artifacts: { baseline: "/tmp/b.png", diff: "/tmp/d.png" },
   },
-  { index: 4, kind: "await", status: "skip" },
+  { index: 4, kind: "await", status: "skip", target: 'visible "Done"' },
 ];
 
 describe("flow report rendering", () => {
@@ -48,13 +51,13 @@ describe("flow report rendering", () => {
         'Flow "checkout" on UDID-1',
         "  › starting",
         "  ✓  1 launch",
-        "  ✓  2 tap [login]",
-        "  ✗  3 snapshot — diff 2.10% > 1%",
+        '  ✓  2 tap "Login" [login]',
+        '  ✗  3 snapshot "home" — diff 2.10% > 1%',
         "       baseline: /tmp/b.png",
         "       diff: /tmp/d.png",
-        "  ·  4 await",
+        '  ·  4 await visible "Done"',
         "",
-        "FAIL — 3 passed, 1 failed, 0 errored, 1 skipped",
+        "FAIL — 2 passed, 1 failed, 0 errored, 1 skipped",
       ].join("\n")
     );
   });
@@ -92,9 +95,9 @@ describe("flow report rendering", () => {
 
   it("renderSummary carries the device only when asked (live tail)", () => {
     const report = mkReport(STEPS);
-    expect(renderSummary(report)).toBe("FAIL — 3 passed, 1 failed, 0 errored, 1 skipped");
+    expect(renderSummary(report)).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
     expect(renderSummary(report, { withDevice: true })).toBe(
-      "FAIL on UDID-1 — 3 passed, 1 failed, 0 errored, 1 skipped"
+      "FAIL on UDID-1 — 2 passed, 1 failed, 0 errored, 1 skipped"
     );
   });
 

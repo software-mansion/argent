@@ -24,6 +24,8 @@ export interface StepReport {
   tool?: string;
   flow?: string;
   message?: string;
+  /** Human-readable step target (selector / snapshot name), set by the runner. */
+  target?: string;
   /**
    * Snapshot-step artifacts keyed by role (baseline/current/diff). The wire
    * value is an artifact handle; materializeArtifacts has already rewritten
@@ -109,7 +111,8 @@ export function parseRunArgs(argv: string[]): {
 
 export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
-  const label = s.tool ? `${s.kind} ${s.tool}` : s.kind;
+  const what = s.tool ?? s.target;
+  const label = what ? `${s.kind} ${what}` : s.kind;
   const reason = s.reason ? ` — ${s.reason}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
   return `  ${glyph} ${String(n).padStart(2)} ${label}${where}${reason}`;

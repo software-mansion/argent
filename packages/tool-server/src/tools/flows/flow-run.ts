@@ -19,6 +19,7 @@ import {
   parseFlow,
   setActiveProjectRoot,
   type FlowFile,
+  type FlowSelector,
   type FlowStep,
   type Launch,
 } from "./flow-utils";
@@ -104,6 +105,12 @@ export interface StepReport {
   message?: string;
   /** The fragment a step belongs to (set on `run` and the steps it expands). */
   flow?: string;
+  /**
+   * Human-readable "what this step acts on" — the selector for directive
+   * steps, the snapshot name — so a report line reads `tap "Clear logs"`,
+   * not a bare `tap`. Display-only; derived from the step definition.
+   */
+  target?: string;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
 }
@@ -560,6 +567,9 @@ function summarize(
   let skipped = 0;
   let errored = 0;
   for (const s of steps) {
+    // Echo is narration, not a test step — counting it would let the summary
+    // disagree with the renderers' step numbering (which skips echo too).
+    if (s.kind === "echo") continue;
     if (s.status === "pass") passed++;
     else if (s.status === "fail") failed++;
     else if (s.status === "skip") skipped++;
@@ -588,6 +598,44 @@ function pushReport(state: ExecState, report: StepReport): void {
   state.onStepReport?.(report);
 }
 
+function selectorLabel(sel: FlowSelector): string {
+  const parts: string[] = [];
+  if (sel.text !== undefined) parts.push(`"${sel.text}"`);
+  if (sel.identifier) parts.push(`id=${sel.identifier}`);
+  if (sel.role) parts.push(`role=${sel.role}`);
+  return parts.join(" ");
+}
+
+/** Display-only "what this step acts on" for {@link StepReport.target}. */
+function stepTarget(step: FlowStep): string | undefined {
+  switch (step.kind) {
+    case "tap":
+      if (step.selector) return selectorLabel(step.selector);
+      if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
+      return undefined;
+    case "type":
+      return `into ${selectorLabel(step.into)}`;
+    case "await":
+    case "assert": {
+      const sel = selectorLabel(step.selector);
+      // A text condition checks expectedText against the element the selector
+      // locates; the other conditions are about the selector itself.
+      if (step.condition === "text") {
+        return `${sel} ${step.textMatch ?? "contains"} "${step.expectedText ?? ""}"`;
+      }
+      return `${step.condition} ${sel}`;
+    }
+    case "scroll-to": {
+      const dir = step.direction !== "down" ? ` (${step.direction})` : "";
+      return `${selectorLabel(step.target)}${dir}`;
+    }
+    case "snapshot":
+      return `"${step.name}"`;
+    default:
+      return undefined;
+  }
+}
+
 /** Execute a list of steps, appending reports to state. Honors hard-stop + abort. */
 async function execSteps(
   state: ExecState,
@@ -599,7 +647,13 @@ async function execSteps(
     const index = state.reports.length;
 
     if (state.stopped) {
-      pushReport(state, { index, kind: step.kind, status: "skip", flow: sourceFlow });
+      pushReport(state, {
+        index,
+        kind: step.kind,
+        status: "skip",
+        flow: sourceFlow,
+        target: stepTarget(step),
+      });
       continue;
     }
     if (state.signal?.aborted) {
@@ -610,6 +664,7 @@ async function execSteps(
         status: "skip",
         reason: "run aborted",
         flow: sourceFlow,
+        target: stepTarget(step),
       });
       continue;
     }
@@ -671,7 +726,7 @@ async function execLeafStep(
   index: number,
   sourceFlow: string
 ): Promise<StepReport> {
-  const base = { index, kind: step.kind, flow: sourceFlow } as const;
+  const base = { index, kind: step.kind, flow: sourceFlow, target: stepTarget(step) } as const;
   const { registry, ctx, device, signal } = state;
 
   switch (step.kind) {

@@ -82,6 +82,9 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
       "tool:pass",
       "tool:pass",
     ]);
+    // Echo is narration — the counters cover only the two real steps.
+    expect(result.passed).toBe(2);
+    expect(result.ok).toBe(true);
   });
 
   it("streams nested fragment steps (run:) with their source-flow attribution", async () => {
@@ -141,6 +144,54 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
     expect(events).toEqual(result.steps);
     expect(events.map((e) => e.status)).toEqual(["pass", "error", "skip", "skip"]);
     expect(result.ok).toBe(false);
+    // The skipped echo stays out of the counters like a passed one would.
+    expect(result.passed).toBe(1);
+    expect(result.errored).toBe(1);
+    expect(result.skipped).toBe(1);
+  });
+
+  it("labels directive steps with their target selector", async () => {
+    // A failing first step hard-stops the run, so every directive below is
+    // reported as a skip — which must still carry its target label.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "boom", args: {} },
+        { kind: "tap", selector: { text: "Clear logs", loose: true } },
+        { kind: "tap", x: 0.5, y: 0.25 },
+        {
+          kind: "assert",
+          condition: "hidden",
+          selector: { text: "] outer Touchable", loose: true },
+        },
+        {
+          kind: "await",
+          condition: "text",
+          selector: { identifier: "total" },
+          expectedText: "Total",
+          textMatch: "contains",
+        },
+        { kind: "scroll-to", target: { text: "Nested touchables", loose: true }, direction: "up" },
+        { kind: "type", into: { identifier: "email" }, text: "a@b.c" },
+        { kind: "snapshot", name: "home" },
+      ],
+    });
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    const result = asRun(
+      await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.steps.map((s) => s.target)).toEqual([
+      undefined,
+      '"Clear logs"',
+      "(0.5, 0.25)",
+      'hidden "] outer Touchable"',
+      'id=total contains "Total"',
+      '"Nested touchables" (up)',
+      "into id=email",
+      '"home"',
+    ]);
   });
 
   it("runs identically when no progress consumer is attached", async () => {

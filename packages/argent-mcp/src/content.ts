@@ -222,6 +222,8 @@ export type FlowStepResult = {
   outputHint?: string;
   args?: unknown;
   flow?: string;
+  /** Human-readable step target (selector / snapshot name), set by the runner. */
+  target?: string;
   /**
    * Snapshot-step artifacts keyed by role (baseline/current/diff). Values are
    * artifact handles on current tool-servers; treated as untrusted wire data
@@ -255,6 +257,7 @@ function stepLabel(step: FlowStepResult): string {
   if (step.kind === "echo") return step.message ?? "";
   if (step.kind === "run") return `run ${step.flow ?? ""}`.trim();
   if (step.tool) return step.tool;
+  if (step.target) return `${step.kind} ${step.target}`;
   return step.kind;
 }
 
