@@ -128,7 +128,9 @@ type HttpFailureMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
  * `tvos` / `android-tv` here for reporting only when the cache already knows the
  * kind, and leave it coarse otherwise. The first tool call on a device may land
  * before the cache is warm and report the base platform; subsequent calls, once
- * describe/screenshot/streaming have run, report the TV variant.
+ * a describe/interaction path has warmed the runtime-kind cache (the per-platform
+ * warmers are listed on `getCachedSimulatorRuntimeKind` /
+ * `getCachedAndroidRuntimeKind`), report the TV variant.
  */
 function refineTvPlatform(basePlatform: DevicePlatform, deviceId: string): TelemetryPlatform {
   if (basePlatform === "ios" && getCachedSimulatorRuntimeKind(deviceId) === "tv") {
@@ -180,14 +182,21 @@ function extractInvocationMeta(
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
-/** Coarse platform from a tool call's device arg (`udid` / `device_id` / `avdName`), or null. */
+/**
+ * Telemetry platform from a tool call's device arg, or null when it carries none.
+ * A `udid` / `device_id` resolves through the runtime-kind cache and refines to
+ * `tvos` / `android-tv` once that cache is warm (coarse `ios` / `android` until
+ * then); only the `avdName`-only fallback is unconditionally coarse.
+ */
 function platformFromArgs(data: unknown): TelemetryPlatform | null {
   if (!data || typeof data !== "object") return null;
   const deviceArg = extractDeviceArg(data);
   if (deviceArg) return inferPlatform(deviceArg) ?? null;
   // An `avdName`-only call (boot-device before the emulator exists) has no serial
-  // to resolve a runtime kind from, so it stays the coarse `android` platform —
-  // an Android TV AVD is attributed to `android-tv` on its first device-arg call.
+  // to resolve a runtime kind from, so it stays the coarse `android` platform.
+  // Once the emulator is up, later `udid` / `device_id` calls refine an Android TV
+  // AVD to `android-tv` — from the call after describe/launch has warmed the cache,
+  // not the first (see `refineTvPlatform`).
   if (typeof (data as Record<string, unknown>).avdName === "string") return "android";
   return null;
 }

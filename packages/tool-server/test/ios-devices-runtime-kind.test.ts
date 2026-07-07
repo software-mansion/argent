@@ -24,6 +24,7 @@ vi.mock("node:child_process", async () => {
 import {
   getSimulatorRuntimeKind,
   getCachedSimulatorRuntimeKind,
+  cacheSimulatorRuntimeKind,
   __resetSimulatorRuntimeKindCacheForTesting,
 } from "../src/utils/ios-devices";
 
@@ -99,5 +100,26 @@ describe("getCachedSimulatorRuntimeKind — synchronous cache-only read", () => 
     mockSimctl();
     await getSimulatorRuntimeKind(TV_UDID);
     expect(getCachedSimulatorRuntimeKind("CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")).toBeUndefined();
+  });
+});
+
+describe("cacheSimulatorRuntimeKind — warm from an out-of-band verdict", () => {
+  it("seeds the cache so the synchronous reader refines without any simctl call", () => {
+    // The tv-control factory already holds the runtime kind from its own
+    // listIosSimulators() call; warming here lets the telemetry reader see `tv`
+    // with no further probe (the whole point of the synchronous hot path).
+    cacheSimulatorRuntimeKind(TV_UDID, "tv");
+    expect(getCachedSimulatorRuntimeKind(TV_UDID)).toBe("tv");
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("caches a mobile verdict too (an iPhone that reached a tv path)", () => {
+    cacheSimulatorRuntimeKind(PHONE_UDID, "mobile");
+    expect(getCachedSimulatorRuntimeKind(PHONE_UDID)).toBe("mobile");
+  });
+
+  it("is a no-op for an undefined kind, leaving the entry unwarmed", () => {
+    cacheSimulatorRuntimeKind(TV_UDID, undefined);
+    expect(getCachedSimulatorRuntimeKind(TV_UDID)).toBeUndefined();
   });
 });

@@ -84,14 +84,26 @@ export async function isTvOsSimulator(udid: string): Promise<boolean> {
 }
 
 /**
+ * Memoize a runtime-kind verdict a caller already resolved out-of-band — e.g. the
+ * tv-control factory, which fetches the simulator list to validate the target and
+ * so holds the kind in hand. Warming the cache here lets the synchronous telemetry
+ * reader refine that device without a redundant `simctl` probe, and mirrors how
+ * the Android TV factory's `getAndroidRuntimeKind` warms its cache. No-op for an
+ * undefined kind; a simulator's kind is fixed at creation, so it never goes stale.
+ */
+export function cacheSimulatorRuntimeKind(udid: string, kind: "mobile" | "tv" | undefined): void {
+  if (kind) runtimeKindCache.set(udid, kind);
+}
+
+/**
  * Synchronous, cache-only view of a UDID's runtime kind: returns the memoized
  * "mobile"/"tv" verdict if a prior `getSimulatorRuntimeKind` call resolved it,
  * otherwise undefined. It NEVER runs `simctl` — callers on a latency-sensitive
  * hot path (telemetry platform inference) use this to distinguish tvOS from iOS
  * only when the kind is already known, and fall back to the coarse platform when
  * it isn't, rather than paying a ~100ms probe per call. The cache is warmed as a
- * side effect of the describe/screenshot/keyboard/streaming paths that any real
- * tvOS session exercises.
+ * side effect of the describe/screenshot/keyboard/streaming and tv-remote
+ * (tv-control) paths that any real tvOS session exercises.
  */
 export function getCachedSimulatorRuntimeKind(udid: string): "mobile" | "tv" | undefined {
   return runtimeKindCache.get(udid);
