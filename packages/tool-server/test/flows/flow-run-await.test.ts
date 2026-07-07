@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 
-const PROJECT_ROOT = path.join(os.tmpdir(), "flow-await-tests");
+const PROJECT_ROOT = path.join(os.tmpdir(), `flow-await-tests-${process.pid}`);
 
 // Mock registry: invokeTool returns canned per-tool results; getTool is a stub.
 function makeRegistry(invoke: (id: string, args: unknown) => Promise<unknown>) {
@@ -15,16 +15,19 @@ function makeRegistry(invoke: (id: string, args: unknown) => Promise<unknown>) {
   } as unknown as Registry;
 }
 
-const writtenFiles: string[] = [];
+// The flow lives at the exact path the file-input boundary derives
+// (`${project_root}/.argent/flows/${name}.yaml`) — any other explicit
+// flow_file is rejected by the containment check.
 async function writeFlow(yaml: string): Promise<string> {
-  const file = path.join(os.tmpdir(), `flow-await-${writtenFiles.length}-${process.pid}.yaml`);
+  const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
+  const file = path.join(flowsDir, "gated.yaml");
+  await fs.mkdir(flowsDir, { recursive: true });
   await fs.writeFile(file, yaml, "utf8");
-  writtenFiles.push(file);
   return file;
 }
 
 afterEach(async () => {
-  await Promise.all(writtenFiles.splice(0).map((f) => fs.rm(f, { force: true })));
+  await fs.rm(PROJECT_ROOT, { recursive: true, force: true });
 });
 
 const GATED_FLOW = `executionPrerequisite: ""

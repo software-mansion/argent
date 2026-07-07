@@ -63,7 +63,16 @@ async function runFlow(
   registry: Registry,
   params: Record<string, unknown>
 ): Promise<FlowRunResult> {
-  return asRun(await createRunFlowTool(registry).execute({}, params as never));
+  // The flow file deliberately lives outside project_root (it pins the
+  // flow-relative app-path anchor), which the containment check only allows
+  // for a boundary-materialized upload — mark it as one, like a remote
+  // client's call would be.
+  const ctx = {
+    fileInputs: {
+      flow_file: { clientPath: String(params.flow_file), presentOnHost: false, viaUpload: true },
+    },
+  };
+  return asRun(await createRunFlowTool(registry).execute({}, params as never, ctx as never));
 }
 
 beforeEach(() => {

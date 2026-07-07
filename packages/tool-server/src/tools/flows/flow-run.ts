@@ -1,11 +1,12 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isLiveServiceState } from "@argent/registry";
+import { FAILURE_CODES, FailureError, isLiveServiceState } from "@argent/registry";
 import type {
   DeviceInfo,
   FileInputSpec,
   Registry,
+  ResolvedFileInput,
   ToolContext,
   ToolDefinition,
 } from "@argent/registry";
@@ -374,7 +375,7 @@ returns a notice with the prerequisite instead of running.`,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const signal = ctx?.signal;
-      const filePath = resolveFlowFilePath(params);
+      const filePath = resolveFlowFilePath(params, ctx?.fileInputs?.flow_file);
       const flowsDir = path.dirname(filePath);
       const flow = parseFlow(await fs.readFile(filePath, "utf8"));
 
@@ -748,16 +749,48 @@ function errMsg(err: unknown): string {
 }
 
 /**
- * Prefer the boundary-resolved `flow_file`; fall back to deriving the path from
- * project_root + name. The name is validated in both branches.
+ * Resolve the flow YAML path a tool reads. With no `flow_file`, derive it from
+ * project_root + name. When `flow_file` is set it must be one of the two shapes
+ * the file-input boundary legitimately produces: the exact
+ * `${project_root}/.argent/flows/${name}.yaml` path (co-located client,
+ * resolved in place), or a temp file THIS server materialized from uploaded
+ * content (`fileInput.viaUpload` — remote client). Anything else is rejected:
+ * the schema marks `flow_file` internal, and honoring an arbitrary path would
+ * let a caller execute (and, under --update-baselines, write PNGs next to) any
+ * YAML on the host, bypassing the project-root containment the rest of the
+ * module enforces. Name and project_root are validated in every branch.
  */
-export function resolveFlowFilePath(params: {
-  name: string;
-  project_root: string;
-  flow_file?: string;
-}): string {
+export function resolveFlowFilePath(
+  params: {
+    name: string;
+    project_root: string;
+    flow_file?: string;
+  },
+  fileInput?: ResolvedFileInput
+): string {
   assertSafeFlowName(params.name);
-  if (params.flow_file) return params.flow_file;
   setActiveProjectRoot(params.project_root);
-  return getFlowPath(params.name);
+  const expected = getFlowPath(params.name);
+  if (!params.flow_file) return expected;
+  // A path the boundary materialized from uploaded content is a fresh temp
+  // file this process itself created (see file-inputs.ts) — trusted as-is.
+  if (fileInput?.viaUpload) return params.flow_file;
+  if (
+    !path.isAbsolute(params.flow_file) ||
+    params.flow_file.split(/[\\/]+/).includes("..") ||
+    path.resolve(params.flow_file) !== path.resolve(expected)
+  ) {
+    throw new FailureError(
+      `Invalid flow_file "${params.flow_file}": it must resolve to the flow's path under the ` +
+        `project root ("${expected}"). flow_file is internal — leave it unset and pass ` +
+        `project_root + name.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_containment",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  return params.flow_file;
 }
