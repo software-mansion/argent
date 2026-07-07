@@ -86,9 +86,11 @@ const NO_TELEMETRY_OPTION: InstallerOption = {
 };
 
 /**
- * Single source of truth for the installer subcommands' summaries, usage, and
- * options. Options mirror the flags each installer function actually parses
- * (see packages/argent-installer/src/{init,update,uninstall}.ts).
+ * How each installer subcommand is described in help — its summary (the sole
+ * copy, also rendered by the top-level table in cli.ts), usage, and options.
+ * The option lists are hand-maintained to mirror the flags each installer
+ * actually parses (see packages/argent-installer/src/{init,update,uninstall}.ts);
+ * keep them in sync when those flags change — nothing links them automatically.
  */
 export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMeta> = {
   init: {

@@ -154,7 +154,7 @@ describe("printInstallerHelp", () => {
     // The whole contract of the help path is that it is side-effect-free. This
     // asserts the function's sole observable effect is console.log; the
     // end-to-end guarantee (config left untouched) is covered in
-    // cli-dispatch.e2e.test.ts.
+    // cli-dispatch.test.ts.
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     const result = printInstallerHelp("uninstall");
     expect(result).toBeUndefined();
