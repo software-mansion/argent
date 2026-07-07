@@ -270,6 +270,50 @@ describe("settings-permissions iOS branch", () => {
       /must be booted first — use boot-device/
     );
   });
+
+  it("a camera failure on a shutdown simulator gets the boot-device hint, not the camera hint", async () => {
+    // cameraHint is gated on `!shutdownHint`, so a shutdown error must win even
+    // for camera — otherwise the agent is told to list services when the real
+    // fix is to boot the device. Pins that guard (the camera-hint and shutdown
+    // tests above never pair the two).
+    execFileFails(
+      "An error was encountered processing the command (domain=NSCocoaErrorDomain, code=405):\nUnable to lookup in current state: Shutdown"
+    );
+    const rejection = expect(
+      iosImpl.handler({}, params({ permission: "camera" }), iosDevice)
+    ).rejects;
+    await rejection.toThrow(/must be booted first — use boot-device/);
+    await rejection.not.toThrow(/list the services it supports/);
+  });
+
+  it("maps each supported permission to its simctl privacy service (identity)", async () => {
+    // Lock IOS_SERVICE: microphone/photos/location-always are asserted above,
+    // this pins the rest so an accidental null/typo (which would surface a false
+    // "unsupported") is caught — notably `reminders`, the sole iOS-only service.
+    execFileSucceeds();
+    const cases: Array<[SettingsPermissionsParams["permission"], string]> = [
+      ["contacts", "contacts"],
+      ["calendar", "calendar"],
+      ["location", "location"],
+      ["media-library", "media-library"],
+      ["motion", "motion"],
+      ["reminders", "reminders"],
+    ];
+    for (const [permission, service] of cases) {
+      execFileMock.mockClear();
+      const result = await iosImpl.handler({}, params({ permission }), iosDevice);
+      const [, args] = execFileMock.mock.calls[0]!;
+      expect(args, permission).toEqual([
+        "simctl",
+        "privacy",
+        IOS_UDID,
+        "grant",
+        service,
+        "com.example.app",
+      ]);
+      expect(result.applied, permission).toEqual([service]);
+    }
+  });
 });
 
 describe("settings-permissions Android branch", () => {
@@ -396,6 +440,29 @@ describe("settings-permissions Android branch", () => {
     );
   });
 
+  it("finds the target package among substring siblings", async () => {
+    // The realistic installed shape: `pm list packages <pkg>` filters by
+    // substring, so an installed app usually returns several lines — the target
+    // plus every package whose name contains it (e.g. `com.google.android.gms`
+    // returns both `...gms.supervision` and `...gms`). The per-line `.some(...)`
+    // must match the exact target line among the siblings, in any order; a switch
+    // to whole-output or first-line matching would read a real installed app as
+    // "not installed" while every other Android test stayed green.
+    mockAdbShell.mockImplementation(async (_serial, cmd) => {
+      if (cmd.startsWith("pm list packages")) {
+        return "package:com.example.app.helper\npackage:com.example.app\npackage:com.example.app.debug";
+      }
+      return "";
+    });
+    const result = await androidImpl.handler({}, params({}), androidDevice);
+    expect(result.applied).toEqual(["android.permission.CAMERA"]);
+    expect(mockAdbShell).toHaveBeenCalledWith(
+      ANDROID_SERIAL,
+      "pm grant 'com.example.app' android.permission.CAMERA",
+      expect.anything()
+    );
+  });
+
   it("location fans out to fine + coarse", async () => {
     const result = await androidImpl.handler({}, params({ permission: "location" }), androidDevice);
     expect(result.applied).toEqual([
@@ -426,6 +493,30 @@ describe("settings-permissions Android branch", () => {
       androidDevice
     );
     expect(result.applied).toEqual(["android.permission.ACCESS_BACKGROUND_LOCATION"]);
+  });
+
+  it("maps each abstract permission to its concrete android.permission.* set", async () => {
+    // Lock the ANDROID_PERMISSIONS table: camera/photos/location(-always) are
+    // covered above, this pins the rest so an accidental emptying/typo of a
+    // mapping surfaces here instead of silently granting the wrong permission or
+    // reporting "unsupported". Notably notifications→POST_NOTIFICATIONS (a
+    // primary Android use case) and the two-permission contacts/calendar/
+    // media-library fan-outs, none of which had a mapping assertion.
+    const cases: Array<[SettingsPermissionsParams["permission"], string[]]> = [
+      ["microphone", ["android.permission.RECORD_AUDIO"]],
+      ["contacts", ["android.permission.READ_CONTACTS", "android.permission.WRITE_CONTACTS"]],
+      ["notifications", ["android.permission.POST_NOTIFICATIONS"]],
+      ["calendar", ["android.permission.READ_CALENDAR", "android.permission.WRITE_CALENDAR"]],
+      [
+        "media-library",
+        ["android.permission.READ_MEDIA_AUDIO", "android.permission.READ_EXTERNAL_STORAGE"],
+      ],
+      ["motion", ["android.permission.ACTIVITY_RECOGNITION"]],
+    ];
+    for (const [permission, expected] of cases) {
+      const result = await androidImpl.handler({}, params({ permission }), androidDevice);
+      expect(result.applied, permission).toEqual(expected);
+    }
   });
 
   it("partial pm failures (a real device throws on exit 255) land in `skipped`, not an error", async () => {

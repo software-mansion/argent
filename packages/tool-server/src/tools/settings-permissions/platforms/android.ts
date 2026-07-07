@@ -183,13 +183,16 @@ export const androidImpl: PlatformImpl<
     }
 
     // Partial success is expected (which concrete permission exists depends on
-    // manifest + API level), but zero successes means the action did nothing —
-    // surface pm's own reasons so the caller can fix the bundleId/manifest.
+    // manifest + API level), but zero successes means the action did nothing.
+    // The package is already known-installed (the preflight above proved it), so
+    // don't reassert that here — surface pm's own per-permission reasons, which
+    // also carry any transport/timeout cause verbatim, so the caller sees the
+    // real problem rather than a fixed manifest guess.
     if (applied.length === 0) {
       const details = failures.map((f) => `${f.permission}: ${f.detail}`).join("; ");
       throw new FailureError(
-        `Failed to ${action} '${permission}' for ${bundleId} on ${udid} — pm rejected every mapped permission. ` +
-          `The app must be installed and declare the permission in its manifest. (${details})`,
+        `Failed to ${action} '${permission}' for ${bundleId} on ${udid} — every mapped runtime permission was rejected. ` +
+          `Usually the manifest doesn't declare it, or it isn't a runtime-changeable permission; see the per-permission detail for the exact cause. (${details})`,
         {
           error_code: FAILURE_CODES.ANDROID_SETTINGS_PERMISSION_FAILED,
           failure_stage: "android_settings_permission_pm",

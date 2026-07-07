@@ -25,10 +25,14 @@ const SIMCTL_ACTION: Record<PermissionAction, "grant" | "revoke" | "reset"> = {
 // models, with two exceptions:
 // - `notifications` has NO simctl privacy service (notification authorization
 //   lives outside TCC), so it is null and surfaces a clear unsupported error.
-// - `camera` is not listed by every Xcode's simctl (the simulator has no
-//   camera hardware). It is passed through rather than pre-rejected so an
-//   Xcode that does support it works; on one that doesn't, simctl's own
-//   "invalid service" error is wrapped with a hint below.
+// - `camera` support varies by simruntime (simulators have no camera hardware,
+//   and some runtimes don't model the service — independent of whether `simctl
+//   privacy`'s usage text lists it). It is passed through rather than
+//   pre-rejected so a runtime that accepts it works; a runtime that rejects it
+//   fails with a generic NSError (NSPOSIXErrorDomain, "Failed to set access" /
+//   "Operation not permitted") that carries no reliable "unsupported service"
+//   text, so the handler below keys a list-services hint off the service name
+//   rather than the message wording.
 const IOS_SERVICE: Record<PermissionName, string | null> = {
   "camera": "camera",
   "microphone": "microphone",
@@ -83,12 +87,13 @@ export const iosImpl: PlatformImpl<
       const shutdownHint = /current state:\s*shutdown/i.test(detail)
         ? " The simulator must be booted first — use boot-device."
         : "";
-      // `camera` is the one service some Xcodes don't model (simulators have no
-      // camera hardware). simctl rejects an unsupported service with a generic
-      // CoreSimulator NSError ("Failed to set access" / "Operation not
-      // permitted") that is indistinguishable from any other failure, so there
-      // is no reliable text to classify it as unsupported — key the hint off the
-      // service we know can be missing instead of parsing simctl's wording.
+      // `camera` is the one service some simruntimes don't model (simulators
+      // have no camera hardware). simctl rejects an unsupported service with a
+      // generic NSError (NSPOSIXErrorDomain, "Failed to set access" / "Operation
+      // not permitted") that is indistinguishable from any other failure, so
+      // there is no reliable text to classify it as unsupported — key the hint
+      // off the service we know can be missing instead of parsing simctl's
+      // wording.
       const cameraHint =
         service === "camera" && !shutdownHint
           ? " If this Xcode's `simctl privacy` does not model the 'camera' service, run `xcrun simctl privacy` to list the services it supports."
