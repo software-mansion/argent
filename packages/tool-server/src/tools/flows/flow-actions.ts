@@ -655,7 +655,13 @@ function assertReason(
         ? `element(s) matched ${sel} but none was visible (zero-area frame)`
         : `no element matched selector ${sel}`;
     case "hidden":
-      return `an element matching ${sel} was still visible`;
+      // No visible match on the final read means the deadline was spent on
+      // blind reads (blank trees the poll refuses to trust once the element
+      // has matched — see waitForCondition): the element may well be gone,
+      // but that can't be confirmed, so don't claim it was still on screen.
+      return matches.some(isVisible)
+        ? `an element matching ${sel} was still visible`
+        : `could not confirm the element is hidden — it was visible earlier, but the last UI reads returned an empty tree`;
     case "text": {
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       const wanted = textMatch === "equals" ? "equal" : "contain";
