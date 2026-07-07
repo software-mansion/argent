@@ -120,6 +120,45 @@ describe("claudeAdapter.findShadowingConfigs", () => {
     expect(project.trusted).toBe(true);
   });
 
+  // Only the stock `argent mcp` shape is a provable leftover. Anything the
+  // user customized — command, args, env — may be a deliberate override that
+  // outranks the committed entry BY DESIGN (a dev-checkout `claude mcp add`),
+  // so it must never be auto-removed, especially by `argent update --yes`.
+  it("reports a custom-command local-scope entry as NOT auto-removable", () => {
+    writeJsonFile(claudeJsonPath(), {
+      projects: {
+        [root]: {
+          mcpServers: { argent: { command: "node", args: ["/dev/checkout/cli.js", "mcp"] } },
+        },
+      },
+    });
+
+    const findings = claude.findShadowingConfigs!(root, "local");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].autoRemove).toBe(false);
+    expect(findings[0].entry).toEqual({ command: "node", args: ["/dev/checkout/cli.js", "mcp"] });
+  });
+
+  it("reports a bare entry with custom args or env as NOT auto-removable", () => {
+    writeJsonFile(claudeJsonPath(), {
+      projects: {
+        [root]: {
+          mcpServers: { argent: { command: "argent", args: ["mcp", "--metro-port", "8082"] } },
+        },
+      },
+    });
+    expect(claude.findShadowingConfigs!(root, "local")[0].autoRemove).toBe(false);
+
+    writeJsonFile(claudeJsonPath(), {
+      projects: {
+        [root]: {
+          mcpServers: { argent: { command: "argent", args: ["mcp"], env: { FOO: "1" } } },
+        },
+      },
+    });
+    expect(claude.findShadowingConfigs!(root, "local")[0].autoRemove).toBe(false);
+  });
+
   it("matches a project key that is a symlink/path variant of the root", () => {
     const link = path.join(tmpDir, "project-link");
     fs.symlinkSync(root, link);
@@ -222,6 +261,33 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(result.warnedCount).toBe(0);
     const project = (readJsonFile(claudeJsonPath()).projects as Record<string, any>)[root];
     expect(project.mcpServers).toBeUndefined();
+  });
+
+  it("keeps a custom-command Claude local-scope override (warns instead of removing)", async () => {
+    // A deliberate dev override registered via `claude mcp add argent -- node
+    // ~/dev/checkout/cli.js mcp`. Local scope outranking the committed entry is
+    // the point of that override — the sweep must flag it, never delete it.
+    globallyInstalled = true;
+    writeJsonFile(claudeJsonPath(), {
+      projects: {
+        [root]: {
+          mcpServers: { argent: { command: "node", args: ["/dev/checkout/cli.js", "mcp"] } },
+        },
+      },
+    });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [claude],
+      detectedAdapters: [claude],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+    });
+
+    expect(result.removedCount).toBe(0);
+    expect(result.warnedCount).toBe(1);
+    const project = (readJsonFile(claudeJsonPath()).projects as Record<string, any>)[root];
+    expect(project.mcpServers.argent).toBeDefined();
   });
 
   it("removes a dead bare-argent global entry on a local install", async () => {

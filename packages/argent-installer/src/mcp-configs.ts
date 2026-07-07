@@ -452,13 +452,31 @@ const claudeAdapter: McpConfigAdapter = {
         if (!isRecord(project)) continue;
         const servers = project.mcpServers;
         if (!isRecord(servers) || !(MCP_SERVER_KEY in servers)) continue;
+        const raw = servers[MCP_SERVER_KEY];
+        const entry = normalizeServerEntry(raw);
+        // Auto-remove ONLY the stock shape a previous install left behind:
+        // bare `argent mcp`, no env. Anything else — a custom command pointing
+        // at a dev checkout, extra args, env vars — is a deliberate hand-tuned
+        // override that outranks the committed entry BY DESIGN. Report it so
+        // the shared policy warns (or, when provably dead, asks first); never
+        // delete it silently — `argent update --yes` runs this sweep too.
+        const hasCustomEnv = isRecord(raw) && isRecord(raw.env) && Object.keys(raw.env).length > 0;
+        const isStockShape =
+          entry !== null &&
+          entry.command === MCP_BINARY_NAME &&
+          entry.args.length === 1 &&
+          entry.args[0] === "mcp" &&
+          !hasCustomEnv;
         findings.push({
           location: `~/.claude.json (local-scope entry for ${key})`,
-          reason:
-            "local scope outranks every entry argent can write — the new install would be silently ignored",
-          entry: normalizeServerEntry(servers[MCP_SERVER_KEY]),
-          // Keyed to this project root; removal cannot affect other projects.
-          autoRemove: true,
+          reason: isStockShape
+            ? "local scope outranks every entry argent can write — the new install would be silently ignored"
+            : "a customized local-scope entry outranks the entry just written; if it is a " +
+              "deliberate override keep it, otherwise remove it (claude mcp remove argent)",
+          entry,
+          // Keyed to this project root, so removal cannot affect other
+          // projects — but only the stock shape is provably a leftover.
+          autoRemove: isStockShape,
           remove: (): boolean => {
             // Re-read at removal time and bail unless the entry is still
             // there: readJson yields {} on a parse failure, and writing that
