@@ -185,6 +185,29 @@ function killChildEscalating(child: ChildProcess): void {
   }, 2000).unref();
 }
 
+/**
+ * Terminate a Chromium/Electron app by pid — the only handle left once
+ * {@link bootElectronApp} returns (the child is detached + unref'd). Same
+ * escalation as {@link killChildEscalating}: SIGTERM, then SIGKILL after a grace
+ * period. An already-exited process is a no-op, not an error.
+ */
+export function killChromiumByPid(pid: number): void {
+  if (signalPid(pid, "SIGTERM") === "gone") return; // already exited, nothing to escalate
+  setTimeout(() => {
+    signalPid(pid, "SIGKILL");
+  }, 2000).unref();
+}
+
+/** Send a signal to a pid, reporting "gone" on ESRCH (no such process). */
+function signalPid(pid: number, signal: NodeJS.Signals): "sent" | "gone" {
+  try {
+    process.kill(pid, signal);
+    return "sent";
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ESRCH" ? "gone" : "sent";
+  }
+}
+
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
   const port = options.port ?? (await pickFreePort());
   const launcher = resolveLauncher(options.appPath);

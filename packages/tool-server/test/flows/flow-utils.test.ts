@@ -10,6 +10,8 @@ import {
   setActiveProjectRoot,
   clearActiveProjectRoot,
   getFlowPath,
+  appIdForPlatform,
+  chromiumLaunchSpec,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
 
@@ -444,6 +446,121 @@ describe("parseFlow", () => {
     };
     const serialized = serializeFlow(flow);
     expect(parseFlow(serialized)).toEqual(flow);
+  });
+});
+
+// ── chromium launch (app path) ───────────────────────────────────────
+
+describe("chromium launch parsing", () => {
+  it("parses a chromium launch with a bare-string app path", () => {
+    const flow = parseFlow("steps:\n  - launch: { chromium: ./app }\n");
+    expect(flow.steps).toEqual([{ kind: "launch", app: { chromium: "./app" } }]);
+  });
+
+  it("parses a chromium launch with a { path, args } map", () => {
+    const flow = parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [--e2e] } }\n");
+    expect(flow.steps).toEqual([
+      { kind: "launch", app: { chromium: { path: "./app", args: ["--e2e"] } } },
+    ]);
+  });
+
+  it("parses a mixed per-platform launch (ios id + chromium path)", () => {
+    const flow = parseFlow("steps:\n  - launch: { ios: com.acme.app, chromium: ./app }\n");
+    expect(flow.steps).toEqual([
+      { kind: "launch", app: { ios: "com.acme.app", chromium: "./app" } },
+    ]);
+  });
+
+  it("round-trips a chromium { path, args } launch through YAML", () => {
+    const flow: FlowFile = {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { chromium: { path: "/abs/app", args: ["--foo", "--bar"] } } },
+      ],
+    };
+    expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
+  });
+
+  it("rejects a chromium map with no path", () => {
+    expect(() => parseFlow("steps:\n  - launch: { chromium: { args: [--e2e] } }\n")).toThrow(
+      /launch needs/
+    );
+  });
+
+  it("rejects a chromium map with non-string args", () => {
+    expect(() =>
+      parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [1, 2] } }\n")
+    ).toThrow(/launch needs/);
+  });
+});
+
+describe("chromiumLaunchSpec", () => {
+  it("reads a bare-string launch as the app path", () => {
+    expect(chromiumLaunchSpec("./app")).toEqual({ path: "./app" });
+  });
+
+  it("reads a chromium string value as the path", () => {
+    expect(chromiumLaunchSpec({ chromium: "./app" })).toEqual({ path: "./app" });
+  });
+
+  it("reads a chromium { path, args } value", () => {
+    expect(chromiumLaunchSpec({ chromium: { path: "./app", args: ["--e2e"] } })).toEqual({
+      path: "./app",
+      args: ["--e2e"],
+    });
+  });
+
+  it("returns null when no chromium target is declared", () => {
+    expect(chromiumLaunchSpec({ ios: "com.acme.app" })).toBeNull();
+    expect(chromiumLaunchSpec(undefined)).toBeNull();
+  });
+
+  it("appIdForPlatform returns the chromium path (for the non-boot launch-app fallback)", () => {
+    expect(appIdForPlatform({ chromium: { path: "./app", args: ["--e2e"] } }, "chromium")).toBe(
+      "./app"
+    );
+    expect(appIdForPlatform({ chromium: "./app" }, "chromium")).toBe("./app");
+    expect(appIdForPlatform({ ios: "com.acme.app" }, "chromium")).toBeNull();
+  });
+});
+
+// ── native shorthand ─────────────────────────────────────────────────
+
+describe("native launch shorthand", () => {
+  it("parses a native-only launch and round-trips it", () => {
+    const flow = parseFlow("steps:\n  - launch: { native: com.acme.app }\n");
+    expect(flow.steps).toEqual([{ kind: "launch", app: { native: "com.acme.app" } }]);
+    expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
+  });
+
+  it("parses native alongside a per-platform override and a chromium path", () => {
+    const flow = parseFlow(
+      "steps:\n  - launch: { native: com.acme.app, android: com.acme.app.debug, chromium: ./app }\n"
+    );
+    expect(flow.steps).toEqual([
+      {
+        kind: "launch",
+        app: { native: "com.acme.app", android: "com.acme.app.debug", chromium: "./app" },
+      },
+    ]);
+  });
+
+  it("rejects an empty native id", () => {
+    expect(() => parseFlow('steps:\n  - launch: { native: "" }\n')).toThrow(/launch needs/);
+  });
+
+  it("appIdForPlatform falls back to native for installed platforms, override wins", () => {
+    const app = { native: "com.acme.app", android: "com.acme.app.debug" };
+    // native fills in for platforms without a specific key…
+    expect(appIdForPlatform(app, "ios")).toBe("com.acme.app");
+    expect(appIdForPlatform(app, "vega")).toBe("com.acme.app");
+    // …and a specific key overrides it.
+    expect(appIdForPlatform(app, "android")).toBe("com.acme.app.debug");
+  });
+
+  it("native never applies to chromium (chromium takes a path, not an id)", () => {
+    expect(appIdForPlatform({ native: "com.acme.app" }, "chromium")).toBeNull();
+    expect(chromiumLaunchSpec({ native: "com.acme.app" })).toBeNull();
   });
 });
 

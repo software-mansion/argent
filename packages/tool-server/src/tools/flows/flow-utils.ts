@@ -182,12 +182,31 @@ export function clearActiveFlow(): void {
 // ── Types ────────────────────────────────────────────────────────────
 
 /**
- * The app a `launch` step starts from scratch. A bare string applies to every
- * platform; the map form targets a specific bundle id / package per platform.
- * A flow that BEGINS with a `launch` step is an e2e flow (standalone-runnable,
- * controls its own start state); one that doesn't is a fragment.
+ * A chromium `launch` target: a filesystem path to the Electron app (bare
+ * string) or a path plus extra CLI args. Unlike iOS/Android/Vega (an OS-installed
+ * app id relaunched in place), chromium is booted from this path, so it must
+ * exist on the tool-server host; a relative path resolves against the flow
+ * file's directory (the same anchor `run:` and baselines use).
  */
-export type Launch = string | { ios?: string; android?: string; chromium?: string; vega?: string };
+export type ChromiumLaunch = string | { path: string; args?: string[] };
+
+/**
+ * The app a `launch` step starts from scratch. A bare string applies to every
+ * platform; the map targets a specific id per platform (chromium takes a path —
+ * see {@link ChromiumLaunch}). `native` is a shared id for the installed-app
+ * platforms (ios/android/vega), overridden by a specific `ios`/`android`/`vega`
+ * key. A flow that BEGINS with a `launch` step is an e2e flow; one that doesn't
+ * is a fragment.
+ */
+export type Launch =
+  | string
+  | {
+      native?: string;
+      ios?: string;
+      android?: string;
+      vega?: string;
+      chromium?: ChromiumLaunch;
+    };
 
 /** Axis + sense a `scroll-to` step scrolls in to reveal its target. */
 export type ScrollDirection = "up" | "down" | "left" | "right";
@@ -250,12 +269,37 @@ export function isE2eFlow(flow: FlowFile): boolean {
   return first?.kind === "launch";
 }
 
-/** Resolve the launch app id for a platform, or null when none is declared for it. */
+/**
+ * Resolve the launch app id for a platform, or null when none is declared. For
+ * ios/android/vega a specific key wins, else the shared `native` id. For chromium
+ * this returns the app *path* (not an id, and never `native`) — chromium booters
+ * want {@link chromiumLaunchSpec}, which also carries the CLI args.
+ */
 export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
   if (launch === undefined) return null;
   if (typeof launch === "string") return launch;
+  if (platform === "chromium") {
+    const c = launch.chromium;
+    if (c === undefined) return null;
+    return typeof c === "string" ? c : c.path;
+  }
   const v = (launch as Record<string, string | undefined>)[platform];
-  return v ?? null;
+  return v ?? launch.native ?? null;
+}
+
+/**
+ * Resolve the chromium launch spec (app path + optional CLI args) a `launch`
+ * step declares, or null when it declares no chromium target. A bare-string
+ * launch (applies to every platform) is treated as the app path.
+ */
+export function chromiumLaunchSpec(
+  launch: Launch | undefined
+): { path: string; args?: string[] } | null {
+  if (launch === undefined) return null;
+  if (typeof launch === "string") return { path: launch };
+  const c = launch.chromium;
+  if (c === undefined) return null;
+  return typeof c === "string" ? { path: c } : { path: c.path, args: c.args };
 }
 
 /**
@@ -539,25 +583,63 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
 
 const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 
+// Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
+const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
+
+/**
+ * Parse a chromium launch value: an app path (bare string) or `{ path, args? }`.
+ * Returns null when the shape is invalid (caller reports the launch error).
+ */
+function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const b = raw as Record<string, unknown>;
+    if (typeof b.path !== "string" || b.path.length === 0) return null;
+    if (b.args === undefined) return { path: b.path };
+    if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
+    return { path: b.path, args: b.args as string[] };
+  }
+  return null;
+}
+
 /** Parse a `launch` step body: a bare app id, or a per-platform map. */
 function parseLaunch(raw: unknown): Launch {
   if (typeof raw === "string" && raw.length > 0) return raw;
-  if (raw !== null && typeof raw === "object") {
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const b = raw as Record<string, unknown>;
     const keys = Object.keys(b);
-    const valid =
-      keys.length > 0 &&
-      keys.every(
-        (k) =>
-          (LAUNCH_PLATFORMS as readonly string[]).includes(k) &&
-          typeof b[k] === "string" &&
-          (b[k] as string).length > 0
-      );
-    if (valid) return b as Launch;
+    if (keys.length > 0 && keys.every((k) => (LAUNCH_MAP_KEYS as readonly string[]).includes(k))) {
+      const out: {
+        native?: string;
+        ios?: string;
+        android?: string;
+        vega?: string;
+        chromium?: ChromiumLaunch;
+      } = {};
+      let valid = true;
+      for (const k of keys) {
+        if (k === "chromium") {
+          const c = parseChromiumLaunch(b[k]);
+          if (c === null) {
+            valid = false;
+            break;
+          }
+          out.chromium = c;
+        } else if (typeof b[k] === "string" && (b[k] as string).length > 0) {
+          (out as Record<string, string>)[k] = b[k] as string;
+        } else {
+          valid = false;
+          break;
+        }
+      }
+      if (valid) return out;
+    }
   }
   return badEntry(
     { launch: raw },
-    `launch needs an app id (bare string) or a per-platform map ({ ${LAUNCH_PLATFORMS.join(" | ")}: <app id> })`
+    `launch needs an app id (bare string) or a per-platform map ` +
+      `({ native | ${LAUNCH_PLATFORMS.filter((p) => p !== "chromium").join(" | ")}: <app id>, ` +
+      `chromium: <app path> | { path, args } })`
   );
 }
 

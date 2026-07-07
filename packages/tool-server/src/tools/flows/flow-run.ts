@@ -1,6 +1,7 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isLiveServiceState } from "@argent/registry";
 import type {
   DeviceInfo,
   FileInputSpec,
@@ -11,6 +12,7 @@ import type {
 import {
   appIdForPlatform,
   assertSafeFlowName,
+  chromiumLaunchSpec,
   getFlowPath,
   isE2eFlow,
   parseFlow,
@@ -26,7 +28,14 @@ import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-dev
 import { runDirective, invokeOnDevice, type ActionEnv } from "./flow-actions";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
-import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import {
+  chromiumCdpRef,
+  CHROMIUM_CDP_NAMESPACE,
+  type ChromiumCdpApi,
+} from "../../blueprints/chromium-cdp";
+import { bootElectronApp, killChromiumByPid } from "../devices/boot-electron";
+import { untrackChromiumPort } from "../../utils/chromium-discovery";
+import { resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
@@ -260,15 +269,38 @@ async function treeSourceGate(
 /**
  * Execute a `launch` step: start the app from a clean state — terminate and
  * relaunch via `restart-app`, so a copy left running by a prior run can't leak
- * state in (Chromium has no app lifecycle to restart — the renderer is always
- * live — so fall back to `launch-app` there). Then let the app settle and wait
- * for the platform's full-hierarchy tree source (see {@link treeSourceGate}),
- * so a slow cold start doesn't eat into the next step's auto-wait budget or
- * degrade it to the wrong tree. Failures are reported as step outcomes, not
- * thrown, so the run still returns a structured report.
+ * state in. Then let the app settle and wait for the platform's full-hierarchy
+ * tree source (see {@link treeSourceGate}), so a slow cold start doesn't eat
+ * into the next step's auto-wait budget or degrade it to the wrong tree.
+ * Failures are reported as step outcomes, not thrown, so the run still returns
+ * a structured report.
+ *
+ * Chromium can't relaunch in place: `execute` boots a fresh instance before
+ * step 1 (`state.chromiumBooted`), so here the step just settles it. The
+ * exception is the `--device` opt-out, where the runner did not boot and falls
+ * back to an in-place `launch-app` instead of spawning a second window.
  */
-async function runLaunch(env: ActionEnv, app: Launch): Promise<{ ok: boolean; reason?: string }> {
-  const { registry, device, signal } = env;
+async function runLaunch(state: ExecState, app: Launch): Promise<{ ok: boolean; reason?: string }> {
+  const { registry, device, signal } = state;
+
+  if (device.platform === "chromium") {
+    if (state.chromiumBooted) {
+      await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal); // already booted + fronted; just settle
+      return { ok: true };
+    }
+    const appPath = appIdForPlatform(app, "chromium");
+    if (!appPath) {
+      return { ok: false, reason: `no chromium app declared — add a chromium launch entry` };
+    }
+    try {
+      await invokeOnDevice(state, "launch-app", { bundleId: appPath });
+    } catch (err) {
+      return { ok: false, reason: `launch-app failed: ${errMsg(err)}` };
+    }
+    await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
+    return { ok: true };
+  }
+
   const bundleId = appIdForPlatform(app, device.platform);
   if (!bundleId) {
     return {
@@ -276,11 +308,10 @@ async function runLaunch(env: ActionEnv, app: Launch): Promise<{ ok: boolean; re
       reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
     };
   }
-  const launchTool = device.platform === "chromium" ? "launch-app" : "restart-app";
   try {
-    await invokeOnDevice(env, launchTool, { bundleId });
+    await invokeOnDevice(state, "restart-app", { bundleId });
   } catch (err) {
-    return { ok: false, reason: `${launchTool} failed: ${errMsg(err)}` };
+    return { ok: false, reason: `restart-app failed: ${errMsg(err)}` };
   }
   await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
   const gate = await treeSourceGate(registry, device, bundleId, signal);
@@ -296,6 +327,15 @@ interface ExecState extends ActionEnv {
   stopped: boolean;
   /** Whether the status bar was pinned for this run (and so must be restored). */
   pinned: boolean;
+  /** True when the runner booted the chromium app for this run (and owns its teardown). */
+  chromiumBooted: boolean;
+}
+
+/** A chromium instance the runner booted and must tear down after the run. */
+interface BootedChromium {
+  deviceId: string;
+  port: number;
+  pid: number;
 }
 
 export function createRunFlowTool(
@@ -311,7 +351,10 @@ condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks
 diffs a screenshot against a stored baseline; \`echo\` annotates; \`run\` executes a referenced fragment inline.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
-\`platform\` to pick one, else the single booted device is used. Every step hard-stops the flow on failure;
+\`platform\` to pick one, else the single booted device is used. For a Chromium e2e flow the \`launch\`
+step's chromium value is an Electron app path ({ chromium: <path> | { path, args } }); the runner boots a
+fresh instance from it (on the tool-server host) and tears it down when the run ends, unless an explicit
+\`device\` pins an already-running instance. Every step hard-stops the flow on failure;
 later steps are reported as skipped. Returns a structured report ({ ok, passed, failed, skipped, errored, steps }).
 
 If a fragment has an execution prerequisite and prerequisiteAcknowledged is not set to true, the tool
@@ -338,10 +381,10 @@ returns a notice with the prerequisite instead of running.`,
         };
       }
 
-      const device = await resolveFlowDevice(registry, ctx, {
-        device: params.device,
-        platform: params.platform as FlowPlatform | undefined,
-      });
+      // Resolve the run device (a Chromium e2e flow boots + owns its own app; see
+      // resolveRunDevice). Any instance it booted is torn down in the finally.
+      const resolved = await resolveRunDevice(registry, ctx, flow, params, flowsDir);
+      const device = resolved.device;
       const env: ActionEnv = { registry, ctx, device, signal };
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
@@ -367,17 +410,115 @@ returns a notice with the prerequisite instead of running.`,
         reports: [],
         stopped: false,
         pinned: statusBarPinned,
+        chromiumBooted: resolved.booted !== null,
       };
 
       try {
         await execSteps(state, flow.steps, params.name, [params.name]);
       } finally {
         if (state.pinned) await restoreStatusBar(device);
+        if (resolved.booted) await teardownBootedChromium(registry, resolved.booted);
       }
 
       return summarize(params.name, device.id, flow.executionPrerequisite, state.reports);
     },
   };
+}
+
+/**
+ * Resolve the device a flow runs against. For a Chromium e2e flow with no
+ * explicit `device` (see {@link chromiumBootSpec}) this boots a fresh Electron
+ * instance from the launch's app path and returns it for teardown; otherwise it
+ * attaches to an already-booted device. An explicit `device` always attaches —
+ * never boots or tears down. `flowDir` is the flow file's directory — the base
+ * for a relative chromium app path.
+ */
+async function resolveRunDevice(
+  registry: Registry,
+  ctx: ToolContext | undefined,
+  flow: FlowFile,
+  params: Params,
+  flowDir: string
+): Promise<{ device: DeviceInfo; booted: BootedChromium | null }> {
+  if (!params.device) {
+    const spec = chromiumBootSpec(flow, params.platform);
+    if (spec) {
+      const booted = await bootChromiumForFlow(spec, flowDir);
+      return { device: resolveDevice(booted.deviceId), booted };
+    }
+  }
+  const device = await resolveFlowDevice(registry, ctx, {
+    device: params.device,
+    platform: params.platform as FlowPlatform | undefined,
+  });
+  return { device, booted: null };
+}
+
+/**
+ * The Chromium app-path spec to boot for this run, or null when this isn't a
+ * Chromium e2e flow that should boot its own app. Requires an e2e flow whose
+ * leading launch names a chromium target that is unambiguously the one to run —
+ * `--platform chromium`, or a single-platform `{ chromium: ... }` map. A
+ * multi-platform or bare launch with no hint defers to device auto-detection.
+ */
+function chromiumBootSpec(
+  flow: FlowFile,
+  platform: string | undefined
+): { path: string; args?: string[] } | null {
+  if (!isE2eFlow(flow)) return null;
+  const first = flow.steps.find((s) => s.kind !== "echo");
+  if (!first || first.kind !== "launch") return null;
+  if (launchTargetPlatform(first.app, platform) !== "chromium") return null;
+  return chromiumLaunchSpec(first.app);
+}
+
+/**
+ * The platform a leading launch targets: an explicit `platform`, else the sole
+ * key of a single-key launch map. Null when ambiguous (bare string, or several
+ * keys) — the caller then auto-detects a booted device.
+ */
+function launchTargetPlatform(launch: Launch, platform: string | undefined): string | null {
+  if (platform) return platform;
+  if (typeof launch === "object") {
+    const keys = Object.keys(launch);
+    if (keys.length === 1) return keys[0]!;
+  }
+  return null;
+}
+
+/**
+ * Boot the Electron app a chromium launch declares. A relative path resolves
+ * against the flow file's directory (`flowDir`) — the same anchor `run:` and
+ * baselines use — so the target is intrinsic to the flow, not the caller's cwd;
+ * an absolute path is taken as-is. Boot failures propagate as-is — the Chromium
+ * analog of `resolveFlowDevice` throwing on no booted device. The app must exist
+ * on the *tool-server* host, so a flow-relative path won't resolve on a remote
+ * tool-server (the flow file lives in a shipped temp dir there).
+ */
+async function bootChromiumForFlow(
+  spec: { path: string; args?: string[] },
+  flowDir: string
+): Promise<BootedChromium> {
+  const appPath = path.isAbsolute(spec.path) ? spec.path : path.resolve(flowDir, spec.path);
+  const res = await bootElectronApp({ appPath, extraArgs: spec.args });
+  return { deviceId: res.id, port: res.port, pid: res.pid };
+}
+
+/**
+ * Tear down a Chromium instance the runner booted. Best-effort — never fail a
+ * run here: dispose the CDP session (if a tool opened one), kill the process,
+ * and forget its port so `list-devices` stops probing it.
+ */
+async function teardownBootedChromium(registry: Registry, booted: BootedChromium): Promise<void> {
+  const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
+  try {
+    const entry = registry.getSnapshot().services.get(urn);
+    if (entry && isLiveServiceState(entry.state)) await registry.disposeService(urn);
+  } catch {
+    /* the kill below frees the real resource regardless */
+  }
+  killChromiumByPid(booted.pid);
+  untrackChromiumPort(booted.port);
 }
 
 /**
