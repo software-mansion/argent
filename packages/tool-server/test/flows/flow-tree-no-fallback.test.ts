@@ -16,13 +16,6 @@ vi.mock("../../src/tools/describe/platforms/ios", () => ({
   describeIos: (...args: unknown[]) => describeIos(...(args as [])),
 }));
 
-// Status-bar pinning shells out to `xcrun simctl` per run — irrelevant to what
-// these tests pin, and a source of contention under the parallel test load.
-vi.mock("../../src/utils/status-bar", () => ({
-  pinStatusBar: vi.fn(async () => false),
-  restoreStatusBar: vi.fn(async () => {}),
-}));
-
 import { fetchFlowTree } from "../../src/tools/flows/flow-tree";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";

@@ -27,6 +27,11 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// The suite-wide setup file (test/setup/stub-status-bar.ts) replaces this module
+// so other tests never shell out; this file is the one place that tests the real
+// implementation (against the execFile mock above), so opt back in.
+vi.unmock("../src/utils/status-bar");
+
 import { pinStatusBar, restoreStatusBar } from "../src/utils/status-bar";
 
 const ANDROID_DEVICE: DeviceInfo = {

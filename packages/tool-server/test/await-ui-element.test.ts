@@ -7,6 +7,23 @@ import { findAll } from "../src/utils/ui-tree-match";
 import type { DescribeNode } from "../src/tools/describe/contract";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
+// execute() resolves the target's form factor before polling: isTvOsSimulator()
+// shells out to `xcrun simctl list` (the fake UDID is never listed, so it never
+// caches and re-probes on EVERY test) and isAndroidTv() probes the serial via
+// real adb round-trips. Both take seconds under the parallel suite load — enough
+// to trip the 5s per-test timeout. The devices here are plain phone shapes, so
+// pin both probes to false and keep the rest of each module real.
+vi.mock("../src/utils/ios-devices", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/ios-devices")>(
+    "../src/utils/ios-devices"
+  );
+  return { ...actual, isTvOsSimulator: async () => false };
+});
+vi.mock("../src/utils/adb", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/adb")>("../src/utils/adb");
+  return { ...actual, isAndroidTv: async () => false };
+});
+
 const IOS_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const ANDROID_SERIAL = "emulator-5554";
 const CHROMIUM_ID = "chromium-cdp-9222";

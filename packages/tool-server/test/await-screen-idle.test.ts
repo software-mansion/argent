@@ -3,6 +3,17 @@ import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-serv
 import { createAwaitScreenIdleTool } from "../src/tools/await-screen-idle";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
+// execute() probes the target's form factor (isTvOsSimulator) before polling —
+// a real `xcrun simctl list` that never caches for this fake UDID, so it re-runs
+// on every test and takes seconds under the parallel suite load. The device here
+// is a plain phone shape, so pin the probe to false and keep the rest real.
+vi.mock("../src/utils/ios-devices", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/ios-devices")>(
+    "../src/utils/ios-devices"
+  );
+  return { ...actual, isTvOsSimulator: async () => false };
+});
+
 const IOS_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const FRAME = { x: 0.1, y: 0.4, width: 0.8, height: 0.05 };
 
