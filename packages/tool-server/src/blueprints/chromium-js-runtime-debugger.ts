@@ -11,6 +11,7 @@ import type { ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import type { SourceResolver } from "../utils/debugger/source-resolver";
 import { LogFileWriter } from "../utils/debugger/log-file-writer";
+import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
 import {
   type ConsoleLogEntry,
   type ConsoleLogEvents,
@@ -180,12 +181,11 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     let nextLogId = 0;
 
     const onConsoleAPI = (params: ConsoleAPICalledParams) => {
-      // Chrome's consoleAPICalled.timestamp is ms-since-epoch; Hermes' is
-      // seconds (which the Metro blueprint multiplies by 1000). Either source
-      // can theoretically hand us a non-finite number (CDP server bug, future
-      // protocol revision). new Date(NaN).toISOString() throws RangeError —
-      // since this fires inside a typed emitter that try/catches listeners,
-      // a throw here silently drops the entry. Coerce defensively.
+      // consoleAPICalled.timestamp is ms-since-epoch on both Chrome and Hermes/RN
+      // (see consoleTimestampToIso). Keep the numeric entry.timestamp finite: a
+      // non-finite value (CDP server bug / future protocol revision) is coerced to
+      // now, matching the ISO helper below, so the streamed entry and the log file
+      // stay consistent.
       const ts = Number.isFinite(params.timestamp) ? params.timestamp : Date.now();
       const entry: ConsoleLogEntry = {
         id: nextLogId++,
@@ -201,7 +201,7 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
       };
       logWriter.write({
         id: entry.id,
-        timestamp: new Date(ts).toISOString(),
+        timestamp: consoleTimestampToIso(ts),
         level: entry.level,
         message: entry.message,
         stackTrace: entry.stackTrace,

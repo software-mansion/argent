@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { Registry, type DeviceInfo } from "@argent/registry";
+import { Registry, FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
@@ -9,88 +9,89 @@ import { injectAndroidNamedKey } from "../src/utils/android-input";
 // The `keyboard` tool's `key` is a free `z.string()` and its `text` is a free
 // string, so an unknown named key or an un-typeable character passes zod
 // validation but is a *caller* mistake, not an internal fault. The HTTP layer
-// maps InvalidToolInputError → 400 and a plain Error → 500. Before this, only
-// the Android backend threw InvalidToolInputError, so `key: "pageup"` returned
-// 400 on Android but 500 on iOS / chromium / vega — the same well-typed-but-
-// unusable input mapping to different status codes by platform (hubgan review).
-// These pins keep every keyboard backend's input-rejection taxonomy uniform.
+// maps InvalidToolInputError → 400 and anything else → 500. Before this, the
+// non-Android backends threw a plain `Error` (pre-#420) / a `FailureError`
+// (post-#420) — both surfaced as 500, so `key: "pageup"` returned 400 on Android
+// but 500 on iOS / chromium / vega (hubgan review). These pins keep every
+// keyboard backend's input-rejection uniform: a 400-mapping InvalidToolInputError
+// that STILL carries #420's granular telemetry code (the 400 mapping keys off the
+// error class, not the code — see InvalidToolInputError in utils/capability.ts).
 
-function iosApi(): SimulatorApiStub {
-  return { pressKey: vi.fn() };
+/** Assert the error is a 400-class input error carrying the given telemetry code. */
+async function expectInvalidInput(p: Promise<unknown>, code: string): Promise<void> {
+  const err = await p.then(
+    () => {
+      throw new Error("expected the call to reject, but it resolved");
+    },
+    (e: unknown) => e
+  );
+  expect(err).toBeInstanceOf(InvalidToolInputError);
+  expect(getFailureSignal(err)?.error_code).toBe(code);
 }
-interface SimulatorApiStub {
-  pressKey: (dir: string, code: number) => void;
+
+function iosRegistry(): Registry {
+  const registry = new Registry();
+  vi.spyOn(registry, "resolveService").mockResolvedValue({ pressKey: vi.fn() } as never);
+  return registry;
 }
-
-function chromiumApiStub() {
-  return { dispatchKeyEvent: vi.fn(async () => {}) };
+function chromiumRegistry(): Registry {
+  const registry = new Registry();
+  vi.spyOn(registry, "resolveService").mockResolvedValue({
+    dispatchKeyEvent: vi.fn(async () => {}),
+  } as never);
+  return registry;
 }
+const iosDevice = { id: "AAAA", platform: "ios", kind: "simulator" } as unknown as DeviceInfo;
+const chromiumDevice = {
+  id: "chromium-cdp-9222",
+  platform: "chromium",
+  kind: "app",
+} as unknown as DeviceInfo;
 
-describe("keyboard backends — unknown key is invalid input (400), uniform across platforms", () => {
-  it("iOS simulator-server backend throws InvalidToolInputError for an unknown key", async () => {
-    const registry = new Registry();
-    vi.spyOn(registry, "resolveService").mockResolvedValue(iosApi() as never);
-    const device = { id: "AAAA", platform: "ios", kind: "simulator" } as unknown as DeviceInfo;
-    await expect(
-      typeSimulatorServer(registry, device, { udid: device.id, key: "pageup" })
-    ).rejects.toBeInstanceOf(InvalidToolInputError);
-  });
-
-  it("chromium backend throws InvalidToolInputError for an unknown key", async () => {
-    const registry = new Registry();
-    vi.spyOn(registry, "resolveService").mockResolvedValue(chromiumApiStub() as never);
-    const impl = makeChromiumImpl(registry);
-    const device = {
-      id: "chromium-cdp-9222",
-      platform: "chromium",
-      kind: "app",
-    } as unknown as DeviceInfo;
-    await expect(
-      impl.handler({}, { udid: device.id, key: "pageup" }, device)
-    ).rejects.toBeInstanceOf(InvalidToolInputError);
-  });
-
-  it("vega backend throws InvalidToolInputError for an unknown key", async () => {
-    await expect(injectVegaNamedKey("pageup")).rejects.toBeInstanceOf(InvalidToolInputError);
-  });
-
-  it("vega backend throws InvalidToolInputError for a newline in text", async () => {
-    await expect(injectVegaText("a\nb")).rejects.toBeInstanceOf(InvalidToolInputError);
-  });
-
-  it("android backend throws InvalidToolInputError for an unknown key (parity anchor)", async () => {
-    // The android path already did this; assert it here alongside the siblings so
-    // the four backends are pinned to the same taxonomy in one place.
-    await expect(injectAndroidNamedKey("emulator-5554", "pageup")).rejects.toBeInstanceOf(
-      InvalidToolInputError
+describe("keyboard backends — input rejection is a 400 with a uniform telemetry taxonomy", () => {
+  it("iOS: unknown key → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    await expectInvalidInput(
+      typeSimulatorServer(iosRegistry(), iosDevice, { udid: iosDevice.id, key: "pageup" }),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
     );
   });
 
-  it("iOS simulator-server backend throws InvalidToolInputError for an un-typeable character", async () => {
-    const registry = new Registry();
-    vi.spyOn(registry, "resolveService").mockResolvedValue(iosApi() as never);
-    const device = { id: "AAAA", platform: "ios", kind: "simulator" } as unknown as DeviceInfo;
-    // An emoji has no keycode in the HID map, so this is a caller input error.
-    await expect(
-      typeSimulatorServer(registry, device, { udid: device.id, text: "😀" })
-    ).rejects.toBeInstanceOf(InvalidToolInputError);
+  it("iOS: un-typeable character → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+    await expectInvalidInput(
+      typeSimulatorServer(iosRegistry(), iosDevice, { udid: iosDevice.id, text: "😀" }),
+      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+    );
   });
 
-  it("chromium backend throws InvalidToolInputError for an un-typeable character", async () => {
-    const registry = new Registry();
-    vi.spyOn(registry, "resolveService").mockResolvedValue(chromiumApiStub() as never);
-    const impl = makeChromiumImpl(registry);
-    const device = {
-      id: "chromium-cdp-9222",
-      platform: "chromium",
-      kind: "app",
-    } as unknown as DeviceInfo;
-    // An emoji has no CDP key descriptor, so this is a caller input error — the
-    // parity of the iOS `text: "😀"` case above, on the one changed chromium
-    // throw site (`No CDP key descriptor for character`) that was otherwise
-    // untested.
-    await expect(impl.handler({}, { udid: device.id, text: "😀" }, device)).rejects.toBeInstanceOf(
-      InvalidToolInputError
+  it("chromium: unknown key → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    const impl = makeChromiumImpl(chromiumRegistry());
+    await expectInvalidInput(
+      impl.handler({}, { udid: chromiumDevice.id, key: "pageup" }, chromiumDevice),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+  });
+
+  it("chromium: un-typeable character → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+    const impl = makeChromiumImpl(chromiumRegistry());
+    await expectInvalidInput(
+      impl.handler({}, { udid: chromiumDevice.id, text: "😀" }, chromiumDevice),
+      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+    );
+  });
+
+  it("vega: unknown key → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    await expectInvalidInput(injectVegaNamedKey("pageup"), FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED);
+  });
+
+  it("vega: newline in text → 400 + VEGA_TEXT_INVALID", async () => {
+    await expectInvalidInput(injectVegaText("a\nb"), FAILURE_CODES.VEGA_TEXT_INVALID);
+  });
+
+  it("android: unknown key → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    // adbShell is never reached — the unknown key is rejected before injection.
+    await expectInvalidInput(
+      injectAndroidNamedKey("emulator-5554", "pageup"),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
     );
   });
 });

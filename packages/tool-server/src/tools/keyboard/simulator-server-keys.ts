@@ -1,3 +1,4 @@
+import { FAILURE_CODES } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
@@ -40,10 +41,17 @@ export async function typeSimulatorServer(
     const code = NAMED_KEYS[params.key.toLowerCase()];
     if (code == null) {
       // Well-typed but unusable input (the schema's `key` is a free string) — a
-      // caller mistake, so InvalidToolInputError (→400), matching the Android
-      // path. A plain Error would surface as a 500 and diverge by platform.
+      // caller mistake, so InvalidToolInputError → HTTP 400, matching the Android
+      // path and uniform across keyboard backends. The KEYBOARD_KEY_UNSUPPORTED
+      // telemetry signal from #420 is preserved: the 400 mapping keys off the
+      // error class, not the code.
       throw new InvalidToolInputError(
-        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`
+        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`,
+        {
+          error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+          failure_stage: "keyboard_named_key_simulator",
+          error_kind: "unsupported",
+        }
       );
     }
     await pressKeyCode(code);
@@ -53,8 +61,14 @@ export async function typeSimulatorServer(
     for (const char of params.text) {
       const press = charToKeyPress(char);
       // A character with no keycode can't be typed on this backend — a caller
-      // input error (→400), not an internal fault (500).
-      if (!press) throw new InvalidToolInputError(`No keycode for character "${char}"`);
+      // input error → 400, keeping the KEYBOARD_CHARACTER_UNSUPPORTED telemetry
+      // code (#420).
+      if (!press)
+        throw new InvalidToolInputError(`No keycode for character "${char}"`, {
+          error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+          failure_stage: "keyboard_char_simulator",
+          error_kind: "unsupported",
+        });
       await pressKeyCode(press.keyCode, press.withShift);
       await sleep(delay);
     }

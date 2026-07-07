@@ -1,4 +1,4 @@
-import type { Registry } from "@argent/registry";
+import { FAILURE_CODES, type Registry } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../../blueprints/chromium-cdp";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../../utils/capability";
@@ -15,9 +15,15 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
     const named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
     if (!named) {
       // Well-typed but unusable input (`key` is a free string) — a caller
-      // mistake mapped to 400, matching the Android path, not a 500.
+      // mistake mapped to 400 (matching the Android path, uniform across
+      // backends), keeping the KEYBOARD_KEY_UNSUPPORTED telemetry code (#420).
       throw new InvalidToolInputError(
-        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`
+        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`,
+        {
+          error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+          failure_stage: "keyboard_named_key_chromium",
+          error_kind: "unsupported",
+        }
       );
     }
     await api.dispatchKeyEvent({
@@ -40,9 +46,13 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
     for (const char of params.text) {
       const desc = charToChromiumKey(char);
       if (!desc) {
-        // A character with no CDP descriptor can't be typed — caller input
-        // error (→400), not an internal fault (→500).
-        throw new InvalidToolInputError(`No CDP key descriptor for character "${char}"`);
+        // A character with no CDP descriptor can't be typed — caller input error
+        // → 400, keeping the KEYBOARD_CHARACTER_UNSUPPORTED telemetry code (#420).
+        throw new InvalidToolInputError(`No CDP key descriptor for character "${char}"`, {
+          error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+          failure_stage: "keyboard_char_chromium",
+          error_kind: "unsupported",
+        });
       }
       await api.dispatchKeyEvent({
         type: "keyDown",

@@ -29,6 +29,12 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function assertSafeSessionId(sessionId: string): void {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
+    // Defense-in-depth against path traversal. The zod schema already rejects any
+    // session_id that fails SESSION_ID_PATTERN (same regex) before execute() runs,
+    // so a value reaching here means a direct, non-registry caller bypassed the
+    // schema — a programmer error, not a user-reachable failure. It therefore
+    // stays a plain Error without a telemetry code (it could never bucket a real
+    // failure on the toolFailed path).
     throw new Error(
       `Invalid session_id "${sessionId}". Allowed: letters, digits, '_' and '-' ` +
         `(no path separators, no "..").`
@@ -326,17 +332,29 @@ async function loadNativeSession(
     try {
       await fs.access(pftrace);
     } catch {
-      throw new Error(
+      throw new FailureError(
         `No native profiler .pftrace found for session "${sessionId}". ` +
-          `Expected file at ${pftrace}`
+          `Expected file at ${pftrace}`,
+        {
+          error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
+          failure_stage: "profiler_load_android_pftrace",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        }
       );
     }
     const metadata = await readAndroidNativeProfilerMetadata(pftrace);
     const appProcess = metadata?.appProcess ?? appProcessOverride?.trim();
     if (!appProcess) {
-      throw new Error(
+      throw new FailureError(
         `Android profiler session "${sessionId}" is missing its metadata sidecar. ` +
-          "Retry profiler-load with app_process set to the Android package name used for the recording."
+          "Retry profiler-load with app_process set to the Android package name used for the recording.",
+        {
+          error_code: FAILURE_CODES.PROFILER_NATIVE_METADATA_MISSING,
+          failure_stage: "profiler_load_android_metadata",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     api.traceFile = pftrace;
@@ -395,7 +413,11 @@ async function loadNativeSession(
         error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
         failure_stage: "profiler_load_native_session",
         failure_area: "tool_server",
-        error_kind: "validation",
+        // A trace file missing on disk is a not_found condition — same kind as
+        // the Android .pftrace-missing site above, so this shared code isn't
+        // split into two kinds by platform (validation stays for the
+        // analyze-before-stop guard, NATIVE_PROFILER_NO_EXPORTED_TRACE).
+        error_kind: "not_found",
       }
     );
   }

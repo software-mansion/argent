@@ -52,6 +52,21 @@ export interface ServiceBlueprint<T = unknown, C = unknown> {
     context: C,
     options?: Record<string, unknown>
   ): Promise<ServiceInstance<T>>;
+  /**
+   * Optional: decide whether an error thrown by a tool that used this service's
+   * instance means the instance is dead and should be torn down + re-created.
+   *
+   * When a tool fails, the registry asks each of that tool's resolved services
+   * this question; any that answer `true` are disposed and the tool is retried
+   * once against freshly-resolved instances. This is how a cached instance whose
+   * underlying process is still alive but no longer serving (e.g. a simulator
+   * that was un-booted, so its simulator-server stopped listening) self-heals
+   * instead of returning the same connection error on every subsequent call.
+   *
+   * Keep this conservative: only return `true` for errors that prove the request
+   * never took effect (so retrying can't double-apply a side effect).
+   */
+  recoverable?(error: unknown): boolean;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import type { IosCaptureStrategy } from "./types";
 import { deviceStrategy } from "./device";
 import { allProcessesStrategy } from "./all-processes";
@@ -26,8 +26,9 @@ interface XcodeVersion {
 function readActiveXcodeVersion(): XcodeVersion | null {
   try {
     // `xcodebuild -version` honours DEVELOPER_DIR / xcode-select and prints
-    // e.g. "Xcode 26.5\nBuild version 17F42".
-    const out = execSync("xcodebuild -version", {
+    // e.g. "Xcode 26.5\nBuild version 17F42". Argv (execFileSync, no shell) to
+    // keep the iOS-profiler subsystem uniformly shell-free.
+    const out = execFileSync("xcodebuild", ["-version"], {
       encoding: "utf-8",
       timeout: 5_000,
       stdio: ["ignore", "pipe", "ignore"],

@@ -2,6 +2,7 @@ import {
   FAILURE_CODES,
   withFailureSignal,
   type DeviceInfo,
+  type FailureSignal,
   type Platform,
   type ToolCapability,
 } from "@argent/registry";
@@ -89,7 +90,16 @@ export class NotImplementedOnPlatformError extends Error {
  * `.message` is the human-friendly reason, safe to bubble straight to the agent.
  */
 export class InvalidToolInputError extends Error {
-  constructor(message: string) {
+  /**
+   * @param signal Optional telemetry-signal overrides. The HTTP 400 mapping keys
+   *   off the error *class* (see http.ts), not the `error_code`, so a caller can
+   *   pass a more granular `error_code` / `failure_stage` / `error_kind` — e.g.
+   *   the keyboard backends' `KEYBOARD_KEY_UNSUPPORTED` /
+   *   `KEYBOARD_CHARACTER_UNSUPPORTED` / `VEGA_TEXT_INVALID` classifications
+   *   (from #420) — and keep both the granular telemetry bucket AND the 400
+   *   status. Defaults to the generic `TOOL_INPUT_INVALID` / validation signal.
+   */
+  constructor(message: string, signal?: Partial<FailureSignal>) {
     super(message);
     this.name = "InvalidToolInputError";
     withFailureSignal(this, {
@@ -97,6 +107,7 @@ export class InvalidToolInputError extends Error {
       failure_stage: "tool_input_validation",
       failure_area: "tool_server",
       error_kind: "validation",
+      ...signal,
     });
   }
 }

@@ -1,4 +1,5 @@
 import * as path from "path";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import { startPerfetto, stopPerfetto } from "../../../../utils/android-profiler/capture";
@@ -27,7 +28,15 @@ export async function startNativeProfilerAndroid(
   params: AndroidStartParams
 ): Promise<{ status: "recording"; pid: number; traceFile: string }> {
   if (api.profilingActive) {
-    throw new Error(`A native profiling session is already running (PID: ${api.capturePid}).`);
+    throw new FailureError(
+      `A native profiling session is already running (PID: ${api.capturePid}).`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
+        failure_stage: "android_native_profiler_start",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
 
   // An explicit app_process is validated up front (Perfetto won't tell us it's
@@ -100,17 +109,46 @@ export async function stopNativeProfilerAndroid(
 ): Promise<AndroidStopResult> {
   const recoveringPartialTrace = api.recordingTimedOut || api.recordingExitedUnexpectedly;
   if (!api.profilingActive && !recoveringPartialTrace) {
-    throw new Error("No active native profiling session found. Call native-profiler-start first.");
+    throw new FailureError(
+      "No active native profiling session found. Call native-profiler-start first.",
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_NO_ACTIVE_SESSION,
+        failure_stage: "android_native_profiler_stop",
+        failure_area: "tool_server",
+        // Internal session-state, not caller input — matches the react twin
+        // REACT_PROFILER_NO_ACTIVE_SESSION (not_found) so the "no active session"
+        // family carries one consistent kind across React/native/iOS/Android.
+        error_kind: "not_found",
+      }
+    );
   }
 
   if (!api.traceFile || !api.androidOnDeviceTracePath || !api.capturePid) {
     if (recoveringPartialTrace) {
+      // Unreachable on Android: `recordingExitedUnexpectedly` is only ever set on
+      // the iOS path, and the Android recording-cap timeout sets `recordingTimedOut`
+      // while leaving the trace handles (traceFile / androidOnDeviceTracePath /
+      // capturePid) intact — so `recoveringPartialTrace` is never true here with the
+      // handles missing. Kept as a defensive guard, but a mid-recording perfetto
+      // crash on Android is not detected/flagged yet, so it stays unclassified
+      // rather than getting a telemetry code that can never fire on this platform.
       throw new Error(
         "Native profiling recording exited unexpectedly and no trace file is available. " +
           "Call native-profiler-start again."
       );
     }
-    throw new Error("No active native profiling session found. Call native-profiler-start first.");
+    // Unreachable in practice: the trace handles (traceFile / androidOnDeviceTracePath
+    // / capturePid) are all set synchronously BEFORE `profilingActive` is flipped true,
+    // and are nulled only AFTER it is flipped false (the recording-cap timeout likewise
+    // leaves them intact) — so `profilingActive === true` always implies every handle is
+    // present, making "active session yet handles missing" impossible. Kept as a
+    // defensive "this should never happen" invariant — a programmer/state error, not a
+    // user-reachable failure mode — so it stays a plain Error without a telemetry code
+    // (a code here could never bucket a real failure on the toolFailed path).
+    throw new Error(
+      "Native profiling session is active but its trace handles are missing — the recording state is inconsistent. " +
+        "Call native-profiler-start again."
+    );
   }
 
   if (api.recordingTimeout) {
@@ -164,7 +202,12 @@ export async function analyzeNativeProfilerAndroid(
   api: NativeProfilerSessionApi
 ): Promise<NativeProfilerAnalyzeResult> {
   if (!api.exportedFiles || !api.exportedFiles.pftrace) {
-    throw new Error("No exported trace data found. Call native-profiler-stop first.");
+    throw new FailureError("No exported trace data found. Call native-profiler-stop first.", {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_NO_EXPORTED_TRACE,
+      failure_stage: "android_native_profiler_analyze",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
 
   const hostTracePath = api.exportedFiles.pftrace;

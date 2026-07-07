@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { runVega } from "./vega-cli";
 import { runAdb, parseAdbDevices } from "./adb";
 import { listRunningVvdConsolePorts, listRunningVvdPids } from "./vega-process";
@@ -12,12 +13,18 @@ import { listRunningVvdConsolePorts, listRunningVvdPids } from "./vega-process";
  * Thrown when >1 VVD is running — v1 can't tell which one a call targets. Typed so
  * callers that otherwise swallow discovery failures (e.g. `describe`) re-throw it.
  */
-export class MultipleVegaDevicesError extends Error {
+export class MultipleVegaDevicesError extends FailureError {
   constructor(consolePorts: number[]) {
     super(
       `Multiple Vega Virtual Devices detected (console ports: ${consolePorts.join(", ")}). ` +
         "argent v1 targets a single running VVD and cannot tell which one a tool call " +
-        "refers to — stop all but one VVD and retry."
+        "refers to — stop all but one VVD and retry.",
+      {
+        error_code: FAILURE_CODES.VEGA_MULTIPLE_DEVICES,
+        failure_stage: "vega_resolve_console_port_multiple",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
     );
     this.name = "MultipleVegaDevicesError";
   }
@@ -38,9 +45,20 @@ async function waitForAdbDevice(serial: string, timeoutMs: number): Promise<void
     }));
     if (parseAdbDevices(stdout).some((d) => d.serial === serial && d.state === "device")) return;
     if (Date.now() >= deadline) {
-      throw new Error(
+      throw new FailureError(
         `Vega VVD is running (${serial}) but it has not registered with adb yet — its adb ` +
-          "transport may still be coming up. Retry in a moment."
+          "transport may still be coming up. Retry in a moment.",
+        {
+          error_code: FAILURE_CODES.VEGA_DEVICE_NOT_REGISTERED,
+          failure_stage: "vega_adb_register",
+          failure_area: "tool_server",
+          // We polled until the deadline and adb never enumerated the transport,
+          // so the failure is structurally a timeout. The distinct error_code
+          // (vs VEGA_BOOT_TIMEOUT, the VVD never starting) already carries the
+          // "registered vs started" distinction — error_kind reflects the true
+          // nature (deadline expiry) rather than double-encoding that.
+          error_kind: "timeout",
+        }
       );
     }
     await new Promise((r) => setTimeout(r, ADB_READY_POLL_MS));
@@ -57,9 +75,15 @@ export async function discoverVegaConsolePort(
 ): Promise<number> {
   const ports = await listRunningVvdConsolePorts();
   if (ports.size === 0) {
-    throw new Error(
+    throw new FailureError(
       "No running Vega Virtual Device found. Start one with `boot-device {vvdImage:...}` " +
-        "(or `vega virtual-device start`) and retry."
+        "(or `vega virtual-device start`) and retry.",
+      {
+        error_code: FAILURE_CODES.VEGA_DEVICE_NOT_FOUND,
+        failure_stage: "vega_discover_console_port",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
   if (ports.size > 1) throw new MultipleVegaDevicesError([...ports]);
@@ -169,8 +193,14 @@ export async function waitForVvdRunning(timeoutMs: number): Promise<void> {
     if (await isVvdRunning()) return;
     await new Promise((r) => setTimeout(r, VVD_RUNNING_POLL_INTERVAL_MS));
   }
-  throw new Error(
+  throw new FailureError(
     `Vega Virtual Device did not appear in \`vega device list\` within ` +
-      `${Math.round(timeoutMs / 1000)}s of \`vega virtual-device start\`.`
+      `${Math.round(timeoutMs / 1000)}s of \`vega virtual-device start\`.`,
+    {
+      error_code: FAILURE_CODES.VEGA_BOOT_TIMEOUT,
+      failure_stage: "vega_wait_running",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
   );
 }

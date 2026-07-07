@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import type { KeyboardParams, KeyboardResult } from "./types";
-import { makeIosImpl } from "./platforms/ios";
+import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeAndroidImpl } from "./platforms/android";
 import { makeChromiumImpl } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
@@ -80,6 +80,7 @@ Provide text, key, or both.`,
       toolId: "keyboard",
       capability,
       ios: makeIosImpl(registry),
+      iosRemote: makeIosRemoteImpl(registry),
       android: makeAndroidImpl(registry),
       chromium: makeChromiumImpl(registry),
       vega: vegaImpl,

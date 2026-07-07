@@ -13,7 +13,13 @@ const capabilityIosOnly: ToolCapability = {
   apple: { simulator: true, device: true },
 };
 
+const capabilityRemote: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+};
+
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+const iosRemoteUdid = `remote:${iosUdid}`;
 const androidUdid = "emulator-5554";
 
 beforeEach(() => {
@@ -43,6 +49,50 @@ describe("dispatchByPlatform", () => {
 
     expect(await execute({}, { udid: androidUdid })).toBe("from-android");
     expect(androidHandler).toHaveBeenCalledOnce();
+  });
+
+  it("routes ios-remote UDIDs to the iosRemote handler, not the local ios handler", async () => {
+    const iosHandler = vi.fn().mockResolvedValue("from-ios");
+    const remoteHandler = vi.fn().mockResolvedValue("from-remote");
+
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
+      toolId: "test",
+      capability: capabilityRemote,
+      ios: { handler: iosHandler },
+      android: { handler: async () => "should-not-run" },
+      iosRemote: { handler: remoteHandler },
+    });
+
+    expect(await execute({}, { udid: iosRemoteUdid })).toBe("from-remote");
+    expect(remoteHandler).toHaveBeenCalledOnce();
+    expect(iosHandler).not.toHaveBeenCalled();
+  });
+
+  it("throws a wiring error when a device is ios-remote but no iosRemote branch is provided", async () => {
+    // Capability declares appleRemote, so assertSupported passes — but the tool
+    // forgot to wire the iosRemote branch. Surface a clear wiring error instead
+    // of silently falling through to the local (xcrun-based) ios handler. This
+    // is the exact gap the `keyboard` tool had.
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
+      toolId: "no-remote-branch",
+      capability: capabilityRemote,
+      ios: { handler: async () => "should-not-run" },
+      android: { handler: async () => "should-not-run" },
+    });
+
+    await expect(execute({}, { udid: iosRemoteUdid })).rejects.toThrow(
+      /declares ios-remote capability but has no iosRemote branch/
+    );
   });
 
   it("rejects with UnsupportedOperationError when capability does not declare the platform", async () => {

@@ -16,6 +16,7 @@
  * it) instead of a silent success. Touch injection is unaffected and stays on the
  * simulator-server; only key/text/button events move to this transport.
  */
+import { FAILURE_CODES } from "@argent/registry";
 import { adbShell, shellQuote } from "./adb";
 import { InvalidToolInputError } from "./capability";
 
@@ -131,9 +132,16 @@ export async function injectAndroidKeycode(serial: string, keycode: number): Pro
 export async function injectAndroidNamedKey(serial: string, name: string): Promise<void> {
   const keycode = ANDROID_NAMED_KEYCODES[name.toLowerCase()];
   if (keycode == null) {
-    // Unknown key name is a caller input error (HTTP 400), not a 500.
+    // Unknown key name is a caller input error (HTTP 400), not a 500. Carry the
+    // same KEYBOARD_KEY_UNSUPPORTED telemetry code the iOS/chromium/vega backends
+    // use (#420), so "unknown named key" buckets uniformly across platforms.
     throw new InvalidToolInputError(
-      `Unknown key "${name}". Supported: ${Object.keys(ANDROID_NAMED_KEYCODES).join(", ")}`
+      `Unknown key "${name}". Supported: ${Object.keys(ANDROID_NAMED_KEYCODES).join(", ")}`,
+      {
+        error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+        failure_stage: "keyboard_named_key_android",
+        error_kind: "unsupported",
+      }
     );
   }
   await injectAndroidKeycode(serial, keycode);

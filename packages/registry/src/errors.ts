@@ -32,6 +32,7 @@ export const FAILURE_COMMANDS = [
   "ax_service",
   "simulator_server",
   "cdp",
+  "electron",
   "npm",
   "npx",
   "unknown",
