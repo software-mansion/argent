@@ -22,11 +22,10 @@ export type EventLogRecord = { type: string; msg: string } & Record<
   EventLogValue | undefined
 >;
 
-type EventLogLevel = "debug" | "info" | "warn" | "error" | "fatal";
+type EventLogLevel = "info" | "warn" | "error" | "fatal";
 
 export interface ToolServerEventLog {
   filePath: string;
-  debug: (record: EventLogRecord) => void;
   info: (record: EventLogRecord) => void;
   warn: (record: EventLogRecord) => void;
   error: (record: EventLogRecord) => void;
@@ -78,7 +77,6 @@ export function createToolServerEventLog({
 
   return {
     filePath,
-    debug: (record) => log("debug", record),
     info: (record) => log("info", record),
     warn: (record) => log("warn", record),
     error: (record) => log("error", record),
