@@ -821,7 +821,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // instead of being recorded as anonymous. Only present when there is
       // attribution worth propagating.
       let recordChildInvocation:
-        ((childInvocationId: string, childArgs?: unknown) => () => void) | undefined;
+        | ((childInvocationId: string, childArgs?: unknown) => () => void)
+        | undefined;
       const recordInvocation = options?.recordInvocation;
       if (recordInvocation) {
         const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
