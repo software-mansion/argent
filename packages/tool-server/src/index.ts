@@ -297,7 +297,11 @@ export function start(): void {
     } catch (err) {
       process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
     }
-    eventLog?.dispose();
+    try {
+      await eventLog?.dispose();
+    } catch (err) {
+      process.stderr.write(`[tool-server] event log dispose failed: ${String(err)}\n`);
+    }
 
     // Capture toolserver:stop, then drain — the final telemetry action, so the
     // reason/signal are as fresh as possible. (A crash during the drain below is
@@ -376,7 +380,7 @@ export function start(): void {
       });
       // Surface bind failures (EADDRINUSE / EACCES on privileged ports) as a
       // clean exit instead of routing through uncaughtException → crashShutdown.
-      server.on("error", (err: NodeJS.ErrnoException) => {
+      server.on("error", async (err: NodeJS.ErrnoException) => {
         const code = err.code ? `${err.code}: ` : "";
         process.stderr.write(
           `[tool-server] Failed to bind ${HOST}:${PORT} — ${code}${err.message}\n`
@@ -393,7 +397,11 @@ export function start(): void {
             error_kind: "unknown",
           },
         });
-        eventLog?.dispose();
+        try {
+          await eventLog?.dispose();
+        } catch (err) {
+          process.stderr.write(`[tool-server] event log dispose failed: ${String(err)}\n`);
+        }
         process.exit(1);
       });
       // Bolt the per-Chromium-device WebSocket upgrade handler onto the live

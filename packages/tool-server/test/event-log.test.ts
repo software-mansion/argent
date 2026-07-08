@@ -18,7 +18,7 @@ function readEvents(filePath: string): Array<Record<string, unknown>> {
 }
 
 describe("createToolServerEventLog", () => {
-  it("records structured events as JSONL", () => {
+  it("records structured events as JSONL", async () => {
     const filePath = eventLogPath();
     const eventLog = createToolServerEventLog({ filePath });
 
@@ -29,7 +29,7 @@ describe("createToolServerEventLog", () => {
       host: "127.0.0.1",
       port: 3001,
     });
-    eventLog.dispose();
+    await eventLog.dispose();
 
     expect(readEvents(filePath)).toEqual([
       expect.objectContaining({
@@ -48,13 +48,13 @@ describe("createToolServerEventLog", () => {
     ]);
   });
 
-  it("starts a fresh event log file", () => {
+  it("starts a fresh event log file", async () => {
     const filePath = eventLogPath();
     fs.writeFileSync(filePath, "stale\n");
 
     const eventLog = createToolServerEventLog({ filePath });
     eventLog.info({ type: "tool_server.started", msg: "Tool server started." });
-    eventLog.dispose();
+    await eventLog.dispose();
 
     expect(fs.readFileSync(filePath, "utf8")).not.toContain("stale");
     expect(readEvents(filePath)).toHaveLength(1);
@@ -62,7 +62,7 @@ describe("createToolServerEventLog", () => {
 });
 
 describe("attachRegistryEventLogger", () => {
-  it("records registry lifecycle events into the tool-server event log", () => {
+  it("records registry lifecycle events into the tool-server event log", async () => {
     const registry = new Registry();
     const filePath = eventLogPath();
     const eventLog = createToolServerEventLog({ filePath });
@@ -70,7 +70,7 @@ describe("attachRegistryEventLogger", () => {
 
     registry.events.emit("toolInvoked", "screenshot", "call-1");
     registry.events.emit("toolCompleted", "screenshot", "call-1", 12.34);
-    eventLog.dispose();
+    await eventLog.dispose();
 
     expect(readEvents(filePath)).toEqual([
       expect.objectContaining({
@@ -93,7 +93,7 @@ describe("attachRegistryEventLogger", () => {
     ]);
   });
 
-  it("serializes failed tool errors with nested causes", () => {
+  it("serializes failed tool errors with nested causes", async () => {
     const registry = new Registry();
     const filePath = eventLogPath();
     const eventLog = createToolServerEventLog({ filePath });
@@ -106,7 +106,7 @@ describe("attachRegistryEventLogger", () => {
       "call-2",
       new Error("evaluate failed", { cause })
     );
-    eventLog.dispose();
+    await eventLog.dispose();
 
     const [event] = readEvents(filePath);
     expect(event).toMatchObject({

@@ -1,5 +1,5 @@
 import bunyan from "bunyan";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { createWriteStream, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   FAILURE_CODES,
@@ -31,7 +31,7 @@ export interface ToolServerEventLog {
   warn: (record: EventLogRecord) => void;
   error: (record: EventLogRecord) => void;
   fatal: (record: EventLogRecord) => void;
-  dispose: () => void;
+  dispose: () => Promise<void>;
 }
 
 export interface CreateToolServerEventLogOptions {
@@ -43,6 +43,18 @@ export function createToolServerEventLog({
 }: CreateToolServerEventLogOptions): ToolServerEventLog {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, "");
+  const fileStream = createWriteStream(filePath, { flags: "a" });
+  let disposed = false;
+  let disposePromise: Promise<void> | null = null;
+  let streamError: Error | null = null;
+
+  fileStream.on("error", (error) => {
+    disposed = true;
+    streamError = new Error(`Event log stream failed for ${filePath}: ${error.message}`, {
+      cause: error,
+    });
+    process.stderr.write(`[tool-server] ${streamError.message}\n`);
+  });
 
   const logger = bunyan.createLogger({
     name: "argent-tool-server",
@@ -52,7 +64,7 @@ export function createToolServerEventLog({
         type: "raw",
         stream: {
           write(record: object): void {
-            appendFileSync(filePath, JSON.stringify(record) + "\n");
+            if (!disposed) fileStream.write(JSON.stringify(record) + "\n");
           },
         },
       },
@@ -71,7 +83,30 @@ export function createToolServerEventLog({
     warn: (record) => log("warn", record),
     error: (record) => log("error", record),
     fatal: (record) => log("fatal", record),
-    dispose: () => {},
+    dispose: () => {
+      if (disposePromise) return disposePromise;
+      disposed = true;
+      disposePromise = new Promise<void>((resolve, reject) => {
+        if (streamError) {
+          reject(streamError);
+          return;
+        }
+        if (fileStream.closed || fileStream.destroyed) {
+          resolve();
+          return;
+        }
+        fileStream.once("error", (error) => {
+          reject(
+            streamError ??
+              new Error(`Event log stream failed for ${filePath}: ${error.message}`, {
+                cause: error,
+              })
+          );
+        });
+        fileStream.end(resolve);
+      });
+      return disposePromise;
+    },
   };
 }
 
