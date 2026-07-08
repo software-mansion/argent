@@ -41,8 +41,8 @@
     "scripts/postinstall.cjs"
   ],
   "dependencies": {
-    "@fails-components/webtransport": "^1.6.3",
-    "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
+    "@fails-components/webtransport": "^1.6.5",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.5",
     "@modelcontextprotocol/sdk": "^1.20.0",
     "tree-sitter": "^0.21.1",
     "tree-sitter-typescript": "^0.23.2"
@@ -57,16 +57,16 @@
     "@argent/mcp": "file:../argent-mcp",
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
-    "@clack/prompts": "^1.6.0",
-    "@types/node": "^26.0.1",
+    "@clack/prompts": "^1.7.0",
+    "@types/node": "^26.1.1",
     "@types/semver": "^7.7.1",
     "esbuild": "^0.28.1",
     "picocolors": "^1.1.1",
-    "posthog-node": "5.38.6",
+    "posthog-node": "5.40.0",
     "semver": "^7.8.5",
     "smol-toml": "^1.7.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9",
+    "vitest": "^4.1.10",
     "yaml": "^2.8.3"
   }
 }

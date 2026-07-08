@@ -16,7 +16,7 @@
     "@argent/native-devtools-ios": "file:../native-devtools-ios",
     "@argent/registry": "file:../registry",
     "ci-info": "^4.4.0",
-    "posthog-node": "5.38.6"
+    "posthog-node": "5.40.0"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
