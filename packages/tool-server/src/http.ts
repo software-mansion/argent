@@ -10,11 +10,17 @@ import {
   FAILURE_CODES,
   type FailureSignal,
   type FileInputSpec,
-  type Platform,
+  // The tool-server's coarse *device* platform (TV-agnostic). Telemetry's own
+  // Platform (imported below) is a superset that also carries `tvos`/`android-tv`.
+  type Platform as DevicePlatform,
   type Registry,
   type ResolvedFileInput,
 } from "@argent/registry";
-import { AI_CLIENTS, type AiTelemetryProps } from "@argent/telemetry";
+import {
+  AI_CLIENTS,
+  type AiTelemetryProps,
+  type Platform as TelemetryPlatform,
+} from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
@@ -30,6 +36,8 @@ import {
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
+import { getCachedSimulatorRuntimeKind } from "./utils/ios-devices";
+import { getCachedAndroidRuntimeKind } from "./utils/adb";
 import type { Server as HttpServer } from "node:http";
 import {
   CHROMIUM_CDP_NAMESPACE,
@@ -108,16 +116,41 @@ function extractDeviceArg(data: unknown): string | null {
   return null;
 }
 
-type InvocationMeta = { platform?: Platform } & AiTelemetryProps;
+type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
 // Only coarse platform context is retained for failure telemetry. The raw
 // device id (UDID / serial) is used transiently to infer platform and never
 // stored or forwarded.
-type HttpFailureMeta = { platform?: Platform } & AiTelemetryProps;
+type HttpFailureMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
 
-function inferPlatform(deviceId: string | null): HttpFailureMeta["platform"] | null {
+/**
+ * Split a TV target out of its base mobile platform for telemetry, using only
+ * the already-memoized runtime kind — never a fresh `simctl`/`adb` probe, since
+ * this runs on the per-tool-call hot path. A tvOS simulator and an iPhone
+ * simulator share the same UDID shape (both classify as `ios`); an Android TV
+ * emulator and a phone share the `emulator-NNNN` serial shape (both `android`).
+ * The device platform stays coarse (a TV is a `runtimeKind`, not its own device
+ * platform — capability gating and dispatch are TV-agnostic); we refine it to
+ * `tvos` / `android-tv` here for reporting only when the cache already knows the
+ * kind, and leave it coarse otherwise. The first tool call on a device may land
+ * before the cache is warm and report the base platform; subsequent calls, once
+ * a describe/interaction path has warmed the runtime-kind cache (the per-platform
+ * warmers are listed on `getCachedSimulatorRuntimeKind` /
+ * `getCachedAndroidRuntimeKind`), report the TV variant.
+ */
+function refineTvPlatform(basePlatform: DevicePlatform, deviceId: string): TelemetryPlatform {
+  if (basePlatform === "ios" && getCachedSimulatorRuntimeKind(deviceId) === "tv") {
+    return "tvos";
+  }
+  if (basePlatform === "android" && getCachedAndroidRuntimeKind(deviceId) === "tv") {
+    return "android-tv";
+  }
+  return basePlatform;
+}
+
+function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
   if (!deviceId) return null;
   try {
-    return resolveDevice(deviceId).platform;
+    return refineTvPlatform(resolveDevice(deviceId).platform, deviceId);
   } catch {
     return null;
   }
@@ -154,11 +187,21 @@ function extractInvocationMeta(
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
-/** Coarse platform from a tool call's device arg (`udid` / `device_id` / `avdName`), or null. */
-function platformFromArgs(data: unknown): Platform | null {
+/**
+ * Telemetry platform from a tool call's device arg, or null when it carries none.
+ * A `udid` / `device_id` resolves through the runtime-kind cache and refines to
+ * `tvos` / `android-tv` once that cache is warm (coarse `ios` / `android` until
+ * then); only the `avdName`-only fallback is unconditionally coarse.
+ */
+function platformFromArgs(data: unknown): TelemetryPlatform | null {
   if (!data || typeof data !== "object") return null;
   const deviceArg = extractDeviceArg(data);
   if (deviceArg) return inferPlatform(deviceArg) ?? null;
+  // An `avdName`-only call (boot-device before the emulator exists) has no serial
+  // to resolve a runtime kind from, so it stays the coarse `android` platform.
+  // Once the emulator is up, later `udid` / `device_id` calls refine an Android TV
+  // AVD to `android-tv` — from the call after describe/launch has warmed the cache,
+  // not the first (see `refineTvPlatform`).
   if (typeof (data as Record<string, unknown>).avdName === "string") return "android";
   return null;
 }

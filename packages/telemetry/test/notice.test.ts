@@ -11,7 +11,7 @@ import {
   resetFirstRunNotice,
   shouldShowFirstRunNotice,
 } from "../src/notice.js";
-import { forget } from "../src/erasure.js";
+import { resetLocalTelemetryState } from "../src/uninstall-reset.js";
 import { configFilePath } from "../src/paths.js";
 
 describe("first-run notice", () => {
@@ -90,9 +90,9 @@ describe("first-run notice", () => {
       expect(fs.existsSync(configFilePath())).toBe(false);
     });
 
-    it("is run by forget() so uninstall resets the marker", async () => {
+    it("is run by resetLocalTelemetryState() so uninstall resets the marker", async () => {
       markFirstRunNoticeShown();
-      await forget({ disableConsent: false });
+      await resetLocalTelemetryState();
       expect(hasShownFirstRunNotice()).toBe(false);
     });
   });

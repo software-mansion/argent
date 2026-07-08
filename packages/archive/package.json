@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/archive",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Shared tar.gz helpers for the file boundary: create an archive of a path and extract one back to its top-level member.",
   "type": "module",
   "main": "dist/index.js",

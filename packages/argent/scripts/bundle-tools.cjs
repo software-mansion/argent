@@ -77,10 +77,20 @@ const TELEMETRY_DEFINE = {
 // jsonc-parser, which ships both UMD (main) and ESM (module).
 const MAIN_FIELDS = ["module", "main"];
 
-// Banner injected into ESM bundles so any inlined CJS dependencies that call
-// `require()` work without a real CJS context.
+// Banner injected into ESM bundles so any inlined CJS dependencies that rely on
+// the CJS context work: `require()`, plus `__dirname`/`__filename` (e.g.
+// @argent/native-devtools-ios resolves the simulator-server binary dir relative
+// to `__dirname`, which is undefined in an ESM module without this shim). The
+// shimmed values point at the bundle's own location, matching how the CJS
+// tool-server bundle resolves them natively.
 const ESM_REQUIRE_BANNER = {
-  js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
+  js:
+    "import { createRequire as __createRequire } from 'node:module'; " +
+    "import { fileURLToPath as __fileURLToPath } from 'node:url'; " +
+    "import { dirname as __pathDirname } from 'node:path'; " +
+    "const require = __createRequire(import.meta.url); " +
+    "const __filename = __fileURLToPath(import.meta.url); " +
+    "const __dirname = __pathDirname(__filename);",
 };
 
 // ── Asset source/destination paths ─────────────────────────────────────────
