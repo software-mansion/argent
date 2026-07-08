@@ -573,6 +573,11 @@ export function createPreviewRouter(registry: Registry): Router {
         selections,
         annotations,
         globalComment: typeof body.globalComment === "string" ? body.globalComment : undefined,
+        // Privacy-safe UI usage signals for `lens:round_completed`. Coerced to
+        // strict booleans so a malformed/absent field from the unauthenticated
+        // route can never carry anything but true/false into telemetry.
+        inspectorUsed: body.inspectorUsed === true,
+        offscreenRevealed: body.offscreenRevealed === true,
       });
       res.json(result);
     } catch (err) {

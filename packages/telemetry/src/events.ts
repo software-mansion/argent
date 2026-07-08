@@ -179,6 +179,18 @@ export interface LensRoundCompletedProps {
   skipped_comment_count: number;
   /** Whether the user left a round-wide comment. */
   has_global_comment: boolean;
+  /**
+   * Whether the human opened the element-comment "inspector" (the "Add comment"
+   * spotlight) at least once during this round — an adoption signal for the
+   * inspector button that `annotation_count` (a comment-volume proxy) can't
+   * give: this registers an open even when it produced no saved comment.
+   */
+  inspector_used: boolean;
+  /**
+   * Whether the human clicked "Show them" (or its collapsed pill) to reveal
+   * off-screen variant choices at least once during this round.
+   */
+  offscreen_revealed: boolean;
   /** Whether an `argent lens` CLI session owns the window (vs the MCP path). */
   is_cli_session: boolean;
   /** Whether an `await_user_selection` call was parked to receive this submit. */
@@ -208,6 +220,22 @@ export interface LensRoundAbandonedProps {
   platform?: Platform;
 }
 
+// Fired ONCE per `argent lens` CLI invocation, at the session-begin transition.
+// The generic tool:* path counts the agent's propose_variant/await_user_selection
+// calls (which fire many times per session), and lens:preview_opened fires once
+// PER ROUND — so neither can count how many times a human ran `argent lens`.
+// This is the per-invocation marker: a plain count of these events is the
+// invocation total, and distinct telemetry ids over them are the unique-user
+// population for the tool. Privacy-safe: only an aggregate count, no PII.
+export interface LensCliSessionStartedProps {
+  /**
+   * Coding-agent choices offered in the window's picker (0/1 when no picker is
+   * shown — a single installed agent or a remembered choice; >1 when the human
+   * must pick). A privacy-safe count, never the agent names.
+   */
+  agent_choice_count: number;
+}
+
 // Discriminated union for typed-track()
 
 export interface EventPropertyMap {
@@ -235,6 +263,7 @@ export interface EventPropertyMap {
   "lens:preview_opened": LensPreviewOpenedProps;
   "lens:round_completed": LensRoundCompletedProps;
   "lens:round_abandoned": LensRoundAbandonedProps;
+  "lens:cli_session_started": LensCliSessionStartedProps;
 }
 
 export type EventName = keyof EventPropertyMap;
@@ -265,4 +294,5 @@ export const EVENT_NAMES: readonly EventName[] = [
   "lens:preview_opened",
   "lens:round_completed",
   "lens:round_abandoned",
+  "lens:cli_session_started",
 ];

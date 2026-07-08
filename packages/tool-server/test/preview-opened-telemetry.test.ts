@@ -19,6 +19,10 @@ const mockTrack = vi.mocked(track);
 function app() {
   const registry = { invokeTool: vi.fn() } as unknown as Registry;
   const a = express();
+  // Mirror the real server (http.ts mounts express.json app-wide before the
+  // preview router) so POST bodies to /variants/selection are parsed. Harmless
+  // for the GET cases (no body).
+  a.use(express.json());
   a.use(createPreviewRouter(registry));
   return a;
 }
@@ -292,5 +296,64 @@ describe("GET /preview/variants — per-round lens:preview_opened in a reused wi
 
     expect(res.status).toBe(200);
     expect(previewOpenedCalls()).toHaveLength(0);
+  });
+});
+
+describe("POST /preview/variants/selection — inspector/offscreen usage flags", () => {
+  it("threads the UI's inspectorUsed / offscreenRevealed booleans to lens:round_completed", async () => {
+    const a = app();
+    variantProposalStore.proposeVariant({
+      element: "Foo",
+      variant: { name: "Bold", summary: "s" },
+    });
+    const foo = variantProposalStore.snapshot().proposals[0]!;
+    // roundCompleted is the store event index.ts relays to lens:round_completed;
+    // capture it to prove the POST body's flags reach the aggregate (not `track`,
+    // which the router only calls for lens:preview_opened).
+    const stats: Array<{ inspector_used: boolean; offscreen_revealed: boolean }> = [];
+    const onCompleted = (x: { inspector_used: boolean; offscreen_revealed: boolean }) =>
+      stats.push(x);
+    variantProposalStore.events.on("roundCompleted", onCompleted);
+
+    const res = await request(a)
+      .post("/variants/selection")
+      .send({
+        selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+        inspectorUsed: true,
+        offscreenRevealed: true,
+      });
+
+    variantProposalStore.events.off("roundCompleted", onCompleted);
+    expect(res.status).toBe(200);
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.inspector_used).toBe(true);
+    expect(stats[0]!.offscreen_revealed).toBe(true);
+  });
+
+  it("coerces a missing/non-boolean flag to false (unauthenticated route)", async () => {
+    const a = app();
+    variantProposalStore.proposeVariant({
+      element: "Foo",
+      variant: { name: "Bold", summary: "s" },
+    });
+    const foo = variantProposalStore.snapshot().proposals[0]!;
+    const stats: Array<{ inspector_used: boolean; offscreen_revealed: boolean }> = [];
+    const onCompleted = (x: { inspector_used: boolean; offscreen_revealed: boolean }) =>
+      stats.push(x);
+    variantProposalStore.events.on("roundCompleted", onCompleted);
+
+    // inspectorUsed sent as a non-boolean, offscreenRevealed omitted entirely.
+    const res = await request(a)
+      .post("/variants/selection")
+      .send({
+        selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+        inspectorUsed: "yes",
+      });
+
+    variantProposalStore.events.off("roundCompleted", onCompleted);
+    expect(res.status).toBe(200);
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.inspector_used).toBe(false);
+    expect(stats[0]!.offscreen_revealed).toBe(false);
   });
 });

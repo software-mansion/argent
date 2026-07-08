@@ -675,6 +675,88 @@ describe("VariantProposalStore — roundCompleted telemetry event", () => {
     expect(stats[0]!.is_cli_session).toBe(true);
     expect(stats[0]!.had_parked_await).toBe(false);
   });
+
+  it("forwards the UI's inspector_used / offscreen_revealed usage flags", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ inspector_used: boolean; offscreen_revealed: boolean }> = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    // Asymmetric on purpose (true/false) so a swap or aliasing of the two flags
+    // is caught — a matching pair would hide it.
+    s.submitSelection({
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+      inspectorUsed: true,
+      offscreenRevealed: false,
+    });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.inspector_used).toBe(true);
+    expect(stats[0]!.offscreen_revealed).toBe(false);
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("defaults inspector_used / offscreen_revealed to false when the UI omits them", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ inspector_used: boolean; offscreen_revealed: boolean }> = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    // An older UI (or a bare submit) sends no usage flags — they must read false,
+    // never undefined, so the sanitizer's bool validator keeps them.
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.inspector_used).toBe(false);
+    expect(stats[0]!.offscreen_revealed).toBe(false);
+  });
+});
+
+describe("VariantProposalStore — cliSessionStarted telemetry event", () => {
+  it("emits once on a begin transition with the picker size", () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("cliSessionStarted", (x) => stats.push(x));
+
+    s.setCliSession(true, [
+      { id: "claude", name: "Claude" },
+      { id: "cursor", name: "Cursor" },
+    ]);
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toEqual({ agent_choice_count: 2 });
+    // Privacy: only an aggregate count leaves — never the agent ids/names.
+    assertPrivacySafe(stats[0]);
+    expect(JSON.stringify(stats[0])).not.toMatch(/claude|cursor|Claude|Cursor/);
+  });
+
+  it("reports agent_choice_count 0 when no picker is offered", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ agent_choice_count: number }> = [];
+    s.events.on("cliSessionStarted", (x) => stats.push(x));
+    s.setCliSession(true, []);
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.agent_choice_count).toBe(0);
+  });
+
+  it("emits once per begin (every invocation) with the current picker, never on session end", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ agent_choice_count: number }> = [];
+    s.events.on("cliSessionStarted", (x) => stats.push(x));
+
+    s.setCliSession(true, [{ id: "claude", name: "Claude" }]); // invocation 1 (1 agent)
+    s.setCliSession(false, []); // end never counts
+    expect(stats).toHaveLength(1);
+
+    s.setCliSession(true, []); // invocation 2 (clean re-begin, no picker)
+    // A begin while the store is STILL marked active — a prior session's end
+    // never landed (e.g. `argent lens` was killed) — is a real new invocation
+    // and MUST count. A transition-only guard would miss it and under-count the
+    // very metric this event exists for. Its payload must also reflect THIS
+    // begin's picker size, not a stale one.
+    s.setCliSession(true, [{ id: "cursor", name: "Cursor" }]); // invocation 3, no transition (1 agent)
+    expect(stats.map((x) => x.agent_choice_count)).toEqual([1, 0, 1]);
+  });
 });
 
 describe("VariantProposalStore — roundAbandoned telemetry event", () => {

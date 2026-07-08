@@ -181,6 +181,10 @@ export interface RoundCompletedStats {
   element_comment_count: number;
   skipped_comment_count: number;
   has_global_comment: boolean;
+  /** The human opened the element-comment inspector at least once this round. */
+  inspector_used: boolean;
+  /** The human clicked "Show them" to reveal off-screen choices this round. */
+  offscreen_revealed: boolean;
   is_cli_session: boolean;
   had_parked_await: boolean;
   round_duration_ms: number;
@@ -200,6 +204,18 @@ export interface RoundAbandonedStats {
   had_parked_await: boolean;
   is_cli_session: boolean;
   platform?: Platform;
+}
+
+/**
+ * Privacy-safe aggregate carried by the `cliSessionStarted` store event — fired
+ * once per `argent lens` invocation (the CLI session-begin transition). The
+ * tool-server relays it as `lens:cli_session_started` so invocation totals and
+ * unique users are countable (the generic tool:* path counts per-tool-call and
+ * `lens:preview_opened` counts per-round, so neither can). Same privacy contract
+ * as the other stats; structurally assignable to `LensCliSessionStartedProps`.
+ */
+export interface CliSessionStartedStats {
+  agent_choice_count: number;
 }
 
 type StoreEvents = {
@@ -236,6 +252,14 @@ type StoreEvents = {
    * ⇒ close it. Carries the new active state so listeners need not re-snapshot.
    */
   cliSessionChanged: (active: boolean) => void;
+  /**
+   * Emitted once on a CLI session BEGIN transition (not on end, not on a
+   * re-begin while already active) — i.e. once per `argent lens` invocation.
+   * The tool-server relays it as `lens:cli_session_started` telemetry; kept
+   * separate from `cliSessionChanged` (which drives the window and fires on both
+   * begin and end) so the per-invocation metric is counted exactly once.
+   */
+  cliSessionStarted: (stats: CliSessionStartedStats) => void;
 };
 
 /** A parked `await_user_selection` call, bound to the round it is waiting on. */
@@ -580,6 +604,16 @@ export class VariantProposalStore {
     this.lensAgentChoice = null;
     this.lensAgentRemember = false;
     if (transitioned) this.events.emit("cliSessionChanged", active);
+    // Count every `argent lens` invocation. Each invocation POSTs
+    // /preview/cli-session {active:true} exactly once, so one emit per begin ==
+    // one per invocation. Guarding on `transitioned` would MISS a begin that
+    // arrives while the store is still marked active because a prior session's
+    // clean end never landed (e.g. that `argent lens` was killed) — an
+    // under-count of the exact metric this event exists for. An end is
+    // active=false, so it never emits. Privacy-safe: just the picker size.
+    if (active) {
+      this.events.emit("cliSessionStarted", { agent_choice_count: this.lensAgents.length });
+    }
     this.events.emit("changed");
   }
 
@@ -652,6 +686,13 @@ export class VariantProposalStore {
     selections: SubmittedSelection[];
     globalComment?: string;
     annotations?: ElementAnnotation[];
+    /**
+     * UI usage signals for this round (privacy-safe booleans only), forwarded to
+     * `lens:round_completed` telemetry. Both are best-effort — an older UI omits
+     * them and they read as `false`, never affecting the delivered outcome.
+     */
+    inspectorUsed?: boolean;
+    offscreenRevealed?: boolean;
   }): {
     ok: true;
     round: number;
@@ -785,6 +826,8 @@ export class VariantProposalStore {
           (s) => s.chosenVariant == null && s.comment
         ).length,
         has_global_comment: Boolean(outcome.globalComment),
+        inspector_used: Boolean(input.inspectorUsed),
+        offscreen_revealed: Boolean(input.offscreenRevealed),
         is_cli_session: this.cliSession,
         had_parked_await: toSettle.length > 0,
         round_duration_ms: Math.max(0, outcome.completedAt - firstCreatedAt),

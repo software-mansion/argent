@@ -15,6 +15,7 @@ import {
   variantProposalStore,
   type RoundCompletedStats,
   type RoundAbandonedStats,
+  type CliSessionStartedStats,
 } from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
 
@@ -224,11 +225,19 @@ export function start(): void {
   const onRoundAbandoned = (stats: RoundAbandonedStats): void => {
     telemetryTrack("lens:round_abandoned", stats);
   };
+  // Fired once per `argent lens` invocation (the CLI session-begin transition).
+  // The generic tool:* path counts per-tool-call and lens:preview_opened counts
+  // per-round, so neither can answer "how many `argent lens` runs / unique users"
+  // — this per-invocation marker does. Carries only an aggregate count.
+  const onCliSessionStarted = (stats: CliSessionStartedStats): void => {
+    telemetryTrack("lens:cli_session_started", stats);
+  };
   variantProposalStore.events.on("awaitParked", onAwaitParked);
   variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
   variantProposalStore.events.on("cliSessionChanged", onCliSessionChanged);
   variantProposalStore.events.on("roundCompleted", onRoundCompleted);
   variantProposalStore.events.on("roundAbandoned", onRoundAbandoned);
+  variantProposalStore.events.on("cliSessionStarted", onCliSessionStarted);
 
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
@@ -244,6 +253,7 @@ export function start(): void {
     variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
     variantProposalStore.events.off("roundCompleted", onRoundCompleted);
     variantProposalStore.events.off("roundAbandoned", onRoundAbandoned);
+    variantProposalStore.events.off("cliSessionStarted", onCliSessionStarted);
     cancelPendingClose();
 
     // Drain any simulators Lens booted headless for a CLI session. The happy

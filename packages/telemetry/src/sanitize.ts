@@ -226,6 +226,8 @@ export const ALLOWED: ValidatorMap = {
     element_comment_count: COUNT,
     skipped_comment_count: COUNT,
     has_global_comment: bool,
+    inspector_used: bool,
+    offscreen_revealed: bool,
     is_cli_session: bool,
     had_parked_await: bool,
     round_duration_ms: DURATION_MS,
@@ -238,6 +240,9 @@ export const ALLOWED: ValidatorMap = {
     had_parked_await: bool,
     is_cli_session: bool,
     platform: PLATFORM,
+  },
+  "lens:cli_session_started": {
+    agent_choice_count: COUNT,
   },
 };
 

@@ -2913,6 +2913,7 @@
       const opPillCount = document.getElementById("op-pill-count");
       const revealOffscreenChoices = () => {
         vp.revealOffscreen = true;
+        vp.offscreenRevealed = true; // sticky per-round usage flag for telemetry
         vpRender();
       };
       opShow.addEventListener("click", () => {
@@ -2961,6 +2962,14 @@
         // one yet) we hide its proposals/comments so "Request changes" feels final.
         sentRound: -1,
         inspect: false,
+        // Sticky per-round usage flags for telemetry (reset when a new round
+        // loads / after a CLI submit). inspectorUsed: the human opened the
+        // "Add comment" inspector at least once this round (distinct from
+        // `inspect`, the live toggle, which is false again after they close it).
+        // offscreenRevealed: they clicked "Show them"/the pill to reveal
+        // off-screen choices. Both ride the submit POST → lens:round_completed.
+        inspectorUsed: false,
+        offscreenRevealed: false,
         focus: null, // describe node currently spotlighted
         commentFor: null, // describe node a comment-pop is open for
         spot: null, // spotlight layer root (child of mainEl)
@@ -3261,6 +3270,8 @@
                 vp.anchors = {};
                 vp.revealOffscreen = false;
                 vp.offscreenPromptCollapsed = false;
+                vp.inspectorUsed = false; // new round → reset per-round usage flags
+                vp.offscreenRevealed = false;
                 if (globalCommentEl) globalCommentEl.value = "";
                 if (vp.justCompletedRound === snap.round) {
                   /* keep our own success note */
@@ -4615,6 +4626,7 @@
       }
       function setInspect(on) {
         vp.inspect = on;
+        if (on) vp.inspectorUsed = true; // sticky per-round usage flag for telemetry
         commentBtn.classList.toggle("active", on);
         const commentLabel = on ? "Done commenting" : "Add comment";
         commentBtn.title = commentLabel;
@@ -5228,6 +5240,9 @@
                 comment: a.comment,
               })),
               globalComment: globalCommentEl ? globalCommentEl.value : "",
+              // Privacy-safe per-round UI usage signals → lens:round_completed.
+              inspectorUsed: !!vp.inspectorUsed,
+              offscreenRevealed: !!vp.offscreenRevealed,
             }),
           });
           const body = await res.json().catch(() => ({}));
@@ -5250,6 +5265,8 @@
             vp.annotations = [];
             vp.revealOffscreen = false;
             vp.offscreenPromptCollapsed = false;
+            vp.inspectorUsed = false; // round sent → reset per-round usage flags
+            vp.offscreenRevealed = false;
             if (globalCommentEl) globalCommentEl.value = "";
             closeAnnPop();
             vpRender();
@@ -5328,6 +5345,12 @@
         vp.revealOffscreen = false;
         vp.offscreenPromptCollapsed = false;
         if (globalCommentEl) globalCommentEl.value = "";
+        // NOTE: vp.inspectorUsed / vp.offscreenRevealed are deliberately NOT
+        // reset here. "Clear all" wipes the human's picks/comments for a fresh
+        // start WITHIN the same round; it doesn't undo the fact that they opened
+        // the inspector / revealed off-screen choices this round, so the usage
+        // telemetry must still reflect it. They reset only on a genuine new round
+        // (pollVariants) or after a submit.
         setNote("");
         closeAnnPop();
         vpRender();
