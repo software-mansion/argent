@@ -9,6 +9,7 @@ import {
   type McpServerEntry,
 } from "./mcp-configs.js";
 import { MCP_BINARY_NAME } from "./constants.js";
+import { isDeclaredLocally, readInstallRecord } from "./utils.js";
 import type { InstallMode } from "./install-record.js";
 import type { Scope } from "./init-scope.js";
 
@@ -71,14 +72,28 @@ export function writeMcpConfigs(args: {
   const entryFor = (configScope: "local" | "global"): McpServerEntry =>
     getMcpEntryForScope(installMode, configScope, localCmdMode);
 
-  // A committed local-mode entry in a PROJECT config must survive a
-  // coexisting `init --global` run: the same run keeps .argent/install.json
-  // and reports the project stays in local mode, so clobbering the team's
-  // committed node-path command with the bare `argent` one (dead for every
-  // teammate without a global install) would contradict that — the same
-  // committed-file protection update's refresh applies.
-  const keepsCommittedLocalEntry = (adapter: McpConfigAdapter, configPath: string): boolean => {
+  // The project is still in local mode when its committed record says so or
+  // its manifest still declares the dep — the same signal init.ts uses to keep
+  // vs. clear the .argent marker in this run.
+  const stillLocalMode = (root: string): boolean =>
+    readInstallRecord(root)?.mode === "local" || isDeclaredLocally(root);
+
+  // A committed local-mode entry in a PROJECT config must survive a coexisting
+  // `init --global` run: the same run keeps .argent/install.json and reports
+  // the project stays in local mode, so clobbering the team's committed
+  // node-path command with the bare `argent` one (dead for every teammate
+  // without a global install) would contradict that — the same committed-file
+  // protection update's refresh applies. But only while the project is STILL
+  // local: one that abandoned local mode (devDependency removed) must have its
+  // now-dead node-path entry rewritten to bare `argent`, matching init's own
+  // "Removed stale .argent/install.json" cleanup in the same run.
+  const keepsCommittedLocalEntry = (
+    adapter: McpConfigAdapter,
+    configPath: string,
+    root: string
+  ): boolean => {
     if (installMode !== "global") return false;
+    if (!stillLocalMode(root)) return false;
     let existing: McpServerEntry | null;
     try {
       existing = adapter.getArgentEntry(configPath);
@@ -99,7 +114,7 @@ export function writeMcpConfigs(args: {
     if (!configPath) {
       if (scope === "global" && adapter.projectPath(projectRoot)) {
         const fallback = adapter.projectPath(projectRoot)!;
-        if (keepsCommittedLocalEntry(adapter, fallback)) {
+        if (keepsCommittedLocalEntry(adapter, fallback, projectRoot)) {
           lines.push(
             `${pc.yellow("!")} ${adapter.name} kept the committed local-mode entry ${pc.dim(fallback)}`
           );
@@ -129,7 +144,7 @@ export function writeMcpConfigs(args: {
       continue;
     }
 
-    if (scope !== "global" && keepsCommittedLocalEntry(adapter, configPath)) {
+    if (scope !== "global" && keepsCommittedLocalEntry(adapter, configPath, effectiveRoot)) {
       lines.push(
         `${pc.yellow("!")} ${adapter.name} kept the committed local-mode entry ${pc.dim(configPath)}`
       );

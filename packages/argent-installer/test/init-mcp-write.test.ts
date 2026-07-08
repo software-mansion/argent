@@ -20,22 +20,34 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe("writeMcpConfigs — global mode over a committed local entry", () => {
-  it("keeps the committed local-mode entry instead of rewriting it to bare argent", () => {
-    const mcpJson = path.join(tmpDir, ".mcp.json");
-    fs.writeFileSync(
-      mcpJson,
-      JSON.stringify({
-        mcpServers: {
-          argent: {
-            type: "stdio",
-            command: "node",
-            args: ["node_modules/@swmansion/argent/dist/cli.js", "mcp"],
-          },
+function writeCommittedLocalEntry(): { mcpJson: string; before: string } {
+  const mcpJson = path.join(tmpDir, ".mcp.json");
+  fs.writeFileSync(
+    mcpJson,
+    JSON.stringify({
+      mcpServers: {
+        argent: {
+          type: "stdio",
+          command: "node",
+          args: ["node_modules/@swmansion/argent/dist/cli.js", "mcp"],
         },
-      })
+      },
+    })
+  );
+  return { mcpJson, before: fs.readFileSync(mcpJson, "utf8") };
+}
+
+describe("writeMcpConfigs — global mode over a committed local entry", () => {
+  it("keeps the committed local-mode entry when the project is STILL local (record present)", () => {
+    // Coexistence: the project keeps its local devDependency (marked by the
+    // committed .argent/install.json) and a teammate adds a personal global
+    // install — the committed node-path entry must survive.
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent" })
     );
-    const before = fs.readFileSync(mcpJson, "utf8");
+    const { mcpJson, before } = writeCommittedLocalEntry();
 
     const { lines } = writeMcpConfigs({
       selectedAdapters: [claude],
@@ -47,6 +59,49 @@ describe("writeMcpConfigs — global mode over a committed local entry", () => {
 
     expect(fs.readFileSync(mcpJson, "utf8")).toBe(before);
     expect(lines.join("\n")).toContain("kept the committed local-mode entry");
+  });
+
+  it("keeps the committed local-mode entry when the project STILL declares the dep", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    const { mcpJson, before } = writeCommittedLocalEntry();
+
+    writeMcpConfigs({
+      selectedAdapters: [claude],
+      installMode: "global",
+      scope: "local",
+      effectiveRoot: tmpDir,
+      projectRoot: tmpDir,
+    });
+
+    expect(fs.readFileSync(mcpJson, "utf8")).toBe(before);
+  });
+
+  it("rewrites the dead local entry when the project ABANDONED local mode", () => {
+    // No committed record and no manifest declaration: the devDependency was
+    // removed, so the node-path entry is dead and must be rewritten to bare
+    // `argent` — matching init's own marker cleanup in the same run.
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "proj" }));
+    const { mcpJson } = writeCommittedLocalEntry();
+
+    const { lines } = writeMcpConfigs({
+      selectedAdapters: [claude],
+      installMode: "global",
+      scope: "local",
+      effectiveRoot: tmpDir,
+      projectRoot: tmpDir,
+    });
+
+    const entry = (
+      JSON.parse(fs.readFileSync(mcpJson, "utf8")) as {
+        mcpServers: Record<string, { command: string; args: string[] }>;
+      }
+    ).mcpServers.argent;
+    expect(entry.command).toBe("argent");
+    expect(entry.args).toEqual(["mcp"]);
+    expect(lines.join("\n")).not.toContain("kept the committed");
   });
 
   it("still refreshes a stock global-shape entry in global mode", () => {

@@ -51,6 +51,30 @@ function findDeclaringRoot(startDir: string): string | null {
   }
 }
 
+// The version-STABLE package dir: the conventional <dir>/node_modules/<pkg>
+// symlink closest to cwd that resolves to the running package. Unlike
+// import.meta's realpath — pnpm's version-pinned .pnpm store dir, pruned on a
+// bump — this symlink survives an in-place update. In a pnpm WORKSPACE the
+// symlink sits in the DECLARING member's node_modules, a level below the root
+// where the .pnpm store lives, so scan every level from cwd up rather than
+// only the level where the store matched. Only ever returns a path whose
+// realpath equals the running package, so it can never point at a different
+// install — just a different (stable) alias of the same real dir.
+export function findStablePackageDir(startDir: string, packageRoot: string): string | undefined {
+  let dir = startDir;
+  for (;;) {
+    const candidate = path.join(dir, "node_modules", PACKAGE_NAME);
+    try {
+      if (fs.realpathSync(candidate) === packageRoot) return candidate;
+    } catch {
+      // no symlink at this level — keep walking up
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
 // Install topology of this running package: a project's local devDependency
 // (package root inside a node_modules found by walking up from cwd) or the
 // global PATH install — and, for local, WHICH project. Classified at process
@@ -81,22 +105,14 @@ function classifyInstall(): {
       if (packageRoot === nmReal || packageRoot.startsWith(nmReal + path.sep)) {
         // Local install. Prefer the DECLARING root over this physical hoist
         // root: in a hoisted workspace the declaring manifest sits at cwd
-        // (the member root) or an ancestor below `dir`.
-        //
-        // Also capture the conventional node_modules path when it resolves to
-        // the running package: unlike import.meta's realpath — which under
-        // pnpm is the version-pinned .pnpm store dir a version bump PRUNES —
-        // the symlink path stays valid across bumps, so runtime paths derived
-        // from it keep working (and re-resolve to the NEW version) after an
-        // in-place update.
-        const stable = path.join(dir, "node_modules", PACKAGE_NAME);
-        let stablePackageDir: string | undefined;
-        try {
-          if (fs.realpathSync(stable) === packageRoot) stablePackageDir = stable;
-        } catch {
-          // conventional path absent (exotic layout) — fall back to realpath
-        }
-        return { kind: "local", projectRoot: findDeclaringRoot(cwd) ?? dir, stablePackageDir };
+        // (the member root) or an ancestor below `dir`. The version-stable
+        // package dir (used for runtime paths that must survive a pnpm store
+        // prune) is found by its own cwd-up scan — see findStablePackageDir.
+        return {
+          kind: "local",
+          projectRoot: findDeclaringRoot(cwd) ?? dir,
+          stablePackageDir: findStablePackageDir(cwd, packageRoot),
+        };
       }
     } catch {
       // no node_modules at this level — keep walking up
