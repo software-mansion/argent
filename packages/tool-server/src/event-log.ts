@@ -4,7 +4,6 @@ import { dirname } from "node:path";
 import {
   FAILURE_CODES,
   getFailureSignalOrFallback,
-  type FailureSignal,
   type Registry,
   type ServiceState,
 } from "@argent/registry";
