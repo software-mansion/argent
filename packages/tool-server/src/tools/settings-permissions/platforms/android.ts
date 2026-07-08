@@ -1,6 +1,6 @@
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, shellQuote } from "../../../utils/adb";
+import { adbShell, isTerminalAdbError, shellQuote } from "../../../utils/adb";
 import type {
   PermissionAction,
   PermissionName,
@@ -18,6 +18,14 @@ import type {
 // exists depends on the app's manifest and the device's API level, and `pm`
 // itself is the authority on that.
 //
+// `photos` also lists READ_MEDIA_VISUAL_USER_SELECTED: on API 34+ the platform
+// auto-adds this runtime permission to any app requesting READ_MEDIA_IMAGES/
+// VIDEO, and the "select photos" partial-access dialog grants it persistently.
+// Omitting it would let `deny photos` report full success while the app still
+// passes its partial-access check, and `reset photos` would leave the app in
+// the "keep/select more" flow instead of the first-run dialog. It doesn't exist
+// below API 34, where `pm` rejects it and it lands in `skipped` — expected.
+//
 // `reminders` is empty: iOS Reminders (EventKit) has no Android runtime
 // permission, so it surfaces an unsupported error rather than silently
 // no-opping.
@@ -27,6 +35,7 @@ const ANDROID_PERMISSIONS: Record<PermissionName, string[]> = {
   "photos": [
     "android.permission.READ_MEDIA_IMAGES",
     "android.permission.READ_MEDIA_VIDEO",
+    "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
     "android.permission.READ_EXTERNAL_STORAGE",
   ],
   "contacts": ["android.permission.READ_CONTACTS", "android.permission.WRITE_CONTACTS"],
@@ -64,6 +73,23 @@ interface PmResult {
   detail: string;
 }
 
+// A pm call can fail two very different ways, and only one of them is a
+// per-permission "pm rejected this" result:
+//   1. pm ran and refused the permission (not declared / not changeable) — a
+//      manifest-style rejection that belongs in `skipped`/the aggregate error.
+//   2. the adb transport itself failed — the device dropped mid-fan-out
+//      (unauthorized / offline / not found) or the call was killed at its
+//      timeout. That is not "this permission was rejected"; it means every
+//      remaining call is unreliable and the observed cause (a dead device, a
+//      wedged pm) must reach the caller, not be relabelled as a manifest gap.
+// adbShell already classifies (2) into a FailureError with error_kind +
+// subprocess metadata, so we detect it and let that error propagate intact
+// rather than folding it into the per-permission failure shape.
+function isTransportFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return isTerminalAdbError(message) || getFailureSignal(err)?.error_kind === "timeout";
+}
+
 // pm errors arrive as a Java exception followed by a dozen `at com.android...`
 // stack frames. Only the exception line says anything actionable ("Package X
 // has not requested permission Y"); drop the frames so the surfaced error and
@@ -90,6 +116,10 @@ async function runPm(udid: string, pmArgs: string): Promise<PmResult> {
     }
     return { ok: true, detail: trimmed };
   } catch (err) {
+    // A transport/timeout failure is not a pm rejection — propagate adbShell's
+    // classified FailureError (error_kind + subprocess metadata) so a dead or
+    // wedged device surfaces its real cause instead of a bogus "manifest gap".
+    if (isTransportFailure(err)) throw err;
     return {
       ok: false,
       detail: stripStackFrames(err instanceof Error ? err.message : String(err)),
@@ -164,15 +194,23 @@ export const androidImpl: PlatformImpl<
         // not a changeable type) — the manifest-style failure the aggregate
         // error below describes. Clearing the flags is a refinement that must
         // never demote a permission the revoke already changed:
-        //   - `clear-permission-flags` does not exist before Android 11 (it is an
-        //     unknown pm subcommand there and exits non-zero), so coupling reset
-        //     to it would make every reset on API < 30 falsely report failure;
+        //   - `clear-permission-flags` first appears in Android 13 (API 33) — it
+        //     is absent from android11/android12-release's PackageManagerShell-
+        //     Command and an unknown pm subcommand exits non-zero — so coupling
+        //     reset to it would make every reset on API < 33 falsely report
+        //     failure. (On API 29-32 this means reset can't clear a user-fixed
+        //     "don't ask again" state, only the grant; that ceiling is inherent
+        //     to the platform, not something the tool can work around.)
         //   - and it cannot undo the revoke, so a flag-clear failure on a newer
         //     device still leaves the permission revoked, not "pm-rejected".
-        // So we run it but ignore its outcome — `result` stays the revoke's.
+        // So we run it but ignore its outcome — `result` stays the revoke's, and
+        // a transport error thrown by `runPm` here is swallowed for the same
+        // reason (the revoke already landed; don't fail a done deed).
         result = await runPm(udid, `revoke ${pkg} ${perm}`);
         if (result.ok) {
-          await runPm(udid, `clear-permission-flags ${pkg} ${perm} user-set user-fixed`);
+          await runPm(udid, `clear-permission-flags ${pkg} ${perm} user-set user-fixed`).catch(
+            () => {}
+          );
         }
       }
       if (result.ok) {

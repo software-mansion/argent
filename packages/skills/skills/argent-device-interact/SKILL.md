@@ -216,7 +216,7 @@ When using `screenshot` for permission or native modal navigation:
 - Tap one control at a time and inspect the returned auto-screenshot before doing anything else.
 - After the modal is dismissed, return to normal discovery with `describe`, `native-describe-screen`, or `debugger-component-tree`.
 
-> **Prefer the dialog over the Settings tool.** When the app triggers its own permission prompt, answering it here is the real user path — do that. Reach for the `argent-settings-permissions` tool only when you can't get to the change through the app: pre-authorize/deny a permission _before_ the app asks, re-enable one the user already denied (iOS won't re-prompt), or reset it so the prompt reappears. See the `argent-settings-permissions` skill.
+> **Prefer the dialog over the Settings tool.** When the app triggers its own permission prompt, answering it here is the real user path — do that. Reach for the `settings-permissions` tool only when you can't get to the change through the app: pre-authorize/deny a permission _before_ the app asks, re-enable one the user already denied (iOS won't re-prompt), or reset it so the prompt reappears. See the `argent-settings-permissions` skill.
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 

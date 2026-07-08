@@ -3,7 +3,7 @@ import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { PERMISSION_ACTIONS, PERMISSION_NAMES } from "./types";
 import type { SettingsPermissionsResult, SettingsPermissionsServices } from "./types";
-import { iosImpl } from "./platforms/ios";
+import { iosImpl, iosRemoteImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
 // Mirror launch-app / restart-app: the leading-letter rule keeps a value like
@@ -25,7 +25,7 @@ const zodSchema = z.object({
   permission: z
     .enum(PERMISSION_NAMES)
     .describe(
-      "The permission to change. `notifications` is Android-only (iOS has no simctl service for it); `reminders` is iOS-only; `camera` works on Android and on iOS only when the installed Xcode's `simctl privacy` supports it."
+      "The permission to change. `notifications` is Android-only (iOS has no simctl service for it); `reminders` is iOS-only; `camera` works on Android and on iOS only when the target simulator's runtime models the service (varies by simruntime, not by the installed Xcode)."
     ),
   bundleId: z
     .string()
@@ -41,6 +41,10 @@ const capability: ToolCapability = {
   // `simctl privacy` edits the simulator's TCC store — physical iPhones have no
   // equivalent host-side switch, so no `device: true` on apple.
   apple: { simulator: true },
+  // sim-remote runs the same `simctl privacy` verb on a remote simulator, so a
+  // sim-remote setup can pre-set permissions too — matching the rest of the
+  // launch-app / restart-app / reinstall-app / open-url family.
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
@@ -48,7 +52,7 @@ export const settingsPermissionsTool: ToolDefinition<Params, SettingsPermissions
   id: "settings-permissions",
   description: `Grant, deny, or reset a runtime permission for an app without navigating the system Settings UI. Use during test setup to pre-authorize (or explicitly deny) a service before the app asks, or \`reset\` so the permission dialog appears again on next use. Always per-app: bundleId is required.
 Permissions: camera, microphone, photos, contacts, notifications, calendar, location, location-always, media-library, motion, reminders.
-iOS simulator: runs \`xcrun simctl privacy <udid> grant|revoke|reset <service> <bundleId>\`. \`notifications\` is not supported (no such simctl service). \`reset\` is per-app — simctl's device-wide reset (no bundleId) is a no-op for existing grants on recent iOS, so it is not offered.
+iOS simulator: runs \`xcrun simctl privacy <udid> grant|revoke|reset <service> <bundleId>\`. \`notifications\` is not supported (no such simctl service). \`reset\` is per-app — simctl's device-wide reset (no bundleId) is a no-op for existing grants on recent iOS, so it is not offered. \`grant location\`/\`location-always\` needs the app already installed (location auth isn't stored in TCC and isn't applied to a bundle id until the app exists); other services can be granted before install.
 Android: runs \`pm grant\` / \`pm revoke\` (reset also best-effort clears the user-set permission flags) on the mapped \`android.permission.*\` runtime permissions. The app must be installed and declare them in its manifest; \`reminders\` has no Android equivalent.
 Some permission changes terminate the app if it is running (system behavior on both platforms) — set permissions before launching, or relaunch after.
 Returns { action, permission, bundleId, applied, skipped? }: \`applied\` lists the platform-level services/permissions actually changed; \`skipped\` (Android) lists mapped permissions pm rejected, e.g. ones the manifest doesn't declare. Fails if nothing could be applied.`,
@@ -65,6 +69,7 @@ Returns { action, permission, bundleId, applied, skipped? }: \`applied\` lists t
     toolId: "settings-permissions",
     capability,
     ios: iosImpl,
+    iosRemote: iosRemoteImpl,
     android: androidImpl,
   }),
 };
