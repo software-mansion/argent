@@ -72,6 +72,8 @@ export function start(): void {
   // crash arriving mid-shutdown would be swallowed by the re-entrancy guard and
   // the in-flight shutdown(0) would exit 0, hiding the crash from supervisors.
   let finalExitCode = 0;
+  let shutdownReason: "idle" | "signal" | "crash" = "signal";
+  let shutdownFailureSignal: FailureSignal | null = null;
   let shutdown: ((exitCode?: number) => Promise<void>) | null = null;
 
   // The crash classification is passed in explicitly rather than re-derived from
@@ -127,13 +129,18 @@ export function start(): void {
   // ── Bootstrap ─────────────────────────────────────────────────────
   const registry = createRegistry();
   attachRegistryLogger(registry);
-  const eventLog = isFlagEnabled("tool-server-event-log")
-    ? createToolServerEventLog({
-        filePath:
-          process.env.ARGENT_EVENT_LOG ||
-          path.join(homedir(), ".argent", "tool-server-events.jsonl"),
-      })
-    : null;
+  let eventLog: ReturnType<typeof createToolServerEventLog> | null = null;
+  if (isFlagEnabled("tool-server-event-log")) {
+    const eventLogPath =
+      process.env.ARGENT_EVENT_LOG || path.join(homedir(), ".argent", "tool-server-events.jsonl");
+    try {
+      eventLog = createToolServerEventLog({ filePath: eventLogPath });
+    } catch (err) {
+      process.stderr.write(
+        `[tool-server] Failed to create event log at ${eventLogPath}: ${String(err)}\n`
+      );
+    }
+  }
   if (eventLog) {
     attachRegistryEventLogger(registry, eventLog);
   }
@@ -161,8 +168,6 @@ export function start(): void {
   const warmKeepAlive = setInterval(() => {}, 1_000);
   void identityWarm.finally(() => clearInterval(warmKeepAlive));
   const serverStartedAt = Date.now();
-  let shutdownReason: "idle" | "signal" | "crash" = "signal";
-  let shutdownFailureSignal: FailureSignal | null = null;
   const updateChecker = startUpdateChecker();
 
   const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
