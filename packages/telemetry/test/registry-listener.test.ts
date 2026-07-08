@@ -28,8 +28,8 @@ describe("attachRegistryTelemetry", () => {
     const handle = attachRegistryTelemetry(registry);
     handle.recordInvocation(INVOCATION_ID_1, { platform: "ios" });
 
-    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1);
-    registry.events.emit("toolCompleted", "gesture-tap", INVOCATION_ID_1, 42.5);
+    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1, "Starting tool.");
+    registry.events.emit("toolCompleted", "gesture-tap", INVOCATION_ID_1, 42.5, "Completed tool.");
 
     expect(trackSpy).toHaveBeenCalledTimes(2);
     expect(trackSpy.mock.calls[0]![0]).toBe("tool:invoke");
@@ -56,12 +56,12 @@ describe("attachRegistryTelemetry", () => {
     const handle = attachRegistryTelemetry(registry);
 
     handle.recordInvocation(INVOCATION_ID_1, { platform: "ios", ai_client: "codex" });
-    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1);
-    registry.events.emit("toolCompleted", "gesture-tap", INVOCATION_ID_1, 10);
+    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1, "Starting tool.");
+    registry.events.emit("toolCompleted", "gesture-tap", INVOCATION_ID_1, 10, "Completed tool.");
 
     handle.recordInvocation(INVOCATION_ID_2, { ai_client: "other" });
-    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_2);
-    registry.events.emit("toolFailed", "screenshot", INVOCATION_ID_2, new Error("boom"), 5);
+    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_2, "Starting tool.");
+    registry.events.emit("toolFailed", "screenshot", INVOCATION_ID_2, new Error("boom"), 5, "Failed tool.");
 
     expect(trackSpy.mock.calls[0]![1]).toMatchObject({ ai_client: "codex" });
     expect(trackSpy.mock.calls[1]![1]).toMatchObject({ ai_client: "codex" });
@@ -76,7 +76,7 @@ describe("attachRegistryTelemetry", () => {
     const handle = attachRegistryTelemetry(registry);
 
     handle.recordInvocation(INVOCATION_ID_1, { platform: "ios" });
-    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1);
+    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1, "Starting tool.");
 
     expect(trackSpy.mock.calls[0]![1]).not.toHaveProperty("ai_client");
 
@@ -90,7 +90,7 @@ describe("attachRegistryTelemetry", () => {
 
     handle.recordInvocation(INVOCATION_ID_1, { platform: "android" });
 
-    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1);
+    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1, "Starting tool.");
 
     class TimeoutError extends Error {}
     emitToolFailed(
@@ -156,8 +156,8 @@ describe("attachRegistryTelemetry", () => {
     const handle = attachRegistryTelemetry(registry);
 
     expect(handle.getTotalToolCalls()).toBe(0);
-    registry.events.emit("toolInvoked", "x", INVOCATION_ID_1);
-    registry.events.emit("toolInvoked", "y", INVOCATION_ID_2);
+    registry.events.emit("toolInvoked", "x", INVOCATION_ID_1, "Starting tool.");
+    registry.events.emit("toolInvoked", "y", INVOCATION_ID_2, "Starting tool.");
     expect(handle.getTotalToolCalls()).toBe(2);
     handle.detach();
   });
@@ -167,7 +167,7 @@ describe("attachRegistryTelemetry", () => {
     const registry = new Registry();
     const handle = attachRegistryTelemetry(registry);
     handle.detach();
-    registry.events.emit("toolInvoked", "x", INVOCATION_ID_1);
+    registry.events.emit("toolInvoked", "x", INVOCATION_ID_1, "Starting tool.");
     expect(trackSpy).not.toHaveBeenCalled();
   });
 
@@ -175,7 +175,7 @@ describe("attachRegistryTelemetry", () => {
     const trackSpy = vi.spyOn(telemetry, "track");
     const registry = new Registry();
     const handle = attachRegistryTelemetry(registry);
-    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1);
+    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1, "Starting tool.");
     expect(trackSpy.mock.calls[0]![1]).toEqual({
       tool: "screenshot",
       tool_invocation_id: INVOCATION_ID_1,
@@ -190,7 +190,7 @@ describe("attachRegistryTelemetry", () => {
     const release = handle.recordInvocation(INVOCATION_ID_1, { platform: "android" });
 
     release();
-    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1);
+    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1, "Starting tool.");
 
     expect(trackSpy.mock.calls[0]![1]).toEqual({
       tool: "screenshot",
@@ -207,10 +207,10 @@ describe("attachRegistryTelemetry", () => {
     handle.recordInvocation(INVOCATION_ID_2, { platform: "android" });
     handle.recordInvocation(INVOCATION_ID_1, { platform: "ios" });
 
-    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1);
-    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_2);
-    registry.events.emit("toolCompleted", "screenshot", INVOCATION_ID_2, 20);
-    registry.events.emit("toolCompleted", "screenshot", INVOCATION_ID_1, 10);
+    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1, "Starting tool.");
+    registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_2, "Starting tool.");
+    registry.events.emit("toolCompleted", "screenshot", INVOCATION_ID_2, 20, "Completed tool.");
+    registry.events.emit("toolCompleted", "screenshot", INVOCATION_ID_1, 10, "Completed tool.");
 
     expect(trackSpy.mock.calls.map((call) => call[1])).toEqual([
       expect.objectContaining({
@@ -249,7 +249,8 @@ function emitToolFailed(
     toolId: string,
     toolInvocationId: string,
     error: Error,
-    durationMs: number
+    durationMs: number,
+    msg: string
   ) => void;
-  emit("toolFailed", toolId, toolInvocationId, error, durationMs);
+  emit("toolFailed", toolId, toolInvocationId, error, durationMs, "Failed tool.");
 }

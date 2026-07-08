@@ -68,14 +68,20 @@ describe("attachRegistryEventLogger", () => {
     const eventLog = createToolServerEventLog({ filePath });
     attachRegistryEventLogger(registry, eventLog);
 
-    registry.events.emit("toolInvoked", "screenshot", "call-1");
-    registry.events.emit("toolCompleted", "screenshot", "call-1", 12.34);
+    registry.events.emit("toolInvoked", "screenshot", "call-1", "Capturing screenshot.");
+    registry.events.emit(
+      "toolCompleted",
+      "screenshot",
+      "call-1",
+      12.34,
+      "Captured screenshot."
+    );
     await eventLog.dispose();
 
     expect(readEvents(filePath)).toEqual([
       expect.objectContaining({
         time: expect.any(String),
-        msg: "Tool screenshot was invoked.",
+        msg: "Capturing screenshot.",
         level: 30,
         type: "tool.invoked",
         toolId: "screenshot",
@@ -83,7 +89,7 @@ describe("attachRegistryEventLogger", () => {
       }),
       expect.objectContaining({
         time: expect.any(String),
-        msg: "Tool screenshot completed in 12.34 ms.",
+        msg: "Captured screenshot.",
         level: 30,
         type: "tool.completed",
         toolId: "screenshot",
@@ -104,13 +110,15 @@ describe("attachRegistryEventLogger", () => {
       "toolFailed",
       "screenshot",
       "call-2",
-      new Error("evaluate failed", { cause })
+      new Error("evaluate failed", { cause }),
+      undefined,
+      "Failed to capture screenshot."
     );
     await eventLog.dispose();
 
     const [event] = readEvents(filePath);
     expect(event).toMatchObject({
-      msg: "Tool screenshot failed.",
+      msg: "Failed to capture screenshot.",
       level: 50,
       type: "tool.failed",
       toolId: "screenshot",

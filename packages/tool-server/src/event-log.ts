@@ -153,10 +153,10 @@ export function attachRegistryEventLogger(registry: Registry, eventLog: ToolServ
     });
   });
 
-  registry.events.on("toolInvoked", (toolId: string, toolInvocationId: string) => {
+  registry.events.on("toolInvoked", (toolId: string, toolInvocationId: string, msg: string) => {
     eventLog.info({
       type: "tool.invoked",
-      msg: `Tool ${toolId} was invoked.`,
+      msg,
       toolId,
       toolInvocationId,
     });
@@ -164,10 +164,10 @@ export function attachRegistryEventLogger(registry: Registry, eventLog: ToolServ
 
   registry.events.on(
     "toolCompleted",
-    (toolId: string, toolInvocationId: string, durationMs: number) => {
+    (toolId: string, toolInvocationId: string, durationMs: number, msg: string) => {
       eventLog.info({
         type: "tool.completed",
-        msg: `Tool ${toolId} completed in ${durationMs.toFixed(2)} ms.`,
+        msg,
         toolId,
         toolInvocationId,
         durationMs,
@@ -177,10 +177,16 @@ export function attachRegistryEventLogger(registry: Registry, eventLog: ToolServ
 
   registry.events.on(
     "toolFailed",
-    (toolId: string, toolInvocationId: string, error: Error, durationMs?: number) => {
+    (
+      toolId: string,
+      toolInvocationId: string,
+      error: Error,
+      durationMs: number | undefined,
+      msg: string
+    ) => {
       eventLog.error({
         type: "tool.failed",
-        msg: `Tool ${toolId} failed.`,
+        msg,
         toolId,
         toolInvocationId,
         failureSignal: {
