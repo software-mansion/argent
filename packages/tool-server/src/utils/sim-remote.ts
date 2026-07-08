@@ -232,6 +232,7 @@ export async function proxyStop(udid: string, port: number): Promise<void> {
 export interface MoqInfo {
   url: string;
   fingerprint: string;
+  token: string;
 }
 
 export async function moqInfo(udid: string): Promise<MoqInfo> {
