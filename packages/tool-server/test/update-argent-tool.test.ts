@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 // Mock child_process and update-checker before importing the module under test.
 vi.mock("node:child_process", () => ({
@@ -16,7 +19,9 @@ const mockSpawn = vi.mocked(spawn);
 const mockGetUpdateState = vi.mocked(getUpdateState);
 
 function makeChild() {
-  return { unref: vi.fn() } as unknown as ReturnType<typeof spawn>;
+  // `on` is required: the tool attaches 'error' and 'exit' listeners (spawn
+  // ENOENT must not crash the tool-server; a no-op updater exit unblocks later calls).
+  return { unref: vi.fn(), on: vi.fn() } as unknown as ReturnType<typeof spawn>;
 }
 
 function stateWithUpdate(latestVersion = "99.0.0") {
@@ -58,44 +63,213 @@ function stateUpToDate() {
 describe("update-argent tool", () => {
   // Re-import per test so the module-level `updateScheduled` flag resets.
   let updateArgentTool: typeof import("../src/tools/system/update-argent").updateArgentTool;
+  let savedInstallKind: string | undefined;
+  let savedProjectRoot: string | undefined;
+  let originalCwd: string;
+  let tmpDir: string;
+
+  // A directory that provably hosts a local argent install, for tests that
+  // exercise the project-root resolution of a local-targeted update.
+  function stageDeclaringProject(): string {
+    const projDir = path.join(tmpDir, "proj");
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    return projDir;
+  }
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
     mockSpawn.mockReturnValue(makeChild());
     mockGetUpdateState.mockReturnValue(stateWithUpdate());
+    // Pin the running-install classification: the fallback cwd-walk would
+    // otherwise pick up whatever repository the test process runs in.
+    savedInstallKind = process.env.ARGENT_INSTALL_KIND;
+    savedProjectRoot = process.env.ARGENT_PROJECT_ROOT;
+    process.env.ARGENT_INSTALL_KIND = "global";
+    delete process.env.ARGENT_PROJECT_ROOT;
+    originalCwd = process.cwd();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-update-tool-"));
+    // A cwd with no ancestor declaring argent, so findDeclaringProjectRoot is
+    // deterministic (os.tmpdir() ancestors never declare the package).
+    process.chdir(tmpDir);
     const mod = await import("../src/tools/system/update-argent");
     updateArgentTool = mod.updateArgentTool;
   });
 
   afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedInstallKind === undefined) delete process.env.ARGENT_INSTALL_KIND;
+    else process.env.ARGENT_INSTALL_KIND = savedInstallKind;
+    if (savedProjectRoot === undefined) delete process.env.ARGENT_PROJECT_ROOT;
+    else process.env.ARGENT_PROJECT_ROOT = savedProjectRoot;
     vi.useRealTimers();
     vi.clearAllMocks();
   });
 
   it("returns a message with current and latest version on success", async () => {
-    const result = await updateArgentTool.execute({}, undefined, undefined);
+    const result = await updateArgentTool.execute({}, {}, undefined);
     expect((result as { message: string }).message).toContain("1.0.0 -> v99.0.0");
     expect((result as { message: string }).message).toContain("restart");
   });
 
-  it("spawns `argent update --yes` (not npx) after 2 seconds", async () => {
-    await updateArgentTool.execute({}, undefined, undefined);
+  it("spawns `argent update` with a pinned target flag (not npx) after 2 seconds", async () => {
+    await updateArgentTool.execute({}, { target: "global" }, undefined);
 
     vi.advanceTimersByTime(1999);
     expect(mockSpawn).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
     expect(mockSpawn).toHaveBeenCalledOnce();
-    expect(mockSpawn).toHaveBeenCalledWith("argent", ["update", "--yes", "--version", "99.0.0"], {
-      detached: true,
-      stdio: "ignore",
-      env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
-    });
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--global", "--version", "99.0.0"],
+      {
+        detached: true,
+        stdio: "ignore",
+        env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
+      }
+    );
+  });
+
+  it("a global-serving server refuses a local target instead of guessing the project", async () => {
+    // A global server is shared across every project of that install and its
+    // cwd is frozen at whatever session spawned it FIRST — walking it could
+    // pin a different project than the caller's and rewrite that project's
+    // manifest. Refuse with CLI guidance, even when cwd looks plausible.
+    const projDir = stageDeclaringProject();
+    process.chdir(projDir);
+
+    const result = await updateArgentTool.execute({}, { target: "local" }, undefined);
+
+    expect((result as { message: string }).message).toContain("Could not determine which project");
+    vi.advanceTimersByTime(5000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("pins --global (no --version) and --project-root when a local-serving server targets the global install", async () => {
+    // Cross-install direction that IS provable: the running local install
+    // knows its own project, and the --version pin describes the RUNNING
+    // install, so the installer resolves the global target's version itself.
+    const projDir = stageDeclaringProject();
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.env.ARGENT_PROJECT_ROOT = projDir;
+
+    const result = await updateArgentTool.execute({}, { target: "global" }, undefined);
+    vi.advanceTimersByTime(2000);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--global", "--project-root", projDir],
+      expect.not.objectContaining({ cwd: expect.anything() })
+    );
+    // Honest restart semantics: the running (local) server is not the target.
+    expect((result as { message: string }).message).toContain("not affected");
+    expect((result as { message: string }).message).not.toContain("will stop and restart");
+  });
+
+  it("pins --version and the recorded project root when the running install IS the local target", async () => {
+    const projDir = stageDeclaringProject();
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.env.ARGENT_PROJECT_ROOT = projDir;
+
+    await updateArgentTool.execute({}, { target: "local" }, undefined);
+    vi.advanceTimersByTime(2000);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--local", "--version", "99.0.0", "--project-root", projDir],
+      expect.not.objectContaining({ cwd: expect.anything() })
+    );
+  });
+
+  it("re-proves a recorded project root that no longer exists instead of pinning it", async () => {
+    // ARGENT_PROJECT_ROOT points at a since-deleted project; the tool must not
+    // schedule an update bound to a dead path.
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.env.ARGENT_PROJECT_ROOT = path.join(tmpDir, "deleted-project");
+
+    const result = await updateArgentTool.execute({}, { target: "local" }, undefined);
+
+    expect((result as { message: string }).message).toContain("Could not determine which project");
+    vi.advanceTimersByTime(5000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a local target when no project can be located, instead of guessing", async () => {
+    const result = await updateArgentTool.execute({}, { target: "local" }, undefined);
+
+    expect((result as { message: string }).message).toContain("Could not determine which project");
+    vi.advanceTimersByTime(5000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("pins both --global and --local when a local-serving server targets 'both'", async () => {
+    const projDir = stageDeclaringProject();
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.env.ARGENT_PROJECT_ROOT = projDir;
+
+    const result = await updateArgentTool.execute({}, { target: "both" }, undefined);
+    vi.advanceTimersByTime(2000);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--global", "--local", "--project-root", projDir],
+      expect.not.objectContaining({ cwd: expect.anything() })
+    );
+    // 'both' covers the running install — the restart promise holds.
+    expect((result as { message: string }).message).toContain("will stop and restart");
+  });
+
+  it("degrades 'both' to --global (and says so) when no project is locatable", async () => {
+    const result = await updateArgentTool.execute({}, { target: "both" }, undefined);
+    vi.advanceTimersByTime(2000);
+
+    // The degraded target IS the running install, so its gates and version pin
+    // apply like a plain global update.
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--global", "--version", "99.0.0"],
+      expect.not.objectContaining({ cwd: expect.anything() })
+    );
+    expect((result as { message: string }).message).toContain("project-local install was skipped");
+  });
+
+  it("a degraded 'both' honors the running install's up-to-date gate", async () => {
+    // With no locatable project, 'both' degrades to the running install — so an
+    // up-to-date state must answer instead of spawning a pointless updater.
+    mockGetUpdateState.mockReturnValue(stateUpToDate());
+
+    const result = await updateArgentTool.execute({}, { target: "both" }, undefined);
+
+    expect((result as { message: string }).message).toContain("already up to date");
+    vi.advanceTimersByTime(5000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("auto (default) pins exactly one target flag and hints at the other install", async () => {
+    const result = await updateArgentTool.execute({}, {}, undefined);
+    vi.advanceTimersByTime(2000);
+
+    const args = mockSpawn.mock.calls[0]![1] as string[];
+    expect(args[0]).toBe("update");
+    expect(args).toContain("--version");
+    expect(args).toContain("99.0.0");
+    // In 'auto' mode we resolve to the single install serving this session.
+    const flags = args.filter((a) => a === "--global" || a === "--local");
+    expect(flags).toHaveLength(1);
+    // ...and hint at the OTHER install so the agent can offer to update it too.
+    // The global->local direction goes through the CLI, which can bind the
+    // right project — the hint must say so.
+    expect((result as { message: string }).message).toMatch(/argent update --local/);
   });
 
   it("does NOT spawn before 2 seconds have elapsed", async () => {
-    await updateArgentTool.execute({}, undefined, undefined);
+    await updateArgentTool.execute({}, {}, undefined);
     vi.advanceTimersByTime(1999);
     expect(mockSpawn).not.toHaveBeenCalled();
   });
@@ -104,33 +278,136 @@ describe("update-argent tool", () => {
     const child = makeChild();
     mockSpawn.mockReturnValue(child);
 
-    await updateArgentTool.execute({}, undefined, undefined);
+    await updateArgentTool.execute({}, {}, undefined);
     vi.advanceTimersByTime(2000);
 
     expect(child.unref).toHaveBeenCalledOnce();
   });
 
-  it("returns 'already up to date' when no update is available", async () => {
+  it("swallows a spawn error and allows a retry (no tool-server crash in local mode)", async () => {
+    const handlers: Record<string, (err: Error) => void> = {};
+    const child = {
+      unref: vi.fn(),
+      on: vi.fn((event: string, cb: (err: Error) => void) => {
+        handlers[event] = cb;
+        return child;
+      }),
+    } as unknown as ReturnType<typeof spawn>;
+    mockSpawn.mockReturnValue(child);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await updateArgentTool.execute({}, {}, undefined);
+    vi.advanceTimersByTime(2000);
+
+    // ENOENT (`argent` not on PATH): the 'error' handler must exist and not throw.
+    expect(handlers.error).toBeTypeOf("function");
+    expect(() => handlers.error!(new Error("spawn argent ENOENT"))).not.toThrow();
+
+    // The scheduled flag reset, so a later call re-attempts rather than reporting
+    // "already in progress" forever.
+    const second = await updateArgentTool.execute({}, {}, undefined);
+    expect((second as { message: string }).message).not.toContain("already in progress");
+    vi.advanceTimersByTime(2000);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+    errSpy.mockRestore();
+  });
+
+  it("a no-op updater exit unblocks later calls (the server was not restarted)", async () => {
+    const handlers: Record<string, (...args: unknown[]) => void> = {};
+    const child = {
+      unref: vi.fn(),
+      on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+        handlers[event] = cb;
+        return child;
+      }),
+    } as unknown as ReturnType<typeof spawn>;
+    mockSpawn.mockReturnValue(child);
+
+    await updateArgentTool.execute({}, {}, undefined);
+    vi.advanceTimersByTime(2000);
+
+    // The updater exited without restarting this server (a no-op, e.g. a
+    // cross-install target already current); the next call must not be stuck
+    // behind "already in progress".
+    expect(handlers.exit).toBeTypeOf("function");
+    handlers.exit!(0);
+
+    const second = await updateArgentTool.execute({}, {}, undefined);
+    expect((second as { message: string }).message).not.toContain("already in progress");
+  });
+
+  it("returns 'already up to date' when no update is available for the running install", async () => {
     mockGetUpdateState.mockReturnValue(stateUpToDate());
 
-    const result = await updateArgentTool.execute({}, undefined, undefined);
+    const result = await updateArgentTool.execute({}, {}, undefined);
     expect((result as { message: string }).message).toContain("already up to date");
     vi.advanceTimersByTime(5000);
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
+  it("a cross-install target bypasses the running install's up-to-date gate", async () => {
+    // The update state describes only the RUNNING (local) install — it says
+    // nothing about the global install; the installer gets the final word.
+    mockGetUpdateState.mockReturnValue(stateUpToDate());
+    const projDir = stageDeclaringProject();
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.env.ARGENT_PROJECT_ROOT = projDir;
+
+    const result = await updateArgentTool.execute({}, { target: "global" }, undefined);
+    vi.advanceTimersByTime(2000);
+
+    expect((result as { message: string }).message).toContain("update initiated");
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--global", "--project-root", projDir],
+      expect.not.objectContaining({ cwd: expect.anything() })
+    );
+  });
+
+  it("accepts an optionalDependencies declaration when re-proving a local server's project", async () => {
+    // A local-serving server spawned by an older argent (no ARGENT_PROJECT_ROOT
+    // recorded): the cwd-walk fallback applies — its cwd IS its project.
+    const projDir = path.join(tmpDir, "opt-proj");
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projDir, "package.json"),
+      JSON.stringify({ name: "opt", optionalDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.chdir(projDir);
+
+    const result = await updateArgentTool.execute({}, { target: "local" }, undefined);
+    vi.advanceTimersByTime(2000);
+
+    expect((result as { message: string }).message).toContain("update initiated");
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      [
+        "update",
+        "--yes",
+        "--local",
+        "--version",
+        "99.0.0",
+        "--project-root",
+        fs.realpathSync(projDir),
+      ],
+      expect.anything()
+    );
+  });
+
   it("returns a held-by-policy message and does not spawn when the latest update is not installable yet", async () => {
     mockGetUpdateState.mockReturnValue(stateHeldByPolicy());
 
-    const result = await updateArgentTool.execute({}, undefined, undefined);
+    const result = await updateArgentTool.execute({}, {}, undefined);
     expect((result as { message: string }).message).toContain("not installable yet");
     vi.advanceTimersByTime(5000);
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
   it("returns 'already in progress' and does not double-spawn on second call", async () => {
-    await updateArgentTool.execute({}, undefined, undefined);
-    const second = await updateArgentTool.execute({}, undefined, undefined);
+    await updateArgentTool.execute({}, {}, undefined);
+    const second = await updateArgentTool.execute({}, {}, undefined);
 
     expect((second as { message: string }).message).toContain("already in progress");
 
