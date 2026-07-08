@@ -150,8 +150,10 @@ async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
 //     entirely — see listVegaDevices — so the wedged-VVD case is just ~6s.)
 //   - Android: one bounded `adb devices` call (6s) + ~5s concurrent getprop
 //     enrichment = ~11s.
-//   - iOS / AVD-list / Chromium self-bound by their own subprocess/socket timeouts
-//     (iOS `simctl` ~10s, AVD-list ~5s, Chromium <1s) — all comfortably under 25s.
+//   - iOS: waits up to 12s for another argent process' host-wide simctl-list lock
+//     and then runs a 10s bounded `simctl list devices` probe — still under 25s.
+//   - AVD-list / Chromium self-bound by their own subprocess/socket timeouts
+//     (AVD-list ~5s, Chromium <1s) — both comfortably under 25s.
 // The Vega binary resolution (`resolveVegaBinary`) runs first but is memoized and
 // returns the instant `vega` is found, so it adds ~0 in practice; only a pathological
 // cold-session `command -v` shell-fork hang would add up to ~4s on top of the 20s,

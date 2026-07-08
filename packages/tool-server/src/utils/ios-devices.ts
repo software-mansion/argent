@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
+import { open, readFile, stat, unlink, type FileHandle } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
+import {
+  SIMCTL_LIST_DEVICES_LOCK_RETRY_MS,
+  SIMCTL_LIST_DEVICES_LOCK_STALE_MS,
+  SIMCTL_LIST_DEVICES_LOCK_WAIT_MS,
+  SIMCTL_LIST_DEVICES_TIMEOUT_MS,
+} from "./simctl-config";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,8 +28,126 @@ interface SimctlDevice {
   isAvailable: boolean;
 }
 
-interface SimctlOutput {
+export interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
+}
+
+const DEFAULT_SIMCTL_LIST_DEVICES_LOCK_PATH = join(tmpdir(), "argent-simctl-list-devices.lock");
+let simctlListDevicesLockPath: string | null = DEFAULT_SIMCTL_LIST_DEVICES_LOCK_PATH;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && "code" in err;
+}
+
+async function removeStaleSimctlListDevicesLock(lockPath: string, now: number): Promise<void> {
+  const cleanupLockPath = `${lockPath}.cleanup`;
+  let cleanupHandle: FileHandle | undefined;
+  try {
+    cleanupHandle = await open(cleanupLockPath, "wx");
+    await cleanupHandle.writeFile(JSON.stringify({ pid: process.pid, createdAt: now }));
+  } catch (err) {
+    if (cleanupHandle) {
+      await cleanupHandle.close().catch(() => {});
+      await unlink(cleanupLockPath).catch(() => {});
+    }
+    if (isNodeError(err) && err.code === "EEXIST") return;
+    throw err;
+  }
+
+  try {
+    await removeStaleSimctlListDevicesLockWithCleanupLock(lockPath, now);
+  } finally {
+    await cleanupHandle.close().catch(() => {});
+    await unlink(cleanupLockPath).catch((err: unknown) => {
+      if (!isNodeError(err) || err.code !== "ENOENT") throw err;
+    });
+  }
+}
+
+async function removeStaleSimctlListDevicesLockWithCleanupLock(
+  lockPath: string,
+  now: number
+): Promise<void> {
+  let createdAt: number | undefined;
+
+  try {
+    const raw = await readFile(lockPath, "utf8");
+    const parsed = JSON.parse(raw) as { createdAt?: unknown };
+    if (typeof parsed.createdAt === "number") createdAt = parsed.createdAt;
+  } catch (err) {
+    if (isNodeError(err) && err.code === "ENOENT") return;
+  }
+
+  if (createdAt === undefined) {
+    try {
+      createdAt = (await stat(lockPath)).mtimeMs;
+    } catch (err) {
+      if (isNodeError(err) && err.code === "ENOENT") return;
+      throw err;
+    }
+  }
+
+  if (now - createdAt < SIMCTL_LIST_DEVICES_LOCK_STALE_MS) return;
+
+  try {
+    await unlink(lockPath);
+  } catch (err) {
+    if (!isNodeError(err) || err.code !== "ENOENT") throw err;
+  }
+}
+
+async function withSimctlListDevicesLock<T>(fn: () => Promise<T>): Promise<T> {
+  const lockPath = simctlListDevicesLockPath;
+  if (!lockPath) return await fn();
+
+  const started = Date.now();
+
+  while (true) {
+    try {
+      const handle = await open(lockPath, "wx");
+      try {
+        await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
+        return await fn();
+      } finally {
+        await handle.close().catch(() => {});
+        await unlink(lockPath).catch((err: unknown) => {
+          if (!isNodeError(err) || err.code !== "ENOENT") throw err;
+        });
+      }
+    } catch (err) {
+      if (!isNodeError(err) || err.code !== "EEXIST") throw err;
+    }
+
+    const now = Date.now();
+    await removeStaleSimctlListDevicesLock(lockPath, now);
+    const elapsed = now - started;
+    if (elapsed >= SIMCTL_LIST_DEVICES_LOCK_WAIT_MS) {
+      throw new Error(
+        `timed out waiting for simctl list devices lock after ${SIMCTL_LIST_DEVICES_LOCK_WAIT_MS}ms`
+      );
+    }
+    await sleep(
+      Math.min(SIMCTL_LIST_DEVICES_LOCK_RETRY_MS, SIMCTL_LIST_DEVICES_LOCK_WAIT_MS - elapsed)
+    );
+  }
+}
+
+/**
+ * Read CoreSimulator's device inventory with a host-wide cap: even if multiple
+ * tool-server processes are alive, only one of them should run
+ * `xcrun simctl list devices --json` at a time.
+ */
+export async function readSimctlDevices(): Promise<SimctlOutput> {
+  return await withSimctlListDevicesLock(async () => {
+    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"], {
+      timeout: SIMCTL_LIST_DEVICES_TIMEOUT_MS,
+    });
+    return JSON.parse(stdout) as SimctlOutput;
+  });
 }
 
 /**
@@ -30,10 +157,7 @@ interface SimctlOutput {
  */
 export async function listIosSimulators(): Promise<IosSimulator[]> {
   try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"], {
-      timeout: 10_000,
-    });
-    const data: SimctlOutput = JSON.parse(stdout);
+    const data = await readSimctlDevices();
     const out: IosSimulator[] = [];
     for (const [runtimeId, devices] of Object.entries(data.devices)) {
       // Accept both iOS and tvOS runtimes
@@ -112,4 +236,21 @@ export function getCachedSimulatorRuntimeKind(udid: string): "mobile" | "tv" | u
 /** Test-only: clear the iOS runtime-kind memo so cases don't leak verdicts. */
 export function __resetSimulatorRuntimeKindCacheForTesting(): void {
   runtimeKindCache.clear();
+}
+
+/** Test-only: isolate the cross-process simctl lock so parallel test workers do
+ * not contend on the real host lock. */
+export function __setSimctlListDevicesLockPathForTesting(path: string | null): void {
+  simctlListDevicesLockPath = path;
+}
+
+export function __resetSimctlListDevicesLockPathForTesting(): void {
+  simctlListDevicesLockPath = DEFAULT_SIMCTL_LIST_DEVICES_LOCK_PATH;
+}
+
+export async function __removeStaleSimctlListDevicesLockForTesting(
+  lockPath: string,
+  now: number
+): Promise<void> {
+  await removeStaleSimctlListDevicesLock(lockPath, now);
 }
