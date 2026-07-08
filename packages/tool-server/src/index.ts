@@ -386,7 +386,12 @@ export function start(): void {
           msg: `Tool server failed to bind ${HOST}:${PORT}.`,
           host: HOST,
           port: PORT,
-          err,
+          failureSignal: {
+            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+            failure_stage: "toolserver_bind",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          },
         });
         eventLog?.dispose();
         process.exit(1);
@@ -404,7 +409,12 @@ export function start(): void {
         eventLog?.error({
           type: "tool_server.start_failed",
           msg: "Tool server failed to start.",
-          err: err instanceof Error ? err : new Error(String(err)),
+          failureSignal: {
+            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+            failure_stage: "toolserver_start",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          },
         });
         shutdownReason = "crash";
         await shutdown?.(1);

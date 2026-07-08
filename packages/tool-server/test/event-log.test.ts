@@ -102,7 +102,7 @@ describe("attachRegistryEventLogger", () => {
     const cause = new Error("socket closed");
     registry.events.emit(
       "toolFailed",
-      "debugger-evaluate",
+      "screenshot",
       "call-2",
       new Error("evaluate failed", { cause })
     );
@@ -110,21 +110,19 @@ describe("attachRegistryEventLogger", () => {
 
     const [event] = readEvents(filePath);
     expect(event).toMatchObject({
-      msg: "Tool debugger-evaluate failed.",
+      msg: "Tool screenshot failed.",
       level: 50,
       type: "tool.failed",
-      toolId: "debugger-evaluate",
+      toolId: "screenshot",
       toolInvocationId: "call-2",
-      err: {
-        name: "Error",
-        message: "evaluate failed",
-        stack: expect.any(String),
-        cause: {
-          name: "Error",
-          message: "socket closed",
-          stack: expect.any(String),
-        },
+      failureSignal: {
+        error_code: "REGISTRY_TOOL_FAILURE_UNCLASSIFIED",
+        failure_stage: "registry_tool_failed_event",
+        failure_area: "registry",
+        error_kind: "unknown",
       },
     });
+    expect(JSON.stringify(event)).not.toContain("evaluate failed");
+    expect(JSON.stringify(event)).not.toContain("socket closed");
   });
 });

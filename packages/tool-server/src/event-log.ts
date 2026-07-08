@@ -1,7 +1,13 @@
 import bunyan from "bunyan";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Registry, ServiceState } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  getFailureSignalOrFallback,
+  type FailureSignal,
+  type Registry,
+  type ServiceState,
+} from "@argent/registry";
 
 export type EventLogValue =
   | string
@@ -11,9 +17,9 @@ export type EventLogValue =
   | EventLogValue[]
   | { [key: string]: EventLogValue | undefined };
 
-export type EventLogRecord = { type: string; msg: string; err?: Error } & Record<
+export type EventLogRecord = { type: string; msg: string } & Record<
   string,
-  EventLogValue | Error | undefined
+  EventLogValue | undefined
 >;
 
 type EventLogLevel = "debug" | "info" | "warn" | "error" | "fatal";
@@ -32,14 +38,6 @@ export interface CreateToolServerEventLogOptions {
   filePath: string;
 }
 
-function serializeError(error: Error): Record<string, unknown> {
-  const serialized = bunyan.stdSerializers.err(error) as Record<string, unknown>;
-  if (error.cause instanceof Error) {
-    serialized.cause = serializeError(error.cause);
-  }
-  return serialized;
-}
-
 export function createToolServerEventLog({
   filePath,
 }: CreateToolServerEventLogOptions): ToolServerEventLog {
@@ -48,9 +46,6 @@ export function createToolServerEventLog({
 
   const logger = bunyan.createLogger({
     name: "argent-tool-server",
-    serializers: {
-      err: serializeError,
-    },
     streams: [
       {
         level: "info",
@@ -99,7 +94,14 @@ export function attachRegistryEventLogger(registry: Registry, eventLog: ToolServ
       type: "service.error",
       msg: `Service ${serviceId} failed.`,
       serviceId,
-      err: error,
+      failureSignal: {
+        ...getFailureSignalOrFallback(error, {
+          error_code: FAILURE_CODES.REGISTRY_SERVICE_INITIALIZATION_FAILED,
+          failure_stage: "registry_service_error_event",
+          failure_area: "registry",
+          error_kind: "unknown",
+        }),
+      },
     });
   });
 
@@ -149,7 +151,14 @@ export function attachRegistryEventLogger(registry: Registry, eventLog: ToolServ
         msg: `Tool ${toolId} failed.`,
         toolId,
         toolInvocationId,
-        err: error,
+        failureSignal: {
+          ...getFailureSignalOrFallback(error, {
+            error_code: FAILURE_CODES.REGISTRY_TOOL_FAILURE_UNCLASSIFIED,
+            failure_stage: "registry_tool_failed_event",
+            failure_area: "registry",
+            error_kind: "unknown",
+          }),
+        },
         ...(durationMs !== undefined ? { durationMs } : {}),
       });
     }
