@@ -69,13 +69,7 @@ describe("attachRegistryEventLogger", () => {
     attachRegistryEventLogger(registry, eventLog);
 
     registry.events.emit("toolInvoked", "screenshot", "call-1", "Capturing screenshot.");
-    registry.events.emit(
-      "toolCompleted",
-      "screenshot",
-      "call-1",
-      12.34,
-      "Captured screenshot."
-    );
+    registry.events.emit("toolCompleted", "screenshot", "call-1", 12.34, "Captured screenshot.");
     await eventLog.dispose();
 
     expect(readEvents(filePath)).toEqual([

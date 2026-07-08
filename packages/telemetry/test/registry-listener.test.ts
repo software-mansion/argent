@@ -61,7 +61,14 @@ describe("attachRegistryTelemetry", () => {
 
     handle.recordInvocation(INVOCATION_ID_2, { ai_client: "other" });
     registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_2, "Starting tool.");
-    registry.events.emit("toolFailed", "screenshot", INVOCATION_ID_2, new Error("boom"), 5, "Failed tool.");
+    registry.events.emit(
+      "toolFailed",
+      "screenshot",
+      INVOCATION_ID_2,
+      new Error("boom"),
+      5,
+      "Failed tool."
+    );
 
     expect(trackSpy.mock.calls[0]![1]).toMatchObject({ ai_client: "codex" });
     expect(trackSpy.mock.calls[1]![1]).toMatchObject({ ai_client: "codex" });

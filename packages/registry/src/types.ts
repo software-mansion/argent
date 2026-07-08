@@ -216,10 +216,7 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   id: string;
   interaction?: {
     startedMsg?: (context: { params: TParams }) => string;
-    completedMsg?: (context: {
-      params: TParams;
-      result: TResult;
-    }) => string;
+    completedMsg?: (context: { params: TParams; result: TResult }) => string;
     failedMsg?: (context: {
       params: TParams;
       error: unknown;
@@ -310,7 +307,12 @@ export type RegistryEvents = {
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
   toolInvoked: (toolId: string, toolInvocationId: string, msg: string) => void;
-  toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number, msg: string) => void;
+  toolCompleted: (
+    toolId: string,
+    toolInvocationId: string,
+    durationMs: number,
+    msg: string
+  ) => void;
   toolFailed: (
     toolId: string,
     toolInvocationId: string,
