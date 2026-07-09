@@ -31,6 +31,48 @@ const DESCRIPTION_KEY = /description:\s*/y;
 // code-context position (see findIdLiteralsInCode).
 const ID_LITERAL = /id:\s*["']([^"']+)["']/y;
 
+// Characters after which a `/` starts a regex literal rather than division.
+// The standard prefix heuristic: a regex can only follow an operator, an opening
+// bracket, a separator, or the start of the input — never an identifier, a
+// number, a closing paren/bracket, or a string (where `/` means division).
+// Statement-keyword positions (`return /re/`) don't occur between an object's
+// properties, so the character class is sufficient here.
+const REGEX_PREV_CHARS = new Set("(,=:[!&|?{};+-*%<>~^");
+
+/**
+ * If a regex literal starts at src[i] (given the last significant code character
+ * before it), return the index just past its closing `/` and flags; otherwise
+ * return i (the `/` is division or invalid - treat it as a plain character).
+ * Handles `[...]` character classes (where `/` does not terminate) and `\`
+ * escapes. A newline before the closing `/` means it was not a regex literal.
+ *
+ * @param {string} src
+ * @param {number} i        index of the opening `/`
+ * @param {string | null} prevSig  last significant code char before i, or null
+ * @returns {number}
+ */
+function skipRegexLiteral(src, i, prevSig) {
+  if (prevSig !== null && !REGEX_PREV_CHARS.has(prevSig)) return i;
+  let inClass = false;
+  for (let j = i + 1; j < src.length; j++) {
+    const ch = src[j];
+    if (ch === "\\") {
+      j++;
+    } else if (ch === "\n") {
+      return i; // regex literals are single-line; this `/` was not one
+    } else if (inClass) {
+      if (ch === "]") inClass = false;
+    } else if (ch === "[") {
+      inClass = true;
+    } else if (ch === "/") {
+      let end = j + 1;
+      while (end < src.length && /[a-zA-Z]/.test(src[end])) end++; // flags
+      return end;
+    }
+  }
+  return i;
+}
+
 function walk(dir) {
   const entries = [];
   for (const name of readdirSync(dir)) {
@@ -70,12 +112,14 @@ function walk(dir) {
 function findOwnDescriptionValue(afterId) {
   let depth = 0;
   let quote = null; // active string/template delimiter, or null when in code
+  let prevSig = null; // last significant code char (regex-vs-division context)
   for (let i = 0; i < afterId.length; i++) {
     const ch = afterId[i];
     if (quote !== null) {
       if (ch === "\\") {
         i++; // skip the escaped character
       } else if (ch === quote) {
+        prevSig = ch; // a string value just ended; a following `/` is division
         quote = null;
       }
       continue;
@@ -95,6 +139,18 @@ function findOwnDescriptionValue(afterId) {
       i = end + 1; // land on the '/'; loop's i++ steps past it
       continue;
     }
+    // Skip regex literals whole: a quote inside one (e.g. `z.regex(/["']/)`)
+    // must not open a fake string, and a brace (e.g. `match: /[{]/`) must not
+    // shift the tracked depth - either would hide the real `description:` and
+    // drop the tool from the downstream security scan.
+    if (ch === "/") {
+      const end = skipRegexLiteral(afterId, i, prevSig);
+      if (end > i) {
+        i = end - 1; // loop's i++ steps past the regex
+        prevSig = ")"; // a value just ended; a following `/` is division
+        continue;
+      }
+    }
     if (ch === '"' || ch === "'" || ch === "`") {
       quote = ch;
     } else if (ch === "{") {
@@ -110,6 +166,7 @@ function findOwnDescriptionValue(afterId) {
       DESCRIPTION_KEY.lastIndex = i;
       if (DESCRIPTION_KEY.test(afterId)) return afterId.slice(DESCRIPTION_KEY.lastIndex);
     }
+    if (!/\s/.test(ch)) prevSig = ch;
   }
   return null;
 }
@@ -132,12 +189,16 @@ function findOwnDescriptionValue(afterId) {
 function findIdLiteralsInCode(src) {
   const out = [];
   let quote = null; // active string/template delimiter, or null when in code
+  let prevSig = null; // last significant code char (regex-vs-division context)
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
     if (quote !== null) {
       if (ch === "\\")
         i++; // skip the escaped character
-      else if (ch === quote) quote = null;
+      else if (ch === quote) {
+        prevSig = ch; // a string value just ended; a following `/` is division
+        quote = null;
+      }
       continue;
     }
     if (ch === "/" && src[i + 1] === "/") {
@@ -152,6 +213,17 @@ function findIdLiteralsInCode(src) {
       i = end + 1;
       continue;
     }
+    // Skip regex literals whole: a quote inside one placed BEFORE an `id:`
+    // (e.g. `s.replace(/"/g, "")`) would otherwise open a fake string that
+    // swallows the id, dropping the tool from the scan without a trace.
+    if (ch === "/") {
+      const end = skipRegexLiteral(src, i, prevSig);
+      if (end > i) {
+        i = end - 1; // loop's i++ steps past the regex
+        prevSig = ")"; // a value just ended; a following `/` is division
+        continue;
+      }
+    }
     if (ch === '"' || ch === "'" || ch === "`") {
       quote = ch;
       continue;
@@ -164,10 +236,44 @@ function findIdLiteralsInCode(src) {
       if (m) {
         out.push({ id: m[1], end: ID_LITERAL.lastIndex });
         i = ID_LITERAL.lastIndex - 1; // resume just past the value (loop's i++ advances)
+        prevSig = '"'; // the id literal's closing quote
+        continue;
       }
     }
+    if (!/\s/.test(ch)) prevSig = ch;
   }
   return out;
+}
+
+/**
+ * True when nothing extends a captured description literal: after trailing
+ * whitespace and comments, the property must end (`,` or `}`). Any other suffix
+ * (`+` concatenation, a `.slice(...)`-style method call, `as const`, ...) means
+ * the rendered description differs from the captured literal, so the caller
+ * must warn-skip instead of emitting wrong text into the security scan.
+ *
+ * @param {string} rest  source text starting just past the literal's closing delimiter
+ * @returns {boolean}
+ */
+function literalIsWholeValue(rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i];
+    if (/\s/.test(ch)) continue;
+    if (ch === "/" && rest[i + 1] === "/") {
+      const nl = rest.indexOf("\n", i + 2);
+      if (nl === -1) return false; // line comment to EOF - property never ends
+      i = nl;
+      continue;
+    }
+    if (ch === "/" && rest[i + 1] === "*") {
+      const end = rest.indexOf("*/", i + 2);
+      if (end === -1) return false; // unterminated block comment
+      i = end + 1;
+      continue;
+    }
+    return ch === "," || ch === "}";
+  }
+  return false; // EOF right after the literal - not a well-formed property
 }
 
 /**
@@ -208,16 +314,17 @@ export function extractToolsFromSource(src, filePath = "<source>") {
               ? value.match(/^'((?:[^'\\]|\\.)*)'/)
               : null;
       if (valueMatch) {
-        // The literal is only the whole description if nothing extends it. A
-        // trailing `+` (string concatenation) or an unescaped `${...}` in a
-        // template (runtime interpolation) means the rendered text isn't the
-        // captured literal alone - leave description null so it falls through to
-        // the loud warn-and-skip below rather than emitting a truncated string
-        // silently into the security scan.
-        const rest = value.slice(valueMatch[0].length).replace(/^\s+/, "");
-        const isConcatenation = rest.startsWith("+");
+        // The literal is only the whole description if nothing extends it: after
+        // it (and any whitespace/comments) the property must simply end with `,`
+        // or `}`. A `+` (concatenation), a `.` (method suffix like
+        // `".....".slice(0, 3)`), an `as const`, or any other suffix means the
+        // rendered text differs from the captured literal; an unescaped `${...}`
+        // in a template means runtime interpolation. Either way, leave
+        // description null so it falls through to the loud warn-and-skip below
+        // rather than emitting wrong text silently into the security scan.
+        const rest = value.slice(valueMatch[0].length);
         const hasInterpolation = delim === "`" && /\$\{/.test(valueMatch[1].replace(/\\./g, ""));
-        if (!isConcatenation && !hasInterpolation) {
+        if (literalIsWholeValue(rest) && !hasInterpolation) {
           // Unescape the standard JS escapes so the description reads as the
           // rendered string, not the source form — e.g. a template literal's
           // literal "\n" must become an actual newline, not survive as a stray
@@ -243,7 +350,7 @@ export function extractToolsFromSource(src, filePath = "<source>") {
       // warn on stderr so the failure is visible, while keeping stdout valid
       // JSON for the downstream `spidershield scan --tools-json` consumer.
       console.error(
-        `extract-tools: WARNING: tool "${id}" in ${filePath} has a description that is not a single string/template literal (concatenation, interpolation, or a non-literal value); skipping.`
+        `extract-tools: WARNING: tool "${id}" in ${filePath} has a description that is not a single string/template literal (a concatenation, an interpolation, a method/operator suffix, or a non-literal value); skipping.`
       );
     } else {
       // value === null: no sibling `description:` was found before this id's
@@ -267,16 +374,16 @@ function extractFromFile(filePath) {
   return extractToolsFromSource(readFileSync(filePath, "utf8"), filePath);
 }
 
-export function extractAllTools() {
-  const files = walk(toolsRoot);
-  const tools = [];
-  for (const f of files) {
-    tools.push(...extractFromFile(f));
-  }
-
-  // Deduplicate by name (take first occurrence). A same-name collision means a
-  // later tool's description never reaches the security scan; warn so that drop
-  // is loud rather than a silent scan-bypass (tool ids are meant to be unique).
+/**
+ * Deduplicate tools by name (first occurrence wins). A same-name collision means
+ * a later tool's description never reaches the security scan; warn so that drop
+ * is loud rather than a silent scan-bypass (tool ids are meant to be unique).
+ * Exported so the warning path is unit-testable.
+ *
+ * @param {{name: string, description: string}[]} tools
+ * @returns {{name: string, description: string}[]}
+ */
+export function dedupeToolsById(tools) {
   const seen = new Set();
   return tools.filter((t) => {
     if (seen.has(t.name)) {
@@ -288,6 +395,15 @@ export function extractAllTools() {
     seen.add(t.name);
     return true;
   });
+}
+
+export function extractAllTools() {
+  const files = walk(toolsRoot);
+  const tools = [];
+  for (const f of files) {
+    tools.push(...extractFromFile(f));
+  }
+  return dedupeToolsById(tools);
 }
 
 function main() {
