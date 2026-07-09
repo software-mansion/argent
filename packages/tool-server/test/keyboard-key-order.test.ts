@@ -113,9 +113,9 @@ describe("keyboard text+key ordering", () => {
     vi.mocked(injectVegaText).mockClear();
     vi.mocked(injectVegaNamedKey).mockClear();
 
-    await expect(vegaImpl.handler({}, { udid: VEGA.id, text: "hi", key: "bogus" }, VEGA)).rejects.toThrow(
-      /Unknown Vega key "bogus"/
-    );
+    await expect(
+      vegaImpl.handler({}, { udid: VEGA.id, text: "hi", key: "bogus" }, VEGA)
+    ).rejects.toThrow(/Unknown Vega key "bogus"/);
     expect(injectVegaText).not.toHaveBeenCalled();
     expect(injectVegaNamedKey).not.toHaveBeenCalled();
   });
