@@ -152,6 +152,10 @@ describe("native-profiler-start malloc_stack_logging", () => {
     expect(dashIdx).toBeGreaterThan(args.indexOf("--launch"));
     expect(args[dashIdx + 1]).toBe("/Users/x/Library/.../MyApp.app");
     expect(dashIdx + 1).toBe(args.length - 1);
+    // the malloc branch hand-rolls its argv apart from the strategy builder, so
+    // --no-prompt must be asserted here separately or a regression dropping it
+    // (xctrace then blocks on an interactive prompt) would slip past.
+    expect(args).toContain("--no-prompt");
 
     // the running instance is terminated first for a clean cold start
     const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
@@ -159,6 +163,56 @@ describe("native-profiler-start malloc_stack_logging", () => {
       true
     );
     expect(efsArgs.some((a) => a.includes("get_app_container"))).toBe(true);
+  });
+
+  it("keeps `--launch -- <app>` last when --notify-tracing-started is present", async () => {
+    // Every other test lets the notify mock throw, so registerStartupNotify
+    // returns null and the argv never contains --notify-tracing-started — on a
+    // real host it IS present. Exercise that argv shape: the notify args must
+    // precede --launch (xctrace treats everything after `--` as the launched
+    // command plus ITS args, so a notify arg ordered after it would be handed
+    // to the app instead of xctrace).
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    vi.doMock("child_process", () => ({
+      spawn: spawnFn,
+      execSync: execSyncFn,
+      execFile: vi.fn(),
+      execFileSync: execFileSyncFn,
+    }));
+    vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+      getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+      listenForDarwinNotification: vi.fn(() => ({
+        ready: Promise.resolve(),
+        fired: new Promise<void>(() => {}),
+        cancel: vi.fn(),
+      })),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+      waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
+    }));
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    const result = await startNativeProfilerIos(api, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      malloc_stack_logging: true,
+    });
+
+    expect(result.status).toBe("recording");
+    const [bin, args] = spawnFn.mock.calls[0] as unknown as [string, string[]];
+    expect(bin).toBe("xctrace");
+
+    const notifyIdx = args.indexOf("--notify-tracing-started");
+    expect(notifyIdx).toBeGreaterThan(-1);
+    expect(args[notifyIdx + 1]).toMatch(/^com\.argent\.ios-profiler\.started\./);
+    expect(notifyIdx).toBeLessThan(args.indexOf("--launch"));
+    expect(args).toContain("--no-prompt");
+    // `--launch -- <app>` must be the final three args even with the notify
+    // pair in the argv.
+    expect(args.slice(-3)).toEqual(["--launch", "--", "/Users/x/Library/.../MyApp.app"]);
   });
 
   it("captures the listapps plist with a large buffer so a big simulator can't overflow it", async () => {
