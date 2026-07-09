@@ -41,7 +41,9 @@ const zodSchema = z.object({
         "allocation records a backtrace), so leave it off for pure CPU/hang profiling. Requires a " +
         "non-degraded Xcode: on Xcode 26.4 and later the cold-launch path is broken, so the call is " +
         "rejected up front (re-run without the flag, or set ARGENT_IOS_CAPTURE=device to override if the " +
-        "device path works on your host). " +
+        "device path works on your host). ARGENT_IOS_CAPTURE=all-processes — e.g. exported globally " +
+        "for the normal capture path — also rejects this flag up front, since that fallback cannot " +
+        "cold-launch; unset it (or set it to device) first. " +
         "Ignored on Android."
     ),
 });
