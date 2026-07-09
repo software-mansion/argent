@@ -368,6 +368,7 @@ function resetStartState(api: NativeProfilerSessionApi): void {
   api.traceFile = null;
   api.appProcess = null;
   api.cpuFilterPid = null;
+  api.mallocStackLogging = null;
 }
 
 export function handleXctraceExit(
@@ -560,6 +561,9 @@ export async function startNativeProfilerIos(
   const attemptStart = async (): Promise<{ child: ChildProcess; pid: number }> => {
     api.appProcess = appProcess;
     api.traceFile = outputFile;
+    // Record the capture mode on the session so the report layer can name it
+    // (its unattributed-leaks note) instead of inferring it from output.
+    api.mallocStackLogging = useMallocStackLogging;
     // Null for the device strategy (already scoped by --attach) and for a
     // malloc_stack_logging cold launch (scoped by --launch on --device); the app
     // PID only for the host-wide all-processes fallback, to filter the samples.
@@ -881,5 +885,9 @@ export async function analyzeNativeProfilerIos(
     // iOS sidecar this Android-scoped change does not add; formatTraceFreshness
     // degrades cleanly to null in that case. See test/ios-instruments/load-freshness.test.ts.
     freshnessNote: formatTraceFreshness(api.wallClockStartMs, Date.now()) ?? undefined,
+    // Same live-session-only caveat as wallClockStartMs: profiler-load has no
+    // capture-mode sidecar, so a restored session renders with null (the
+    // unattributed-leaks note then falls back to inferring the mode).
+    mallocStackLogging: api.mallocStackLogging,
   });
 }

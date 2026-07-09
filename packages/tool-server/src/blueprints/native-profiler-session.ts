@@ -55,6 +55,15 @@ export interface NativeProfilerSessionApi {
    * scopes via --attach and leaves this null. See utils/ios-profiler/capture-strategy.
    */
   cpuFilterPid: number | null;
+  /**
+   * iOS-only: whether the current capture cold-launched the app with
+   * MallocStackLogging=1 (native-profiler-start's malloc_stack_logging flag),
+   * so the report layer can name the capture mode instead of inferring it from
+   * the attributed-leak count. Null when unknown — before any start, on
+   * Android, or for a session restored from disk (profiler-load has no
+   * capture-mode sidecar).
+   */
+  mallocStackLogging: boolean | null;
   recordingTimeout: NodeJS.Timeout | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
@@ -127,6 +136,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       wallClockStartMs: null,
       parsedData: null,
       cpuFilterPid: null,
+      mallocStackLogging: null,
       recordingTimeout: null,
       recordingTimedOut: false,
       recordingExitedUnexpectedly: false,

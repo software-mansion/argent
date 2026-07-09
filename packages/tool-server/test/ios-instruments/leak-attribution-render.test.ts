@@ -57,6 +57,50 @@ describe("leak attribution rendering", () => {
     expect(res.report).toContain("malloc stack logging was active");
   });
 
+  it("names the malloc capture — never --attach — when malloc_stack_logging was on but nothing attributed", async () => {
+    // The one case the attributed-count inference gets wrong: a capture that ran
+    // with malloc_stack_logging: true yet attributed nothing (short capture,
+    // freed-region reuse, system-lib leaks). With the capture mode threaded in
+    // explicitly, the note must not claim the capture used `--attach` and must
+    // not advise enabling the flag the user just used.
+    const res = await renderNativeProfilerReport({
+      payload: payload([leak(false, "<Call stack limit reached>")]),
+      traceFile: null,
+      mallocStackLogging: true,
+    });
+    expect(res.report).toContain("unattributed leak group");
+    expect(res.report).not.toContain("--attach");
+    expect(res.report).not.toContain("stack logging enabled at launch");
+    expect(res.report).toContain("ran with malloc stack logging enabled");
+  });
+
+  it("keeps the --attach hint when the capture mode is explicitly attach", async () => {
+    const res = await renderNativeProfilerReport({
+      payload: payload([leak(false, "<Call stack limit reached>")]),
+      traceFile: null,
+      mallocStackLogging: false,
+    });
+    expect(res.report).toContain("unattributed leak group");
+    expect(res.report).toContain("xctrace --attach");
+    expect(res.report).toContain("malloc stack logging enabled at launch");
+  });
+
+  it("falls back to the attributed-count inference when the capture mode is unknown", async () => {
+    // Sessions restored from disk (profiler-load) have no capture-mode sidecar:
+    // mallocStackLogging is null and the renderer infers the mode the old way —
+    // attributed leaks present ⇒ malloc logging must have been on.
+    const res = await renderNativeProfilerReport({
+      payload: payload([
+        leak(true, "hermes::vm::JSTypedArrayBase::createBuffer(...)", "hermes"),
+        leak(false, "<Call stack limit reached>"),
+      ]),
+      traceFile: null,
+      mallocStackLogging: null,
+    });
+    expect(res.report).toContain("malloc stack logging was active");
+    expect(res.report).not.toContain("stack logging enabled at launch");
+  });
+
   it("does not surface an unattributed leak as an attributed one", async () => {
     // Use a real classifier sentinel ("" → isLeakAttributed === false) so the
     // fixture's attributed:false matches what the pipeline would actually assign;

@@ -23,6 +23,14 @@ interface RenderInput {
   exportErrors?: Record<string, string>;
   /** Optional markdown warning shown in the header when the trace is stale. */
   freshnessNote?: string;
+  /**
+   * Whether the capture cold-launched the app with MallocStackLogging=1
+   * (native-profiler-start's malloc_stack_logging flag). Null/undefined when
+   * unknown — a session restored from disk has no capture-mode sidecar — in
+   * which case the unattributed-leaks note infers the mode from the
+   * attributed-leak count.
+   */
+  mallocStackLogging?: boolean | null;
 }
 
 interface InlineCap {
@@ -38,7 +46,7 @@ interface InlineCap {
 export async function renderNativeProfilerReport(
   input: RenderInput
 ): Promise<NativeProfilerAnalyzeResult> {
-  const { payload, traceFile, freshnessNote } = input;
+  const { payload, traceFile, freshnessNote, mallocStackLogging } = input;
   const exportErrors = input.exportErrors ?? {};
   const bottlenecksTotal = payload.bottlenecks.length;
   const status: "ok" | "analysis_failed" =
@@ -57,7 +65,8 @@ export async function renderNativeProfilerReport(
             hotspotLimit: Infinity,
             hangLimit: Infinity,
           },
-          freshnessNote
+          freshnessNote,
+          mallocStackLogging
         );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
@@ -73,7 +82,8 @@ export async function renderNativeProfilerReport(
             hotspotLimit: MAX_INLINE_HOTSPOTS,
             hangLimit: MAX_INLINE_HANGS,
           },
-          freshnessNote
+          freshnessNote,
+          mallocStackLogging
         );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
@@ -197,7 +207,8 @@ function renderFullReport(
   payload: ProfilerPayload,
   exportErrors?: Record<string, string>,
   cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity },
-  freshnessNote?: string
+  freshnessNote?: string,
+  mallocStackLogging?: boolean | null
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -411,27 +422,9 @@ function renderFullReport(
     }
 
     if (unattributedLeaks.length > 0) {
-      const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
-      const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
-      // When this same capture ALSO produced attributed leaks, the app was launched
-      // under malloc stack logging (the only way a responsible frame is recorded), so
-      // the unattributed remainder is pre-existing / freed-region reuse — telling the
-      // user to "re-run with malloc stack logging" would be advising the thing they
-      // just did. Only when nothing is attributed is the --attach hint apt. The render
-      // layer has no direct capture-mode signal, so it infers it from the attributed count.
-      const hint =
-        attributedLeaks.length > 0
-          ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
-            `groups carry no allocation backtrace (freed-region reuse, or allocations from before ` +
-            `recording started) and are most likely benign system allocations rather than confirmed app leaks.`
-          : `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
-            `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
-            `stack logging enabled at launch.`;
       lines.push(
         ``,
-        `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
-          `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
-          hint
+        renderUnattributedLeaksNote(unattributedLeaks, attributedLeaks.length, mallocStackLogging)
       );
     }
   }
@@ -541,6 +534,47 @@ function renderFullReport(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * The single low-confidence caveat line for unattributed leaks, shared by the
+ * full analyze report above and the combined React × native report — one
+ * source so the wording can't silently diverge between the two.
+ *
+ * `mallocStackLogging` is the actual capture mode when known (a live session
+ * carries it from native-profiler-start). Pass null/undefined when unknown —
+ * a session restored from disk has no capture-mode sidecar — and the mode is
+ * inferred from the attributed count instead: a responsible frame is only
+ * ever recorded when the app was launched under malloc stack logging, so
+ * attributed leaks present ⇒ the flag was on. The inference is silent about
+ * the one case it cannot see (a malloc capture that attributed nothing), which
+ * is exactly why callers that know the mode must pass it.
+ */
+export function renderUnattributedLeaksNote(
+  unattributedLeaks: MemoryLeak[],
+  attributedCount: number,
+  mallocStackLogging?: boolean | null
+): string {
+  const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
+  const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+  const mallocWasOn = mallocStackLogging ?? attributedCount > 0;
+  const hint = !mallocWasOn
+    ? `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
+      `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
+      `stack logging enabled at launch.`
+    : attributedCount > 0
+      ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
+        `groups carry no allocation backtrace (freed-region reuse, or allocations from before ` +
+        `recording started) and are most likely benign system allocations rather than confirmed app leaks.`
+      : `This capture ran with malloc stack logging enabled, yet none of these leaks carry an allocation ` +
+        `backtrace — the allocator recorded no usable stack for them (freed-region reuse, truncated stack ` +
+        `logs, or allocations outside the instrumented malloc zones). Most likely benign system allocations ` +
+        `rather than confirmed app leaks; re-running with malloc stack logging again is unlikely to attribute them.`;
+  return (
+    `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
+    `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
+    hint
+  );
+}
 
 function renderExportErrors(exportErrors?: Record<string, string>): string[] {
   if (!exportErrors || Object.keys(exportErrors).length === 0) return [];

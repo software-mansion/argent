@@ -96,6 +96,40 @@ describe("renderCombinedMemoryLeaks", () => {
     expect(out).not.toContain("No attributed leaks");
   });
 
+  it("names the malloc capture — never --attach — when malloc_stack_logging was on but nothing attributed", () => {
+    // Same inference gap as render.ts: with the capture mode passed in
+    // explicitly, a malloc capture that attributed nothing must not get the
+    // `--attach` framing or the advice to enable the flag that was already on.
+    const out = renderCombinedMemoryLeaks([UNATTRIBUTED], new Set(), true).join("\n");
+
+    expect(out).toContain("1 unattributed leak group(s)");
+    expect(out).not.toContain("--attach");
+    expect(out).not.toContain("stack logging enabled at launch");
+    expect(out).toContain("ran with malloc stack logging enabled");
+  });
+
+  it("renders the identical caveat line as the analyze report (shared helper, no drift)", async () => {
+    // The hint block used to be a verbatim copy in render.ts and here, kept in
+    // sync by hand. Both now delegate to one helper — pin that the emitted
+    // caveat line is byte-identical so a wording change can't silently diverge.
+    const { renderNativeProfilerReport } = await import("../src/utils/ios-profiler/render");
+    const combinedLine = renderCombinedMemoryLeaks([UNATTRIBUTED], new Set(), true)
+      .join("\n")
+      .split("\n")
+      .find((l) => l.includes("unattributed leak group"));
+    const res = await renderNativeProfilerReport({
+      payload: {
+        metadata: { traceFile: null, platform: "iOS", timestamp: "2026-06-16T00:00:00Z" },
+        bottlenecks: [UNATTRIBUTED],
+      },
+      traceFile: null,
+      mallocStackLogging: true,
+    });
+    const renderLine = res.report.split("\n").find((l) => l.includes("unattributed leak group"));
+    expect(combinedLine).toBeDefined();
+    expect(combinedLine).toBe(renderLine);
+  });
+
   it("ties an attributed leak to a recently-mounted React component when names overlap", () => {
     const out = renderCombinedMemoryLeaks([ATTRIBUTED], new Set(["MyModel"])).join("\n");
     expect(out).toContain("may relate to `MyModel` mount/unmount");

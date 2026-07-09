@@ -31,6 +31,7 @@ function fakeApi(): NativeProfilerSessionApi {
     capturePid: null,
     captureProcess: null,
     cpuFilterPid: null,
+    mallocStackLogging: null,
     traceFile: null,
     exportedFiles: null,
     profilingActive: false,
