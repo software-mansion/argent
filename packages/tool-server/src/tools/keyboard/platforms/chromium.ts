@@ -10,8 +10,11 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
 
+  // Resolve the named key before typing anything so an unknown name fails
+  // fast instead of after the text has already been typed.
+  let named: (typeof CHROMIUM_NAMED_KEYS)[string] | undefined;
   if (params.key) {
-    const named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
+    named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
     if (!named) {
       throw new FailureError(
         `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`,
@@ -23,20 +26,6 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
         }
       );
     }
-    await api.dispatchKeyEvent({
-      type: "keyDown",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    await sleep(delay);
-    await api.dispatchKeyEvent({
-      type: "keyUp",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    keysPressed++;
   }
 
   if (params.text) {
@@ -68,6 +57,25 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
       keysPressed++;
       await sleep(delay);
     }
+  }
+
+  // Key after text: a combined call means "type, then submit" (text +
+  // key:"enter"). Pressing the key first submits the still-empty field.
+  if (named) {
+    await api.dispatchKeyEvent({
+      type: "keyDown",
+      key: named.key,
+      code: named.code,
+      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+    });
+    await sleep(delay);
+    await api.dispatchKeyEvent({
+      type: "keyUp",
+      key: named.key,
+      code: named.code,
+      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+    });
+    keysPressed++;
   }
 
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };

@@ -35,9 +35,12 @@ export async function typeSimulatorServer(
     keysPressed++;
   };
 
+  // Resolve the named key before typing anything so an unknown name fails
+  // fast instead of after the text has already been typed.
+  let namedKeyCode: number | undefined;
   if (params.key) {
-    const code = NAMED_KEYS[params.key.toLowerCase()];
-    if (code == null) {
+    namedKeyCode = NAMED_KEYS[params.key.toLowerCase()];
+    if (namedKeyCode == null) {
       throw new FailureError(
         `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`,
         {
@@ -48,7 +51,6 @@ export async function typeSimulatorServer(
         }
       );
     }
-    await pressKeyCode(code);
   }
 
   if (params.text) {
@@ -64,6 +66,14 @@ export async function typeSimulatorServer(
       await pressKeyCode(press.keyCode, press.withShift);
       await sleep(delay);
     }
+  }
+
+  // Key after text: a combined call means "type, then submit" (text +
+  // key:"enter"). Pressing the key first fires enter into the still-empty
+  // field, which can blur it and leak the text to app-level key commands
+  // (e.g. "d" toggles the React Native dev menu when nothing is focused).
+  if (namedKeyCode != null) {
+    await pressKeyCode(namedKeyCode);
   }
 
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };
