@@ -69,19 +69,35 @@ export function assertTypeableAndroidText(text: string): void {
   // with an obvious alternative, so point the caller at it.
   if (/[\n\r]/.test(text)) {
     // Well-typed but not injectable: a caller input error (HTTP 400 via
-    // InvalidToolInputError), not an internal server fault (500).
+    // InvalidToolInputError), not an internal server fault (500). A newline is
+    // a character this backend can't type, so it buckets with the other
+    // un-typeable-character rejections under KEYBOARD_CHARACTER_UNSUPPORTED —
+    // the same telemetry code the iOS/chromium backends use (#420).
     throw new InvalidToolInputError(
-      'keyboard text must not contain a newline on Android; press it with key: "enter" instead'
+      'keyboard text must not contain a newline on Android; press it with key: "enter" instead',
+      {
+        error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+        failure_stage: "keyboard_text_newline_android",
+        error_kind: "unsupported",
+      }
     );
   }
   for (const char of text) {
     const cp = char.codePointAt(0)!;
     if (cp < 0x20 || cp > 0x7e) {
       const hex = cp.toString(16).toUpperCase().padStart(4, "0");
+      // Same KEYBOARD_CHARACTER_UNSUPPORTED bucket as the iOS/chromium
+      // backends' un-typeable-character rejections (#420), so telemetry for
+      // this failure doesn't diverge by platform.
       throw new InvalidToolInputError(
         `keyboard text can only contain printable ASCII on Android; character "${char}" ` +
           `(U+${hex}) can't be typed via \`adb input text\` — emoji crash it and other ` +
-          `non-ASCII (accented, CJK) is silently dropped. Remove it.`
+          `non-ASCII (accented, CJK) is silently dropped. Remove it.`,
+        {
+          error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+          failure_stage: "keyboard_char_android",
+          error_kind: "unsupported",
+        }
       );
     }
   }
@@ -98,7 +114,11 @@ export function assertTypeableAndroidText(text: string): void {
 //   "100%safe" → ["100%", "safe"] → "100%" + "safe" = "100%safe"
 //   "%s"       → ["%", "s"]        → "%" + "s"       = "%s"
 //   "%%"       → ["%", "%"]        → "%" + "%"       = "%%"
-function splitForVerbatimPercent(text: string): string[] {
+//
+// Exported: the Android-TV control blueprint types through the same on-device
+// `input text` sink and shares this quirk handling (blueprints/
+// android-tv-control.ts) — keep the workaround single-sourced.
+export function splitForVerbatimPercent(text: string): string[] {
   // Each `[^%]*%` chunk ends at (and includes) a `%`; the trailing `[^%]+` catches
   // the tail after the final `%`. Every `%` thus lands at a segment boundary.
   return text.match(/[^%]*%|[^%]+/g) ?? [];

@@ -4,7 +4,7 @@ import { InvalidToolInputError } from "../src/utils/capability";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
-import { injectAndroidNamedKey } from "../src/utils/android-input";
+import { injectAndroidNamedKey, injectAndroidText } from "../src/utils/android-input";
 
 // The `keyboard` tool's `key` is a free `z.string()` and its `text` is a free
 // string, so an unknown named key or an un-typeable character passes zod
@@ -92,6 +92,25 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
     await expectInvalidInput(
       injectAndroidNamedKey("emulator-5554", "pageup"),
       FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+  });
+
+  it("android: un-typeable character → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+    // Same granular bucket as the iOS/chromium un-typeable-character
+    // rejections above — not the generic TOOL_INPUT_INVALID (hubgan review).
+    // adbShell is never reached: the guard rejects before injection.
+    await expectInvalidInput(
+      injectAndroidText("emulator-5554", "café"),
+      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+    );
+  });
+
+  it("android: newline in text → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+    // A newline is a character this backend can't type, so it buckets with the
+    // un-typeable-character rejections.
+    await expectInvalidInput(
+      injectAndroidText("emulator-5554", "a\nb"),
+      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
     );
   });
 });

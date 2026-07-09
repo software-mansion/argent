@@ -211,6 +211,33 @@ describe("http dependency gate", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
+  it("prefers 424 over 400 when a dependency error is nested under an InvalidToolInputError", async () => {
+    // Pins the ordering invariant documented at the dispatcher's
+    // InvalidToolInputError → 400 check (http.ts): `findDependencyMissing`
+    // scans the WHOLE cause chain first, so for a chain carrying both classes
+    // the 424 wins. Reordering the two checks — or a throw site nesting a
+    // DependencyMissingError under an InvalidToolInputError — flips this test
+    // instead of silently flipping the status code.
+    stubProbe([]);
+    const registry = new Registry();
+    registry.registerTool({
+      id: "dual-class-error",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      async execute() {
+        const err = new InvalidToolInputError(
+          "that argument needs a missing dependency"
+        ) as InvalidToolInputError & { cause?: unknown };
+        err.cause = new DependencyMissingError(["adb"], "install adb please");
+        throw err;
+      },
+    });
+    const { app } = createHttpApp(registry);
+    const res = await request(app).post("/tools/dual-class-error").send({});
+    expect(res.status).toBe(424);
+    expect(res.body.error).toBe("install adb please");
+  });
+
   it("still returns 424 when the DependencyMissingError is buried two levels deep in the cause chain", async () => {
     // The registry wraps execute() errors in ToolExecutionError with `cause`.
     // If a future middleware adds a second wrap (or something else does), a

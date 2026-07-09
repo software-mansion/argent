@@ -731,6 +731,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // the cause of an `InvalidToolInputError`, the earlier whole-chain scan
         // would surface the dependency error and map the response to 424 first.
         // Keep `InvalidToolInputError` causeless, or reorder these two checks.
+        // That 424-wins precedence is pinned by the dual-class-chain case in
+        // http-dep-gate.test.ts, so reordering is a visible, deliberate change.
         const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
         if (invalidInputErr) {
           res.status(400).json({ error: invalidInputErr.message });
