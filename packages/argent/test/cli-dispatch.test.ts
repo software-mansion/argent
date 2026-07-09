@@ -32,34 +32,41 @@ let stageRoot = "";
 let distDir = "";
 let cliEntry = "";
 
-const FAKE_INSTALLER = `
+// Every fake export records that it ran (and with which argv), so tests can
+// assert both directions: the guard short-circuits BEFORE the installer loads,
+// and non-installer commands still reach their own bundle un-intercepted.
+const RECORD_SNIPPET = `
 import { writeFileSync } from "node:fs";
-// Records which installer entry point ran, so the guard test can prove the
-// dispatcher short-circuited before ever loading real (destructive) code.
-function record(name) {
+function record(name, rest) {
   const marker = process.env.ARGENT_E2E_MARKER;
-  if (marker) writeFileSync(marker, name);
+  const suffix = Array.isArray(rest) ? ":" + rest.join(" ") : "";
+  if (marker) writeFileSync(marker, name + suffix);
 }
-export function init() { record("init"); }
-export function update() { record("update"); }
-export function uninstall() { record("uninstall"); }
 `;
 
-const FAKE_NOOP_BUNDLE = [
-  "startMcpServer",
-  "tools",
-  "run",
-  "server",
-  "lens",
-  "link",
-  "unlink",
-  "enable",
-  "disable",
-  "flags",
-  "telemetry",
-]
-  .map((name) => `export function ${name}() {}`)
-  .join("\n");
+const FAKE_INSTALLER =
+  RECORD_SNIPPET +
+  ["init", "update", "uninstall"]
+    .map((name) => `export function ${name}(rest) { record("${name}", rest); }`)
+    .join("\n");
+
+const FAKE_CLI_BUNDLE =
+  RECORD_SNIPPET +
+  [
+    "startMcpServer",
+    "tools",
+    "run",
+    "server",
+    "lens",
+    "link",
+    "unlink",
+    "enable",
+    "disable",
+    "flags",
+    "telemetry",
+  ]
+    .map((name) => `export function ${name}(rest) { record("${name}", rest); }`)
+    .join("\n");
 
 interface RunResult {
   exitCode: number | null;
@@ -116,8 +123,8 @@ beforeAll(async () => {
   });
 
   fs.writeFileSync(path.join(distDir, "installer.mjs"), FAKE_INSTALLER);
-  fs.writeFileSync(path.join(distDir, "mcp-server.mjs"), FAKE_NOOP_BUNDLE);
-  fs.writeFileSync(path.join(distDir, "cli-cmds.mjs"), FAKE_NOOP_BUNDLE);
+  fs.writeFileSync(path.join(distDir, "mcp-server.mjs"), FAKE_CLI_BUNDLE);
+  fs.writeFileSync(path.join(distDir, "cli-cmds.mjs"), FAKE_CLI_BUNDLE);
 }, 60_000);
 
 afterAll(() => {
@@ -131,7 +138,15 @@ describe("cli dispatcher: installer-help guard", () => {
     const marker = freshMarker();
     await runCli(["uninstall"], marker);
     expect(fs.existsSync(marker)).toBe(true);
-    expect(fs.readFileSync(marker, "utf8")).toBe("uninstall");
+    expect(fs.readFileSync(marker, "utf8")).toBe("uninstall:");
+  });
+
+  it("control: `uninstall --yes` (no help) still reaches the installer with its argv", async () => {
+    // The bareword-help handling must not swallow a legitimate non-interactive
+    // uninstall.
+    const marker = freshMarker();
+    await runCli(["uninstall", "--yes"], marker);
+    expect(fs.readFileSync(marker, "utf8")).toBe("uninstall:--yes");
   });
 
   it("`uninstall --help` prints usage and never runs the installer", async () => {
@@ -153,11 +168,14 @@ describe("cli dispatcher: installer-help guard", () => {
   });
 
   it("lenient help forms also short-circuit the destructive uninstall", async () => {
-    // `--help=foo` / `--HELP` / bareword `help` are plausible fat-fingers on a
-    // command that deletes workspace config; none may reach the installer.
+    // `--help=foo` / `--HELP` / `-help` / smart-dash `—help` / bareword `help`
+    // are plausible fat-fingers on a command that deletes workspace config;
+    // none may reach the installer.
     for (const args of [
       ["uninstall", "--help=foo"],
       ["uninstall", "--HELP"],
+      ["uninstall", "-help"],
+      ["uninstall", "—help"],
       ["uninstall", "help"],
     ]) {
       const marker = freshMarker();
@@ -168,11 +186,71 @@ describe("cli dispatcher: installer-help guard", () => {
     }
   });
 
+  it("`uninstall --yes help` prints usage instead of running a prompt-free uninstall", async () => {
+    // The nastiest fallthrough: `--yes` makes the real uninstall
+    // non-interactive, so before the bareword was honoured past the first
+    // position this argv deleted workspace config with no prompt and no help.
+    for (const args of [
+      ["uninstall", "--yes", "help"],
+      ["uninstall", "-y", "help"],
+    ]) {
+      const marker = freshMarker();
+      const { exitCode, stdout } = await runCli(args, marker);
+      expect(exitCode, `${args.join(" ")} should exit 0`).toBe(0);
+      expect(stdout, `${args.join(" ")} should print usage`).toContain("Usage: argent uninstall");
+      expect(fs.existsSync(marker), `${args.join(" ")} must not run the installer`).toBe(false);
+    }
+  });
+
+  it("`init --from help` is NOT a help request — `help` is the --from value", async () => {
+    const marker = freshMarker();
+    const { exitCode } = await runCli(["init", "--from", "help"], marker);
+    expect(exitCode).toBe(0);
+    expect(fs.readFileSync(marker, "utf8")).toBe("init:--from help");
+  });
+
   it("`install --help` (alias) short-circuits and points at the aliased command", async () => {
     const marker = freshMarker();
     const { exitCode, stdout } = await runCli(["install", "--help"], marker);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Run `argent init --help`");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+});
+
+describe("cli dispatcher: non-installer commands and top-level arms", () => {
+  it("forwards `run <tool> --help` to the run bundle instead of intercepting it", async () => {
+    // The complementary guarantee to the guard: a non-installer `--help`
+    // belongs to the subcommand (`argent run <tool> --help` prints that
+    // tool's flags), so the dispatcher must pass it through untouched.
+    const marker = freshMarker();
+    const { exitCode } = await runCli(["run", "gesture-tap", "--help"], marker);
+    expect(exitCode).toBe(0);
+    expect(fs.readFileSync(marker, "utf8")).toBe("run:gesture-tap --help");
+  });
+
+  it("forwards `tools --help` to the tools bundle", async () => {
+    const marker = freshMarker();
+    const { exitCode } = await runCli(["tools", "--help"], marker);
+    expect(exitCode).toBe(0);
+    expect(fs.readFileSync(marker, "utf8")).toBe("tools:--help");
+  });
+
+  it("top-level `--help` prints the command table without loading any bundle", async () => {
+    const marker = freshMarker();
+    const { exitCode, stdout } = await runCli(["--help"], marker);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Usage: argent <command> [options]");
+    // The installer rows come from INSTALLER_COMMAND_META (single source).
+    expect(stdout).toContain("Initialize argent in the current workspace");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it("an unknown command prints help and exits 1", async () => {
+    const marker = freshMarker();
+    const { exitCode, stdout } = await runCli(["frobnicate"], marker);
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("Usage: argent <command> [options]");
     expect(fs.existsSync(marker)).toBe(false);
   });
 });

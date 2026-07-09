@@ -44,20 +44,49 @@ describe("installerHelpRequested", () => {
     expect(installerHelpRequested("update", ["--Help=x"])).toBe(true);
   });
 
+  it("is true for single-dash and smart-dash help flags", () => {
+    // `-help` is the Go-style spelling; `—help`/`–help` are what smart-dash
+    // editors rewrite `--help` into when it is pasted through them.
+    expect(installerHelpRequested("uninstall", ["-help"])).toBe(true);
+    expect(installerHelpRequested("uninstall", ["—help"])).toBe(true);
+    expect(installerHelpRequested("init", ["–help"])).toBe(true);
+    expect(installerHelpRequested("update", ["—help=x"])).toBe(true);
+  });
+
   it("is true for the bareword `help` as the first argument", () => {
     expect(installerHelpRequested("uninstall", ["help"])).toBe(true);
     expect(installerHelpRequested("init", ["HELP"])).toBe(true);
   });
 
-  it("does not treat a bareword `help` in a later position as help", () => {
-    // `--from help` names a package/tarball literally called `help`; it must
-    // not be swallowed as a help request.
+  it("is true for a bareword `help` after a non-value flag (the --yes footgun)", () => {
+    // `uninstall --yes help`: `--yes` takes no value, so `help` is a help
+    // request. Before this was honoured, the argv fell through to the REAL
+    // uninstall with `--yes` set — which skips the confirmation prompt and
+    // prunes the workspace config with no help and no prompt.
+    expect(installerHelpRequested("uninstall", ["--yes", "help"])).toBe(true);
+    expect(installerHelpRequested("uninstall", ["-y", "help"])).toBe(true);
+    expect(installerHelpRequested("update", ["--no-telemetry", "help"])).toBe(true);
+    // uninstall parses no value-taking flags at all, so even `--from help`
+    // (a flag it does not know) reads as a help request there.
+    expect(installerHelpRequested("uninstall", ["--from", "help"])).toBe(true);
+  });
+
+  it("does not treat a bareword `help` after a value-taking flag as help", () => {
+    // `--from help` names a package/tarball literally called `help`, and
+    // `--version help` / `--project-root help` are those flags' values; none
+    // may be swallowed as a help request.
     expect(installerHelpRequested("init", ["--from", "help"])).toBe(false);
+    expect(installerHelpRequested("install", ["--from", "help"])).toBe(false);
+    expect(installerHelpRequested("update", ["--version", "help"])).toBe(false);
+    expect(installerHelpRequested("update", ["--project-root", "help"])).toBe(false);
   });
 
   it("is false for a near-miss flag that only starts with --help", () => {
     // `--helpme` is not a help request (no `=`, not exactly `--help`).
     expect(installerHelpRequested("uninstall", ["--helpme"])).toBe(false);
+    // `/help` is not a recognised spelling either — it falls through to the
+    // command, where the interactive confirmation still guards uninstall.
+    expect(installerHelpRequested("uninstall", ["/help"])).toBe(false);
   });
 
   it("is false for an installer subcommand without a help flag", () => {
@@ -125,19 +154,26 @@ describe("printInstallerHelp", () => {
 
   it("lists the real flags each command accepts", () => {
     // The point of `--help` is to tell the user which flags exist.
+    // (installer-flags-sync.test.ts asserts these lists against the parsers.)
     const init = render("init");
     expect(init).toContain("Options:");
     expect(init).toContain("--yes, -y");
     expect(init).toContain("--no-telemetry");
     expect(init).toContain("--from <path>");
+    expect(init).toContain("--global");
+    expect(init).toContain("--local");
 
     const update = render("update");
     expect(update).toContain("--version <version>");
     expect(update).toContain("--no-telemetry");
+    expect(update).toContain("--global");
+    expect(update).toContain("--local");
 
     const uninstall = render("uninstall");
     expect(uninstall).toContain("Options:");
     expect(uninstall).toContain("--yes, -y");
+    expect(uninstall).toContain("--global");
+    expect(uninstall).toContain("--local");
   });
 
   it("points aliases at their target command instead of duplicating options", () => {
@@ -152,13 +188,14 @@ describe("printInstallerHelp", () => {
 
   it("only writes to stdout (no wizard / prompt / network)", () => {
     // The whole contract of the help path is that it is side-effect-free. This
-    // asserts the function's sole observable effect is console.log; the
-    // end-to-end guarantee (config left untouched) is covered in
+    // asserts the function writes to console.log and returns nothing — not how
+    // many calls it batches the output into, which is an implementation
+    // detail. The end-to-end guarantee (config left untouched) is covered in
     // cli-dispatch.test.ts.
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     const result = printInstallerHelp("uninstall");
     expect(result).toBeUndefined();
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
 });

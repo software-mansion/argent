@@ -29,30 +29,56 @@ export function isInstallerCommand(command: string | undefined): command is Inst
 }
 
 /**
- * True when `arg` is an unambiguous help flag. Matched leniently — these guard
- * destructive installer commands, so a fat-fingered `--help=foo` or an
- * upper-case `--HELP` must still short-circuit to usage rather than fall
- * through to the real (config-deleting) command.
+ * True when `arg` is a help flag. Accepted spellings, all case-insensitive:
+ * `--help`, `-h`, `--help=<anything>`, single-dash `-help`, and an em/en-dash
+ * `—help` (smart-dash editors rewrite a pasted `--` into one). Anything else —
+ * e.g. `/help` or `--helpme` — is NOT treated as help and falls through to the
+ * real command, where uninstall's interactive confirmation still guards the
+ * destructive path (unless `--yes` was also passed).
  */
 function isHelpFlag(arg: string): boolean {
-  const lower = arg.toLowerCase();
-  return lower === "--help" || lower === "-h" || lower.startsWith("--help=");
+  // Smart-dash normalization: a leading em/en dash stands for the `--` it was
+  // rewritten from.
+  const lower = arg.toLowerCase().replace(/^[—–]/, "--");
+  return lower === "--help" || lower === "-h" || lower === "-help" || lower.startsWith("--help=");
 }
+
+/**
+ * Flags that consume the next argv token, mirroring the real parsers
+ * (`extractFlag` in init-args.ts, the lookahead loops in update.ts). A
+ * bareword `help` immediately after one of these is that flag's value, not a
+ * help request. `--project-root` (update) is agent-internal — parsed but
+ * deliberately absent from the help text. Kept in sync with the parsers by
+ * test/installer-flags-sync.test.ts.
+ */
+export const VALUE_TAKING_FLAGS: Record<InstallerCommand, readonly string[]> = {
+  init: ["--from"],
+  install: ["--from"],
+  update: ["--version", "--project-root"],
+  uninstall: [],
+  remove: [],
+};
 
 /**
  * True when `command` is an installer subcommand and `rest` requests help. Pure
  * — the dispatcher uses it to short-circuit before running any side-effecting
  * installer code.
  *
- * Help is recognised from a help flag anywhere in `rest` (`--help`, `-h`,
- * `--help=…`, case-insensitively) or the bareword `help` as the first argument
- * (`argent uninstall help`). The bareword is only honoured in first position so
- * a flag value such as `--from help` isn't mistaken for a help request.
+ * Help is recognised from a help flag anywhere in `rest` (see `isHelpFlag`) or
+ * the bareword `help` (case-insensitive) in any position — EXCEPT directly
+ * after a value-taking flag, where it is that flag's value: `argent init
+ * --from help` names a package literally called `help` and must reach the
+ * installer. The bareword matters on the destructive path: `argent uninstall
+ * --yes help` would otherwise run a prompt-free uninstall (`--yes` skips the
+ * confirmation).
  */
 export function installerHelpRequested(command: string | undefined, rest: string[]): boolean {
   if (!isInstallerCommand(command)) return false;
   if (rest.some(isHelpFlag)) return true;
-  return rest[0]?.toLowerCase() === "help";
+  const valueFlags = VALUE_TAKING_FLAGS[command];
+  return rest.some(
+    (arg, i) => arg.toLowerCase() === "help" && (i === 0 || !valueFlags.includes(rest[i - 1]!))
+  );
 }
 
 interface InstallerOption {
@@ -94,10 +120,10 @@ const NO_TELEMETRY_OPTION: InstallerOption = {
 /**
  * How each installer subcommand is described in help — its summary and detail
  * lines (the sole copy, also rendered by the top-level table in cli.ts), usage,
- * and options. The option lists are hand-maintained to mirror the flags each
- * installer actually parses (init-args.ts, update.ts, uninstall.ts,
- * install-targets.ts in packages/argent-installer); keep them in sync when
- * those flags change — nothing links them automatically.
+ * and options. The option lists mirror the flags each installer actually parses
+ * (init-args.ts, update.ts, uninstall.ts, install-targets.ts in
+ * packages/argent-installer); test/installer-flags-sync.test.ts fails when they
+ * drift from the parsers.
  */
 export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMeta> = {
   init: {
