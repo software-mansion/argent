@@ -184,6 +184,20 @@ describe("android-input — injection", () => {
     expect(() => assertTypeableAndroidText("line1\nline2")).toThrow(InvalidToolInputError);
     expect(() => assertTypeableAndroidText("ok")).not.toThrow();
   });
+
+  it("rejects a prototype-chain key name as an unknown key, issuing no adb call", async () => {
+    // `key` is a free string, so a lookup on the plain keycode object would let
+    // `Object.prototype` members through: `ANDROID_NAMED_KEYCODES["constructor"]`
+    // is a function (not nullish), so without an own-property guard it would
+    // shell out `input keyevent <garbage>` (a 500) instead of a clean 400.
+    adbShell.mockClear();
+    for (const proto of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      await expect(injectAndroidNamedKey(SERIAL, proto)).rejects.toBeInstanceOf(
+        InvalidToolInputError
+      );
+    }
+    expect(adbShell).not.toHaveBeenCalled();
+  });
 });
 
 describe("android-input — `%` types verbatim (no `%s`→space corruption)", () => {
@@ -342,6 +356,28 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     // pair would miss the reorder.
     const cmds = adbShell.mock.calls.map((c) => c[1]);
     expect(cmds).toEqual(["input keyevent 66", "input text 'abc'"]); // KEYCODE_ENTER, then text
+  });
+
+  it("rejects a key + un-typeable text request with NO on-device side effect", async () => {
+    // The text is validated up front, so a combined request whose text can't be
+    // typed must reject before the key is pressed — not press the key and then
+    // 400 (which would submit a form on `key:"enter"` and double-fire on retry).
+    adbShell.mockClear();
+    await expect(
+      impl.handler({}, { udid: SERIAL, key: "enter", text: "café" } as KeyboardParams, phone)
+    ).rejects.toBeInstanceOf(InvalidToolInputError);
+    // Neither the keyevent nor any text segment reached the device.
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an adb transport failure as a throw (no silent success — the #449 fix)", async () => {
+    // The whole point of moving off the fire-and-forget HID transport: a failed
+    // inject must propagate, not resolve `{ typed }` while nothing was typed.
+    adbShell.mockClear();
+    adbShell.mockRejectedValueOnce(new Error("adb: device offline"));
+    await expect(
+      impl.handler({}, { udid: SERIAL, text: "hi" } as KeyboardParams, phone)
+    ).rejects.toThrow(/device offline/);
   });
 });
 

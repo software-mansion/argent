@@ -113,4 +113,38 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
       FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
     );
   });
+
+  // `key` is a free string, so a prototype-chain name ("constructor",
+  // "__proto__", …) must be rejected as an unknown key on every backend rather
+  // than slipping through an object lookup with a garbage value and going over
+  // the wire as a broken press. Pin the 400 + KEYBOARD_KEY_UNSUPPORTED bucket
+  // for a representative prototype key on each backend.
+  it("iOS: prototype-chain key name → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    await expectInvalidInput(
+      typeSimulatorServer(iosRegistry(), iosDevice, { udid: iosDevice.id, key: "constructor" }),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+  });
+
+  it("chromium: prototype-chain key name → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    const impl = makeChromiumImpl(chromiumRegistry());
+    await expectInvalidInput(
+      impl.handler({}, { udid: chromiumDevice.id, key: "constructor" }, chromiumDevice),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+  });
+
+  it("vega: prototype-chain key name → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    await expectInvalidInput(
+      injectVegaNamedKey("constructor"),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+  });
+
+  it("android: prototype-chain key name → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    await expectInvalidInput(
+      injectAndroidNamedKey("emulator-5554", "constructor"),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+  });
 });

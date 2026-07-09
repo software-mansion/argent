@@ -12,7 +12,13 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
   let keysPressed = 0;
 
   if (params.key) {
-    const named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
+    const lower = params.key.toLowerCase();
+    // Own-property check: a prototype key like "constructor" would otherwise
+    // pass the falsy guard with a garbage value and dispatch a broken CDP key
+    // event instead of rejecting as an unknown key.
+    const named = Object.hasOwn(CHROMIUM_NAMED_KEYS, lower)
+      ? CHROMIUM_NAMED_KEYS[lower]
+      : undefined;
     if (!named) {
       // Well-typed but unusable input (`key` is a free string) — a caller
       // mistake mapped to 400 (matching the Android path, uniform across

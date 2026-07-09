@@ -74,7 +74,11 @@ export function assertTypeableAndroidText(text: string): void {
     // un-typeable-character rejections under KEYBOARD_CHARACTER_UNSUPPORTED —
     // the same telemetry code the iOS/chromium backends use (#420).
     throw new InvalidToolInputError(
-      'keyboard text must not contain a newline on Android; press it with key: "enter" instead',
+      // Advice must hold on every path sharing this guard: named keys work on
+      // phones/tablets but are rejected on a TV target (typeTv), where the
+      // equivalent is the tv-remote select press.
+      "keyboard text must not contain a newline on Android; press enter separately " +
+        'instead (key: "enter" on a phone or tablet, tv-remote select on a TV)',
       {
         error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
         failure_stage: "keyboard_text_newline_android",
@@ -115,10 +119,10 @@ export function assertTypeableAndroidText(text: string): void {
 //   "%s"       → ["%", "s"]        → "%" + "s"       = "%s"
 //   "%%"       → ["%", "%"]        → "%" + "%"       = "%%"
 //
-// Exported: the Android-TV control blueprint types through the same on-device
-// `input text` sink and shares this quirk handling (blueprints/
-// android-tv-control.ts) — keep the workaround single-sourced.
-export function splitForVerbatimPercent(text: string): string[] {
+// Every `input text` sink flows through `injectAndroidText` below — the phone
+// keyboard path directly, the Android-TV blueprint per space-free word — so
+// this workaround stays single-sourced.
+function splitForVerbatimPercent(text: string): string[] {
   // Each `[^%]*%` chunk ends at (and includes) a `%`; the trailing `[^%]+` catches
   // the tail after the final `%`. Every `%` thus lands at a segment boundary.
   return text.match(/[^%]*%|[^%]+/g) ?? [];
@@ -150,7 +154,14 @@ export async function injectAndroidKeycode(serial: string, keycode: number): Pro
 
 /** Press a named key (keyboard tool `key` vocabulary) on Android. */
 export async function injectAndroidNamedKey(serial: string, name: string): Promise<void> {
-  const keycode = ANDROID_NAMED_KEYCODES[name.toLowerCase()];
+  const lower = name.toLowerCase();
+  // Own-property check: `key` is a free string, so a prototype key like
+  // "constructor" would otherwise pass the nullish guard with a garbage value
+  // (Object.prototype.constructor) and shell out a broken keyevent instead of
+  // rejecting as an unknown key.
+  const keycode = Object.hasOwn(ANDROID_NAMED_KEYCODES, lower)
+    ? ANDROID_NAMED_KEYCODES[lower]
+    : undefined;
   if (keycode == null) {
     // Unknown key name is a caller input error (HTTP 400), not a 500. Carry the
     // same KEYBOARD_KEY_UNSUPPORTED telemetry code the iOS/chromium/vega backends

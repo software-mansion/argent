@@ -99,6 +99,16 @@ describe("button tool — per-platform validation", () => {
     expect(injectAndroidKeycode).not.toHaveBeenCalled();
   });
 
+  it("surfaces an adb transport failure as a throw (no silent success — the #449 fix)", async () => {
+    // Moving off the fire-and-forget HID transport means a failed press must
+    // propagate, not resolve `{ pressed }` while nothing happened on-device.
+    vi.mocked(ensureDep).mockResolvedValueOnce(undefined);
+    vi.mocked(injectAndroidKeycode).mockRejectedValueOnce(new Error("adb: device offline"));
+    await expect(
+      buttonTool.execute(services, { udid: androidUdid, button: "home" })
+    ).rejects.toThrow(/device offline/);
+  });
+
   it("accepts every iOS-valid button and drives it over the sim-server as Down then Up (not adb)", async () => {
     // Derive from the SOURCE set (mirroring the Android button test) so a future
     // iOS button added to BUTTONS_BY_PLATFORM.ios is auto-covered here rather

@@ -38,7 +38,11 @@ export async function typeSimulatorServer(
   };
 
   if (params.key) {
-    const code = NAMED_KEYS[params.key.toLowerCase()];
+    const lower = params.key.toLowerCase();
+    // Own-property check: a prototype key like "constructor" would otherwise
+    // pass the nullish guard with a garbage value (Object.prototype.constructor)
+    // and go over the wire as a broken key press instead of rejecting.
+    const code = Object.hasOwn(NAMED_KEYS, lower) ? NAMED_KEYS[lower] : undefined;
     if (code == null) {
       // Well-typed but unusable input (the schema's `key` is a free string) — a
       // caller mistake, so InvalidToolInputError → HTTP 400, matching the Android

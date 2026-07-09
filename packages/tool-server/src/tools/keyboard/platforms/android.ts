@@ -1,7 +1,11 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { isAndroidTv } from "../../../utils/adb";
-import { injectAndroidNamedKey, injectAndroidText } from "../../../utils/android-input";
+import {
+  assertTypeableAndroidText,
+  injectAndroidNamedKey,
+  injectAndroidText,
+} from "../../../utils/android-input";
 import type { KeyboardParams, KeyboardResult } from "../types";
 import { typeTv } from "./tv";
 
@@ -16,6 +20,10 @@ async function typeAndroidPhone(
   params: KeyboardParams
 ): Promise<KeyboardResult> {
   let keysPressed = 0;
+  // Validate the text up front (a pure check, re-run harmlessly inside
+  // `injectAndroidText`): a combined key+text request with un-typeable text
+  // must reject with NO on-device side effect, not press the key and then 400.
+  if (params.text) assertTypeableAndroidText(params.text);
   if (params.key) {
     await injectAndroidNamedKey(device.id, params.key);
     keysPressed++;

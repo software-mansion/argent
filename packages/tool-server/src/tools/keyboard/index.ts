@@ -54,7 +54,7 @@ const capability: ToolCapability = {
 export function createKeyboardTool(registry: Registry): ToolDefinition<Params, KeyboardResult> {
   return {
     id: "keyboard",
-    description: `Type text or press special keys on the device (iOS simulator, Android emulator, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
+    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
 Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the device's input backend is not reachable.
 - text: types a string (supports uppercase, digits, common punctuation)

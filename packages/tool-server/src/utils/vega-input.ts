@@ -160,7 +160,11 @@ export async function injectVegaButtons(buttons: RemoteButton[]): Promise<void> 
 
 /** Press a single named key (keyboard tool `key` vocabulary). */
 export async function injectVegaNamedKey(name: string): Promise<void> {
-  const code = NAMED_KEYCODES[name.toLowerCase()];
+  const lower = name.toLowerCase();
+  // Own-property check: a prototype key like "constructor" would otherwise pass
+  // the falsy guard with a garbage value and reach inputd as a broken
+  // button_press instead of rejecting as an unknown key.
+  const code = Object.hasOwn(NAMED_KEYCODES, lower) ? NAMED_KEYCODES[lower] : undefined;
   if (!code) {
     // Well-typed but unusable input (`key` is a free string) — a caller mistake
     // mapped to 400 (matching the Android path, uniform across backends),

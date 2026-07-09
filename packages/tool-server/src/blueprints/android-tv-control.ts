@@ -5,8 +5,8 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
-import { adbExecOutBinary, adbShell, shellQuote, getAndroidRuntimeKind } from "../utils/adb";
-import { assertTypeableAndroidText, splitForVerbatimPercent } from "../utils/android-input";
+import { adbExecOutBinary, adbShell, getAndroidRuntimeKind } from "../utils/adb";
+import { assertTypeableAndroidText, injectAndroidText } from "../utils/android-input";
 import { UnsupportedOperationError } from "../utils/capability";
 import {
   parseUiAutomatorXml,
@@ -260,21 +260,19 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
         // already contained "%s" came out with a stray space and no error.
         //
         // Instead, send real spaces as KEYCODE_SPACE keyevents (never emitting
-        // "%s" ourselves) and route the `%` handling through the shared
-        // `splitForVerbatimPercent`: every segment ends at a `%`, so a
-        // user-supplied "%s" can never sit adjacent inside one `input text`
-        // call — `%` and `s` land in separate invocations and arrive verbatim.
-        // Quoting keeps all other shell metacharacters inert. Empty text yields
-        // no segments, so it is a no-op.
+        // "%s" ourselves) and type each space-free word through the shared
+        // `injectAndroidText`, which owns the `%`-adjacency handling (a
+        // user-supplied "%s" is split across separate `input text` calls and
+        // arrives verbatim) and the shell quoting. An empty word is a no-op
+        // inside `injectAndroidText`, so consecutive/leading/trailing spaces
+        // round-trip as bare KEYCODE_SPACE presses.
         const KEYCODE_SPACE = 62;
         const words = text.split(" ");
         for (let i = 0; i < words.length; i++) {
           if (i > 0) {
             await adbShell(serial, `input keyevent ${KEYCODE_SPACE}`, { timeoutMs: 10_000 });
           }
-          for (const chunk of splitForVerbatimPercent(words[i]!)) {
-            await adbShell(serial, `input text ${shellQuote(chunk)}`, { timeoutMs: 15_000 });
-          }
+          await injectAndroidText(serial, words[i]!);
         }
       },
 
