@@ -172,6 +172,65 @@ describe("aggregateLeaks", () => {
     );
   });
 
+  it("merges every unattributed frame spelling of one object type into one group", () => {
+    // The exporter is not consistent about how "no stack" is spelled: a missing
+    // responsible-frame attribute parses as "Unknown" (xml-parser default) while
+    // recorded-but-truncated stacks emit the "<Call stack limit reached>"
+    // sentinel, and isLeakAttributed() trims before matching. All of those are
+    // one attribution state, so they must be one group — keying on the verbatim
+    // frame would split them and inflate the "N unattributed leak group(s)"
+    // count in the report.
+    const rows = aggregateLeaks([
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: "<Call stack limit reached>",
+        responsibleLibrary: "",
+        count: 2,
+      },
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: "Unknown",
+        responsibleLibrary: "",
+        count: 1,
+      },
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: " <Call stack limit reached> ",
+        responsibleLibrary: "",
+        count: 1,
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.count).toBe(4);
+    expect(rows[0]?.totalSizeBytes).toBe(192);
+    expect(rows[0]?.attributed).toBe(false);
+  });
+
+  it("merges attributed frames that differ only by surrounding whitespace", () => {
+    const rows = aggregateLeaks([
+      {
+        objectType: "MyModel",
+        sizeBytes: 128,
+        responsibleFrame: "-[SiteA make]",
+        responsibleLibrary: "App",
+        count: 1,
+      },
+      {
+        objectType: "MyModel",
+        sizeBytes: 128,
+        responsibleFrame: "-[SiteA make] ",
+        responsibleLibrary: "App",
+        count: 1,
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.count).toBe(2);
+    expect(rows[0]?.attributed).toBe(true);
+  });
+
   it("returns [] for no leaks", () => {
     expect(aggregateLeaks([])).toEqual([]);
   });

@@ -136,13 +136,20 @@ export function aggregateLeaks(rawLeaks: RawLeak[]): MemoryLeak[] {
     // Group by object type AND responsible frame: with malloc_stack_logging the
     // same object type can leak from several distinct call sites, and each site
     // is its own finding — merging on type alone would attribute them all to
-    // whichever was parsed first and hide the rest. Under `--attach` (no stacks)
-    // every frame is the same sentinel, so this collapses back to per-type.
+    // whichever was parsed first and hide the rest. Key on the frame NORMALIZED
+    // the way isLeakAttributed() matches it (trimmed, with every unattributed
+    // spelling — "", "Unknown", the "<Call stack limit reached>" sentinel —
+    // collapsed to one bucket), not verbatim: an export can mix those spellings
+    // for one object type (a missing responsible-frame attribute parses as
+    // "Unknown"), and keying verbatim would split what is a single unattributed
+    // group per type. Under `--attach` (no stacks) everything is unattributed,
+    // so this collapses back to per-type.
     // The delimiter is a NUL, written as the `\u0000` escape rather than a
     // raw NUL byte: a raw NUL makes git treat this whole source file as binary
     // and hides the diff. Object types and demangled frames never contain a NUL,
     // so the composite key can't collide the way a printable separator could.
-    const key = `${leak.objectType}\u0000${leak.responsibleFrame}`;
+    const frameKey = isLeakAttributed(leak.responsibleFrame) ? leak.responsibleFrame.trim() : "";
+    const key = `${leak.objectType}\u0000${frameKey}`;
     const existing = groups.get(key);
     if (existing) {
       existing.totalSize += leak.sizeBytes * leak.count;
