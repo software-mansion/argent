@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
@@ -37,8 +38,14 @@ export async function typeSimulatorServer(
   if (params.key) {
     const code = NAMED_KEYS[params.key.toLowerCase()];
     if (code == null) {
-      throw new Error(
-        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`
+      throw new FailureError(
+        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`,
+        {
+          error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+          failure_stage: "keyboard_named_key_simulator",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
       );
     }
     await pressKeyCode(code);
@@ -47,7 +54,13 @@ export async function typeSimulatorServer(
   if (params.text) {
     for (const char of params.text) {
       const press = charToKeyPress(char);
-      if (!press) throw new Error(`No keycode for character "${char}"`);
+      if (!press)
+        throw new FailureError(`No keycode for character "${char}"`, {
+          error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+          failure_stage: "keyboard_char_simulator",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        });
       await pressKeyCode(press.keyCode, press.withShift);
       await sleep(delay);
     }

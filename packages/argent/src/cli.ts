@@ -19,7 +19,7 @@
  *   argent run <tool> [flags]     Invoke a tool by name
  *   argent server start [flags]   Spawn a long-lived tool-server (foreground by default)
  *   argent server status|stop|logs   Manage the shared tool-server
- *   argent lens                   Open Argent Lens bound to a fresh claude session (macOS)
+ *   argent lens                   Open Argent Lens bound to a fresh coding-agent session (macOS)
  *   argent link [flags]           Route client requests to a remote tool-server
  *   argent unlink                 Remove the persisted remote link
  *   argent enable <flag>          Enable a feature flag (global by default)
@@ -38,6 +38,7 @@ import {
   INSTALLER_COMMAND_META,
   installerHelpRequested,
   printInstallerHelp,
+  type InstallerCommand,
 } from "./installer-help.js";
 
 const PACKAGE_NAME = "@swmansion/argent";
@@ -59,6 +60,15 @@ const isMcpServer = command === "mcp";
 
 installFatalHandlers({ isMcpServer });
 
+// One installer row of the command table: the shared one-line summary from
+// INSTALLER_COMMAND_META plus its indented detail lines. Sourcing both from the
+// meta keeps this table and the per-command `--help` from drifting apart.
+function installerHelpEntry(command: InstallerCommand): string {
+  const meta = INSTALLER_COMMAND_META[command];
+  const details = (meta.details ?? []).map((line) => `\n              ${line}`).join("");
+  return `${meta.summary}${details}`;
+}
+
 function printHelp(): void {
   const version = getInstalledVersion() ?? "unknown";
   console.log(`
@@ -68,21 +78,21 @@ Usage: argent <command> [options]
 
 Commands:
   mcp         Start the MCP stdio server (used by editors)
-  init        ${INSTALLER_COMMAND_META.init.summary}
-  install     ${INSTALLER_COMMAND_META.install.summary}
-  update      ${INSTALLER_COMMAND_META.update.summary}
-  uninstall   ${INSTALLER_COMMAND_META.uninstall.summary}
-  remove      ${INSTALLER_COMMAND_META.remove.summary}
+  init        ${installerHelpEntry("init")}
+  install     ${installerHelpEntry("install")}
+  update      ${installerHelpEntry("update")}
+  uninstall   ${installerHelpEntry("uninstall")}
+  remove      ${installerHelpEntry("remove")}
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
   server      Manage the shared tool-server (start / status / stop / logs)
-  lens        Open Argent Lens bound to a fresh claude session (macOS)
+  lens        Open Argent Lens bound to a fresh coding-agent session (macOS)
   link        Route client requests to a remote tool-server
   unlink      Remove the persisted remote tool-server link
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
-  telemetry   Manage anonymous opt-out telemetry (status / enable / disable)
+  telemetry   Manage opt-out telemetry (status / enable / disable)
 
 Options:
   --help, -h     Show this help message

@@ -9,6 +9,7 @@ const telemetryMock = vi.hoisted(() => ({
   })),
   track: vi.fn(),
   shutdown: vi.fn().mockResolvedValue(undefined),
+  warmTelemetryIdentity: vi.fn().mockResolvedValue(undefined),
 }));
 
 const registryMock = vi.hoisted(() => ({
@@ -76,6 +77,11 @@ describe("tool-server startup telemetry", () => {
     const { start } = await import("../src/index");
 
     start();
+
+    // The identity warm-up is kicked off during startup (before the readiness
+    // gate), so the fingerprint resolve happens off the accept path. Regression
+    // guard: removing `warmTelemetryIdentity()` from start() must fail here.
+    expect(telemetryMock.warmTelemetryIdentity).toHaveBeenCalledTimes(1);
 
     await vi.waitFor(() => {
       expect(telemetryMock.shutdown).toHaveBeenCalledWith(1500);

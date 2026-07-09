@@ -4,7 +4,7 @@ import * as dns from "node:dns";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
 import semver from "semver";
-import { PACKAGE_NAME, NPM_REGISTRY, MCP_BINARY_NAME } from "./constants.js";
+import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { Document, parseDocument } from "yaml";
 import {
@@ -13,28 +13,55 @@ import {
   parse as parseJsonc,
   type JSONPath,
 } from "jsonc-parser";
+import { resolvePackageRoot } from "./package-root.js";
+
+// ── Re-exports ────────────────────────────────────────────────────────────────
+// The package-manager / topology / preflight / install-record helpers moved into
+// focused modules. They are re-exported here so existing import sites
+// (`./utils.js`) keep resolving unchanged.
+export {
+  formatShellCommand,
+  detectPackageManager,
+  detectProjectPackageManager,
+  globalInstallCommand,
+  globalUninstallCommand,
+  localInstallCommand,
+  localUninstallCommand,
+  projectInstallCommand,
+} from "./package-manager.js";
+export type { PackageManager, ShellCommand } from "./package-manager.js";
+export { hasProjectPackageJson, isYarnPnp } from "./preflight.js";
+export {
+  isTempRunnerPath,
+  isGloballyInstalled,
+  getGloballyInstalledVersion,
+  getGloballyInstalledPackageRoot,
+  isDeclaredLocally,
+  isLocallyInstalled,
+  getLocallyInstalledVersion,
+  readLocalPackageVersionUncached,
+  getLocalArgentBinRelPath,
+  probeLocalInstall,
+} from "./topology.js";
+export type { LocalInstallProbe } from "./topology.js";
+export {
+  getInstallRecordPath,
+  readInstallRecord,
+  writeInstallRecord,
+  removeInstallRecord,
+  resolveInstallMode,
+  resolveInstallModeFromFlags,
+  InstallModeFlagError,
+} from "./install-record.js";
+export type { InstallMode, InstallRecord } from "./install-record.js";
+export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
+export type { TargetFlags, DecideTargetsContext, TargetDecision } from "./install-targets.js";
 
 // ── Package root resolution ───────────────────────────────────────────────────
-// At runtime this module ships in two shapes:
-//   - tsc-compiled in the monorepo: packages/argent-installer/dist/utils.js
-//   - bundled into the published package: <pkg>/dist/installer.mjs
-// Walking up to the nearest package.json works for both layouts and any
-// future repacking, instead of hard-coding a "two levels up" assumption.
-
-/**
- * Given a starting dirname, walk up until the first directory containing a
- * package.json. Falls back to the starting directory if none found. Exported
- * so it can be tested against simulated directory structures.
- */
-export function resolvePackageRoot(dirname: string): string {
-  let current = path.resolve(dirname);
-  while (true) {
-    if (fs.existsSync(path.join(current, "package.json"))) return current;
-    const parent = path.dirname(current);
-    if (parent === current) return path.resolve(dirname);
-    current = parent;
-  }
-}
+// resolvePackageRoot lives in the leaf package-root.ts module (topology.ts
+// needs it too, and importing it from this barrel — which re-exports topology —
+// was an ESM cycle). Re-exported here so existing import sites keep resolving.
+export { resolvePackageRoot };
 
 export const PACKAGE_ROOT = resolvePackageRoot(import.meta.dirname);
 
@@ -351,37 +378,6 @@ export function getInstalledVersion(): string | null {
   }
 }
 
-/**
- * Read the version of the globally-installed argent package — distinct from
- * {@link getInstalledVersion}, which reads the package.json this code is
- * currently executing from. When invoked via `npx @swmansion/argent`, the
- * npx cache is always at the latest published version, so reading
- * PACKAGE_ROOT/package.json masks an outdated global install and lets the
- * update check report "already on the latest" incorrectly. This helper
- * resolves the global binary via `which -a` / `where`, follows symlinks to
- * the actual entrypoint, and walks up to the owning package.json instead.
- *
- * Returns null when argent is not permanently installed on PATH, or when
- * the global package layout cannot be resolved (e.g., Windows wrapper
- * scripts that aren't symlinks). Callers should treat null as "could not
- * determine" — preferable to silently using the running package's version,
- * which is the bug this guards against.
- */
-export function getGloballyInstalledVersion(): string | null {
-  const binaryPath = getGlobalBinaryPath();
-  if (!binaryPath) return null;
-  try {
-    const realPath = fs.realpathSync(binaryPath);
-    const pkgRoot = resolvePackageRoot(path.dirname(realPath));
-    const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8")) as {
-      version?: string;
-    };
-    return pkg.version ?? null;
-  } catch {
-    return null;
-  }
-}
-
 const PROBE_TIMEOUT_MS = 3_000;
 
 export function getLatestVersion(): string {
@@ -398,55 +394,6 @@ export function getLatestVersion(): string {
 export function isNewerVersion(candidate: string, current: string): boolean {
   if (!semver.valid(candidate) || !semver.valid(current)) return false;
   return semver.gt(candidate, current);
-}
-
-// Path segments used by temp package runners (npx, pnpm dlx, bunx, yarn dlx).
-// When invoked via one of these, the runner prepends its cache .bin/ dir to PATH,
-// so `which argent` succeeds even though argent is not permanently installed globally.
-const TEMP_RUNNER_MARKERS = [
-  "_npx",
-  "/dlx-",
-  "\\dlx-",
-  "bun/install/cache",
-  ".bun\\install\\cache",
-];
-
-export function isTempRunnerPath(binaryPath: string): boolean {
-  return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
-}
-
-/**
- * Resolve the path of the globally-installed argent binary, ignoring
- * temp-runner caches (npx / pnpm dlx / bunx / yarn dlx). On Windows `where`
- * returns every match, on Unix `which -a` does — we inspect each line so a
- * concurrent npx invocation does not mask a real global install. Returns
- * null when argent is not permanently installed on PATH.
- */
-function getGlobalBinaryPath(): string | null {
-  try {
-    const cmd = process.platform === "win32" ? "where" : "which -a";
-    const output = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return (
-      output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .find((line) => !isTempRunnerPath(line)) ?? null
-    );
-  } catch {
-    return null;
-  }
-}
-
-/**
- * True iff argent is permanently installed on the user's PATH (not just being
- * executed transiently from an npx / dlx / bunx cache).
- */
-export function isGloballyInstalled(): boolean {
-  return getGlobalBinaryPath() !== null;
 }
 
 // Every `npx` call is `npm exec`, which evaluates the host project's
@@ -489,52 +436,4 @@ export async function isOnline(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
       resolve(!err);
     });
   });
-}
-
-// ── Package manager detection ─────────────────────────────────────────────────
-
-export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
-
-export interface ShellCommand {
-  bin: string;
-  args: string[];
-}
-
-export function formatShellCommand(cmd: ShellCommand): string {
-  const parts = [cmd.bin, ...cmd.args.map((a) => (a.includes(" ") ? `"${a}"` : a))];
-  return parts.join(" ");
-}
-
-export function detectPackageManager(): PackageManager {
-  const agent = process.env.npm_config_user_agent ?? "";
-  if (agent.startsWith("yarn")) return "yarn";
-  if (agent.startsWith("pnpm")) return "pnpm";
-  if (agent.startsWith("bun")) return "bun";
-  return "npm";
-}
-
-export function globalInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
-  switch (pm) {
-    case "yarn":
-      return { bin: "yarn", args: ["global", "add", pkg] };
-    case "pnpm":
-      return { bin: "pnpm", args: ["add", "-g", pkg] };
-    case "bun":
-      return { bin: "bun", args: ["add", "-g", pkg] };
-    default:
-      return { bin: "npm", args: ["install", "-g", pkg] };
-  }
-}
-
-export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
-  switch (pm) {
-    case "yarn":
-      return { bin: "yarn", args: ["global", "remove", pkg] };
-    case "pnpm":
-      return { bin: "pnpm", args: ["remove", "-g", pkg] };
-    case "bun":
-      return { bin: "bun", args: ["remove", "-g", pkg] };
-    default:
-      return { bin: "npm", args: ["uninstall", "-g", pkg] };
-  }
 }

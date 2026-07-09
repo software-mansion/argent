@@ -15,8 +15,8 @@
  * them would swallow their own command-specific help.
  *
  * This module is also the single source of truth for each installer command's
- * one-line summary: the top-level `argent --help` table in cli.ts reads it from
- * `INSTALLER_COMMAND_META` so the two can't drift.
+ * help text: the top-level `argent --help` table in cli.ts reads the summary
+ * and detail lines from `INSTALLER_COMMAND_META` so the two can't drift.
  */
 
 /** Installer subcommands that lack their own `--help` handling. */
@@ -68,6 +68,12 @@ interface InstallerCommandMeta {
    * `printInstallerHelp` appends its own.
    */
   summary: string;
+  /**
+   * Extra lines rendered indented under the summary in the top-level command
+   * table (cli.ts). Per-command `--help` conveys the same information through
+   * the option descriptions instead.
+   */
+  details?: string[];
   /** Usage line, e.g. `argent init [options]`. */
   usage: string;
   /** Real flags this command parses. Empty for aliases (see `aliasOf`). */
@@ -86,15 +92,20 @@ const NO_TELEMETRY_OPTION: InstallerOption = {
 };
 
 /**
- * How each installer subcommand is described in help — its summary (the sole
- * copy, also rendered by the top-level table in cli.ts), usage, and options.
- * The option lists are hand-maintained to mirror the flags each installer
- * actually parses (see packages/argent-installer/src/{init,update,uninstall}.ts);
- * keep them in sync when those flags change — nothing links them automatically.
+ * How each installer subcommand is described in help — its summary and detail
+ * lines (the sole copy, also rendered by the top-level table in cli.ts), usage,
+ * and options. The option lists are hand-maintained to mirror the flags each
+ * installer actually parses (init-args.ts, update.ts, uninstall.ts,
+ * install-targets.ts in packages/argent-installer); keep them in sync when
+ * those flags change — nothing links them automatically.
  */
 export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMeta> = {
   init: {
     summary: "Initialize argent in the current workspace (MCP server + skills + rules)",
+    details: [
+      "(--global [default] installs on PATH; --local commits a",
+      "devDependency setup the whole team gets on `npm install`)",
+    ],
     usage: "argent init [options]",
     options: [
       NON_INTERACTIVE_OPTION,
@@ -102,6 +113,14 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
       {
         flag: "--from <path>",
         description: "Install from a local tarball or package spec instead of the npm release.",
+      },
+      {
+        flag: "--global",
+        description: "Install on PATH for this machine (the default).",
+      },
+      {
+        flag: "--local",
+        description: "Commit a devDependency setup the whole team gets on `npm install`.",
       },
     ],
   },
@@ -113,6 +132,10 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
   },
   update: {
     summary: "Check for updates and refresh configuration",
+    details: [
+      "(acts on the present install — both when a global install and a",
+      "project devDependency coexist; --global/--local select explicitly)",
+    ],
     usage: "argent update [options]",
     options: [
       NON_INTERACTIVE_OPTION,
@@ -121,12 +144,32 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
         flag: "--version <version>",
         description: "Update to a specific version instead of the latest.",
       },
+      {
+        flag: "--global",
+        description: "Act on the global (PATH) install when both kinds coexist.",
+      },
+      {
+        flag: "--local",
+        description: "Act on the project-local (devDependency) install when both kinds coexist.",
+      },
     ],
   },
   uninstall: {
     summary: "Remove argent configuration from the current workspace",
+    details: ["(--global/--local choose which install — package and its", "configs — is removed)"],
     usage: "argent uninstall [options]",
-    options: [{ flag: "--yes, -y", description: "Skip the confirmation prompt." }],
+    options: [
+      { flag: "--yes, -y", description: "Skip the confirmation prompt." },
+      {
+        flag: "--global",
+        description: "Remove the global (PATH) install — the package and its configs.",
+      },
+      {
+        flag: "--local",
+        description:
+          "Remove the project-local (devDependency) install — the package and its configs.",
+      },
+    ],
   },
   remove: {
     summary: "Alias for uninstall",

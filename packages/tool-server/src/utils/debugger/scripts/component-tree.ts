@@ -30,8 +30,21 @@ export function makeComponentTreeScript(opts: {
   return `(async function() {
   var REQUEST_ID = ${requestId};
   var TRACK_SKIPPED = ${trackSkipped};
+  // Deliver errors through the SAME binding channel as the success path. The
+  // consumer (evaluateWithBinding) runs Runtime.evaluate WITHOUT returnByValue/
+  // awaitPromise, so the IIFE's return value is discarded — a 'return' here never
+  // settles the promise and the tool hangs until the 15s binding timeout. Route
+  // every error through __argent_callback with result = JSON.stringify({ error }),
+  // matching the shape the tool parses (response.result → JSON.parse → .error).
+  function __argent_fail(msg) {
+    __argent_callback(JSON.stringify({ requestId: REQUEST_ID, result: JSON.stringify({ error: msg }) }));
+  }
+  // Route any UNEXPECTED throw (outside the named guards below) through the same
+  // binding, so a crash still settles immediately instead of hanging to the 15s
+  // binding timeout. Mirrors inspect-at-point.ts's top-level try/catch.
+  try {
   var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!hook) return JSON.stringify({ error: 'No DevTools hook' });
+  if (!hook) { __argent_fail('No DevTools hook'); return; }
   // Collect fiber roots across ALL renderers. A single React renderer id is not
   // safe to assume: secondary reconcilers (e.g. react-native-skia) frequently
   // register first and own renderer id 1, whose roots contain only that library's
@@ -49,7 +62,7 @@ export function makeComponentTreeScript(opts: {
     var _legacy = hook.getFiberRoots(1);
     if (_legacy) _legacy.forEach(function(_rt) { _allRoots.push(_rt); });
   }
-  if (_allRoots.length === 0) return JSON.stringify({ error: 'No fiber roots' });
+  if (_allRoots.length === 0) { __argent_fail('No fiber roots'); return; }
   // Pick the mounted root with the largest fiber subtree — i.e. the real app UI.
   var root = _allRoots[0];
   var _bestSize = -1;
@@ -79,7 +92,7 @@ export function makeComponentTreeScript(opts: {
         try { var m = __r(i); if (m && m.UIManager) { UIManagerMod = m.UIManager; break; } } catch(e) {}
       }
     }
-    if (!UIManagerMod) return JSON.stringify({ error: 'Could not find UIManager' });
+    if (!UIManagerMod) { __argent_fail('Could not find UIManager'); return; }
   }
 
   var SKIP = new Set([
@@ -427,5 +440,8 @@ export function makeComponentTreeScript(opts: {
     result.skippedCounts = skippedCounts;
   }
   __argent_callback(JSON.stringify({ requestId: REQUEST_ID, result: JSON.stringify(result) }));
+  } catch (e) {
+    __argent_fail('Component-tree script crashed: ' + (e && e.message ? e.message : String(e)));
+  }
 })()`;
 }
