@@ -1,13 +1,21 @@
 /**
- * Guards scripts/extract-tools.mjs against silently dropping tool definitions
- * with a long `description:` value. run-sequence's description is a multi-line
- * template literal whose closing backtick sits ~3000 chars past its `id:`; the
- * old extractor only scanned a fixed 2000-char window after each `id:`, so its
- * `descMatch` came back null and the tool was never emitted — and therefore
- * never security-scanned by the downstream `spidershield scan --tools-json`.
+ * Guards scripts/extract-tools.mjs against dropping or corrupting tool
+ * definitions before they reach the downstream `spidershield scan --tools-json`
+ * security scan. The motivating bug: the old extractor scanned a fixed
+ * 2000-char window after each `id:`, so run-sequence's ~4285-char multi-line
+ * template-literal description came back null and the tool was silently
+ * excluded from the scan.
  *
- * Runs the REAL extractor against the REAL repo and asserts every discoverable
- * tool definition is captured.
+ * Ground truth: the real-tree tests parse every tool source file with the
+ * actual TypeScript parser and require the extractor's output to match the AST
+ * exactly - names AND descriptions. Any drop (regex-literal lexing gap, window
+ * regression, walk change), corruption (truncation, bad unescape), or
+ * fabrication diverges from the AST and fails, with no reliance on stderr
+ * warning formats and no false red from `id:`-like text in comments or strings.
+ *
+ * The TypeScript package is a test-only dependency (unit-tests.yml runs
+ * `npm ci`): the extractor itself must stay dependency-free because
+ * tool-description-quality.yml runs it on a bare checkout without installing.
  *
  * Run: node --test scripts/extract-tools.test.mjs
  */
@@ -18,7 +26,8 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractToolsFromSource } from "./extract-tools.mjs";
+import ts from "typescript";
+import { extractToolsFromSource, dedupeToolsById } from "./extract-tools.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const toolsRoot = join(repoRoot, "packages", "tool-server", "src", "tools");
@@ -32,95 +41,157 @@ function runExtractor() {
   return { tools: JSON.parse(res.stdout).tools, stderr: res.stderr ?? "" };
 }
 
-// Independently discover every string-literal `id: "..."` in the source tree,
-// using the same shape the extractor keys off but WITHOUT its description step.
-// This is a SUPERSET of the tool set the extractor emits: it also matches nested
-// object keys (e.g. `defaultPayload: { id: "x" }`) and id:-like tokens the
-// extractor deliberately skips. The "no silent drops" test below relies on that:
-// every discovered id must be either emitted or loudly warned, never dropped in
-// silence. Tools whose id is a const reference (e.g. await-ui-element's
-// `id: AWAIT_UI_ELEMENT_TOOL_ID`) are not string literals and are not in scope
-// for this extractor by design, so they are excluded here too.
-function discoverIdLiterals() {
-  const ids = new Set();
+function captureWarnings(fn) {
+  const warnings = [];
+  const originalError = console.error;
+  console.error = (...args) => warnings.push(args.join(" "));
+  try {
+    return { result: fn(), warnings };
+  } finally {
+    console.error = originalError;
+  }
+}
+
+// --- TypeScript-AST oracle --------------------------------------------------
+// Computes the ground-truth tool set the extractor must emit: every object
+// literal with an `id: "..."` string-literal property whose `description:` is a
+// plain string / no-substitution template literal. `.text` is the COOKED value
+// (escapes resolved), so it doubles as an oracle for the extractor's unescaping.
+// Objects whose `description:` exists but is not a plain literal (concatenation,
+// interpolation, method call, const reference) are collected as `nonStatic` -
+// their rendered text cannot be extracted statically, so the scan would lose
+// them; the real tree must not contain any. Ids with no description sibling
+// (nested payload keys, descriptionless tools) are out of the emitted set by
+// design and the extractor warn-skips them.
+function oracleFromSource(src, fileName = "oracle.ts") {
+  const sourceFile = ts.createSourceFile(fileName, src, ts.ScriptTarget.Latest, true);
+  const tools = [];
+  const nonStatic = [];
+  const visit = (node) => {
+    if (ts.isObjectLiteralExpression(node)) {
+      let id = null;
+      let descNode;
+      for (const prop of node.properties) {
+        if (!ts.isPropertyAssignment(prop)) continue;
+        const name =
+          ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name) ? prop.name.text : null;
+        if (name === "id" && ts.isStringLiteral(prop.initializer)) id = prop.initializer.text;
+        if (name === "description") descNode = prop.initializer;
+      }
+      if (id !== null && descNode !== undefined) {
+        if (ts.isStringLiteral(descNode) || ts.isNoSubstitutionTemplateLiteral(descNode)) {
+          tools.push({ name: id, description: descNode.text.trim() });
+        } else {
+          nonStatic.push(id);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return { tools, nonStatic };
+}
+
+function oracleFromTree() {
+  const tools = [];
+  const nonStatic = [];
   const walk = (dir) => {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name);
       if (statSync(full).isDirectory()) {
         walk(full);
       } else if (extname(name) === ".ts" && !name.endsWith(".d.ts")) {
-        const src = readFileSync(full, "utf8");
-        const re = /\bid:\s*["']([^"']+)["']/g;
-        let m;
-        while ((m = re.exec(src)) !== null) ids.add(m[1]);
+        const fromFile = oracleFromSource(readFileSync(full, "utf8"), full);
+        tools.push(...fromFile.tools);
+        nonStatic.push(...fromFile.nonStatic);
       }
     }
   };
   walk(toolsRoot);
-  return ids;
+  return { tools, nonStatic };
 }
 
-test("run-sequence's long description is captured IN FULL, not truncated", () => {
+const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+// --- Real-tree ground-truth tests -------------------------------------------
+
+test("extractor output equals the TypeScript-AST ground truth exactly", () => {
   const { tools } = runExtractor();
-  const runSequence = tools.find((t) => t.name === "run-sequence");
-  assert.ok(
-    runSequence,
-    "run-sequence was dropped — the description lookahead regressed to a fixed window"
-  );
-  // Assert fullness, not just presence: the original bug truncated at a fixed
-  // 2000-char window, so a re-truncation could still emit the tool with a
-  // shortened description and pass a name-only check. The description is ~4285
-  // chars; assert it runs well past the old window AND reaches its closing
-  // backtick (the final sentence), so the capture is provably complete.
-  assert.ok(
-    runSequence.description.length > 3000,
-    `run-sequence description truncated to ${runSequence.description.length} chars (past the old 2000-char window expected)`
-  );
-  assert.ok(
-    runSequence.description.includes("returns partial results"),
-    "run-sequence description does not reach its final sentence — captured value is truncated"
-  );
-});
+  const oracle = oracleFromTree();
 
-test("gesture-tap is captured (control)", () => {
-  const { tools } = runExtractor();
-  const names = tools.map((t) => t.name);
-  assert.ok(names.includes("gesture-tap"));
-});
+  // Sanity floor: an oracle bug that empties BOTH sides would make the
+  // equality below pass vacuously; the real tree has ~72 tools.
+  assert.ok(
+    oracle.tools.length >= 60,
+    `oracle found only ${oracle.tools.length} tools - oracle or tree layout broke`
+  );
 
-test("no tool definition is silently dropped (every id: is emitted or loudly warned)", () => {
-  const { tools, stderr } = runExtractor();
-  const extracted = new Set(tools.map((t) => t.name));
-  const discovered = discoverIdLiterals();
+  // Unique ids: a same-name collision would mean one tool's description
+  // silently replaces another's in the scan.
+  const names = oracle.tools.map((t) => t.name);
+  const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+  assert.deepEqual(dupes, [], `duplicate tool ids in the source tree: ${dupes.join(", ")}`);
 
-  // No fabricated tools: every emitted name is a real id: literal in the source.
-  const fabricated = [...extracted].filter((id) => !discovered.has(id));
+  // The invariant: nothing dropped, nothing corrupted, nothing fabricated.
+  // Name-level diffs first for a readable failure, then the full deep equality
+  // (which also compares every description byte-for-byte).
+  const extractedNames = new Set(tools.map((t) => t.name));
+  const oracleNames = new Set(names);
+  const dropped = [...oracleNames].filter((n) => !extractedNames.has(n));
+  const fabricated = [...extractedNames].filter((n) => !oracleNames.has(n));
+  assert.deepEqual(
+    dropped,
+    [],
+    `tools in the AST but missing from the extractor: ${dropped.join(", ")}`
+  );
   assert.deepEqual(
     fabricated,
     [],
-    `extractor emitted names with no id: literal in the source: ${fabricated.join(", ")}`
+    `extractor emitted tools the AST does not contain: ${fabricated.join(", ")}`
   );
+  assert.deepEqual([...tools].sort(byName), [...oracle.tools].sort(byName));
+});
 
-  // Completeness WITHOUT a false positive when a tool legitimately uses a shape
-  // the extractor is designed to skip: an id: literal the extractor does not
-  // emit — a nested object key (e.g. `defaultPayload: { id: "x" }`), a tool
-  // whose description isn't a static string/template literal, or a
-  // description-less tool — must be named in a stderr WARNING, i.e. skipped
-  // LOUDLY. This is the exact invariant the PR restores (the old fixed-window
-  // matcher dropped long-description tools SILENTLY): the check stays green when
-  // a future tool uses one of those shapes (the extractor warns and the count
-  // shifts) and fails only on a genuinely SILENT drop.
-  const silentlyDropped = [...discovered].filter(
-    (id) => !extracted.has(id) && !stderr.includes(`"${id}"`)
-  );
+test("every real tool description is a plain literal (statically extractable, so it gets scanned)", () => {
+  const oracle = oracleFromTree();
   assert.deepEqual(
-    silentlyDropped,
+    oracle.nonStatic,
     [],
-    `id: literals dropped by the extractor with no stderr warning: ${silentlyDropped.join(", ")}`
+    `these tools' descriptions are not a single string/template literal, so the ` +
+      `extractor cannot capture them and they would drop out of the spidershield ` +
+      `scan: ${oracle.nonStatic.join(", ")}. Make each a plain literal.`
   );
 });
 
+test("run-sequence and describe (the two originally dropped tools) and gesture-tap (control) are present", () => {
+  // Presence-only on purpose: fullness and exact wording are covered
+  // byte-for-byte by the AST-equality test, so a legitimate rewrite of a
+  // description cannot fail this suite while capture stays complete.
+  const { tools } = runExtractor();
+  const names = new Set(tools.map((t) => t.name));
+  for (const expected of ["run-sequence", "describe", "gesture-tap"]) {
+    assert.ok(names.has(expected), `${expected} missing from extractor output`);
+  }
+});
+
 // --- Boundary-parsing rules (pure, fixture-driven) -------------------------
+
+test("a >4000-char multi-line description is captured in full (the original regression)", () => {
+  // Pins the fixed-window bug class forever, independent of any real tool's
+  // current wording or length: the old extractor cut its search at 2000 chars.
+  const sentence = "Runs one scripted step against the target device and reports the outcome. ";
+  const longDescription = sentence.repeat(60).trim(); // ~4560 chars
+  const src = `
+    export const longTool = defineTool({
+      id: "long-description-tool",
+      description: \`${longDescription}\`,
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.equal(tools.length, 1, "long-description tool was dropped");
+  assert.equal(tools[0].description, longDescription, "long description was truncated");
+});
 
 test("a description containing an id: token is still captured in full", () => {
   // The closing-delimiter-anchored search must not be truncated by an `id:`
@@ -137,14 +208,14 @@ test("a description containing an id: token is still captured in full", () => {
     });
   `;
   const tools = extractToolsFromSource(src, "fixture.ts");
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
-  assert.ok("menu-item-tool" in byName, "tool with an id: inside its description was dropped");
+  const byId = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.ok("menu-item-tool" in byId, "tool with an id: inside its description was dropped");
   assert.ok(
-    byName["menu-item-tool"].includes("nested menu item"),
+    byId["menu-item-tool"].includes("nested menu item"),
     "description was truncated at the inner id: instead of its closing backtick"
   );
   // The `id: "sub-thing"` inside the description text is not a real tool.
-  assert.ok(!("sub-thing" in byName), "an id: inside a description was mistaken for a tool");
+  assert.ok(!("sub-thing" in byId), "an id: inside a description was mistaken for a tool");
 });
 
 test("a description-less tool does not borrow the next tool's description", () => {
@@ -161,14 +232,14 @@ test("a description-less tool does not borrow the next tool's description", () =
       handler: async () => {},
     });
   `;
-  const tools = extractToolsFromSource(src, "fixture.ts");
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  const { result: tools } = captureWarnings(() => extractToolsFromSource(src, "fixture.ts"));
+  const byId = Object.fromEntries(tools.map((t) => [t.name, t.description]));
   assert.equal(
-    byName["has-description-tool"],
+    byId["has-description-tool"],
     "This description belongs to has-description-tool only."
   );
   assert.ok(
-    !("no-description-tool" in byName),
+    !("no-description-tool" in byId),
     "a description-less tool borrowed the following tool's description"
   );
 });
@@ -191,11 +262,26 @@ test("tools with mixed description forms in one file are both captured", () => {
     });
   `;
   const tools = extractToolsFromSource(src, "fixture.ts");
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
-  assert.equal(byName["first-tool"], "First tool, plain double-quoted description.");
+  const byId = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(byId["first-tool"], "First tool, plain double-quoted description.");
   assert.equal(
-    byName["second-tool"],
+    byId["second-tool"],
     "Second tool, a template-literal description with some length."
+  );
+});
+
+test("single-quoted id and description are captured (with escapes)", () => {
+  const src = `
+    export const sq = defineTool({
+      id: 'single-quoted-tool',
+      description: 'Types the user\\'s text into the focused field.',
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.equal(
+    tools.find((t) => t.name === "single-quoted-tool")?.description,
+    "Types the user's text into the focused field."
   );
 });
 
@@ -216,38 +302,109 @@ test("standard escapes render as their actual characters, not literal backslash 
   assert.equal(description, "Line one.\nLine two.\tTabbed. Say `hi` and $done.");
 });
 
-test("a non-static description (concatenation / interpolation) is dropped loudly, not truncated silently", () => {
-  // The captured literal is only the whole description if nothing extends it. A
-  // `+` concatenation or a template `${...}` interpolation means the rendered
-  // text is more than the leading literal; emitting just that literal would feed
-  // a SILENTLY truncated string into the security scan — the same silent-partial
-  // class this script exists to prevent. Both must warn on stderr and be skipped.
-  for (const [label, src] of [
+test("a regex literal between id: and description: does not hide the description", () => {
+  // The lexer must skip regex literals whole: a brace inside a character class
+  // (`/[{]/`) must not shift the tracked object depth, and a quote inside a
+  // regex (`/["']/`) must not open a fake string. Either would make the sibling
+  // description: invisible and drop the tool from the security scan.
+  for (const [label, field] of [
+    ["brace class", "match: /[{]/,"],
+    ["quote class", `schema: z.string().regex(/["']/),`],
+    ["replace with a double-quote regex", `normalize: (s) => s.replace(/"/g, ""),`],
+  ]) {
+    const src = `
+      export const t = defineTool({
+        id: "regex-field-tool",
+        ${field}
+        description: "Real description of regex-field-tool.",
+        handler: async () => {},
+      });
+    `;
+    const { result: tools, warnings } = captureWarnings(() =>
+      extractToolsFromSource(src, "fixture.ts")
+    );
+    assert.equal(
+      tools.find((t) => t.name === "regex-field-tool")?.description,
+      "Real description of regex-field-tool.",
+      `${label}: regex literal between id: and description: dropped or corrupted the tool`
+    );
+    assert.deepEqual(warnings, [], `${label}: unexpected warnings`);
+  }
+});
+
+test("a quote-bearing regex BEFORE the id: does not swallow the tool", () => {
+  // A regex containing a quote that appears before the id: (an earlier
+  // property, or earlier code in the file) must not open a fake string that
+  // hides the id: token itself — that variant produced no warning at all.
+  const src = `
+    export const t = defineTool({
+      normalize: (s) => s.replace(/"/g, ""),
+      id: "after-regex-tool",
+      description: "Description after a quote-bearing regex.",
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.equal(
+    tools.find((t) => t.name === "after-regex-tool")?.description,
+    "Description after a quote-bearing regex."
+  );
+});
+
+test("division is not mistaken for a regex literal", () => {
+  // The other side of the regex heuristic: `/` after a value (identifier,
+  // number, closing paren) is division and must be scanned through normally.
+  const src = `
+    export const t = defineTool({
+      id: "division-tool",
+      timeoutMs: 60000 / 2,
+      budget: total / count,
+      description: "Kept: the slashes above are division, not regex openers.",
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.equal(
+    tools.find((t) => t.name === "division-tool")?.description,
+    "Kept: the slashes above are division, not regex openers."
+  );
+});
+
+test("a non-static description (concatenation / interpolation / method suffix) is dropped loudly, not emitted wrong", () => {
+  // The captured literal is only the description if nothing extends it. A `+`
+  // concatenation, a template `${...}` interpolation, or a method/operator
+  // suffix (`"...".slice(0, 3)`) means the rendered text differs from the
+  // leading literal; emitting just that literal would feed silently wrong text
+  // into the security scan. All must warn on stderr and be skipped.
+  for (const [label, id, src] of [
     [
       "concatenation",
+      "concat-tool",
       `defineTool({ id: "concat-tool", description: "part A " + "part B", handler() {} });`,
     ],
     [
       "interpolation",
+      "interp-tool",
       'defineTool({ id: "interp-tool", description: `hello ${world} rest`, handler() {} });',
     ],
+    [
+      "slice suffix",
+      "slice-tool",
+      `defineTool({ id: "slice-tool", description: "abcdefghij".slice(0, 3), handler() {} });`,
+    ],
+    [
+      "replace suffix",
+      "replace-tool",
+      `defineTool({ id: "replace-tool", description: "hello WORLD".replace("WORLD", "there"), handler() {} });`,
+    ],
   ]) {
-    const warnings = [];
-    const originalError = console.error;
-    console.error = (...args) => warnings.push(args.join(" "));
-    let tools;
-    try {
-      tools = extractToolsFromSource(src, "fixture.ts");
-    } finally {
-      console.error = originalError;
-    }
-    assert.equal(tools.length, 0, `${label}: a truncated description must not be emitted`);
+    const { result: tools, warnings } = captureWarnings(() =>
+      extractToolsFromSource(src, "fixture.ts")
+    );
+    assert.equal(tools.length, 0, `${label}: a partial/wrong description must not be emitted`);
     assert.ok(
-      warnings.some(
-        (w) =>
-          /WARNING/.test(w) && w.includes(label === "concatenation" ? "concat-tool" : "interp-tool")
-      ),
-      `${label}: expected a stderr WARNING; got ${JSON.stringify(warnings)}`
+      warnings.some((w) => /WARNING/.test(w) && w.includes(id)),
+      `${label}: expected a stderr WARNING naming ${id}; got ${JSON.stringify(warnings)}`
     );
   }
 });
@@ -278,10 +435,10 @@ test("an id: key inside a nested object value is not mistaken for a tool", () =>
       handler: async () => {},
     });
   `;
-  const tools = extractToolsFromSource(src, "fixture.ts");
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
-  assert.equal(byName["create-thing"], "Creates a thing.", "real tool dropped by a nested id: key");
-  assert.ok(!("example-id" in byName), "a nested object's id: key was emitted as a spurious tool");
+  const { result: tools } = captureWarnings(() => extractToolsFromSource(src, "fixture.ts"));
+  const byId = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(byId["create-thing"], "Creates a thing.", "real tool dropped by a nested id: key");
+  assert.ok(!("example-id" in byId), "a nested object's id: key was emitted as a spurious tool");
   assert.equal(tools.length, 1, "exactly the real tool should be emitted");
 });
 
@@ -297,10 +454,10 @@ test("a balanced nested object (with a deep inner id:) between id: and descripti
       handler: async () => {},
     });
   `;
-  const tools = extractToolsFromSource(src, "fixture.ts");
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
-  assert.equal(byName["native-thing"], "Does a native thing.");
-  assert.ok(!("cap-1" in byName), "a deeply nested id: key was emitted as a spurious tool");
+  const { result: tools } = captureWarnings(() => extractToolsFromSource(src, "fixture.ts"));
+  const byId = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(byId["native-thing"], "Does a native thing.");
+  assert.ok(!("cap-1" in byId), "a deeply nested id: key was emitted as a spurious tool");
   assert.equal(tools.length, 1);
 });
 
@@ -317,9 +474,9 @@ test("a line comment with an apostrophe between id: and description: keeps the t
     });
   `;
   const tools = extractToolsFromSource(src, "fixture.ts");
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  const byId = Object.fromEntries(tools.map((t) => [t.name, t.description]));
   assert.equal(
-    byName["line-commented-tool"],
+    byId["line-commented-tool"],
     "The real, comment-preceded description.",
     "a line comment (with an apostrophe) between id: and description: dropped the tool"
   );
@@ -339,9 +496,9 @@ test("a block comment between id: and description: keeps the tool", () => {
     });
   `;
   const tools = extractToolsFromSource(src, "fixture.ts");
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  const byId = Object.fromEntries(tools.map((t) => [t.name, t.description]));
   assert.equal(
-    byName["block-commented-tool"],
+    byId["block-commented-tool"],
     "The real block-comment-preceded description.",
     "a block comment between id: and description: dropped the tool or matched the fake description"
   );
@@ -368,13 +525,13 @@ test("an id: literal inside a comment does not corrupt a real tool's description
     });
   `;
   const tools = extractToolsFromSource(src, "fixture.ts");
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  const byId = Object.fromEntries(tools.map((t) => [t.name, t.description]));
   assert.equal(
-    byName["screenshot"],
+    byId["screenshot"],
     "Take a screenshot of the device.",
     "a commented id: cross-reference overwrote the real tool's description"
   );
-  assert.equal(byName["foo-tool"], "Foo tool description.");
+  assert.equal(byId["foo-tool"], "Foo tool description.");
   assert.equal(tools.length, 2, "exactly the two real tools should be emitted");
 });
 
@@ -389,18 +546,29 @@ test("a top-level tool with no description is dropped loudly (stderr warning)", 
       handler: async () => {},
     });
   `;
-  const warnings = [];
-  const originalError = console.error;
-  console.error = (...args) => warnings.push(args.join(" "));
-  let tools;
-  try {
-    tools = extractToolsFromSource(src, "fixture.ts");
-  } finally {
-    console.error = originalError;
-  }
+  const { result: tools, warnings } = captureWarnings(() =>
+    extractToolsFromSource(src, "fixture.ts")
+  );
   assert.equal(tools.length, 0, "a description-less tool must not be emitted");
   assert.ok(
     warnings.some((w) => /WARNING/.test(w) && w.includes("no-description-real-tool")),
     `expected a stderr WARNING naming the dropped id; got: ${JSON.stringify(warnings)}`
+  );
+});
+
+test("duplicate tool ids keep the first occurrence and warn about the rest", () => {
+  const duplicated = [
+    { name: "dup-tool", description: "First definition - must survive." },
+    { name: "unique-tool", description: "Unrelated tool." },
+    { name: "dup-tool", description: "Second definition - must be skipped loudly." },
+  ];
+  const { result: deduped, warnings } = captureWarnings(() => dedupeToolsById(duplicated));
+  assert.deepEqual(deduped, [
+    { name: "dup-tool", description: "First definition - must survive." },
+    { name: "unique-tool", description: "Unrelated tool." },
+  ]);
+  assert.ok(
+    warnings.some((w) => /WARNING/.test(w) && w.includes("dup-tool")),
+    `expected a duplicate-id WARNING naming dup-tool; got: ${JSON.stringify(warnings)}`
   );
 });
