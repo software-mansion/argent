@@ -123,6 +123,31 @@ export async function precheckNativeDevtools(
   udid: string,
   bundleId?: string
 ): Promise<NativeDevtoolsPrecheckBlock | null> {
+  // Terminal case first: an app that can never be injected (Apple system app).
+  // Injectability is a static property of the bundle id, knowable without any
+  // env state, so this fires before the env plumbing below — a given-up sim or
+  // a transient ensureEnvReady failure must not mask the terminal signal behind
+  // init_failed's "re-boot the simulator" guidance (a reboot can never make a
+  // system app injectable), and no env-setup work is spent on an app that can
+  // never load the dylib. Throwing (rather than returning a restart-required
+  // block) makes the native-* feature tools surface a hard error instead of
+  // instructing an unbounded restart→retry loop that can never succeed. The
+  // 2-arg overload (bundleId undefined) must NOT throw: native-devtools-status
+  // reports the state instead, and launch-app / restart-app run it too —
+  // launching or restarting a system app is legitimate, it just never injects.
+  if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
+    throw new FailureError(
+      `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools can never be injected into it. ` +
+        NON_INJECTABLE_RECOVERY,
+      {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+        failure_stage: "native_devtools_precheck",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+
   const existing = api.getInitFailure();
   if (existing?.givenUp) return buildInitFailedResult(udid, existing);
 
@@ -136,24 +161,6 @@ export async function precheckNativeDevtools(
       lastError: "ensureEnvReady threw without recording state",
       givenUp: false,
     });
-  }
-
-  // Terminal case: an app that can never be injected (Apple system app). Throw
-  // instead of returning a restart-required block so the native-* feature tools
-  // surface a hard error rather than instructing an unbounded restart→retry
-  // loop that can never succeed. The 2-arg overload (bundleId undefined), used
-  // by native-devtools-status, must NOT throw — it reports the state instead.
-  if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
-    throw new FailureError(
-      `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools can never be injected into it. ` +
-        NON_INJECTABLE_RECOVERY,
-      {
-        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
-        failure_stage: "native_devtools_precheck",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
   }
 
   if (bundleId !== undefined && (await api.requiresAppRestart(bundleId))) {

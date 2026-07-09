@@ -232,10 +232,53 @@ describe("precheckNativeDevtools — non-injectable terminal error", () => {
     }
   });
 
-  it("does not throw for the same api via the 2-arg overload (status path)", async () => {
+  it("does not throw for the same api via the 2-arg overload (status / launch-app / restart-app path)", async () => {
     const { api } = makeNativeApi({ appRunning: true, connected: false });
 
     await expect(precheckNativeDevtools(api, UDID)).resolves.toBeNull();
+  });
+
+  it("throws the terminal error even when env init has given up", async () => {
+    // Injectability is a static property of the bundle id — a broken env must
+    // not mask the terminal signal behind init_failed's "re-boot the simulator"
+    // guidance, which can never make a system app injectable.
+    const { api } = makeNativeApi({
+      initFailure: {
+        attempts: MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
+        lastError: "ensureEnv timeout",
+        givenUp: true,
+      },
+    });
+
+    try {
+      await precheckNativeDevtools(api, UDID, "com.apple.Preferences");
+      throw new Error("expected precheckNativeDevtools to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(FailureError);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+    }
+  });
+
+  it("fires before any env work — ensureEnvReady never runs for a non-injectable bundle", async () => {
+    // Same ordering guarantee from the other side: no env-setup work is spent
+    // on an app that can never load the dylib, and a transiently failing
+    // ensureEnvReady cannot swallow the terminal signal.
+    const { api } = makeNativeApi({
+      initFailure: { attempts: 1, lastError: "first attempt failed", givenUp: false },
+    });
+    const ensureEnvReady = vi.fn(async () => {
+      throw new Error("transient ensureEnv failure");
+    });
+    api.ensureEnvReady = ensureEnvReady;
+
+    try {
+      await precheckNativeDevtools(api, UDID, "com.apple.Preferences");
+      throw new Error("expected precheckNativeDevtools to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(FailureError);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+    }
+    expect(ensureEnvReady).not.toHaveBeenCalled();
   });
 });
 
@@ -258,13 +301,13 @@ describe("non-injectable recovery guidance is consistent and points only at work
     expect(recommendationOnly).not.toContain("native-");
   });
 
-  it("all three surfaces carry the same dead-end warning verbatim", async () => {
+  it("the precheck throw and the status description share the recovery guidance verbatim", async () => {
     // The precheck throw, the status description, and the describe fallback hint
     // used to recommend different tool sets. They now share the dead-end warning
-    // verbatim, so no surface can drift into recommending a native-* tool. (The
-    // describe-fallback hint's copy is asserted in describe-tool.test.ts.) The
-    // pre-describe surfaces additionally share the full describe/screenshot
-    // recommendation.
+    // verbatim, so no surface can drift into recommending a native-* tool. This
+    // test covers the two pre-describe surfaces, which additionally share the
+    // full describe/screenshot recommendation; the third surface (the describe
+    // fallback hint) is asserted in describe-tool.test.ts.
     expect(nativeDevtoolsStatusTool.description).toContain(NON_INJECTABLE_RECOVERY);
 
     let message = "";
