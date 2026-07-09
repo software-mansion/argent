@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const execFileMock = vi.fn();
 
@@ -83,6 +86,10 @@ vi.mock("../src/utils/vega-sdk", () => ({ listVvdImages: vi.fn(async () => []) }
 import { listDevicesTool } from "../src/tools/devices/list-devices";
 import { __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 import { listVvdImages } from "../src/utils/vega-sdk";
+import {
+  __resetSimctlListDevicesLockPathForTesting,
+  __setSimctlListDevicesLockPathForTesting,
+} from "../src/utils/ios-devices";
 
 function simctlJson(): string {
   return JSON.stringify({
@@ -125,6 +132,11 @@ function simctlJson(): string {
 
 beforeEach(() => {
   execFileMock.mockReset();
+  __resetSimctlListDevicesLockPathForTesting();
+});
+
+afterEach(() => {
+  __resetSimctlListDevicesLockPathForTesting();
 });
 
 describe("list-devices", () => {
@@ -240,6 +252,32 @@ describe("list-devices", () => {
     });
 
     const result = await listDevicesTool.execute!({}, {});
+    expect(result.devices.filter((d) => d.platform === "ios")).toHaveLength(0);
+    expect(result.devices.filter((d) => d.platform === "android")).toHaveLength(1);
+    expect(result.avds.length).toBeGreaterThan(0);
+  });
+
+  it("omits iOS when the local simctl lock cannot be created — other platforms still returned", async () => {
+    const missingDirectory = join(
+      tmpdir(),
+      `argent-list-devices-missing-lock-dir-${process.pid}-${randomUUID()}`
+    );
+    __setSimctlListDevicesLockPathForTesting(join(missingDirectory, "simctl.lock"));
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        return { stdout: "", stderr: "" };
+      }
+      if (cmd === "emulator" && args[0] === "-list-avds") {
+        return { stdout: "Pixel_3a_API_34\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
     expect(result.devices.filter((d) => d.platform === "ios")).toHaveLength(0);
     expect(result.devices.filter((d) => d.platform === "android")).toHaveLength(1);
     expect(result.avds.length).toBeGreaterThan(0);

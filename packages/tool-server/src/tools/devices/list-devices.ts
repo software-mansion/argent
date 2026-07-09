@@ -212,11 +212,15 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     // out to potentially-wedged devices; iOS / AVD-list / Chromium already self-bound
     // with their own short subprocess/socket timeouts, but wrapping them too makes the
     // "no branch can hang the fan-out" guarantee universal at near-zero cost (the
-    // timer is cleared on the fast happy path). The deadline only substitutes a
-    // fallback on *slowness*; a rejection still propagates exactly as before — so the
-    // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
+    // timer is cleared on the fast happy path). Branch-level discovery failures
+    // degrade to that branch's empty result so one platform issue does not hide
+    // working devices from the others.
     const [ios, iosRemote, android, avds, chromium, vega] = await Promise.all([
-      withDeadline(listIosSimulators(), [], "ios"),
+      withDeadline(
+        listIosSimulators().catch(() => []),
+        [],
+        "ios"
+      ),
       withDeadline(listRemoteIosSimulators(), [], "ios-remote"),
       withDeadline(
         // Opt into runtimeKind enrichment (list-devices surfaces TV vs mobile to

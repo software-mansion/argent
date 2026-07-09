@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { open, readFile, stat, unlink, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,7 +34,24 @@ export interface SimctlOutput {
 }
 
 const DEFAULT_SIMCTL_LIST_DEVICES_LOCK_PATH = join(tmpdir(), "argent-simctl-list-devices.lock");
+const SIMCTL_LIST_DEVICES_LOCK_LIVE_OWNER_MAX_MS = SIMCTL_LIST_DEVICES_LOCK_STALE_MS * 4;
 let simctlListDevicesLockPath: string | null = DEFAULT_SIMCTL_LIST_DEVICES_LOCK_PATH;
+
+interface SimctlListDevicesLockMetadata {
+  createdAt: number;
+  ownerId: string;
+  pid: number;
+}
+
+class SimctlListDevicesLockError extends Error {
+  constructor(
+    message: string,
+    readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = "SimctlListDevicesLockError";
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,28 +61,153 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
 }
 
+function isSimctlListDevicesLockError(err: unknown): err is SimctlListDevicesLockError {
+  return err instanceof SimctlListDevicesLockError;
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return isNodeError(err) && err.code === "EPERM";
+  }
+}
+
+function isLockOwnedByLiveProcess(metadata: SimctlListDevicesLockMetadata, now: number): boolean {
+  if (now - metadata.createdAt >= SIMCTL_LIST_DEVICES_LOCK_LIVE_OWNER_MAX_MS) return false;
+  return isProcessAlive(metadata.pid);
+}
+
+function parseSimctlListDevicesLockMetadata(raw: string): SimctlListDevicesLockMetadata | null {
+  try {
+    const parsed = JSON.parse(raw) as {
+      createdAt?: unknown;
+      ownerId?: unknown;
+      pid?: unknown;
+    };
+    if (
+      typeof parsed.createdAt === "number" &&
+      typeof parsed.ownerId === "string" &&
+      typeof parsed.pid === "number"
+    ) {
+      return {
+        createdAt: parsed.createdAt,
+        ownerId: parsed.ownerId,
+        pid: parsed.pid,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function readSimctlListDevicesLockMetadata(
+  lockPath: string
+): Promise<SimctlListDevicesLockMetadata | null> {
+  try {
+    return parseSimctlListDevicesLockMetadata(await readFile(lockPath, "utf8"));
+  } catch (err) {
+    if (isNodeError(err) && err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+async function getSimctlListDevicesLockCreatedAt(lockPath: string): Promise<number | undefined> {
+  const metadata = await readSimctlListDevicesLockMetadata(lockPath);
+  if (metadata) return metadata.createdAt;
+
+  try {
+    return (await stat(lockPath)).mtimeMs;
+  } catch (err) {
+    if (isNodeError(err) && err.code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
+async function acquireSimctlListDevicesLock(
+  lockPath: string,
+  now: number
+): Promise<SimctlListDevicesLockMetadata | null> {
+  const metadata: SimctlListDevicesLockMetadata = {
+    createdAt: now,
+    ownerId: randomUUID(),
+    pid: process.pid,
+  };
+  let handle: FileHandle | undefined;
+
+  try {
+    handle = await open(lockPath, "wx");
+    await handle.writeFile(JSON.stringify(metadata));
+    return metadata;
+  } catch (err) {
+    if (handle) {
+      await handle.close().catch(() => {});
+      await unlink(lockPath).catch(() => {});
+    }
+    if (isNodeError(err) && err.code === "EEXIST") return null;
+    throw new SimctlListDevicesLockError(
+      `failed to acquire simctl list devices lock at ${lockPath}`,
+      err
+    );
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function releaseSimctlListDevicesLock(
+  lockPath: string,
+  metadata: SimctlListDevicesLockMetadata
+): Promise<void> {
+  const currentMetadata = await readSimctlListDevicesLockMetadata(lockPath);
+  if (currentMetadata?.ownerId !== metadata.ownerId) return;
+
+  try {
+    await unlink(lockPath);
+  } catch (err) {
+    if (!isNodeError(err) || err.code !== "ENOENT") {
+      throw new SimctlListDevicesLockError(
+        `failed to release simctl list devices lock at ${lockPath}`,
+        err
+      );
+    }
+  }
+}
+
+async function removeStaleCleanupLock(cleanupLockPath: string, now: number): Promise<void> {
+  const createdAt = await getSimctlListDevicesLockCreatedAt(cleanupLockPath);
+  if (createdAt === undefined || now - createdAt < SIMCTL_LIST_DEVICES_LOCK_STALE_MS) return;
+
+  const metadata = await readSimctlListDevicesLockMetadata(cleanupLockPath);
+  if (metadata && isLockOwnedByLiveProcess(metadata, now)) return;
+
+  try {
+    await unlink(cleanupLockPath);
+  } catch (err) {
+    if (!isNodeError(err) || err.code !== "ENOENT") {
+      throw new SimctlListDevicesLockError(
+        `failed to remove stale simctl list devices cleanup lock at ${cleanupLockPath}`,
+        err
+      );
+    }
+  }
+}
+
 async function removeStaleSimctlListDevicesLock(lockPath: string, now: number): Promise<void> {
   const cleanupLockPath = `${lockPath}.cleanup`;
-  let cleanupHandle: FileHandle | undefined;
-  try {
-    cleanupHandle = await open(cleanupLockPath, "wx");
-    await cleanupHandle.writeFile(JSON.stringify({ pid: process.pid, createdAt: now }));
-  } catch (err) {
-    if (cleanupHandle) {
-      await cleanupHandle.close().catch(() => {});
-      await unlink(cleanupLockPath).catch(() => {});
-    }
-    if (isNodeError(err) && err.code === "EEXIST") return;
-    throw err;
+  let cleanupMetadata = await acquireSimctlListDevicesLock(cleanupLockPath, now);
+  if (!cleanupMetadata) {
+    await removeStaleCleanupLock(cleanupLockPath, now);
+    cleanupMetadata = await acquireSimctlListDevicesLock(cleanupLockPath, Date.now());
+    if (!cleanupMetadata) return;
   }
 
   try {
     await removeStaleSimctlListDevicesLockWithCleanupLock(lockPath, now);
   } finally {
-    await cleanupHandle.close().catch(() => {});
-    await unlink(cleanupLockPath).catch((err: unknown) => {
-      if (!isNodeError(err) || err.code !== "ENOENT") throw err;
-    });
+    await releaseSimctlListDevicesLock(cleanupLockPath, cleanupMetadata);
   }
 }
 
@@ -72,31 +215,24 @@ async function removeStaleSimctlListDevicesLockWithCleanupLock(
   lockPath: string,
   now: number
 ): Promise<void> {
-  let createdAt: number | undefined;
-
-  try {
-    const raw = await readFile(lockPath, "utf8");
-    const parsed = JSON.parse(raw) as { createdAt?: unknown };
-    if (typeof parsed.createdAt === "number") createdAt = parsed.createdAt;
-  } catch (err) {
-    if (isNodeError(err) && err.code === "ENOENT") return;
-  }
-
-  if (createdAt === undefined) {
-    try {
-      createdAt = (await stat(lockPath)).mtimeMs;
-    } catch (err) {
-      if (isNodeError(err) && err.code === "ENOENT") return;
-      throw err;
-    }
-  }
+  const createdAt = await getSimctlListDevicesLockCreatedAt(lockPath);
+  if (createdAt === undefined) return;
 
   if (now - createdAt < SIMCTL_LIST_DEVICES_LOCK_STALE_MS) return;
 
+  const metadata = await readSimctlListDevicesLockMetadata(lockPath);
+  if (metadata && isLockOwnedByLiveProcess(metadata, now)) return;
+
   try {
-    await unlink(lockPath);
+    if (metadata) await releaseSimctlListDevicesLock(lockPath, metadata);
+    else await unlink(lockPath);
   } catch (err) {
-    if (!isNodeError(err) || err.code !== "ENOENT") throw err;
+    if (!isNodeError(err) || err.code !== "ENOENT") {
+      throw new SimctlListDevicesLockError(
+        `failed to remove stale simctl list devices lock at ${lockPath}`,
+        err
+      );
+    }
   }
 }
 
@@ -107,26 +243,20 @@ async function withSimctlListDevicesLock<T>(fn: () => Promise<T>): Promise<T> {
   const started = Date.now();
 
   while (true) {
-    try {
-      const handle = await open(lockPath, "wx");
+    const metadata = await acquireSimctlListDevicesLock(lockPath, Date.now());
+    if (metadata) {
       try {
-        await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
         return await fn();
       } finally {
-        await handle.close().catch(() => {});
-        await unlink(lockPath).catch((err: unknown) => {
-          if (!isNodeError(err) || err.code !== "ENOENT") throw err;
-        });
+        await releaseSimctlListDevicesLock(lockPath, metadata);
       }
-    } catch (err) {
-      if (!isNodeError(err) || err.code !== "EEXIST") throw err;
     }
 
     const now = Date.now();
     await removeStaleSimctlListDevicesLock(lockPath, now);
     const elapsed = now - started;
     if (elapsed >= SIMCTL_LIST_DEVICES_LOCK_WAIT_MS) {
-      throw new Error(
+      throw new SimctlListDevicesLockError(
         `timed out waiting for simctl list devices lock after ${SIMCTL_LIST_DEVICES_LOCK_WAIT_MS}ms`
       );
     }
@@ -175,7 +305,8 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
       }
     }
     return out;
-  } catch {
+  } catch (err) {
+    if (isSimctlListDevicesLockError(err)) throw err;
     return [];
   }
 }

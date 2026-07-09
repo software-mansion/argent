@@ -47,7 +47,16 @@ import {
 
 const TV_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const PHONE_UDID = "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB";
+const SIMCTL_LIST_DEVICES_LOCK_LIVE_OWNER_MAX_MS = SIMCTL_LIST_DEVICES_LOCK_STALE_MS * 4;
 let testLockPath: string;
+
+function lockMetadata(createdAt: number, pid = process.pid) {
+  return JSON.stringify({
+    createdAt,
+    ownerId: randomUUID(),
+    pid,
+  });
+}
 
 // Shape a `simctl list devices --json` payload: one tvOS device and one iOS
 // device, so both a "tv" and a "mobile" verdict can be resolved from one probe.
@@ -216,6 +225,40 @@ describe("listIosSimulators — simctl discovery fan-out cap", () => {
     await expect(access(testLockPath)).resolves.toBeUndefined();
   });
 
+  it("keeps a stale lock while its owner process is still alive", async () => {
+    await writeFile(
+      testLockPath,
+      lockMetadata(Date.now() - SIMCTL_LIST_DEVICES_LOCK_STALE_MS - 1_000)
+    );
+
+    await __removeStaleSimctlListDevicesLockForTesting(testLockPath, Date.now());
+
+    await expect(access(testLockPath)).resolves.toBeUndefined();
+  });
+
+  it("removes very old locks even when the recorded PID is alive again", async () => {
+    const now = Date.now();
+    await writeFile(
+      testLockPath,
+      lockMetadata(now - SIMCTL_LIST_DEVICES_LOCK_LIVE_OWNER_MAX_MS - 1_000)
+    );
+
+    await __removeStaleSimctlListDevicesLockForTesting(testLockPath, now);
+
+    await expect(access(testLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes stale lock files once the owner process is gone", async () => {
+    await writeFile(
+      testLockPath,
+      lockMetadata(Date.now() - SIMCTL_LIST_DEVICES_LOCK_STALE_MS - 1_000, 0)
+    );
+
+    await __removeStaleSimctlListDevicesLockForTesting(testLockPath, Date.now());
+
+    await expect(access(testLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("removes malformed lock files once they are old enough to be stale", async () => {
     await writeFile(testLockPath, "");
     const staleMtimeMs = Date.now() - SIMCTL_LIST_DEVICES_LOCK_STALE_MS - 1_000;
@@ -235,5 +278,45 @@ describe("listIosSimulators — simctl discovery fan-out cap", () => {
     await __removeStaleSimctlListDevicesLockForTesting(testLockPath, Date.now());
 
     await expect(access(testLockPath)).resolves.toBeUndefined();
+  });
+
+  it("recovers an orphaned cleanup sidecar before removing a stale lock", async () => {
+    const staleCreatedAt = Date.now() - SIMCTL_LIST_DEVICES_LOCK_STALE_MS - 1_000;
+    await writeFile(testLockPath, lockMetadata(staleCreatedAt, 0));
+    await writeFile(`${testLockPath}.cleanup`, lockMetadata(staleCreatedAt, 0));
+
+    await __removeStaleSimctlListDevicesLockForTesting(testLockPath, Date.now());
+
+    await expect(access(testLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(`${testLockPath}.cleanup`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("recovers very old cleanup sidecars even when the recorded PID is alive again", async () => {
+    const now = Date.now();
+    const staleCreatedAt = now - SIMCTL_LIST_DEVICES_LOCK_LIVE_OWNER_MAX_MS - 1_000;
+    await writeFile(testLockPath, lockMetadata(staleCreatedAt, 0));
+    await writeFile(`${testLockPath}.cleanup`, lockMetadata(staleCreatedAt));
+
+    await __removeStaleSimctlListDevicesLockForTesting(testLockPath, now);
+
+    await expect(access(testLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(`${testLockPath}.cleanup`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not hide lock acquisition failures as an empty simulator list", async () => {
+    const missingDirectory = join(
+      tmpdir(),
+      `argent-test-missing-lock-dir-${process.pid}-${randomUUID()}`
+    );
+    __setSimctlListDevicesLockPathForTesting(join(missingDirectory, "simctl.lock"));
+    mockSimctl();
+
+    await expect(listIosSimulators()).rejects.toThrow("failed to acquire simctl list devices lock");
+  });
+
+  it("still returns an empty list when simctl itself fails", async () => {
+    execFileMock.mockReturnValue(new Error("xcrun unavailable"));
+
+    await expect(listIosSimulators()).resolves.toEqual([]);
   });
 });
