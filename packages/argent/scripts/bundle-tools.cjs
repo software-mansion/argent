@@ -9,6 +9,7 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 // esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
+const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
 const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
 const NATIVE_DEVTOOLS_IOS_ENTRY = path.resolve(
@@ -41,6 +42,7 @@ const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/
 // from source (rather than each package's compiled dist/) keeps the bundle
 // independent of build order/freshness.
 const ALIASES = {
+  "@argent/archive": ARCHIVE_ENTRY,
   "@argent/registry": REGISTRY_ENTRY,
   "@argent/native-devtools-ios": NATIVE_DEVTOOLS_IOS_ENTRY,
   "@argent/native-devtools-android": NATIVE_DEVTOOLS_ANDROID_ENTRY,

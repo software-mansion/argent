@@ -31,10 +31,8 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
+import { safeExtractTarGz } from "@argent/archive";
 
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
 export const ARTIFACT_MARKER = "__argentArtifact" as const;
@@ -180,11 +178,9 @@ async function downloadAndExtractArchive(
   const tarball = join(dir, `${sanitizeSegment(handle.filename)}.tar.gz`);
   try {
     await writeFile(tarball, data);
-    // `-C dir` recreates the bundle's own top-level directory inside `dir`. The
-    // server tars `basename(hostPath)`, which equals `handle.filename`, so the
-    // unpacked bundle lands at `dir/<filename>`.
-    await execFileAsync("tar", ["-xzf", tarball, "-C", dir]);
-    return join(dir, handle.filename);
+    // Slip-hardened: a compromised tool-server shouldn't be able to write
+    // outside the artifact cache via a `../` member.
+    return await safeExtractTarGz(tarball, dir, handle.filename);
   } catch {
     return null;
   } finally {
