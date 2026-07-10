@@ -4,6 +4,12 @@
  * packages/tool-server/src/tools/**\/*.ts and outputs MCP tools/list JSON
  * suitable for `spidershield scan . --tools-json <file>`.
  *
+ * Must stay dependency-free (node: builtins only): the tool-description-quality
+ * workflow runs it on a bare checkout without `npm ci`. The unit suite
+ * (extract-tools.test.mjs) independently parses the same tree with the real
+ * TypeScript parser and asserts this extractor's output matches it exactly, so
+ * any lexing gap on a shape that actually enters the tree fails CI loudly.
+ *
  * Usage:
  *   node scripts/extract-tools.mjs > tools.json
  */
@@ -18,41 +24,196 @@ const __filename = fileURLToPath(import.meta.url);
 const __dir = dirname(__filename);
 const toolsRoot = join(__dir, "..", "packages", "tool-server", "src", "tools");
 
-// Standard JS string/template-literal escapes this extractor unescapes when
-// rendering a captured description. Anything not listed here (e.g. \x41,
-// é) is left as-is rather than guessed at.
-const UNESCAPE_MAP = { n: "\n", r: "\r", t: "\t", 0: "\0" };
+// Single-character escapes with a non-identity meaning. Everything else
+// follows full JS semantics in unescapeJsString: \xNN / \uNNNN / \u{...} decode
+// to their code point, a backslash-newline is a line continuation (empty), and
+// any other escaped character is an identity escape (the backslash drops).
+const UNESCAPE_MAP = { n: "\n", r: "\r", t: "\t", v: "\v", b: "\b", f: "\f", 0: "\0" };
 
 // Sticky matcher for the `description:` key, anchored per candidate position so
 // resolving it costs no per-character substring allocation (see findOwnDescriptionValue).
 const DESCRIPTION_KEY = /description:\s*/y;
 
-// Sticky matcher for an `id: "..."` string literal, anchored at a known
-// code-context position (see findIdLiteralsInCode).
-const ID_LITERAL = /id:\s*["']([^"']+)["']/y;
+// Sticky matcher for an `id: "..."` string/template literal with a matching
+// closing delimiter, anchored at a known code-context position (see
+// findIdLiteralsInCode). A template id is only static without interpolation;
+// the caller rejects a captured `${`.
+const ID_LITERAL = /id:\s*(["'`])([^"'`]+)\1/y;
 
-// Characters after which a `/` starts a regex literal rather than division.
-// The standard prefix heuristic: a regex can only follow an operator, an opening
-// bracket, a separator, or the start of the input — never an identifier, a
+// Characters after which a `/` starts a regex literal rather than division:
+// an operator, an opening bracket, or a separator — never an identifier, a
 // number, a closing paren/bracket, or a string (where `/` means division).
-// Statement-keyword positions (`return /re/`) don't occur between an object's
-// properties, so the character class is sufficient here.
 const REGEX_PREV_CHARS = new Set("(,=:[!&|?{};+-*%<>~^");
 
+// Keywords a regex literal can directly follow even though they end in an
+// identifier character (`return /["']/` is ordinary code in helper functions
+// that share a file with tool definitions).
+const REGEX_PREV_KEYWORDS = new Set([
+  "return",
+  "typeof",
+  "case",
+  "in",
+  "of",
+  "delete",
+  "void",
+  "throw",
+  "new",
+  "do",
+  "else",
+  "yield",
+  "await",
+  "instanceof",
+]);
+
+function walk(dir) {
+  const entries = [];
+  for (const name of readdirSync(dir)) {
+    const full = join(dir, name);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      entries.push(...walk(full));
+    } else if (extname(name) === ".ts" && !name.endsWith(".d.ts")) {
+      entries.push(full);
+    }
+  }
+  return entries;
+}
+
+// --- Lexical skip helpers ----------------------------------------------------
+// One shared set of rules for everything that is NOT code: comments, string and
+// template literals (with `${...}` interpolations skipped opaquely), and regex
+// literals. Both scanners drive these, so their notion of "code context" cannot
+// drift apart.
+
+/** @returns {number} index just past the newline ending a `//` comment */
+function skipLineComment(src, i) {
+  const nl = src.indexOf("\n", i + 2);
+  return nl === -1 ? src.length : nl + 1;
+}
+
+/** @returns {number} index just past the `*` + `/` ending a block comment */
+function skipBlockComment(src, i) {
+  const end = src.indexOf("*/", i + 2);
+  return end === -1 ? src.length : end + 2;
+}
+
+/** src[i] is `'` or `"`. @returns {number} index just past the closing delimiter */
+function skipStringLiteral(src, i) {
+  const delim = src[i];
+  for (let j = i + 1; j < src.length; j++) {
+    if (src[j] === "\\") j++;
+    else if (src[j] === delim) return j + 1;
+  }
+  return src.length;
+}
+
 /**
- * If a regex literal starts at src[i] (given the last significant code character
- * before it), return the index just past its closing `/` and flags; otherwise
- * return i (the `/` is division or invalid - treat it as a plain character).
- * Handles `[...]` character classes (where `/` does not terminate) and `\`
- * escapes. A newline before the closing `/` means it was not a regex literal.
+ * src[i] is a backtick. Skips the whole template literal, INCLUDING `${...}`
+ * interpolations: the code inside an interpolation is not a tool-definition
+ * site, but its strings, nested templates, comments, regexes, and braces must
+ * be tracked so the template's real closing backtick is found. Without this, a
+ * nested template's opening backtick "closes" the outer one and everything
+ * after is mis-lexed (a fake `description:` inside an interpolation could even
+ * be emitted as a tool's real description).
+ *
+ * @returns {number} index just past the closing backtick
+ */
+function skipTemplateLiteral(src, i) {
+  for (let j = i + 1; j < src.length; j++) {
+    const ch = src[j];
+    if (ch === "\\") j++;
+    else if (ch === "$" && src[j + 1] === "{") j = skipInterpolation(src, j + 1) - 1;
+    else if (ch === "`") return j + 1;
+  }
+  return src.length;
+}
+
+/** src[i] is the `{` of a `${`. @returns {number} index just past the matching `}` */
+function skipInterpolation(src, i) {
+  let depth = 1;
+  let prevSig = null;
+  let prevSigIdx = -1;
+  for (let j = i + 1; j < src.length; j++) {
+    const ch = src[j];
+    if (ch === "/" && src[j + 1] === "/") {
+      j = skipLineComment(src, j) - 1;
+      continue;
+    }
+    if (ch === "/" && src[j + 1] === "*") {
+      j = skipBlockComment(src, j) - 1;
+      continue;
+    }
+    if (ch === "/") {
+      const end = skipRegexLiteral(src, j, prevSig, prevSigIdx);
+      if (end > j) {
+        j = end - 1;
+        prevSig = ")"; // a value just ended; a following `/` is division
+        prevSigIdx = j;
+        continue;
+      }
+    }
+    if (ch === '"' || ch === "'") {
+      j = skipStringLiteral(src, j) - 1;
+      prevSig = ch;
+      prevSigIdx = j;
+      continue;
+    }
+    if (ch === "`") {
+      j = skipTemplateLiteral(src, j) - 1;
+      prevSig = "`";
+      prevSigIdx = j;
+      continue;
+    }
+    if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      if (--depth === 0) return j + 1;
+    }
+    if (!/\s/.test(ch)) {
+      prevSig = ch;
+      prevSigIdx = j;
+    }
+  }
+  return src.length;
+}
+
+/**
+ * True when a `/` may start a regex literal here: after an operator/separator
+ * character, after a regex-permitting keyword (`return`, `typeof`, ...), or at
+ * the start of the input. After an identifier, number, closing paren/bracket,
+ * or string, `/` is division.
+ *
+ * @param {string} src
+ * @param {string | null} prevSig  last significant code char, or null
+ * @param {number} prevSigIdx      index of prevSig in src (-1 when null)
+ */
+function isRegexPosition(src, prevSig, prevSigIdx) {
+  if (prevSig === null) return true;
+  if (REGEX_PREV_CHARS.has(prevSig)) return true;
+  if (/[A-Za-z0-9_$]/.test(prevSig)) {
+    let start = prevSigIdx;
+    while (start > 0 && /[A-Za-z0-9_$]/.test(src[start - 1])) start--;
+    return REGEX_PREV_KEYWORDS.has(src.slice(start, prevSigIdx + 1));
+  }
+  return false;
+}
+
+/**
+ * If a regex literal starts at src[i] (given the last significant code
+ * character before it), return the index just past its closing `/` and flags;
+ * otherwise return i (the `/` is division or invalid - treat it as a plain
+ * character). Handles `[...]` character classes (where `/` does not terminate)
+ * and `\` escapes. A newline before the closing `/` means it was not a regex
+ * literal.
  *
  * @param {string} src
  * @param {number} i        index of the opening `/`
  * @param {string | null} prevSig  last significant code char before i, or null
+ * @param {number} prevSigIdx      index of prevSig in src (-1 when null)
  * @returns {number}
  */
-function skipRegexLiteral(src, i, prevSig) {
-  if (prevSig !== null && !REGEX_PREV_CHARS.has(prevSig)) return i;
+function skipRegexLiteral(src, i, prevSig, prevSigIdx) {
+  if (!isRegexPosition(src, prevSig, prevSigIdx)) return i;
   let inClass = false;
   for (let j = i + 1; j < src.length; j++) {
     const ch = src[j];
@@ -73,18 +234,30 @@ function skipRegexLiteral(src, i, prevSig) {
   return i;
 }
 
-function walk(dir) {
-  const entries = [];
-  for (const name of readdirSync(dir)) {
-    const full = join(dir, name);
-    const stat = statSync(full);
-    if (stat.isDirectory()) {
-      entries.push(...walk(full));
-    } else if (extname(name) === ".ts" && !name.endsWith(".d.ts")) {
-      entries.push(full);
+/**
+ * Render a captured string/template-literal body as its runtime (cooked) text,
+ * following JS escape semantics: named escapes (\n, \t, ...), \xNN, \uNNNN,
+ * \u{...}, line continuations (backslash-newline vanish), and identity escapes
+ * (the backslash drops). An out-of-range \u{...} is left as source text - such
+ * a file would not compile anyway.
+ *
+ * @param {string} raw
+ * @returns {string}
+ */
+function unescapeJsString(raw) {
+  return raw.replace(
+    /\\(?:u\{([0-9A-Fa-f]+)\}|u([0-9A-Fa-f]{4})|x([0-9A-Fa-f]{2})|(\r\n|[\s\S]))/g,
+    (whole, uBrace, u4, x2, single) => {
+      if (uBrace !== undefined) {
+        const cp = parseInt(uBrace, 16);
+        return cp <= 0x10ffff ? String.fromCodePoint(cp) : whole;
+      }
+      if (u4 !== undefined) return String.fromCharCode(parseInt(u4, 16));
+      if (x2 !== undefined) return String.fromCharCode(parseInt(x2, 16));
+      if (single === "\r\n" || single === "\r" || single === "\n") return ""; // line continuation
+      return UNESCAPE_MAP[single] ?? single;
     }
-  }
-  return entries;
+  );
 }
 
 /**
@@ -92,8 +265,10 @@ function walk(dir) {
  * of that tool's own `description:` value (starting at its opening delimiter), or
  * null when the `id:` has no sibling `description:`.
  *
- * Scans forward tracking object-literal brace depth, ignoring braces and the
- * `description:` token whenever they occur inside a string / template literal:
+ * Scans forward tracking object-literal brace depth, with comments, string and
+ * template literals (interpolations included), and regex literals skipped whole
+ * so nothing inside them can open a fake string, shift the depth, or match as a
+ * `description:` token:
  *   - the first `description:` seen at depth 0 (a sibling of the `id:`) is the
  *     tool's own description; a balanced nested object between the two (e.g.
  *     `capability: { apple: { simulator: true } }`, which 7 real tools already
@@ -111,49 +286,40 @@ function walk(dir) {
  */
 function findOwnDescriptionValue(afterId) {
   let depth = 0;
-  let quote = null; // active string/template delimiter, or null when in code
   let prevSig = null; // last significant code char (regex-vs-division context)
+  let prevSigIdx = -1;
   for (let i = 0; i < afterId.length; i++) {
     const ch = afterId[i];
-    if (quote !== null) {
-      if (ch === "\\") {
-        i++; // skip the escaped character
-      } else if (ch === quote) {
-        prevSig = ch; // a string value just ended; a following `/` is division
-        quote = null;
-      }
-      continue;
-    }
-    // Skip comments so an apostrophe (e.g. `// don't`), a brace, or a stray
-    // `description:` token inside a comment between the `id:` and the real
-    // `description:` can't open a fake string / shift the depth / match early.
     if (ch === "/" && afterId[i + 1] === "/") {
-      const nl = afterId.indexOf("\n", i + 2);
-      if (nl === -1) return null; // line comment runs to EOF; no description follows
-      i = nl; // loop's i++ steps past the newline
+      i = skipLineComment(afterId, i) - 1;
       continue;
     }
     if (ch === "/" && afterId[i + 1] === "*") {
-      const end = afterId.indexOf("*/", i + 2);
-      if (end === -1) return null; // unterminated block comment; nothing parseable after
-      i = end + 1; // land on the '/'; loop's i++ steps past it
+      i = skipBlockComment(afterId, i) - 1;
       continue;
     }
-    // Skip regex literals whole: a quote inside one (e.g. `z.regex(/["']/)`)
-    // must not open a fake string, and a brace (e.g. `match: /[{]/`) must not
-    // shift the tracked depth - either would hide the real `description:` and
-    // drop the tool from the downstream security scan.
     if (ch === "/") {
-      const end = skipRegexLiteral(afterId, i, prevSig);
+      const end = skipRegexLiteral(afterId, i, prevSig, prevSigIdx);
       if (end > i) {
-        i = end - 1; // loop's i++ steps past the regex
+        i = end - 1;
         prevSig = ")"; // a value just ended; a following `/` is division
+        prevSigIdx = i;
         continue;
       }
     }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      quote = ch;
-    } else if (ch === "{") {
+    if (ch === '"' || ch === "'") {
+      i = skipStringLiteral(afterId, i) - 1;
+      prevSig = ch;
+      prevSigIdx = i;
+      continue;
+    }
+    if (ch === "`") {
+      i = skipTemplateLiteral(afterId, i) - 1;
+      prevSig = "`";
+      prevSigIdx = i;
+      continue;
+    }
+    if (ch === "{") {
       depth++;
     } else if (ch === "}") {
       if (--depth < 0) return null; // id's own object closed - not a tool
@@ -166,14 +332,18 @@ function findOwnDescriptionValue(afterId) {
       DESCRIPTION_KEY.lastIndex = i;
       if (DESCRIPTION_KEY.test(afterId)) return afterId.slice(DESCRIPTION_KEY.lastIndex);
     }
-    if (!/\s/.test(ch)) prevSig = ch;
+    if (!/\s/.test(ch)) {
+      prevSig = ch;
+      prevSigIdx = i;
+    }
   }
   return null;
 }
 
 /**
- * Find every `id: "..."` string literal that occurs in CODE - never one inside a
- * string, template literal, or comment.
+ * Find every static `id:` string/template literal that occurs in CODE - never
+ * one inside a string, template literal (interpolations included), comment, or
+ * regex literal.
  *
  * A raw global regex over the source matched `id:` tokens anywhere, so an `id:`
  * appearing in a comment (e.g. a `// see id: "screenshot"` cross-reference) or in
@@ -183,49 +353,46 @@ function findOwnDescriptionValue(afterId) {
  * downstream security scan. Lexing to code context first removes that whole class,
  * and also skips non-id keys like `$id:` (the `$` fails the word-boundary check).
  *
+ * A template-literal id (`` id: `x` ``) counts only without `${...}`
+ * interpolation; an interpolated id is dynamic, like a const-reference id, and
+ * is out of scope for this static extractor.
+ *
  * @param {string} src
  * @returns {{ id: string, end: number }[]}  end = index just past the matched literal
  */
 function findIdLiteralsInCode(src) {
   const out = [];
-  let quote = null; // active string/template delimiter, or null when in code
   let prevSig = null; // last significant code char (regex-vs-division context)
+  let prevSigIdx = -1;
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
-    if (quote !== null) {
-      if (ch === "\\")
-        i++; // skip the escaped character
-      else if (ch === quote) {
-        prevSig = ch; // a string value just ended; a following `/` is division
-        quote = null;
-      }
-      continue;
-    }
     if (ch === "/" && src[i + 1] === "/") {
-      const nl = src.indexOf("\n", i + 2);
-      if (nl === -1) break; // line comment runs to EOF
-      i = nl;
+      i = skipLineComment(src, i) - 1;
       continue;
     }
     if (ch === "/" && src[i + 1] === "*") {
-      const end = src.indexOf("*/", i + 2);
-      if (end === -1) break; // unterminated block comment
-      i = end + 1;
+      i = skipBlockComment(src, i) - 1;
       continue;
     }
-    // Skip regex literals whole: a quote inside one placed BEFORE an `id:`
-    // (e.g. `s.replace(/"/g, "")`) would otherwise open a fake string that
-    // swallows the id, dropping the tool from the scan without a trace.
     if (ch === "/") {
-      const end = skipRegexLiteral(src, i, prevSig);
+      const end = skipRegexLiteral(src, i, prevSig, prevSigIdx);
       if (end > i) {
-        i = end - 1; // loop's i++ steps past the regex
+        i = end - 1;
         prevSig = ")"; // a value just ended; a following `/` is division
+        prevSigIdx = i;
         continue;
       }
     }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      quote = ch;
+    if (ch === '"' || ch === "'") {
+      i = skipStringLiteral(src, i) - 1;
+      prevSig = ch;
+      prevSigIdx = i;
+      continue;
+    }
+    if (ch === "`") {
+      i = skipTemplateLiteral(src, i) - 1;
+      prevSig = "`";
+      prevSigIdx = i;
       continue;
     }
     // A code-context `id:` token. The word-boundary check before it means
@@ -234,13 +401,21 @@ function findIdLiteralsInCode(src) {
       ID_LITERAL.lastIndex = i;
       const m = ID_LITERAL.exec(src);
       if (m) {
-        out.push({ id: m[1], end: ID_LITERAL.lastIndex });
+        // A template id containing `${` is interpolated - dynamic, not a static
+        // tool id (same class as a const-reference id; out of scope by design).
+        if (!(m[1] === "`" && m[2].includes("${"))) {
+          out.push({ id: m[2], end: ID_LITERAL.lastIndex });
+        }
         i = ID_LITERAL.lastIndex - 1; // resume just past the value (loop's i++ advances)
-        prevSig = '"'; // the id literal's closing quote
+        prevSig = m[1]; // the id literal's closing delimiter
+        prevSigIdx = i;
         continue;
       }
     }
-    if (!/\s/.test(ch)) prevSig = ch;
+    if (!/\s/.test(ch)) {
+      prevSig = ch;
+      prevSigIdx = i;
+    }
   }
   return out;
 }
@@ -303,15 +478,16 @@ export function extractToolsFromSource(src, filePath = "<source>") {
     let description = null;
     if (value !== null) {
       const delim = value[0];
-      // Template literal allows escaped backticks (\`) so inline code like
-      // `adb pull` doesn't truncate; the quoted forms allow the standard escapes.
+      // Match the whole literal to its true closing delimiter. `\\[\s\S]`
+      // (not `\\.`) lets an escaped line terminator - a line continuation -
+      // stay part of one legal literal.
       const valueMatch =
         delim === "`"
-          ? value.match(/^`((?:\\.|[^`\\])*)`/)
+          ? value.match(/^`((?:\\[\s\S]|[^`\\])*)`/)
           : delim === '"'
-            ? value.match(/^"((?:[^"\\]|\\.)*)"/)
+            ? value.match(/^"((?:[^"\\]|\\[\s\S])*)"/)
             : delim === "'"
-              ? value.match(/^'((?:[^'\\]|\\.)*)'/)
+              ? value.match(/^'((?:[^'\\]|\\[\s\S])*)'/)
               : null;
       if (valueMatch) {
         // The literal is only the whole description if nothing extends it: after
@@ -322,16 +498,18 @@ export function extractToolsFromSource(src, filePath = "<source>") {
         // in a template means runtime interpolation. Either way, leave
         // description null so it falls through to the loud warn-and-skip below
         // rather than emitting wrong text silently into the security scan.
+        // The interpolation probe replaces escape pairs with a placeholder
+        // (never deletes them) so `$` + escape + `{` cannot glue into a fake
+        // `${`, and an escaped `\${` or `$\{` stays the literal text it renders as.
         const rest = value.slice(valueMatch[0].length);
-        const hasInterpolation = delim === "`" && /\$\{/.test(valueMatch[1].replace(/\\./g, ""));
+        const hasInterpolation =
+          delim === "`" && /\$\{/.test(valueMatch[1].replace(/\\[\s\S]/g, " "));
         if (literalIsWholeValue(rest) && !hasInterpolation) {
-          // Unescape the standard JS escapes so the description reads as the
-          // rendered string, not the source form — e.g. a template literal's
-          // literal "\n" must become an actual newline, not survive as a stray
-          // backslash-n in the extracted (and downstream security-scanned) text.
-          description = valueMatch[1]
-            .replace(/\\([`$\\'"nrt0])/g, (_m, ch) => UNESCAPE_MAP[ch] ?? ch)
-            .trim();
+          // Render the runtime (cooked) text: template literals first normalize
+          // line terminators (`\r\n` / `\r` cook to `\n` per spec - relevant on
+          // a CRLF checkout), then JS escape semantics apply.
+          const text = delim === "`" ? valueMatch[1].replace(/\r\n?/g, "\n") : valueMatch[1];
+          description = unescapeJsString(text).trim();
         }
       }
     }
@@ -357,12 +535,14 @@ export function extractToolsFromSource(src, filePath = "<source>") {
       // enclosing object closed. Usually the `id:` is a nested object key (e.g.
       // `defaultPayload: { id: "example" }`), correctly not a tool. But a real
       // top-level tool with a missing/empty `description` (type-legal:
-      // `description?` is optional in ToolDefinition) also lands here and would
-      // be silently omitted from the downstream security scan. The two aren't
-      // locally distinguishable, so warn on stderr (stdout stays valid JSON) to
-      // make a real drop loud instead of only a cryptic count mismatch in CI.
+      // `description?` is optional in ToolDefinition) also lands here - as does
+      // one whose `description:` is written BEFORE its `id:` (this scan is
+      // forward-only) - and would be silently omitted from the downstream
+      // security scan. The cases aren't locally distinguishable, so warn on
+      // stderr (stdout stays valid JSON) to make a real drop loud instead of
+      // only a cryptic count mismatch in CI.
       console.error(
-        `extract-tools: WARNING: id "${id}" in ${filePath} has no sibling description at its object scope; skipping (nested object key, or a tool missing its description).`
+        `extract-tools: WARNING: id "${id}" in ${filePath} has no sibling description at its object scope; skipping (nested object key, a tool missing its description, or a description written before the id).`
       );
     }
   }
