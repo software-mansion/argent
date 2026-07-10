@@ -8,6 +8,7 @@
     "customConditions": ["node"]
   },
   "references": [
+    { "path": "../archive" },
     { "path": "../configuration-core" },
     { "path": "../registry" },
     { "path": "../update-core" },
