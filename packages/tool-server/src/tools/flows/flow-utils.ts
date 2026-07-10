@@ -220,7 +220,7 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
  * and is never serialized as a field — the YAML spelling carries it exactly:
  * bare string ⇔ loose, map form ⇔ strict (`selectorToYaml`/`parseSelector` are
  * inverses). It is never forwarded into a tool's input — explicit `{ text }` /
- * `{ identifier }` selectors stay strict everywhere, including across the
+ * `{ id }` selectors stay strict everywhere, including across the
  * serialize/parse round-trip every recorded step performs.
  */
 export type FlowSelector = Selector & { loose?: boolean };
@@ -304,10 +304,12 @@ export function chromiumLaunchSpec(
 
 /**
  * A selector in YAML is sugared: a bare string is shorthand for `{ text: <string> }`
- * (the common case), and the full `{ text?, identifier?, role? }` map is still
- * accepted for identifier/role locators.
+ * (the common case), and the full `{ text?, id?, role? }` map is still accepted
+ * for identifier/role locators. The map form spells the internal `identifier`
+ * field `id`; `identifier` is accepted on parse as an alias (so existing flow
+ * files keep working) but serialization always emits `id`.
  */
-type YamlSelector = string | Selector;
+type YamlSelector = string | (Omit<Selector, "identifier"> & { id?: string });
 
 /** A tap targets an element (selector, possibly a bare string) or a raw point. */
 type TapBody = YamlSelector | { x: number; y: number };
@@ -364,7 +366,7 @@ type YamlFlowFile = {
  * against — e.g. a recorder-captured `{ text: "Save" }` hijacked by a
  * `testID="save"` elsewhere on screen.
  */
-function selectorToYaml(sel: FlowSelector): YamlSelector {
+export function selectorToYaml(sel: FlowSelector): YamlSelector {
   if (
     sel.loose &&
     sel.text !== undefined &&
@@ -373,8 +375,9 @@ function selectorToYaml(sel: FlowSelector): YamlSelector {
   ) {
     return sel.text;
   }
-  const { loose: _loose, ...rest } = sel;
-  return { ...rest };
+  // YAML spells the identifier field `id` (parseSelector maps it back).
+  const { loose: _loose, identifier, ...rest } = sel;
+  return identifier === undefined ? { ...rest } : { ...rest, id: identifier };
 }
 
 /** Sugar an await/assert step into the condition-as-key YAML body. */
@@ -497,13 +500,24 @@ function parseSelector(raw: unknown, where: string): FlowSelector {
   // Bare-string sugar: a string is shorthand for a text selector, marked
   // `loose` so the flow runner tries the identifier locator first and falls
   // back to text — a hand-written `foo` then matches `testID="foo"` too. An
-  // explicit `{ text }` / `{ identifier }` map is strict (no `loose`).
+  // explicit `{ text }` / `{ id }` map is strict (no `loose`).
   if (typeof raw === "string") {
     const r = selectorSchema.safeParse({ text: raw });
     if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
     return { ...r.data, loose: true };
   }
-  const r = selectorSchema.safeParse(raw);
+  // Map form: `id` is the YAML spelling of the internal `identifier` field —
+  // rewrite it before schema validation. `identifier` still parses as an alias
+  // (existing flow files), but a map carrying both is ambiguous and rejected.
+  let normalized = raw;
+  if (raw !== null && typeof raw === "object" && "id" in raw) {
+    const { id, ...rest } = raw as { id: unknown } & Record<string, unknown>;
+    if ("identifier" in rest) {
+      badEntry(raw, `${where}: selector takes \`id\` or \`identifier\` (its alias), not both`);
+    }
+    normalized = { ...rest, identifier: id };
+  }
+  const r = selectorSchema.safeParse(normalized);
   if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
   return r.data;
 }
@@ -661,7 +675,12 @@ function fromYamlStep(raw: YamlStep): FlowStep {
     // mixing both is ambiguous (which wins?) and rejected rather than silently
     // resolved one way.
     if (obj.x !== undefined || obj.y !== undefined) {
-      if (obj.text !== undefined || obj.identifier !== undefined || obj.role !== undefined) {
+      if (
+        obj.text !== undefined ||
+        obj.id !== undefined ||
+        obj.identifier !== undefined ||
+        obj.role !== undefined
+      ) {
         badEntry(raw, "tap takes a selector or x/y coordinates, not both");
       }
       if (typeof obj.x !== "number" || typeof obj.y !== "number") {

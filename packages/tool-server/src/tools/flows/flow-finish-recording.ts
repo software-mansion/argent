@@ -9,8 +9,17 @@ import {
   clientFileDirective,
   parseFlow,
   serializeFlow,
+  selectorToYaml,
   type FlowSavedTo,
+  type FlowSelector,
 } from "./flow-utils";
+
+// Quote selectors in the step summary the way the flow FILE spells them
+// (`id`, bare string for loose, no internal `loose` flag) — the summary is what
+// gets read before hand-editing the YAML, so the spellings must agree.
+function selectorLabel(sel: FlowSelector): string {
+  return JSON.stringify(selectorToYaml(sel));
+}
 
 const zodSchema = z.object({});
 
@@ -60,21 +69,21 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         case "run":
           return `${n}. run: ${step.flow}`;
         case "tap":
-          return `${n}. tap: ${JSON.stringify(step.selector)}`;
+          return `${n}. tap: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
         case "type":
-          return `${n}. type: ${JSON.stringify(step.into)} ← "${step.text}"`;
+          return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
         case "await":
         case "assert": {
           const tail =
             step.condition === "text"
-              ? `text ${JSON.stringify(step.selector)} == "${step.expectedText ?? ""}"`
-              : `${step.condition} ${JSON.stringify(step.selector)}`;
+              ? `text ${selectorLabel(step.selector)} == "${step.expectedText ?? ""}"`
+              : `${step.condition} ${selectorLabel(step.selector)}`;
           return `${n}. ${step.kind}: ${tail}`;
         }
         case "wait":
           return `${n}. wait: ${step.ms}ms`;
         case "scroll-to":
-          return `${n}. scroll-to: ${JSON.stringify(step.target)} (${step.direction})`;
+          return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
         case "snapshot":
           return `${n}. snapshot: ${step.name}`;
         case "tool":

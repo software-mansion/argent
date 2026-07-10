@@ -161,10 +161,14 @@ function axisFullyInside(
 const DEFAULT_ASSERT_TIMEOUT_MS = 1000;
 
 function describeSelector(s: FlowSelector): string {
-  return Object.entries(s)
-    .filter(([k]) => k !== "loose")
-    .map(([k, v]) => `${k}="${v}"`)
-    .join(" ");
+  return (
+    Object.entries(s)
+      .filter(([k]) => k !== "loose")
+      // `identifier` is spelled `id` in flow YAML — print the spelling the flow
+      // file uses so a failure reads like the step that caused it.
+      .map(([k, v]) => `${k === "identifier" ? "id" : k}="${v}"`)
+      .join(" ")
+  );
 }
 
 /**
@@ -172,7 +176,7 @@ function describeSelector(s: FlowSelector): string {
  * selector (bare-string sugar, `tap: foo`) tries the identifier locator first
  * and falls back to text (label/value) only when that finds nothing — so a
  * hand-written `foo` matches a `testID="foo"` as well as visible text. Explicit
- * `{ text }` / `{ identifier }` selectors carry no flag and match strictly.
+ * `{ text }` / `{ id }` selectors carry no flag and match strictly.
  * Lives in the flow runner only; the shared match engine and the tools that
  * consume it are untouched.
  */

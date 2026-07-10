@@ -43,9 +43,13 @@ const zodSchema = z.object({
 });
 
 function formatSelector(selector: Selector): string {
-  return Object.entries(selector)
-    .map(([k, v]) => `${k}="${v}"`)
-    .join(" ");
+  return (
+    Object.entries(selector)
+      // `identifier` is spelled `id` in flow YAML — warnings should quote the
+      // selector the way the recorded file will spell it.
+      .map(([k, v]) => `${k === "identifier" ? "id" : k}="${v}"`)
+      .join(" ")
+  );
 }
 
 // The full-hierarchy source replay gates on per platform (`treeSourceGate` in

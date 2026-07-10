@@ -174,12 +174,36 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
   });
 
+  it("parses the map form's `id` as the internal identifier field (strict)", () => {
+    const flow = parseFlow("steps:\n  - tap: { id: submit-btn }\n");
+    expect(flow.steps).toEqual([{ kind: "tap", selector: { identifier: "submit-btn" } }]);
+  });
+
+  it("accepts `identifier` as a parse-only alias for `id`", () => {
+    const flow = parseFlow("steps:\n  - tap: { identifier: submit-btn }\n");
+    expect(flow.steps).toEqual([{ kind: "tap", selector: { identifier: "submit-btn" } }]);
+  });
+
+  it("rejects a selector map carrying both `id` and `identifier`", () => {
+    expect(() => parseFlow("steps:\n  - tap: { id: a, identifier: b }\n")).toThrow(
+      /`id` or `identifier`.*not both/
+    );
+  });
+
+  it("re-serializes an identifier-spelled flow with the `id` spelling", () => {
+    // Old files parse via the alias; the next write (appendStep re-serializes
+    // the whole file) migrates them to the canonical `id` spelling.
+    const yaml = serializeFlow(parseFlow("steps:\n  - tap: { identifier: submit-btn }\n"));
+    expect(yaml).toContain("id: submit-btn");
+    expect(yaml).not.toContain("identifier:");
+  });
+
   it("parses condition-as-key await/assert sugar (visible/exists/hidden)", () => {
     const flow = parseFlow(
       [
         "steps:",
         "  - await: { visible: Account }",
-        "  - assert: { exists: { identifier: row } }",
+        "  - assert: { exists: { id: row } }",
         "  - await: { hidden: spinner }",
       ].join("\n")
     );
@@ -192,7 +216,7 @@ describe("parseFlow", () => {
 
   it("parses the text sugar { in, contains } as a substring match", () => {
     const flow = parseFlow(
-      'steps:\n  - assert: { text: { in: { identifier: counter }, contains: "Taps: 0" } }\n'
+      'steps:\n  - assert: { text: { in: { id: counter }, contains: "Taps: 0" } }\n'
     );
     expect(flow.steps).toEqual([
       {
@@ -207,7 +231,7 @@ describe("parseFlow", () => {
 
   it("parses the text sugar { in, equals } as an exact match", () => {
     const flow = parseFlow(
-      'steps:\n  - assert: { text: { in: { identifier: counter }, equals: "Taps: 0" } }\n'
+      'steps:\n  - assert: { text: { in: { id: counter }, equals: "Taps: 0" } }\n'
     );
     expect(flow.steps).toEqual([
       {
@@ -284,7 +308,8 @@ describe("parseFlow", () => {
     expect(yaml).not.toContain("condition:");
     expect(yaml).toContain('contains: "Taps: 0"');
     expect(yaml).toContain('equals: "1"');
-    expect(yaml).toContain("identifier: counter");
+    expect(yaml).toContain("id: counter");
+    expect(yaml).not.toContain("identifier:");
   });
 
   it("roundtrips the sugared step kinds through YAML", () => {
@@ -456,9 +481,11 @@ describe("parseFlow", () => {
   });
 
   it("rejects a tap body mixing a selector with coordinates", () => {
-    expect(() => parseFlow("steps:\n  - tap: { identifier: box, x: 0.5, y: 0.5 }\n")).toThrow(
-      "tap takes a selector or x/y coordinates, not both"
-    );
+    for (const key of ["id", "identifier"]) {
+      expect(() => parseFlow(`steps:\n  - tap: { ${key}: box, x: 0.5, y: 0.5 }\n`)).toThrow(
+        "tap takes a selector or x/y coordinates, not both"
+      );
+    }
   });
 
   it("rejects a coordinate tap with a missing or non-numeric x/y", () => {

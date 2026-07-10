@@ -18,7 +18,7 @@ import {
  * no richer source to query. What the raw tree lacks is the flow contract the
  * other adapters provide: the flat-leaves-under-one-root shape and, above all,
  * `subtreeText` hoisting — without it a `text` assert against a container
- * (`{ in: { identifier: "log-box" }, contains: ... }`) reads the container's
+ * (`{ in: { id: "log-box" }, contains: ... }`) reads the container's
  * own (empty) text instead of the lines it visibly wraps.
  */
 
