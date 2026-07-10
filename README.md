@@ -173,14 +173,41 @@ npm install -g @swmansion/argent
 argent init
 ```
 
+#### Share Argent with your team (committable install)
+
+By default Argent installs **globally**. To version Argent _with your repo_ so every
+teammate gets the same setup on `npm install` — no per-developer global install, no
+`argent init` — choose the local mode:
+
+```bash
+npx @swmansion/argent init --local
+```
+
+This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP
+configs that launch the project-local copy (`node node_modules/@swmansion/argent/dist/cli.js mcp`).
+Commit `package.json` + your lockfile, the generated MCP config (`.mcp.json`,
+`.cursor/mcp.json`, …), `.argent/install.json`, and the skills/rules/agents files.
+Teammates then just run `npm install`.
+
+Pass `--global` to force the default mode in scripts; `--local` and `--global` are
+mutually exclusive. A non-interactive (`--yes`) run defaults to global unless the
+project already opted into local mode (a committed `.argent/install.json`, or
+`@swmansion/argent` declared in the project's own `package.json`).
+
+> In local mode the committed MCP config runs the project-local copy, so the bare
+> `argent` command is **not** on teammates' `PATH`. Note that `npm install` builds
+> Argent's native deps (`tree-sitter`) on each machine — prebuilt for macOS, Linux
+> x64, and Windows x64; other targets (Linux arm64, Windows arm) compile from source
+> and need a C/C++ toolchain.
+
 ## CLI Reference
 
 | Command            | Description                                                                                                                                                                                               |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `argent init`      | Install globally and configure MCP in the current workspace                                                                                                                                               |
+| `argent init`      | Install and configure MCP in the current workspace (`--global` default, `--local` for a committable devDependency)                                                                                        |
 | `argent install`   | Alias for `init` command                                                                                                                                                                                  |
-| `argent update`    | Pull the latest version and refresh workspace configuration                                                                                                                                               |
-| `argent remove`    | Unregister the MCP server and uninstall the package                                                                                                                                                       |
+| `argent update`    | Pull the latest version and refresh workspace configuration (acts on the present install — both when a global install and a project devDependency coexist; `--global`/`--local` select explicitly)        |
+| `argent remove`    | Unregister the MCP server and uninstall the package (`--global`/`--local` choose which install — and its configs — is removed; non-interactive runs never remove a coexisting global install)             |
 | `argent uninstall` | Alias for `remove` command                                                                                                                                                                                |
 | `argent mcp`       | Start MCP server instance, used internally by agent                                                                                                                                                       |
 | `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)                                                                                                                                     |
@@ -192,7 +219,7 @@ argent init
 | `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                                                                                                                    |
 | `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                                                                                                              |
 | `argent flags`     | List available feature flags and their state                                                                                                                                                              |
-| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`                                                                                                                                               |
+| `argent telemetry` | Manage telemetry: `status` / `enable` / `disable`                                                                                                                                                         |
 
 ## Supported Editors
 
@@ -213,7 +240,7 @@ argent init
 
 ## Privacy
 
-Argent collects anonymous, opt-out usage and diagnostic telemetry to help us prioritise features and fix what breaks. It is minimal by design.
+Argent collects opt-out usage and diagnostic telemetry to help us prioritise features and fix what breaks.
 
 You can opt out at any time:
 

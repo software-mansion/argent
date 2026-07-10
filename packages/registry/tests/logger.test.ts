@@ -105,7 +105,14 @@ describe("attachRegistryLogger — formatError via toolFailed", () => {
     const root = new Error("timeout");
     const outer = new Error("evaluate failed", { cause: root });
 
-    registry.events.emit("toolFailed", "my-tool", "11111111-1111-4111-8111-111111111111", outer);
+    registry.events.emit(
+      "toolFailed",
+      "my-tool",
+      "11111111-1111-4111-8111-111111111111",
+      outer,
+      undefined,
+      "Failed my-tool."
+    );
 
     const output = errorSpy.mock.calls[0]![0] as string;
     expect(output).toContain(
@@ -141,7 +148,12 @@ describe("attachRegistryLogger — happy-path events", () => {
     const registry = new Registry();
     attachRegistryLogger(registry);
 
-    registry.events.emit("toolInvoked", "my-tool", "11111111-1111-4111-8111-111111111111");
+    registry.events.emit(
+      "toolInvoked",
+      "my-tool",
+      "11111111-1111-4111-8111-111111111111",
+      "Starting my-tool."
+    );
 
     expect(logSpy).toHaveBeenCalledOnce();
     expect(logSpy.mock.calls[0]![0]).toContain(
@@ -157,7 +169,8 @@ describe("attachRegistryLogger — happy-path events", () => {
       "toolCompleted",
       "my-tool",
       "11111111-1111-4111-8111-111111111111",
-      123.456
+      123.456,
+      "Completed my-tool."
     );
 
     expect(logSpy).toHaveBeenCalledOnce();

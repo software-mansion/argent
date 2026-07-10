@@ -7,6 +7,8 @@ import { parse as parseJsonc } from "jsonc-parser";
 import {
   ALL_ADAPTERS,
   getMcpEntry,
+  isArgentManagedEntry,
+  resolveLocalCommandMode,
   addClaudePermission,
   removeClaudePermission,
   copyRulesAndAgents,
@@ -77,6 +79,175 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+// ── isArgentManagedEntry ──────────────────────────────────────────────────────
+
+describe("isArgentManagedEntry", () => {
+  it("accepts every shape argent itself writes", () => {
+    expect(isArgentManagedEntry({ command: "argent", args: ["mcp"] })).toBe(true);
+    expect(
+      isArgentManagedEntry({
+        command: "node",
+        args: ["node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(true);
+    // Windows separators in a committed relative path still count as managed.
+    expect(
+      isArgentManagedEntry({
+        command: "node",
+        args: ["node_modules\\@swmansion\\argent\\dist\\cli.js", "mcp"],
+      })
+    ).toBe(true);
+    // The fallback shapes getLocalArgentBinRelPath emits for hoisted
+    // workspaces and pnpm store layouts are argent-authored too.
+    expect(
+      isArgentManagedEntry({
+        command: "node",
+        args: ["../../node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(true);
+    expect(
+      isArgentManagedEntry({
+        command: "node",
+        args: [
+          "node_modules/.pnpm/@swmansion+argent@1.0.0/node_modules/@swmansion/argent/dist/cli.js",
+          "mcp",
+        ],
+      })
+    ).toBe(true);
+    expect(isArgentManagedEntry({ command: "yarn", args: ["argent", "mcp"] })).toBe(true);
+    // The shape argent itself wrote up to v0.9.x (env dropped in 0.10 by
+    // #238): still argent-authored, still repairable.
+    expect(
+      isArgentManagedEntry({
+        command: "argent",
+        args: ["mcp"],
+        env: { ARGENT_MCP_LOG: "/Users/someone/.argent/mcp-calls.log" },
+      })
+    ).toBe(true);
+    expect(isArgentManagedEntry({ command: "npx", args: ["--no-install", "argent", "mcp"] })).toBe(
+      true
+    );
+  });
+
+  it("rejects customized and unrecognizable entries", () => {
+    // A dev checkout: node with an absolute / out-of-tree path.
+    expect(
+      isArgentManagedEntry({ command: "node", args: ["/home/dev/argent/cli.js", "mcp"] })
+    ).toBe(false);
+    expect(isArgentManagedEntry({ command: "node", args: ["../elsewhere/cli.js", "mcp"] })).toBe(
+      false
+    );
+    // Env vars mark a hand-tuned entry even on the stock command.
+    expect(
+      isArgentManagedEntry({ command: "argent", args: ["mcp"], env: { PATH: "/custom" } })
+    ).toBe(false);
+    // Extra or missing args.
+    expect(isArgentManagedEntry({ command: "argent", args: ["mcp", "--flag"] })).toBe(false);
+    expect(isArgentManagedEntry({ command: "argent", args: [] })).toBe(false);
+    // The unreadable-entry sentinel and absent entries.
+    expect(isArgentManagedEntry({ command: "", args: [] })).toBe(false);
+    expect(isArgentManagedEntry(null)).toBe(false);
+    expect(isArgentManagedEntry({ command: "docker", args: ["run", "argent", "mcp"] })).toBe(false);
+  });
+});
+
+// ── claudeAdapter.remove on the user-global file ─────────────────────────────
+
+describe("claudeAdapter.remove on ~/.claude.json", () => {
+  it("drops only the argent key and never prunes unrelated empty structures", () => {
+    homedirOverride = tmpDir;
+    const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const globalPath = path.join(tmpDir, ".claude.json");
+    fs.writeFileSync(
+      globalPath,
+      JSON.stringify({
+        oauthAccount: { email: "user@example.com" },
+        projects: { "/work/app": { allowedTools: [], history: [] } },
+        mcpServers: { argent: { command: "argent", args: ["mcp"] } },
+      })
+    );
+
+    expect(claude.remove(globalPath)).toBe(true);
+
+    const after = JSON.parse(fs.readFileSync(globalPath, "utf8"));
+    expect(after.mcpServers).toBeUndefined();
+    // The user's empty scaffolding survives — pruneEmptyConfig must not run
+    // against their primary Claude config.
+    expect(after.projects["/work/app"]).toEqual({ allowedTools: [], history: [] });
+    expect(after.oauthAccount).toEqual({ email: "user@example.com" });
+    homedirOverride = undefined;
+  });
+});
+
+// ── Allowlist scope on global-only clients ────────────────────────────────────
+
+describe("global-only allowlists honor the cleanup scope", () => {
+  it("Cursor's removeAllowlist no-ops for scope 'local'", () => {
+    homedirOverride = tmpDir;
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const permPath = path.join(tmpDir, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(permPath, JSON.stringify({ mcpAllowlist: ["argent:*"] }));
+
+    // A local-only uninstall retaining the global install must not strip the
+    // machine-global file that install depends on.
+    cursor.removeAllowlist!(tmpDir, "local");
+    expect(JSON.parse(fs.readFileSync(permPath, "utf8")).mcpAllowlist).toEqual(["argent:*"]);
+
+    cursor.removeAllowlist!(tmpDir, "global");
+    expect(fs.existsSync(permPath)).toBe(false);
+    homedirOverride = undefined;
+  });
+});
+
+// ── getArgentEntry env passthrough ────────────────────────────────────────────
+
+describe("getArgentEntry env passthrough", () => {
+  it("surfaces env vars so classification can see hand-tuned entries", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const configPath = path.join(tmpDir, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          argent: { command: "argent", args: ["mcp"], env: { PATH: "/custom/bin" } },
+        },
+      })
+    );
+
+    expect(cursor.getArgentEntry(configPath)).toEqual({
+      command: "argent",
+      args: ["mcp"],
+      env: { PATH: "/custom/bin" },
+    });
+  });
+
+  it("maps opencode's `environment` key onto env", () => {
+    const opencode = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+    const configPath = path.join(tmpDir, "opencode.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcp: {
+          argent: {
+            type: "local",
+            command: ["argent", "mcp"],
+            enabled: true,
+            environment: { FOO: "bar" },
+          },
+        },
+      })
+    );
+
+    expect(opencode.getArgentEntry(configPath)).toEqual({
+      command: "argent",
+      args: ["mcp"],
+      env: { FOO: "bar" },
+    });
+  });
+});
+
 // ── getMcpEntry ───────────────────────────────────────────────────────────────
 
 describe("getMcpEntry", () => {
@@ -88,6 +259,92 @@ describe("getMcpEntry", () => {
     // per-user log path into ARGENT_MCP_LOG (issue #238). The MCP server
     // falls back to ${homedir()}/.argent/mcp-calls.log at runtime.
     expect(entry.env).toBeUndefined();
+  });
+
+  it("defaults to the global command when no mode is passed", () => {
+    expect(getMcpEntry({ kind: "global" })).toEqual({ command: "argent", args: ["mcp"] });
+  });
+
+  it("local-node runs `node <relative bin path> mcp`", () => {
+    expect(
+      getMcpEntry({ kind: "local-node", binRelPath: "node_modules/@swmansion/argent/dist/cli.js" })
+    ).toEqual({
+      command: "node",
+      args: ["node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+    });
+  });
+
+  it("local-pnp runs `yarn argent mcp`", () => {
+    expect(getMcpEntry({ kind: "local-pnp" })).toEqual({
+      command: "yarn",
+      args: ["argent", "mcp"],
+    });
+  });
+
+  it("local-npx runs `npx --no-install argent mcp` (never bare npx / -y)", () => {
+    expect(getMcpEntry({ kind: "local-npx" })).toEqual({
+      command: "npx",
+      args: ["--no-install", "argent", "mcp"],
+    });
+  });
+
+  it("local entries carry no env block", () => {
+    expect(getMcpEntry({ kind: "local-node", binRelPath: "x" }).env).toBeUndefined();
+    expect(getMcpEntry({ kind: "local-pnp" }).env).toBeUndefined();
+  });
+});
+
+// ── resolveLocalCommandMode ─────────────────────────────────────────────────
+
+describe("resolveLocalCommandMode", () => {
+  function stageLocalArgent(root: string): void {
+    const pkgDir = path.join(root, "node_modules", "@swmansion", "argent", "dist");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "node_modules", "@swmansion", "argent", "package.json"),
+      JSON.stringify({
+        name: "@swmansion/argent",
+        version: "1.0.0",
+        bin: { argent: "dist/cli.js" },
+      })
+    );
+    fs.writeFileSync(path.join(pkgDir, "cli.js"), "");
+  }
+
+  it("returns local-pnp for a Yarn PnP project", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    expect(resolveLocalCommandMode(tmpDir)).toEqual({ kind: "local-pnp" });
+  });
+
+  it("returns local-node with the resolved bin path when installed", () => {
+    stageLocalArgent(tmpDir);
+    expect(resolveLocalCommandMode(tmpDir)).toEqual({
+      kind: "local-node",
+      binRelPath: "node_modules/@swmansion/argent/dist/cli.js",
+    });
+  });
+
+  it("falls back to local-npx when the bin can't be resolved", () => {
+    expect(resolveLocalCommandMode(tmpDir)).toEqual({ kind: "local-npx" });
+  });
+
+  it("opencode writes the local-node entry as a command array", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+    const configPath = path.join(tmpDir, "opencode.json");
+    adapter.write(
+      configPath,
+      getMcpEntry({ kind: "local-node", binRelPath: "node_modules/@swmansion/argent/dist/cli.js" })
+    );
+    const cfg = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+      mcp: { argent: { command: string[]; type: string; enabled: boolean } };
+    };
+    expect(cfg.mcp.argent.command).toEqual([
+      "node",
+      "node_modules/@swmansion/argent/dist/cli.js",
+      "mcp",
+    ]);
+    expect(cfg.mcp.argent.type).toBe("local");
+    expect(cfg.mcp.argent.enabled).toBe(true);
   });
 });
 

@@ -62,6 +62,10 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description:
       "Discover and control physical iOS devices (iOS 27+) over Apple's CoreDevice tunnel via pymobiledevice3. The required tunnel is auto-started via a macOS admin prompt (or run `sudo pymobiledevice3 remote tunneld` manually). Supports screenshot, tap, swipe, hardware buttons, and launch-app.",
   },
+  {
+    name: "tool-server-event-log",
+    description: "Write structured tool-server lifecycle events to a JSONL file.",
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the
