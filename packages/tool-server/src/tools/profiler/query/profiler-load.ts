@@ -402,12 +402,19 @@ async function loadNativeSession(
 
   const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
 
-  api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
+  api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks, mallocStackLogging: null };
   api.exportedFiles = files;
-  // The raw_*.xml carry no capture-mode sidecar, so the loaded trace's mode is
-  // unknown — clear any flag left by an earlier live capture in this process,
-  // or the report would attribute THIS trace to the previous session's mode.
+  // The raw_*.xml carry no metadata sidecar, so nothing per-capture is known
+  // about the loaded trace — clear ALL the session residue an earlier live
+  // capture in this process left behind, or analyze would attribute it to the
+  // loaded trace: the capture mode (mis-labels the unattributed-leaks note),
+  // the CPU filter PID (silently drops the loaded trace's samples), the start
+  // time (fires the stale-trace note with the wrong timestamp), and the .trace
+  // path (mislabels the report and writes the .md over the OLD trace's report).
   api.mallocStackLogging = null;
+  api.cpuFilterPid = null;
+  api.wallClockStartMs = null;
+  api.traceFile = null;
 
   const lines: string[] = [
     `Loaded native profiler session \`${sessionId}\`.`,

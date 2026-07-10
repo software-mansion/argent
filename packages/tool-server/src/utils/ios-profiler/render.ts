@@ -563,8 +563,9 @@ export function renderUnattributedLeaksNote(
       `stack logging enabled at launch.`
     : attributedCount > 0
       ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
-        `groups carry no allocation backtrace (freed-region reuse, or allocations from before ` +
-        `recording started) and are most likely benign system allocations rather than confirmed app leaks.`
+        `groups carry no allocation backtrace (freed-region reuse, truncated stack logs, or ` +
+        `allocations outside the instrumented malloc zones) and are most likely benign system ` +
+        `allocations rather than confirmed app leaks.`
       : `This capture ran with malloc stack logging enabled, yet none of these leaks carry an allocation ` +
         `backtrace — the allocator recorded no usable stack for them (freed-region reuse, truncated stack ` +
         `logs, or allocations outside the instrumented malloc zones). Most likely benign system allocations ` +

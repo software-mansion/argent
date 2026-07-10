@@ -31,6 +31,7 @@ function fakeApi(): NativeProfilerSessionApi {
     capturePid: null,
     captureProcess: null,
     cpuFilterPid: null,
+    recordingMallocStackLogging: null,
     mallocStackLogging: null,
     traceFile: null,
     exportedFiles: null,
@@ -84,13 +85,27 @@ async function importStart() {
   return mod.startNativeProfilerIos;
 }
 
+// startNativeProfilerIos reads ARGENT_IOS_CAPTURE (via the capture-strategy
+// resolver), and exporting it globally is a documented operator setup for
+// degraded Xcodes — scrub it for every test so an ambient value can't flip the
+// resolved strategy (=all-processes would refuse every malloc start here), and
+// restore the ambient value afterwards. Tests that exercise the override still
+// set it themselves after the scrub.
+const AMBIENT_IOS_CAPTURE = process.env.ARGENT_IOS_CAPTURE;
+
 describe("native-profiler-start malloc_stack_logging", () => {
   beforeEach(() => {
+    delete process.env.ARGENT_IOS_CAPTURE;
     vi.resetModules();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    if (AMBIENT_IOS_CAPTURE === undefined) {
+      delete process.env.ARGENT_IOS_CAPTURE;
+    } else {
+      process.env.ARGENT_IOS_CAPTURE = AMBIENT_IOS_CAPTURE;
+    }
     vi.useRealTimers();
     vi.doUnmock("child_process");
     vi.doUnmock("../../src/utils/react-profiler/debug/dump");
@@ -163,6 +178,28 @@ describe("native-profiler-start malloc_stack_logging", () => {
       true
     );
     expect(efsArgs.some((a) => a.includes("get_app_container"))).toBe(true);
+  });
+
+  it("stamps only the in-flight capture mode — never the report-facing flag", async () => {
+    // api.mallocStackLogging describes the data in exportedFiles/parsedData
+    // and is stamped at STOP; a new start stamping it directly would re-label
+    // the previous capture's still-loaded data with the new capture's mode
+    // (e.g. an attach start flipping a malloc capture's report to "--attach").
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    api.mallocStackLogging = true; // previous capture (stop-stamped) was malloc-mode
+
+    await startNativeProfilerIos(api, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      // default attach mode
+    });
+
+    expect(api.recordingMallocStackLogging).toBe(false);
+    expect(api.mallocStackLogging).toBe(true); // untouched until the next stop
   });
 
   it("keeps `--launch -- <app>` last when --notify-tracing-started is present", async () => {

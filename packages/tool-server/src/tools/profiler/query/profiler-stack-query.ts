@@ -314,7 +314,8 @@ export function renderLeakStacksIos(
   if (unattributedCount > 0) {
     const cause = mallocWasOn
       ? "the capture ran with malloc stack logging, but no allocation backtrace was recorded " +
-        "for these (freed-region reuse, or allocations from before recording started)"
+        "for these (freed-region reuse, truncated stack logs, or allocations outside the " +
+        "instrumented malloc zones)"
       : "captured under `xctrace --attach`, which has no malloc-stack history";
     lines.push(
       `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
@@ -371,11 +372,14 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         params.top_n
       );
     case "leak_stacks":
+      // Capture mode comes from parsedData — frozen at analyze/load time with
+      // the leaks it describes — not the live session field, which a recording
+      // started after the analyze would have re-stamped.
       return renderLeakStacksIos(
         data.memoryLeaks,
         params.object_type,
         params.top_n,
-        api.mallocStackLogging
+        data.mallocStackLogging
       );
     default:
       throw new FailureError(`Unknown mode: ${params.mode}`, {

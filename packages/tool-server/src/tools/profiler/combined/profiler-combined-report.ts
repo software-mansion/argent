@@ -332,7 +332,13 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       );
 
       lines.push(
-        ...renderCombinedMemoryLeaks(memoryLeaks, mountComponents, nativeApi.mallocStackLogging)
+        ...renderCombinedMemoryLeaks(
+          memoryLeaks,
+          mountComponents,
+          // From parsedData, not the live session field: a recording started
+          // after the analyze must not re-label the data being rendered here.
+          nativeApi.parsedData?.mallocStackLogging ?? null
+        )
       );
     }
 

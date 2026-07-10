@@ -33,6 +33,13 @@ export interface NativeProfilerParsedData {
   uiHangs: UiHang[];
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
+  /**
+   * Capture mode of THIS parsed data (see the session field of the same name),
+   * frozen at parse time so drill-down consumers (leak_stacks, the combined
+   * report) stay paired with the data even after a newer capture re-stamps the
+   * session. Null when unknown (session restored from disk).
+   */
+  mallocStackLogging: boolean | null;
 }
 
 export interface NativeProfilerSessionApi {
@@ -56,12 +63,19 @@ export interface NativeProfilerSessionApi {
    */
   cpuFilterPid: number | null;
   /**
-   * iOS-only: whether the current capture cold-launched the app with
-   * MallocStackLogging=1 (native-profiler-start's malloc_stack_logging flag),
-   * so the report layer can name the capture mode instead of inferring it from
-   * the attributed-leak count. Null when unknown — before any start, on
-   * Android, or for a session restored from disk (profiler-load has no
-   * capture-mode sidecar).
+   * iOS-only: whether the IN-FLIGHT (or most recently attempted) recording was
+   * cold-launched with MallocStackLogging=1 (native-profiler-start's
+   * malloc_stack_logging flag). Stamped at start, copied into
+   * `mallocStackLogging` when stop writes `exportedFiles` — the split keeps a
+   * new start from re-labeling the previous capture's still-loaded data.
+   */
+  recordingMallocStackLogging: boolean | null;
+  /**
+   * iOS-only: capture mode of the data currently in `exportedFiles` (and, via
+   * analyze, `parsedData`) — the report layer names it instead of inferring it
+   * from the attributed-leak count. Stamped at stop alongside `exportedFiles`;
+   * cleared by profiler-load (the raw_*.xml carry no capture-mode sidecar).
+   * Null when unknown — before any stop, on Android, or after a load.
    */
   mallocStackLogging: boolean | null;
   recordingTimeout: NodeJS.Timeout | null;
@@ -136,6 +150,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       wallClockStartMs: null,
       parsedData: null,
       cpuFilterPid: null,
+      recordingMallocStackLogging: null,
       mallocStackLogging: null,
       recordingTimeout: null,
       recordingTimedOut: false,

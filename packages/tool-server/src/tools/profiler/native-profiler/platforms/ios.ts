@@ -368,7 +368,9 @@ function resetStartState(api: NativeProfilerSessionApi): void {
   api.traceFile = null;
   api.appProcess = null;
   api.cpuFilterPid = null;
-  api.mallocStackLogging = null;
+  // Only the in-flight mode: api.mallocStackLogging still describes the
+  // previous capture's exportedFiles, which a failed start leaves in place.
+  api.recordingMallocStackLogging = null;
 }
 
 export function handleXctraceExit(
@@ -561,9 +563,12 @@ export async function startNativeProfilerIos(
   const attemptStart = async (): Promise<{ child: ChildProcess; pid: number }> => {
     api.appProcess = appProcess;
     api.traceFile = outputFile;
-    // Record the capture mode on the session so the report layer can name it
-    // (its unattributed-leaks note) instead of inferring it from output.
-    api.mallocStackLogging = useMallocStackLogging;
+    // Record the in-flight capture's mode; stop copies it into
+    // api.mallocStackLogging when it writes exportedFiles, so the report layer
+    // names the mode of the data it actually renders — stamping the session's
+    // report-facing flag HERE would re-label the previous capture's
+    // still-loaded exports/parsedData with the new capture's mode.
+    api.recordingMallocStackLogging = useMallocStackLogging;
     // Null for the device strategy (already scoped by --attach) and for a
     // malloc_stack_logging cold launch (scoped by --launch on --device); the app
     // PID only for the host-wide all-processes fallback, to filter the samples.
@@ -737,6 +742,9 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
 
     const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile);
     api.exportedFiles = exportedFiles;
+    // The exports now describe the recording that just ended — pair its
+    // capture mode with them for the report layer.
+    api.mallocStackLogging = api.recordingMallocStackLogging;
 
     const warning = wasTimeout
       ? "Recording timed out at 10 min cap; exported the partial trace. " +
@@ -789,6 +797,9 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
 
   const { files: exportedFiles, diagnostics } = await exportIosTraceData(api.traceFile);
   api.exportedFiles = exportedFiles;
+  // The exports now describe the recording that just ended — pair its capture
+  // mode with them for the report layer.
+  api.mallocStackLogging = api.recordingMallocStackLogging;
 
   const stopResult: IosStopResult = {
     traceFile: api.traceFile,
@@ -833,7 +844,16 @@ export async function analyzeNativeProfilerIos(
   const { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
     await runIosProfilerPipeline(api.exportedFiles, { cpuFilterPid: api.cpuFilterPid });
 
-  api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
+  api.parsedData = {
+    cpuSamples,
+    uiHangs,
+    cpuHotspots,
+    memoryLeaks,
+    // Freeze the exports' capture mode with the parsed data so drill-down
+    // consumers (leak_stacks, combined report) stay paired with it even after
+    // a newer capture re-stamps the session fields.
+    mallocStackLogging: api.mallocStackLogging,
+  };
 
   const exportErrors: Record<string, string> = {};
   if (!api.exportedFiles.cpu) {

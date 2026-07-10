@@ -25,6 +25,7 @@ function makeApi(wallClockStartMs: number | null): NativeProfilerSessionApi {
     appProcess: "MyApp",
     capturePid: null,
     cpuFilterPid: null,
+    recordingMallocStackLogging: null,
     mallocStackLogging: null,
     captureProcess: null,
     traceFile: "/tmp/native-profiler-ios.trace",

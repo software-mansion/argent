@@ -111,14 +111,20 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     expect(report).toContain("Stale trace");
   });
 
-  it("clears a previous live capture's mallocStackLogging on load (the loaded trace's mode is unknown)", async () => {
-    // Same staleness class as wallClockStartMs, but this one IS resettable at
-    // load time: a live malloc_stack_logging capture stamps the session flag,
-    // and the raw_*.xml carry no capture-mode sidecar — so restoring an OLDER
-    // session must clear the flag, or analyze/combined-report would attribute
-    // the loaded trace to the previous session's capture mode.
+  it("clears ALL of a previous live capture's per-capture residue on load", async () => {
+    // The raw_*.xml carry no metadata sidecar, so nothing per-capture is known
+    // about a loaded trace. A live capture earlier in the same process leaves
+    // four fields behind, each of which would corrupt the loaded trace's
+    // analyze if it survived: mallocStackLogging mislabels the
+    // unattributed-leaks note, cpuFilterPid silently filters the loaded CPU
+    // samples by a dead PID, wallClockStartMs fires the stale-trace note with
+    // the wrong timestamp, and traceFile mislabels the report and writes the
+    // .md over the OLD trace's report.
     const api = await buildIosSession();
-    api.mallocStackLogging = true; // what native-profiler-start(malloc) leaves behind
+    api.mallocStackLogging = true;
+    api.cpuFilterPid = 4242;
+    api.wallClockStartMs = Date.now() - 2 * DAY_MS;
+    api.traceFile = join(tempDir, "previous-live.trace");
 
     const cpuXml = join(tempDir, `native-profiler-${SESSION_ID}_raw_cpu.xml`);
     await writeFile(cpuXml, "<trace-query-result></trace-query-result>", "utf8");
@@ -130,5 +136,17 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     });
 
     expect(api.mallocStackLogging).toBeNull();
+    expect(api.parsedData?.mallocStackLogging).toBeNull();
+    expect(api.cpuFilterPid).toBeNull();
+    expect(api.wallClockStartMs).toBeNull();
+    expect(api.traceFile).toBeNull();
+
+    // And analyze on the loaded session behaves like a fresh process: no
+    // stale-trace note from the old capture's start time, no report mislabeled
+    // with (or written next to) the old .trace.
+    const { report, reportFile } = await analyzeNativeProfilerIos(api);
+    expect(report).not.toContain("Stale trace");
+    expect(report).not.toContain("previous-live.trace");
+    expect(reportFile).toBeNull();
   });
 });
