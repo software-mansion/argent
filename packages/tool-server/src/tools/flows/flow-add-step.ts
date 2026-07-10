@@ -222,15 +222,24 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         typeof strippedArgs.bundleId === "string" &&
         Object.keys(strippedArgs).length === 1;
 
+      // A multi-tap (`clickCount: 2` = double-tap) must survive the rewrite as
+      // `times`, or replay would silently fire a single tap for a recorded
+      // double. Bounds match the tool's clickCount; 1 is the default (absent).
+      const cc = args.clickCount;
+      const tapTimes =
+        isTap && typeof cc === "number" && Number.isInteger(cc) && cc >= 2 && cc <= 10
+          ? { times: cc }
+          : {};
+
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
-        step = { kind: "tap", selector: captured.selector };
+        step = { kind: "tap", selector: captured.selector, ...tapTimes };
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
         // directive so every tap reads uniformly.
-        step = { kind: "tap", x: args.x as number, y: args.y as number };
+        step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };
         warning = captured?.warning;
       } else if (isLaunch) {
         step = { kind: "launch", app: strippedArgs.bundleId as string };

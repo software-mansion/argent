@@ -572,11 +572,14 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
 /**
  * Tap either an element (resolve a selector → frame, auto-waiting) or a raw
  * normalized point. Coordinate taps are the fallback for elements with no
- * stable selector (e.g. an unlabeled view).
+ * stable selector (e.g. an unlabeled view). `times` rides the gesture-tap
+ * tool's `clickCount`: one resolution, one dispatched multi-tap gesture —
+ * never N separate calls, whose RPC gaps could fall outside the OS
+ * double-tap window.
  */
 async function runTap(
   env: ActionEnv,
-  target: { selector?: FlowSelector; x?: number; y?: number }
+  target: { selector?: FlowSelector; x?: number; y?: number; times?: number }
 ): Promise<DirectiveOutcome> {
   let point: { x: number; y: number };
   if (target.selector) {
@@ -591,7 +594,10 @@ async function runTap(
   } else {
     return { ok: false, reason: "tap needs a selector or x/y coordinates" };
   }
-  await invokeOnDevice(env, "gesture-tap", point);
+  await invokeOnDevice(env, "gesture-tap", {
+    ...point,
+    ...(target.times !== undefined ? { clickCount: target.times } : {}),
+  });
   return { ok: true };
 }
 

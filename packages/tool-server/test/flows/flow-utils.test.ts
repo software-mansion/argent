@@ -617,7 +617,7 @@ describe("parseFlow", () => {
 
     it("rejects an unknown key on a selector map", () => {
       expect(() => parseFlow("steps:\n  - tap: { text: Save, roel: button }\n")).toThrow(
-        /tap has unknown key `roel` \(did you mean `role`\?\)/
+        /tap: selector has unknown key `roel` \(did you mean `role`\?\)/
       );
       expect(() => parseFlow("steps:\n  - await: { visible: { txt: Save } }\n")).toThrow(
         /await.visible: selector has unknown key `txt` \(did you mean `text`\?\)/
@@ -643,7 +643,7 @@ describe("parseFlow", () => {
 
     it("rejects a stray key on a coordinate tap", () => {
       expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, why: 0.6 }\n")).toThrow(
-        /tap has unknown key `why`/
+        /a coordinate tap takes only \{ x, y, times \}/
       );
     });
 
