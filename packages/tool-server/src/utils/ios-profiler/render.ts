@@ -263,7 +263,7 @@ function renderFullReport(
     cpuHotspots.forEach((b, i) => {
       const hangFlag = b.duringHang ? "Yes" : "—";
       lines.push(
-        `| ${i + 1} | \`${demangleSymbol(b.dominantFunction)}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
+        `| ${i + 1} | \`${escapeMarkdownTableCell(demangleSymbol(b.dominantFunction))}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
       );
     });
 

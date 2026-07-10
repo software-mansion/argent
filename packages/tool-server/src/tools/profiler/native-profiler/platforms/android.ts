@@ -48,18 +48,26 @@ export async function startNativeProfilerAndroid(
     .slice(0, 15);
   const hostTracePath = path.join(debugDir, `native-profiler-${timestamp}.pftrace`);
 
-  api.recordingTimedOut = false;
-  api.recordingExitedUnexpectedly = false;
-  api.lastExitInfo = null;
-  api.appProcess = appPackage;
-  api.traceFile = hostTracePath;
-
+  // Start perfetto BEFORE mutating any session state: a failed start (adb
+  // error, device offline, spawn failure) must be non-destructive. If a prior
+  // capture hit the 10-min cap or exited early, its partial trace is still
+  // recoverable via native-profiler-stop, and its recordingTimedOut/
+  // recordingExitedUnexpectedly/traceFile fields must survive an unrelated
+  // failed start attempt — otherwise the pending recovery is silently burned.
+  // (Same contract as the iOS start path.)
   const { pid, onDeviceTracePath, child } = await startPerfetto({
     serial: params.device_id,
     appPackage,
     timestamp,
   });
 
+  // Perfetto is up — this capture now owns the session; stamp its descriptors
+  // and clear any prior capture's recovery flags (superseded on success only).
+  api.recordingTimedOut = false;
+  api.recordingExitedUnexpectedly = false;
+  api.lastExitInfo = null;
+  api.appProcess = appPackage;
+  api.traceFile = hostTracePath;
   api.capturePid = pid;
   api.captureProcess = child;
   api.androidOnDeviceTracePath = onDeviceTracePath;

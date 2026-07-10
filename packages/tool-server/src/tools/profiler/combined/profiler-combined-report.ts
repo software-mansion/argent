@@ -18,6 +18,10 @@ import {
 import type { HotCommitSummary } from "../../../utils/react-profiler/types/output";
 import type { UiHang, MemoryLeak } from "../../../utils/profiler-shared/types";
 import { formatBytes } from "../../../utils/profiler-shared/format";
+import {
+  isCaptureInFlight,
+  inFlightGuardMessage,
+} from "../../../utils/profiler-shared/capture-guard";
 import { renderUnattributedLeaksNote } from "../../../utils/ios-profiler/render";
 import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipeline/index";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
@@ -61,6 +65,21 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
   }),
   async execute(services, params) {
     const nativeApi = services.nativeSession as NativeProfilerSessionApi;
+
+    // A capture started after analyze re-stamps the live session fields
+    // (wallClockStartMs, traceFile) while parsedData stays frozen on the earlier
+    // capture. This report anchors the frozen hangs to the LIVE wallClockStartMs
+    // (below), so a new/pending capture would shift every hang by the gap
+    // between the two recordings' starts and mislabel real correlations. Refuse
+    // until the newer capture is stopped — same contract as analyze/profiler-load.
+    if (isCaptureInFlight(nativeApi)) {
+      throw new FailureError(inFlightGuardMessage(nativeApi, "re-run profiler-combined-report"), {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
+        failure_stage: "profiler_combined_report_session_state",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
+    }
 
     // For iOS, the analyze step cached uiHangs + memoryLeaks in parsedData.
     // For Android, drill-down re-queries the .pftrace, so we load the same

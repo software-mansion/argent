@@ -346,6 +346,69 @@ describe("native-profiler-start malloc_stack_logging", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
+  // Dev + prod builds of one Xcode target share CFBundleExecutable "MyApp"
+  // (exact.length === 2). Advising "pass the exact CFBundleExecutable" would be a
+  // dead end — the user already passed it. The refusal must point at the
+  // globally-unique CFBundleIdentifier, and passing one must actually resolve.
+  const SHARED_EXECUTABLE_BUILDS = JSON.stringify({
+    "com.example.dev": {
+      CFBundleExecutable: "MyApp",
+      CFBundleIdentifier: "com.example.dev",
+      CFBundleDisplayName: "MyApp Dev",
+      ApplicationType: "User",
+    },
+    "com.example.prod": {
+      CFBundleExecutable: "MyApp",
+      CFBundleIdentifier: "com.example.prod",
+      CFBundleDisplayName: "MyApp",
+      ApplicationType: "User",
+    },
+  });
+
+  it("refusal for a shared CFBundleExecutable names the bundle id as the disambiguator", async () => {
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execFileSyncFn = makeExecFileSyncFn({ listappsJson: SHARED_EXECUTABLE_BUILDS });
+    applyCommonMocks(
+      spawnFn,
+      vi.fn(() => ""),
+      execFileSyncFn
+    );
+    const startNativeProfilerIos = await importStart();
+
+    await expect(
+      startNativeProfilerIos(fakeApi(), {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      })
+    ).rejects.toThrow(/CFBundleIdentifier/);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("passing the exact CFBundleIdentifier resolves and cold-launches that specific build", async () => {
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execFileSyncFn = makeExecFileSyncFn({ listappsJson: SHARED_EXECUTABLE_BUILDS });
+    applyCommonMocks(
+      spawnFn,
+      vi.fn(() => ""),
+      execFileSyncFn
+    );
+    const startNativeProfilerIos = await importStart();
+
+    const result = await startNativeProfilerIos(fakeApi(), {
+      device_id: "DEVICE-UDID",
+      app_process: "com.example.prod",
+      malloc_stack_logging: true,
+    });
+    expect(result.status).toBe("recording");
+    const terminateCalls = execFileSyncFn.mock.calls
+      .map((c) => (c[1] as string[]) ?? [])
+      .filter((a) => a.includes("terminate"));
+    expect(terminateCalls).toHaveLength(1);
+    expect(terminateCalls[0]).toContain("com.example.prod");
+    expect(terminateCalls[0]).not.toContain("com.example.dev");
+  });
+
   it("stamps only the in-flight capture mode — never the report-facing flag", async () => {
     // api.mallocStackLogging describes the data in exportedFiles/parsedData
     // and is stamped at STOP; a new start stamping it directly would re-label

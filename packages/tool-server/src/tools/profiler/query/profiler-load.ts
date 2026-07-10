@@ -21,6 +21,10 @@ import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
+import {
+  isCaptureInFlight,
+  inFlightGuardMessage,
+} from "../../../utils/profiler-shared/capture-guard";
 
 // session_id is interpolated into on-disk file paths
 // (`react-profiler-${id}_cpu.json`, `native-profiler-${id}_raw_cpu.xml`, …).
@@ -325,18 +329,13 @@ async function loadNativeSession(
   // make stop's partial-trace export unreachable (the .trace bundle cannot be
   // re-ingested; only the raw_*.xml that export writes are loadable). Refuse
   // until the capture is stopped.
-  if (api.profilingActive || api.recordingTimedOut || api.recordingExitedUnexpectedly) {
-    throw new FailureError(
-      api.profilingActive
-        ? `A native profiling session is recording on this device. Run native-profiler-stop first, then retry profiler-load.`
-        : `A native profiling capture on this device ended unexpectedly and its partial trace has not been exported yet. Run native-profiler-stop first (it recovers the partial trace), then retry profiler-load.`,
-      {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
-        failure_stage: "profiler_load_native_session",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
+  if (isCaptureInFlight(api)) {
+    throw new FailureError(inFlightGuardMessage(api, "retry profiler-load"), {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
+      failure_stage: "profiler_load_native_session",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   // Android .pftrace first — the platform field on the resolved session API
   // tells us which shape to load. If the platform is android but the .pftrace

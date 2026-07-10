@@ -135,7 +135,7 @@ function renderHangStacksIos(
   return lines.join("\n");
 }
 
-function renderFunctionCallersIos(
+export function renderFunctionCallersIos(
   cpuSamples: CpuSample[],
   functionName: string,
   topN: number
@@ -182,7 +182,7 @@ function renderFunctionCallersIos(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallers) {
-      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
+      lines.push(`| \`${escapeMarkdownTableCell(demangleSymbol(name))}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -194,7 +194,7 @@ function renderFunctionCallersIos(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallees) {
-      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
+      lines.push(`| \`${escapeMarkdownTableCell(demangleSymbol(name))}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -202,7 +202,7 @@ function renderFunctionCallersIos(
   return lines.join("\n");
 }
 
-function renderThreadBreakdownIos(
+export function renderThreadBreakdownIos(
   cpuSamples: CpuSample[],
   cpuHotspots: CpuHotspot[],
   threadFilter: string | undefined,
@@ -254,7 +254,7 @@ function renderThreadBreakdownIos(
       lines.push("|---|---|---|---|");
       for (const h of threadHotspots.slice(0, topN)) {
         lines.push(
-          `| \`${demangleSymbol(h.dominantFunction)}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
+          `| \`${escapeMarkdownTableCell(demangleSymbol(h.dominantFunction))}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
         );
       }
     }

@@ -25,6 +25,10 @@ import {
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 import { formatTraceFreshness } from "../../../../utils/profiler-shared/freshness";
+import {
+  isCaptureInFlight,
+  inFlightGuardMessage,
+} from "../../../../utils/profiler-shared/capture-guard";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
 
 // Two candidates because __dirname differs by runtime: bundled it's argent/dist/
@@ -310,10 +314,15 @@ function getAppBundlePath(udid: string, bundleId: string): string {
 function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
   if (appProcess) {
     const installed = getInstalledApps(udid);
+    // CFBundleIdentifier is included so a bundle id is always a unique escape
+    // hatch: it is globally unique, so passing one narrows to exactly one app
+    // even when several builds share a CFBundleExecutable/CFBundleDisplayName.
     const matches = Object.values(installed).filter(
       (info) =>
         info.ApplicationType === "User" &&
-        (info.CFBundleExecutable === appProcess || info.CFBundleDisplayName === appProcess)
+        (info.CFBundleExecutable === appProcess ||
+          info.CFBundleDisplayName === appProcess ||
+          info.CFBundleIdentifier === appProcess)
     );
     if (matches.length === 1) return matches[0];
     if (matches.length > 1) {
@@ -321,18 +330,21 @@ function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
       // so first-match-in-plist-order is not acceptable when several installed
       // apps share a display name (dev + prod builds both shown as "MyApp"):
       // an exact executable match wins; otherwise refuse before touching
-      // anything, naming the candidates.
+      // anything, naming the candidates. (A bundle-id argument can never reach
+      // here — it uniquely matches one app above — so the tie is always on
+      // executable/display name, and the bundle id is the guaranteed escape.)
       const exact = matches.filter((info) => info.CFBundleExecutable === appProcess);
       if (exact.length === 1) return exact[0];
       const appList = matches
         .map(
           (info) =>
-            `  - ${info.CFBundleExecutable} (${info.CFBundleIdentifier}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
+            `  - ${info.CFBundleIdentifier} (CFBundleExecutable ${info.CFBundleExecutable}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
         )
         .join("\n");
       throw new FailureError(
         `app_process "${appProcess}" matches multiple installed user apps on simulator ${udid}:\n${appList}\n` +
-          `Pass the exact CFBundleExecutable of the app you want to cold-launch with malloc_stack_logging.`,
+          `Pass the exact CFBundleIdentifier (the first column above) to select one — the ` +
+          `CFBundleExecutable/display name you passed is shared by these builds.`,
         {
           error_code: FAILURE_CODES.NATIVE_PROFILER_LAUNCH_APP_AMBIGUOUS,
           failure_stage: "native_profiler_resolve_app_for_launch",
@@ -343,7 +355,8 @@ function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
     }
     throw new FailureError(
       `No installed user app matching "${appProcess}" found on simulator ${udid}. ` +
-        `Pass the exact CFBundleExecutable or display name, or omit app_process to auto-detect the running app.`,
+        `Pass the exact CFBundleIdentifier, CFBundleExecutable, or display name, or omit ` +
+        `app_process to auto-detect the running app.`,
       {
         error_code: FAILURE_CODES.NATIVE_PROFILER_LAUNCH_APP_NOT_FOUND,
         failure_stage: "native_profiler_resolve_app_for_launch",
@@ -856,18 +869,13 @@ export async function analyzeNativeProfilerIos(
   // newer capture while exportedFiles still holds the previous one — analyze
   // would render the old exports under the new trace's name, freshness anchor,
   // and CPU filter PID. Same contract as the profiler-load guard: stop first.
-  if (api.profilingActive || api.recordingTimedOut || api.recordingExitedUnexpectedly) {
-    throw new FailureError(
-      api.profilingActive
-        ? `A native profiling session is recording on this device. Run native-profiler-stop first, then analyze.`
-        : `A native profiling capture on this device ended unexpectedly and its partial trace has not been exported yet. Run native-profiler-stop first (it recovers the partial trace), then analyze.`,
-      {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
-        failure_stage: "native_profiler_analyze_session_state",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
+  if (isCaptureInFlight(api)) {
+    throw new FailureError(inFlightGuardMessage(api, "analyze"), {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
+      failure_stage: "native_profiler_analyze_session_state",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   if (!api.exportedFiles) {
     throw new FailureError("No exported trace data found. Call native-profiler-stop first.", {

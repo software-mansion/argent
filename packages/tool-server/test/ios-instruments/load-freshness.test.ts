@@ -172,7 +172,21 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     api.lastExitInfo = { code: 137, signal: "SIGKILL" };
     api.traceFile = join(tempDir, "crashed.trace");
 
-    await expect(analyzeNativeProfilerIos(api)).rejects.toThrow(/native-profiler-stop first/);
+    // The stated cause must match the crash — not a timeout.
+    await expect(analyzeNativeProfilerIos(api)).rejects.toThrow(/ended unexpectedly/);
+  });
+
+  it("analyze names the 10-minute cap (not 'ended unexpectedly') for a timed-out capture", async () => {
+    // A 10-min-cap timeout sets recordingTimedOut (NOT recordingExitedUnexpectedly).
+    // stop itself distinguishes the two ("timed out at 10 min cap" vs "exited
+    // before stop"); the guard's stated cause must not contradict it.
+    const api = await buildIosSession();
+    api.exportedFiles = { cpu: null, hangs: null, leaks: null };
+    api.recordingTimedOut = true;
+    api.traceFile = join(tempDir, "timed-out.trace");
+
+    await expect(analyzeNativeProfilerIos(api)).rejects.toThrow(/10-minute recording cap/);
+    await expect(analyzeNativeProfilerIos(api)).rejects.not.toThrow(/ended unexpectedly/);
   });
 
   it("refuses load_native while a recording is in flight (residue clearing would wedge the session)", async () => {
@@ -223,9 +237,31 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
         port: 8081,
         device_id: "ios-sim",
       })
-    ).rejects.toThrow(/native-profiler-stop first/);
+    ).rejects.toThrow(/ended unexpectedly/);
 
     expect(api.traceFile).toBe(join(tempDir, "crashed.trace"));
     expect(api.recordingExitedUnexpectedly).toBe(true);
+  });
+
+  it("load names the 10-minute cap (not 'ended unexpectedly') for a timed-out capture", async () => {
+    const api = await buildIosSession();
+    api.recordingTimedOut = true;
+    api.traceFile = join(tempDir, "timed-out.trace");
+
+    const cpuXml = join(tempDir, `native-profiler-${SESSION_ID}_raw_cpu.xml`);
+    await writeFile(cpuXml, "<trace-query-result></trace-query-result>", "utf8");
+
+    await expect(
+      profilerLoadTool.execute({ session: api } as never, {
+        mode: "load_native",
+        session_id: SESSION_ID,
+        port: 8081,
+        device_id: "ios-sim",
+      })
+    ).rejects.toThrow(/10-minute recording cap/);
+
+    // Recovery state untouched — the partial trace stays reachable by stop.
+    expect(api.traceFile).toBe(join(tempDir, "timed-out.trace"));
+    expect(api.recordingTimedOut).toBe(true);
   });
 });
