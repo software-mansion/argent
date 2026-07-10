@@ -150,6 +150,31 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     expect(reportFile).toBeNull();
   });
 
+  it("analyze refuses while a newer recording is in flight (would re-label the old exports)", async () => {
+    // analyze re-runs the pipeline from api.exportedFiles using the LIVE
+    // session fields — mid-recording those belong to the newer capture, so
+    // the old exports would render under the new trace's name, freshness
+    // anchor, and (on a degraded Xcode) the new capture's CPU filter PID.
+    // Same contract as the profiler-load guard: stop first.
+    const api = await buildIosSession();
+    api.exportedFiles = { cpu: null, hangs: null, leaks: null };
+    api.profilingActive = true;
+    api.capturePid = 12345;
+    api.traceFile = join(tempDir, "in-flight.trace");
+
+    await expect(analyzeNativeProfilerIos(api)).rejects.toThrow(/native-profiler-stop first/);
+  });
+
+  it("analyze refuses while a crashed capture awaits its recovery export", async () => {
+    const api = await buildIosSession();
+    api.exportedFiles = { cpu: null, hangs: null, leaks: null };
+    api.recordingExitedUnexpectedly = true;
+    api.lastExitInfo = { code: 137, signal: "SIGKILL" };
+    api.traceFile = join(tempDir, "crashed.trace");
+
+    await expect(analyzeNativeProfilerIos(api)).rejects.toThrow(/native-profiler-stop first/);
+  });
+
   it("refuses load_native while a recording is in flight (residue clearing would wedge the session)", async () => {
     // The residue clearing above nulls traceFile — with a live capture that
     // would make native-profiler-stop throw NO_ACTIVE_SESSION (its gate needs

@@ -130,4 +130,23 @@ describe("renderLeakStacksIos — capture-mode-aware unattributed note", () => {
     expect(out).toContain("unattributed");
     expect(out).not.toContain("--attach");
   });
+
+  it("escapes '|' in table cells so demangled operator frames can't break the row", () => {
+    const pipeLeak = leak({
+      objectType: "LeakySpan",
+      totalSizeBytes: 3072,
+      count: 3,
+      responsibleFrame: "folly::operator|(folly::Range<char const*>, folly::Range<char const*>)",
+      responsibleLibrary: "folly",
+      attributed: true,
+      severity: "RED",
+    });
+    const out = renderLeakStacksIos([pipeLeak], undefined, 10, true);
+    const header = out.split("\n").find((l) => l.startsWith("| Object Type"));
+    const row = out.split("\n").find((l) => l.includes("folly::operator"));
+    expect(row).toBeDefined();
+    expect(row).toContain("operator\\|");
+    const unescapedPipes = (s: string) => s.split(/(?<!\\)\|/).length;
+    expect(unescapedPipes(row!)).toBe(unescapedPipes(header!));
+  });
 });

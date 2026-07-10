@@ -310,13 +310,36 @@ function getAppBundlePath(udid: string, bundleId: string): string {
 function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
   if (appProcess) {
     const installed = getInstalledApps(udid);
-    for (const [, info] of Object.entries(installed)) {
-      if (
+    const matches = Object.values(installed).filter(
+      (info) =>
         info.ApplicationType === "User" &&
         (info.CFBundleExecutable === appProcess || info.CFBundleDisplayName === appProcess)
-      ) {
-        return info;
-      }
+    );
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      // The malloc path TERMINATES the resolved app before cold-launching it,
+      // so first-match-in-plist-order is not acceptable when several installed
+      // apps share a display name (dev + prod builds both shown as "MyApp"):
+      // an exact executable match wins; otherwise refuse before touching
+      // anything, naming the candidates.
+      const exact = matches.filter((info) => info.CFBundleExecutable === appProcess);
+      if (exact.length === 1) return exact[0];
+      const appList = matches
+        .map(
+          (info) =>
+            `  - ${info.CFBundleExecutable} (${info.CFBundleIdentifier}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
+        )
+        .join("\n");
+      throw new FailureError(
+        `app_process "${appProcess}" matches multiple installed user apps on simulator ${udid}:\n${appList}\n` +
+          `Pass the exact CFBundleExecutable of the app you want to cold-launch with malloc_stack_logging.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_LAUNCH_APP_AMBIGUOUS,
+          failure_stage: "native_profiler_resolve_app_for_launch",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
     }
     throw new FailureError(
       `No installed user app matching "${appProcess}" found on simulator ${udid}. ` +
@@ -555,10 +578,6 @@ export async function startNativeProfilerIos(
     }
   }
 
-  api.recordingTimedOut = false;
-  api.recordingExitedUnexpectedly = false;
-  api.lastExitInfo = null;
-
   const attemptStart = async (): Promise<{ child: ChildProcess; pid: number }> => {
     const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
     const notify = await registerStartupNotify(notifyName);
@@ -688,7 +707,13 @@ export async function startNativeProfilerIos(
 
   // Stamp the per-capture descriptors only now, on SUCCESS: a failed start
   // must leave the previous capture's still-loaded exports fully described
-  // for analyze (trace name, all-processes filter PID, capture mode).
+  // for analyze (trace name, all-processes filter PID, capture mode). The
+  // stale recovery flags reset here too — nothing in the attempt reads them,
+  // and clearing them on a FAILED start would make stop's partial-trace
+  // recovery for the previous abnormal capture unreachable, forfeiting it.
+  api.recordingTimedOut = false;
+  api.recordingExitedUnexpectedly = false;
+  api.lastExitInfo = null;
   api.appProcess = appProcess;
   api.traceFile = outputFile;
   // The in-flight capture's mode; stop copies it into api.mallocStackLogging
@@ -826,6 +851,24 @@ async function checkExportFileMissing(filePath: string | null): Promise<string |
 export async function analyzeNativeProfilerIos(
   api: NativeProfilerSessionApi
 ): Promise<NativeProfilerAnalyzeResult> {
+  // Mid-recording (or with a crashed capture pending recovery), the live
+  // session fields (traceFile, cpuFilterPid, wallClockStartMs) belong to the
+  // newer capture while exportedFiles still holds the previous one — analyze
+  // would render the old exports under the new trace's name, freshness anchor,
+  // and CPU filter PID. Same contract as the profiler-load guard: stop first.
+  if (api.profilingActive || api.recordingTimedOut || api.recordingExitedUnexpectedly) {
+    throw new FailureError(
+      api.profilingActive
+        ? `A native profiling session is recording on this device. Run native-profiler-stop first, then analyze.`
+        : `A native profiling capture on this device ended unexpectedly and its partial trace has not been exported yet. Run native-profiler-stop first (it recovers the partial trace), then analyze.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
+        failure_stage: "native_profiler_analyze_session_state",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
   if (!api.exportedFiles) {
     throw new FailureError("No exported trace data found. Call native-profiler-stop first.", {
       error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,

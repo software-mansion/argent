@@ -58,10 +58,10 @@ interface ExecFileSyncOpts {
   encoding?: string;
   timeout?: number;
 }
-function makeExecFileSyncFn(opts?: { xcodebuild?: string }) {
+function makeExecFileSyncFn(opts?: { xcodebuild?: string; listappsJson?: string }) {
   return vi.fn((bin: string, args: string[] = [], _opts?: ExecFileSyncOpts) => {
     if (bin === "xcodebuild") return opts?.xcodebuild ?? ""; // capture-strategy reads `xcodebuild -version`
-    if (bin === "plutil") return LISTAPPS_JSON; // plutil converts the listapps plist to JSON
+    if (bin === "plutil") return opts?.listappsJson ?? LISTAPPS_JSON; // plutil converts the listapps plist to JSON
     if (args.includes("listapps")) return "<plist/>"; // raw plist, piped into plutil
     if (args.includes("launchctl"))
       return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n"; // `simctl spawn <udid> launchctl list`
@@ -226,6 +226,124 @@ describe("native-profiler-start malloc_stack_logging", () => {
     expect(api.mallocStackLogging).toBe(true);
     expect(api.capturePid).toBeNull();
     expect(api.captureProcess).toBeNull();
+  });
+
+  it("a failed start leaves a pending partial-trace recovery intact", async () => {
+    // Capture A ended abnormally (timeout / unexpected xctrace exit): stop's
+    // recovery branch gates on `(recovery flags) && traceFile` to export the
+    // partial trace. Nothing in a start attempt reads those flags, so a FAILED
+    // restart must not burn them — clearing them forfeits up to 10 minutes of
+    // captured data (the .trace bundle cannot be re-ingested by profiler-load).
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    vi.doMock("child_process", () => ({
+      spawn: spawnFn,
+      execSync: execSyncFn,
+      execFile: vi.fn(),
+      execFileSync: execFileSyncFn,
+    }));
+    vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+      getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+      listenForDarwinNotification: vi.fn(() => {
+        throw new Error("notifyutil unavailable in tests");
+      }),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+      waitForXctraceReady: vi.fn(async () => {
+        throw new Error("xctrace failed to start");
+      }),
+    }));
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    api.recordingExitedUnexpectedly = true;
+    api.lastExitInfo = { code: 1, signal: null };
+    api.traceFile = "/tmp/argent-profiler-cwd/native-profiler-A.trace";
+
+    await expect(
+      startNativeProfilerIos(api, { device_id: "DEVICE-UDID", app_process: "MyApp" })
+    ).rejects.toThrow(/xctrace failed to start/);
+
+    expect(api.recordingExitedUnexpectedly).toBe(true);
+    expect(api.lastExitInfo).toEqual({ code: 1, signal: null });
+    expect(api.traceFile).toBe("/tmp/argent-profiler-cwd/native-profiler-A.trace");
+  });
+
+  it("malloc mode prefers the exact CFBundleExecutable match over an earlier display-name match", async () => {
+    // Two installed apps can share a display name (dev + prod builds both
+    // shown as "MyApp"). The malloc path TERMINATES the resolved app before
+    // cold-launching it, so first-match-in-plist-order is not acceptable: an
+    // exact executable match must win regardless of enumeration order.
+    const twoApps = JSON.stringify({
+      "com.example.staging": {
+        CFBundleExecutable: "MyAppStaging",
+        CFBundleIdentifier: "com.example.staging",
+        CFBundleDisplayName: "MyApp",
+        ApplicationType: "User",
+      },
+      "com.example.myapp": {
+        CFBundleExecutable: "MyApp",
+        CFBundleIdentifier: "com.example.myapp",
+        ApplicationType: "User",
+      },
+    });
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execSyncFn = vi.fn(() => "");
+    const execFileSyncFn = makeExecFileSyncFn({ listappsJson: twoApps });
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    const result = await startNativeProfilerIos(fakeApi(), {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      malloc_stack_logging: true,
+    });
+
+    expect(result.status).toBe("recording");
+    const terminateCalls = execFileSyncFn.mock.calls
+      .map((c) => (c[1] as string[]) ?? [])
+      .filter((a) => a.includes("terminate"));
+    expect(terminateCalls).toHaveLength(1);
+    expect(terminateCalls[0]).toContain("com.example.myapp");
+    expect(terminateCalls[0]).not.toContain("com.example.staging");
+  });
+
+  it("malloc mode refuses an app_process that matches several installed apps ambiguously", async () => {
+    // Display-name-only ambiguity (no exact executable match): terminating an
+    // arbitrary one of them would kill the wrong app. Refuse before touching
+    // anything, naming the candidates.
+    const twoApps = JSON.stringify({
+      "com.example.staging": {
+        CFBundleExecutable: "MyAppStaging",
+        CFBundleIdentifier: "com.example.staging",
+        CFBundleDisplayName: "MyApp",
+        ApplicationType: "User",
+      },
+      "com.example.prod": {
+        CFBundleExecutable: "MyAppProd",
+        CFBundleIdentifier: "com.example.prod",
+        CFBundleDisplayName: "MyApp",
+        ApplicationType: "User",
+      },
+    });
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execSyncFn = vi.fn(() => "");
+    const execFileSyncFn = makeExecFileSyncFn({ listappsJson: twoApps });
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    await expect(
+      startNativeProfilerIos(fakeApi(), {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      })
+    ).rejects.toThrow(/matches multiple installed user apps/);
+
+    const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+    expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
   });
 
   it("stamps only the in-flight capture mode — never the report-facing flag", async () => {

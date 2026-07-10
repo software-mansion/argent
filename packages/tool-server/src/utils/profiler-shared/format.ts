@@ -13,3 +13,14 @@ import bytesUtil from "bytes";
 export function formatBytes(bytes: number): string {
   return bytesUtil(bytes, { decimalPlaces: 1 }) ?? `${bytes}B`;
 }
+
+/**
+ * Escape a value for interpolation into a GFM table cell: GFM splits cells on
+ * unescaped `|` even inside code spans, so a demangled C++ frame such as
+ * `folly::operator|(...)` would shift every column after it. Used by the leak
+ * tables, where malloc_stack_logging makes real demangled frames (operators
+ * included) the headline content.
+ */
+export function escapeMarkdownTableCell(value: string): string {
+  return value.replace(/\|/g, "\\|");
+}

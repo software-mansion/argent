@@ -15,7 +15,7 @@ import {
   type AndroidStackQueryMode,
 } from "../../../utils/android-profiler/pipeline/index";
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
-import { formatBytes } from "../../../utils/profiler-shared/format";
+import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-shared/format";
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 
 const zodSchema = z.object({
@@ -331,7 +331,7 @@ export function renderLeakStacksIos(
 
   for (const l of sorted) {
     lines.push(
-      `| \`${l.objectType}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${demangleSymbol(l.responsibleFrame)}\` | ${l.responsibleLibrary || "—"} |`
+      `| \`${escapeMarkdownTableCell(l.objectType)}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${escapeMarkdownTableCell(demangleSymbol(l.responsibleFrame))}\` | ${escapeMarkdownTableCell(l.responsibleLibrary) || "—"} |`
     );
   }
 

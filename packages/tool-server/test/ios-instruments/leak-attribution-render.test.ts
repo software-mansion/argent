@@ -131,6 +131,26 @@ describe("leak attribution rendering", () => {
     expect(res.report).toContain("No attributed leaks");
   });
 
+  it("escapes '|' in leak table cells so demangled operator frames can't break the row", async () => {
+    // GFM splits table cells on unescaped pipes even inside code spans. A
+    // demangled C++ frame like `operator|` was unreachable in argent's own
+    // captures before malloc_stack_logging (attach mode never attributed), so
+    // the leak table must escape it now that real frames are the headline.
+    const frame = "folly::operator|(folly::Range<char const*>, folly::Range<char const*>)";
+    const res = await renderNativeProfilerReport({
+      payload: payload([leak(true, frame, "folly")]),
+      traceFile: null,
+    });
+    const header = res.report.split("\n").find((l) => l.includes("| # | Object Type"));
+    const row = res.report.split("\n").find((l) => l.includes("folly::operator"));
+    expect(row).toBeDefined();
+    expect(row).toContain("operator\\|");
+    // Splitting on unescaped pipes yields the same cell count as the header —
+    // the row's columns stay aligned.
+    const unescapedPipes = (s: string) => s.split(/(?<!\\)\|/).length;
+    expect(unescapedPipes(row!)).toBe(unescapedPipes(header!));
+  });
+
   it("shows the real frame + library for an attributed leak", async () => {
     const frame = "hermes::vm::JSTypedArrayBase::createBuffer(...)";
     const res = await renderNativeProfilerReport({

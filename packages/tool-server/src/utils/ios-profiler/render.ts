@@ -3,6 +3,7 @@ import * as path from "path";
 import bytesUtil from "bytes";
 import type { TraceProcessorUnavailableError } from "@argent/native-devtools-android";
 import { demangleSymbol } from "../profiler-shared/demangle";
+import { escapeMarkdownTableCell } from "../profiler-shared/format";
 import type {
   ProfilerPayload,
   Bottleneck,
@@ -414,7 +415,7 @@ function renderFullReport(
       );
       attributedLeaks.forEach((b, i) => {
         lines.push(
-          `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${demangleSymbol(b.responsibleFrame)}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
+          `| ${i + 1} | \`${escapeMarkdownTableCell(b.objectType)}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${escapeMarkdownTableCell(demangleSymbol(b.responsibleFrame))}\` | ${escapeMarkdownTableCell(b.responsibleLibrary) || "—"} | ${severityEmoji(b.severity)} |`
         );
       });
     } else {
