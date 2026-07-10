@@ -6,7 +6,10 @@ import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { coreDeviceRef, type CoreDeviceApi } from "../../blueprints/core-device";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../blueprints/physical-ios-automation";
 import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { getScreenshotScale, httpScreenshot } from "../../utils/simulator-client";
 import { isTvOsSimulator } from "../../utils/ios-devices";
@@ -152,15 +155,18 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         return { image };
       }
 
-      // A physical iOS device captures over CoreDevice (pymobiledevice3), not
-      // the simulator-server. CoreDevice returns a full-resolution PNG;
+      // A physical iOS device captures over WebDriverAgent, not simulator-server.
+      // WDA returns a full-resolution PNG;
       // rotation/scale/downscaler are simulator/Chromium-only knobs and don't
       // apply to the device. Checked before the (async, simulator-only) tvOS
       // probe below since a physical udid isn't a simulator runtime at all.
       if (isPhysicalIos(device)) {
-        const ref = coreDeviceRef(device);
-        const coreDevice = (await registry.resolveService(ref.urn, ref.options)) as CoreDeviceApi;
-        const { path: capturedPath } = await coreDevice.screenshot();
+        const ref = physicalIosAutomationRef(device);
+        const physicalIos = (await registry.resolveService(
+          ref.urn,
+          ref.options
+        )) as PhysicalIosAutomationApi;
+        const { path: capturedPath } = await physicalIos.screenshot();
         const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
         return { image };
       }

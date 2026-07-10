@@ -31,8 +31,16 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
-import { isPhysicalIosUdid, classifyDevice, stripRemotePrefix } from "../../utils/device-info";
-import { ensureCoreDeviceTunnel } from "../../blueprints/core-device";
+import {
+  isPhysicalIosUdid,
+  classifyDevice,
+  resolveDevice,
+  stripRemotePrefix,
+} from "../../utils/device-info";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../blueprints/physical-ios-automation";
 import {
   simctlBoot as simRemoteBoot,
   simctlBootstatus as simRemoteBootstatus,
@@ -59,7 +67,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
+      "iOS: simulator or connected physical-iPhone UDID from `list-devices`. Simulators are booted; physical phones are prepared for WebDriverAgent control without rebooting. Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
     ),
   avdName: z
     .string()
@@ -479,13 +487,12 @@ async function bootIos(
     );
   }
 
-  // A physical iPhone is already powered on — there is nothing to "boot". It is
-  // driven over CoreDevice (see core-device blueprint), not the simulator-server.
-  // Use this as the explicit "prepare" step: ensure the CoreDevice tunnel is up,
-  // auto-starting it via the macOS authorization prompt if needed (no manual
-  // sudo). Surfaces a clear error if the prompt is declined / unavailable.
+  // A physical iPhone is already powered on — there is nothing to "boot".
+  // Treat this as the explicit preparation step: build/sign WDA if needed and
+  // establish the persistent XCTest transport so the first control is warm.
   if (isPhysicalIosUdid(udid)) {
-    await ensureCoreDeviceTunnel(udid);
+    const ref = physicalIosAutomationRef(resolveDevice(udid));
+    await registry.resolveService<PhysicalIosAutomationApi>(ref.urn, ref.options);
     return { platform: "ios", udid, booted: true };
   }
 
@@ -1396,8 +1403,8 @@ export function createBootDeviceTool(
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
   return {
     id: "boot-device",
-    description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, or spawn an Electron app and wait until it is ready to accept interactions.
-Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
+    description: `Start an iOS simulator, prepare a connected physical iPhone for WebDriverAgent control, launch an Android emulator, start a Vega (Fire TV) Virtual Device, or spawn an Electron app and wait until it is ready to accept interactions.
+Pick the platform by which argument you pass: 'udid' for an iOS simulator or physical iPhone from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one). A physical iPhone is not rebooted; Argent builds/signs/caches WebDriverAgent on first use and reuses the session.
 Use at the start of a session once you have picked a target.
 Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'vega', serial, vvdImage, booted } or { platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
 Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.`,

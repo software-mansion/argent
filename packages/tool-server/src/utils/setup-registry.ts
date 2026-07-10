@@ -2,6 +2,8 @@ import { Registry } from "@argent/registry";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { coreDeviceBlueprint } from "../blueprints/core-device";
+import { physicalIosAutomationBlueprint } from "../blueprints/physical-ios-automation";
+import { deviceLogSessionBlueprint } from "../blueprints/device-log-session";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
@@ -62,6 +64,8 @@ import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/nativ
 import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
 import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
+import { deviceLogsStartTool } from "../tools/device-logs/device-logs-start";
+import { deviceLogsStopTool } from "../tools/device-logs/device-logs-stop";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
 import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit-query";
 import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
@@ -95,6 +99,8 @@ export function createRegistry(): Registry {
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(coreDeviceBlueprint);
+  registry.registerBlueprint(physicalIosAutomationBlueprint);
+  registry.registerBlueprint(deviceLogSessionBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
@@ -153,6 +159,8 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeProfilerStartTool);
   registry.registerTool(nativeProfilerStopTool);
   registry.registerTool(nativeProfilerAnalyzeTool);
+  registry.registerTool(deviceLogsStartTool);
+  registry.registerTool(deviceLogsStopTool);
   registry.registerTool(profilerCpuQueryTool);
   registry.registerTool(profilerCommitQueryTool);
   registry.registerTool(profilerStackQueryTool);

@@ -60,7 +60,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
   {
     name: "physical-ios-devices",
     description:
-      "Discover and control physical iOS devices (iOS 27+) over Apple's CoreDevice tunnel via pymobiledevice3. The required tunnel is auto-started via a macOS admin prompt (or run `sudo pymobiledevice3 remote tunneld` manually). Supports screenshot, tap, swipe, hardware buttons, and launch-app.",
+      "Discover and control physical iOS devices through an automatically signed WebDriverAgent session. Supports full touch/multi-touch, keyboard, screenshots, accessibility, app lifecycle, device logs, and native Time Profiler capture without a root tunnel.",
   },
   {
     name: "tool-server-event-log",

@@ -38,7 +38,7 @@ export interface RecordArgsInput {
 
 export interface IosCaptureStrategy {
   /** Stable identifier — also the value accepted by the ARGENT_IOS_CAPTURE override. */
-  readonly name: "device" | "all-processes";
+  readonly name: "device" | "all-processes" | "physical-all-processes";
   /** One-line human-readable description for logs. */
   readonly description: string;
   /** Build the `xctrace record …` argv for this strategy. */

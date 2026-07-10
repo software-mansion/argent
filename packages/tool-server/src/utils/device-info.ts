@@ -17,8 +17,8 @@ const IOS_UDID_SHAPE =
  * `00008120-000E6D0C0ABBA01E`. This is distinct from the simulator UUID
  * (four dashes) so a real device can be told apart from a simulator by shape
  * alone, the same way Android emulators vs phones are distinguished. Older
- * 40-hex device UDIDs belong to pre-A12 hardware that tops out well below the
- * iOS 27 floor for the CoreDevice control path, so they are intentionally not matched.
+ * 40-hex device UDIDs belong to pre-A12 hardware outside the iOS 17+ full-parity
+ * target for this backend, so they are intentionally not matched.
  */
 const IOS_PHYSICAL_UDID_SHAPE = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$/;
 
@@ -120,7 +120,7 @@ export function resolveDevice(udid: string): DeviceInfo {
   return { id: udid, platform, kind };
 }
 
-/** A physical iOS device (driven via CoreDevice/pymobiledevice3, not the simulator-server). */
+/** A physical iOS device (driven via WebDriverAgent/XCTest, not simulator-server). */
 export function isPhysicalIos(device: DeviceInfo): boolean {
   return device.platform === "ios" && device.kind === "device";
 }

@@ -77,7 +77,8 @@ export type DescribeSource =
   | "cdp-dom"
   | "vega-automation"
   | "tv-focus"
-  | "coredevice-ax";
+  | "coredevice-ax"
+  | "wda-ax";
 
 // Internal shape produced by the per-platform adapters. The `tree` is consumed
 // by the formatter in `format-tree.ts` and then dropped before the tool replies

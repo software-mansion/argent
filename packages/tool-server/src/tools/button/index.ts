@@ -1,22 +1,26 @@
 import { z } from "zod";
 import type { Platform, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { coreDeviceRef, type CoreDeviceApi } from "../../blueprints/core-device";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../blueprints/physical-ios-automation";
 import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../../utils/android-input";
 import { ensureDep } from "../../utils/check-deps";
 
-// Argent button name → pymobiledevice3 CoreDevice HID button name. CoreDevice
-// exposes the physical buttons only; appSwitch (a SpringBoard gesture) and the
-// iPhone 15 Pro action button have no HID equivalent, so they are omitted and
-// rejected with a clear error on physical iOS.
-const COREDEVICE_BUTTON: Partial<Record<Params["button"], string>> = {
+// Argent button name → physical WDA action. XCTest exposes the Action button
+// on supported phones, but it has no public App Switcher command.
+const PHYSICAL_IOS_BUTTON: Partial<
+  Record<Params["button"], "home" | "power" | "volumeUp" | "volumeDown" | "actionButton">
+> = {
   home: "home",
-  power: "lock",
-  volumeUp: "volume-up",
-  volumeDown: "volume-down",
+  power: "power",
+  volumeUp: "volumeUp",
+  volumeDown: "volumeDown",
+  actionButton: "actionButton",
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -70,7 +74,7 @@ export const buttonTool: ToolDefinition<Params, Result> = {
 Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
-On a physical iPhone, button presses route over CoreDevice (home, power, volumeUp, volumeDown).
+On a physical iPhone, Home/Power/volume and Action-button presses route through WebDriverAgent; App Switcher is not exposed by XCTest.
 Fails if the device backend is not reachable — the simulator-server for iOS, or \`adb\` for Android (Android presses are injected with \`adb shell input keyevent\`).`,
   zodSchema,
   capability,
@@ -83,12 +87,9 @@ Fails if the device backend is not reachable — the simulator-server for iOS, o
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
     if (isPhysicalIos(device)) {
-      // A button with no CoreDevice HID equivalent (appSwitch/actionButton) is
-      // always rejected by execute() below, before it ever touches
-      // services.coreDevice — don't pay for resolving the CoreDevice service
-      // (tunnel setup, possibly a macOS admin prompt) just to reject anyway.
-      if (!COREDEVICE_BUTTON[params.button]) return {};
-      return { coreDevice: coreDeviceRef(device) };
+      // Do not start WDA only to reject App Switcher, which XCTest cannot expose.
+      if (!PHYSICAL_IOS_BUTTON[params.button]) return {};
+      return { physicalIos: physicalIosAutomationRef(device) };
     }
     return device.platform === "android" ? {} : { simulatorServer: simulatorServerRef(device) };
   },
@@ -102,16 +103,16 @@ Fails if the device backend is not reachable — the simulator-server for iOS, o
       );
     }
     if (isPhysicalIos(device)) {
-      const name = COREDEVICE_BUTTON[params.button];
+      const name = PHYSICAL_IOS_BUTTON[params.button];
       if (!name) {
         throw new UnsupportedOperationError(
           "button",
           device,
-          `button '${params.button}' is not available on physical iOS (CoreDevice exposes home, power, volumeUp, volumeDown)`
+          `button '${params.button}' is not available on physical iOS (home, power, volumeUp, volumeDown, and actionButton are supported)`
         );
       }
-      const coreDevice = services.coreDevice as CoreDeviceApi;
-      await coreDevice.button(name);
+      const physicalIos = services.physicalIos as PhysicalIosAutomationApi;
+      await physicalIos.button(name);
       return { pressed: params.button };
     }
     if (device.platform === "android") {

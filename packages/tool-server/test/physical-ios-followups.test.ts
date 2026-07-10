@@ -1,15 +1,14 @@
 /**
- * Follow-up coverage for the physical-iOS (CoreDevice) feature. These tests pin
+ * Follow-up coverage for physical-iOS automation. These tests pin
  * behaviors that the original physical-ios.test.ts left uncovered and that a
  * regression could silently break:
  *
  *  - discovery must NOT surface the host's iOS simulators as phantom physical
  *    devices (devicectl enumerates them with transportType "sameMachine");
- *  - the `button` CoreDevice HID mapping + rejection of buttons with no HID;
+ *  - the `button` WDA mapping + rejection of unsupported App Switcher;
  *  - the privileged-tunnel flag gate (root escalation must be opt-in);
- *  - tools that are unsupported on physical iOS reject with a 400-mapped
- *    UnsupportedOperationError, not a generic 500 (open-url/reinstall/restart,
- *    describe, native-profiler), while staying supported on simulators/Android;
+ *  - parity tools advertise physical-device support while simulator-only
+ *    native injection tools remain gated;
  *  - run-sequence must not eagerly hold simulator-server for a physical iPhone;
  *  - swipe duration clamping + timeout scaling.
  */
@@ -32,10 +31,9 @@ import {
 import { buttonTool } from "../src/tools/button";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
 import { describeIos } from "../src/tools/describe/platforms/ios";
-import { iosImpl as openUrlIos } from "../src/tools/open-url/platforms/ios";
-import { iosImpl as reinstallIos } from "../src/tools/reinstall-app/platforms/ios";
-import { makeIosImpl as makeRestartAppIosImpl } from "../src/tools/restart-app/platforms/ios";
 import { makeIosImpl as makeLaunchAppIosImpl } from "../src/tools/launch-app/platforms/ios";
+import { iosImpl as openUrlIosImpl } from "../src/tools/open-url/platforms/ios";
+import { makeIosImpl as makeRestartAppIosImpl } from "../src/tools/restart-app/platforms/ios";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { createKeyboardTool } from "../src/tools/keyboard";
@@ -48,7 +46,6 @@ const mockFlag = vi.mocked(isFlagEnabled);
 
 // Physical-iOS branches of both handlers throw/reject before ever touching
 // `registry` (see the assertions below), so a stub registry is safe here.
-const restartIos = makeRestartAppIosImpl({} as never);
 const launchAppIos = makeLaunchAppIosImpl({} as never);
 const keyboardTool = createKeyboardTool({} as never);
 
@@ -113,51 +110,45 @@ describe("discovery does not surface simulators as physical devices", () => {
   });
 });
 
-describe("button — CoreDevice HID mapping on physical iOS", () => {
+describe("button — WDA mapping on physical iOS", () => {
   const press = async (button: string) => {
-    const coreDevice = { button: vi.fn().mockResolvedValue(undefined) };
+    const physicalIos = { button: vi.fn().mockResolvedValue(undefined) };
     const res = await buttonTool.execute(
-      { coreDevice } as never,
+      { physicalIos } as never,
       {
         udid: PHYSICAL_UDID,
         button,
       } as never
     );
-    return { coreDevice, res };
+    return { physicalIos, res };
   };
 
-  it("maps the four supported buttons to their pymobiledevice3 HID names", async () => {
-    for (const [argent, hid] of [
+  it("maps all supported buttons to the physical automation API", async () => {
+    for (const [argent, backend] of [
       ["home", "home"],
-      ["power", "lock"],
-      ["volumeUp", "volume-up"],
-      ["volumeDown", "volume-down"],
+      ["power", "power"],
+      ["volumeUp", "volumeUp"],
+      ["volumeDown", "volumeDown"],
+      ["actionButton", "actionButton"],
     ]) {
-      const { coreDevice, res } = await press(argent);
-      expect(coreDevice.button).toHaveBeenCalledWith(hid);
+      const { physicalIos, res } = await press(argent);
+      expect(physicalIos.button).toHaveBeenCalledWith(backend);
       expect(res).toEqual({ pressed: argent });
     }
   });
 
-  it("rejects buttons with no CoreDevice HID equivalent", async () => {
-    // appSwitch / actionButton exist on iOS but have no HID button.
+  it("rejects App Switcher, which XCTest does not expose", async () => {
     await expect(press("appSwitch")).rejects.toBeInstanceOf(UnsupportedOperationError);
-    await expect(press("actionButton")).rejects.toBeInstanceOf(UnsupportedOperationError);
   });
 
-  it("does not resolve the CoreDevice service for a button with no HID equivalent", () => {
-    // services() runs before execute() (the registry resolves services first),
-    // so eagerly resolving coreDevice here would pay for tunnel setup —
-    // possibly a macOS admin prompt — just to reject the button afterward.
-    for (const button of ["appSwitch", "actionButton"]) {
-      const services = buttonTool.services!({ udid: PHYSICAL_UDID, button } as never);
-      expect(services.coreDevice).toBeUndefined();
-    }
+  it("does not resolve WDA for unsupported App Switcher", () => {
+    const services = buttonTool.services!({ udid: PHYSICAL_UDID, button: "appSwitch" } as never);
+    expect(services.physicalIos).toBeUndefined();
   });
 
-  it("still resolves the CoreDevice service for a supported button", () => {
+  it("resolves the physical automation service for a supported button", () => {
     const services = buttonTool.services!({ udid: PHYSICAL_UDID, button: "home" } as never);
-    expect(services.coreDevice).toBeDefined();
+    expect(services.physicalIos).toBeDefined();
   });
 });
 
@@ -195,11 +186,45 @@ describe("launch-app enforces the physical-iOS flag (no bypass)", () => {
   });
 });
 
-describe("gesture-swipe routes physical iOS to the CoreDevice backend", () => {
-  it("forwards normalized coords and duration to coreDevice.swipe", async () => {
-    const coreDevice = { swipe: vi.fn().mockResolvedValue(undefined) };
+describe("physical iOS app lifecycle parity", () => {
+  const device = resolveDevice(PHYSICAL_UDID);
+
+  it("opens deep links through the persistent physical automation session", async () => {
+    const openUrl = vi.fn().mockResolvedValue(undefined);
+    const result = await openUrlIosImpl.handler(
+      { physicalIos: { openUrl } } as never,
+      { udid: PHYSICAL_UDID, url: "maps://?q=Bangalore+Palace" },
+      device
+    );
+
+    expect(openUrl).toHaveBeenCalledWith("maps://?q=Bangalore+Palace");
+    expect(result).toEqual({ opened: true, url: "maps://?q=Bangalore+Palace" });
+  });
+
+  it("terminates and relaunches apps through the persistent physical automation session", async () => {
+    const terminateApp = vi.fn().mockResolvedValue(true);
+    const launchApp = vi.fn().mockResolvedValue(undefined);
+    const registry = {
+      resolveService: vi.fn().mockResolvedValue({ terminateApp, launchApp }),
+    };
+    const restart = makeRestartAppIosImpl(registry as never);
+    const result = await restart.handler(
+      {},
+      { udid: PHYSICAL_UDID, bundleId: "com.apple.Maps" },
+      device
+    );
+
+    expect(terminateApp).toHaveBeenCalledWith("com.apple.Maps");
+    expect(launchApp).toHaveBeenCalledWith("com.apple.Maps");
+    expect(result).toEqual({ restarted: true, bundleId: "com.apple.Maps" });
+  });
+});
+
+describe("gesture-swipe routes physical iOS to WDA", () => {
+  it("forwards normalized coords and duration to physicalIos.swipe", async () => {
+    const physicalIos = { swipe: vi.fn().mockResolvedValue(undefined) };
     const res = await gestureSwipeTool.execute(
-      { coreDevice } as never,
+      { physicalIos } as never,
       {
         udid: PHYSICAL_UDID,
         fromX: 0.5,
@@ -209,14 +234,14 @@ describe("gesture-swipe routes physical iOS to the CoreDevice backend", () => {
         durationMs: 250,
       } as never
     );
-    expect(coreDevice.swipe).toHaveBeenCalledWith(0.5, 0.7, 0.5, 0.3, 250);
+    expect(physicalIos.swipe).toHaveBeenCalledWith(0.5, 0.7, 0.5, 0.3, 250);
     expect(res).toMatchObject({ swiped: true });
   });
 
   it("defaults the duration to 300ms when omitted", async () => {
-    const coreDevice = { swipe: vi.fn().mockResolvedValue(undefined) };
+    const physicalIos = { swipe: vi.fn().mockResolvedValue(undefined) };
     await gestureSwipeTool.execute(
-      { coreDevice } as never,
+      { physicalIos } as never,
       {
         udid: PHYSICAL_UDID,
         fromX: 0.2,
@@ -225,56 +250,26 @@ describe("gesture-swipe routes physical iOS to the CoreDevice backend", () => {
         toY: 0.8,
       } as never
     );
-    expect(coreDevice.swipe).toHaveBeenCalledWith(0.2, 0.2, 0.8, 0.8, 300);
+    expect(physicalIos.swipe).toHaveBeenCalledWith(0.2, 0.2, 0.8, 0.8, 300);
   });
 });
 
-describe("tools unsupported on physical iOS reject with UnsupportedOperationError (400)", () => {
+describe("physical iOS describe", () => {
   const device = resolveDevice(PHYSICAL_UDID);
 
-  it("open-url", async () => {
-    await expect(
-      openUrlIos.handler({} as never, { udid: PHYSICAL_UDID, url: "https://x" } as never, device)
-    ).rejects.toBeInstanceOf(UnsupportedOperationError);
-  });
-
-  it("reinstall-app", async () => {
-    await expect(
-      reinstallIos.handler(
-        {} as never,
-        { udid: PHYSICAL_UDID, bundleId: "com.x", appPath: "/tmp/x.app" } as never,
-        device
-      )
-    ).rejects.toBeInstanceOf(UnsupportedOperationError);
-  });
-
-  it("restart-app", async () => {
-    await expect(
-      restartIos.handler({} as never, { udid: PHYSICAL_UDID, bundleId: "com.x" } as never, device)
-    ).rejects.toBeInstanceOf(UnsupportedOperationError);
-  });
-
-  // describe is NOT in the unsupported set: on a physical iPhone it returns the
-  // real on-screen accessibility tree via the CoreDevice axtree() snapshot
-  // (works in-app and on the home screen). A stub service stands in here.
-  it("describe — returns the CoreDevice accessibility tree (source coredevice-ax), not a rejection", async () => {
+  it("returns the live WDA accessibility tree", async () => {
     const registry = {
       resolveService: async () => ({
-        axtree: async () => ({
-          screen: { w: 393, h: 852 },
-          elements: [
-            { caption: "General, Button", id: "e1", rect: "{{16, 100}, {361, 44}}" },
-            { caption: "Accessibility, Button", id: "e2" },
-          ],
-        }),
+        source: async () =>
+          '<AppiumAUT><XCUIElementTypeApplication x="0" y="0" width="393" height="852"><XCUIElementTypeWindow x="0" y="0" width="393" height="852"><XCUIElementTypeButton label="General" x="16" y="100" width="361" height="44"/></XCUIElementTypeWindow></XCUIElementTypeApplication></AppiumAUT>',
+        windowSize: async () => ({ width: 393, height: 852 }),
       }),
     };
     const result = await describeIos(registry as never, device, {});
-    expect(result.source).toBe("coredevice-ax");
+    expect(result.source).toBe("wda-ax");
     const flat = JSON.stringify(result.tree);
     expect(flat).toContain("General");
-    expect(flat).toContain("Accessibility");
-    expect(result.hint).toContain("screenshot");
+    expect(result.hint).toContain("WebDriverAgent");
   });
 });
 
@@ -307,19 +302,19 @@ describe("capability matrix is honest about physical-iOS support (clean 400 at t
   it("supported tools accept a physical iPhone", () => {
     expect(() => assertSupported("gesture-tap", gestureTapTool.capability, physical)).not.toThrow();
     expect(() => assertSupported("button", buttonTool.capability, physical)).not.toThrow();
+    expect(() => assertSupported("keyboard", keyboardTool.capability, physical)).not.toThrow();
+    expect(() => assertSupported("gesture-pinch", gesturePinchTool.capability, physical)).not.toThrow();
+    expect(() =>
+      assertSupported("screenshot-diff", screenshotDiffTool.capability, physical)
+    ).not.toThrow();
+    expect(() =>
+      assertSupported("native-profiler-start", nativeProfilerStartTool.capability, physical)
+    ).not.toThrow();
   });
 
   it("simulator-only tools reject a physical iPhone via the capability gate", () => {
     for (const [id, cap] of [
-      ["keyboard", keyboardTool.capability],
-      ["gesture-pinch", gesturePinchTool.capability],
-      ["screenshot-diff", screenshotDiffTool.capability],
       ["native-describe-screen", nativeDescribeScreenTool.capability],
-      // native-profiler-start does LIVE capture via simulator-only simctl (the
-      // process enumeration mislabels a real iPhone as a "simulator"), so it
-      // rejects physical iOS at the gate. (Its post-capture sibling tools stay
-      // device-agnostic — see profiler-query-android-capability.test.ts.)
-      ["native-profiler-start", nativeProfilerStartTool.capability],
     ] as const) {
       expect(() => assertSupported(id, cap, physical)).toThrow(UnsupportedOperationError);
       // ...but still work on a simulator (no regression to simulator support).

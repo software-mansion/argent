@@ -1,7 +1,11 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../blueprints/physical-ios-automation";
+import { isPhysicalIos, resolveDevice } from "../../utils/device-info";
 import { sendTouchEvent } from "../../utils/gesture-utils";
 import { sleep } from "../../utils/timing";
 
@@ -39,7 +43,7 @@ interface Result {
 }
 
 const capability: ToolCapability = {
-  apple: { simulator: true, device: false },
+  apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
@@ -53,15 +57,27 @@ Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers i
 Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    return isPhysicalIos(device)
+      ? { physicalIos: physicalIosAutomationRef(device) }
+      : { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params) {
-    const api = services.simulatorServer as SimulatorServerApi;
     const duration = params.durationMs ?? 300;
     const steps = Math.max(1, Math.round(duration / 16));
 
     let timestampMs = 0;
+    const physicalEvents: Array<{
+      type: "Down" | "Move" | "Up";
+      x: number;
+      y: number;
+      x2: number;
+      y2: number;
+      delayMs: number;
+    }> = [];
+    const physical = isPhysicalIos(resolveDevice(params.udid));
+    const api = physical ? undefined : (services.simulatorServer as SimulatorServerApi);
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
@@ -76,8 +92,16 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      sendTouchEvent(api, type, x1, y1, x2, y2);
-      if (i < steps) await sleep(16);
+      if (physical) {
+        physicalEvents.push({ type, x: x1, y: y1, x2, y2, delayMs: i === 0 ? 0 : 16 });
+      } else {
+        sendTouchEvent(api!, type, x1, y1, x2, y2);
+        if (i < steps) await sleep(16);
+      }
+    }
+
+    if (physical) {
+      await (services.physicalIos as PhysicalIosAutomationApi).touch(physicalEvents);
     }
 
     return { rotated: true, timestampMs };

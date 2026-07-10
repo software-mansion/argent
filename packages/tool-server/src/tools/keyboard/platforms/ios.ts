@@ -4,6 +4,11 @@ import { isTvOsSimulator } from "../../../utils/ios-devices";
 import type { KeyboardParams, KeyboardResult } from "../types";
 import { typeSimulatorServer } from "../simulator-server-keys";
 import { typeTv } from "./tv";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../../blueprints/physical-ios-automation";
+import { isPhysicalIos } from "../../../utils/device-info";
 
 // A tvOS sim classifies as platform "ios" by UDID shape, so this branch handles
 // both iPhone/iPad (simulator-server typing) and Apple TV (focus-driven typing).
@@ -12,10 +17,21 @@ export function makeIosImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
-    handler: async (_services, params, device) =>
-      (await isTvOsSimulator(device.id))
+    handler: async (_services, params, device) => {
+      if (isPhysicalIos(device)) {
+        const ref = physicalIosAutomationRef(device);
+        const api = await registry.resolveService<PhysicalIosAutomationApi>(ref.urn, ref.options);
+        if (params.key) await api.pressKey(params.key.toLowerCase());
+        if (params.text) await api.typeText(params.text, params.delayMs);
+        return {
+          typed: params.text ?? params.key ?? "",
+          keys: (params.key ? 1 : 0) + (params.text?.length ?? 0),
+        };
+      }
+      return (await isTvOsSimulator(device.id))
         ? typeTv(registry, device, params)
-        : typeSimulatorServer(registry, device, params),
+        : typeSimulatorServer(registry, device, params);
+    },
   };
 }
 

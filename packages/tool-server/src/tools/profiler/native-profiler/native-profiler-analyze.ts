@@ -18,12 +18,8 @@ const zodSchema = z.object({
     .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
 });
 
-// A session can never exist for physical iOS (native-profiler-start rejects it,
-// same apple.device:false reasoning) — reject here too for a clean, consistent
-// error rather than the confusing "no active session" a physical UDID would
-// otherwise always hit.
 const capability = {
-  apple: { simulator: true, device: false },
+  apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
@@ -44,7 +40,7 @@ export const nativeProfilerAnalyzeTool: ToolDefinition<
   id: "native-profiler-analyze",
   capability,
   description: `Analyze exported native trace data and return an LLM-optimized markdown report.
-iOS: parses CPU time profile, UI hangs, and memory leaks from the exported XML files.
+iOS: parses every available export. Simulator recordings include CPU time profile, UI hangs, and memory leaks; physical-device Time Profiler recordings include app-filtered CPU and hang data when available.
 Android: queries the Perfetto .pftrace via the in-process Perfetto trace-processor engine for CPU hotspots, UI hangs with jank reason + main-thread state breakdown, GC annotation, and an RSS-growth weak signal.
 Returns a structured markdown report with severity indicators, tables, and actionable suggestions.
 After presenting the report, ask the user whether to investigate further (drill-down with

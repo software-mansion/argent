@@ -4,7 +4,11 @@ import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
-import { resolveDevice } from "../../../utils/device-info";
+import { isPhysicalIos, resolveDevice } from "../../../utils/device-info";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../../blueprints/physical-ios-automation";
 import { assertSupported } from "../../../utils/capability";
 import { ensureDeps } from "../../../utils/check-deps";
 import { stopNativeProfilerIos, type IosStopResult } from "./platforms/ios";
@@ -50,12 +54,8 @@ interface AndroidStopArtifacts {
 
 type StopResult = IosStopArtifacts | AndroidStopArtifacts;
 
-// A session can never exist for physical iOS (native-profiler-start rejects it,
-// same apple.device:false reasoning) — reject here too for a clean, consistent
-// error rather than the confusing "no active session" a physical UDID would
-// otherwise always hit.
 const capability = {
-  apple: { simulator: true, device: false },
+  apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
@@ -84,16 +84,22 @@ export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, S
   id: "native-profiler-stop",
   capability,
   description: `Stop native profiling and export trace data.
-iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks XML.
+iOS: sends SIGINT to xctrace and waits for packaging. Simulator captures export CPU, hangs, and leaks XML; physical-device Time Profiler captures export app-filtered CPU and hang XML when that table is present.
 Android: sends SIGTERM to the perfetto daemon, polls /proc/<pid>, then \`adb pull\`s the .pftrace.
 Call native-profiler-start first.
 Use when the user has finished the interaction to profile and you need to export the trace.
 Returns { traceFile, exportedFiles, exportDiagnostics? }; traceFile is the raw trace bundle and exportedFiles the exports, all downloadable artifacts materialized to local paths.
 Fails if no active native-profiler-start session exists for the given device_id.`,
   zodSchema,
-  services: (params) => ({
-    session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
-  }),
+  services: (params) => {
+    const device = resolveDevice(params.device_id);
+    return {
+      session: nativeProfilerSessionRef(device),
+      ...(isPhysicalIos(device)
+        ? { physicalIos: physicalIosAutomationRef(device) }
+        : {}),
+    };
+  },
   async execute(services, params, ctx) {
     const api = services.session as NativeProfilerSessionApi;
     const device = resolveDevice(params.device_id);
@@ -106,6 +112,7 @@ Fails if no active native-profiler-start session exists for the given device_id.
     // the "no active session" error path never needs it.
     if (api.platform === "ios") {
       await ensureDeps(["xcrun"]);
+      await (services.physicalIos as PhysicalIosAutomationApi | undefined)?.flushControls();
       const ios: IosStopResult = await stopNativeProfilerIos(api);
       const artifacts = requireArtifacts(ctx);
       const result: IosStopArtifacts = {

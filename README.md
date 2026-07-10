@@ -48,22 +48,30 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 
 ## Physical iOS devices (experimental)
 
-Argent can drive a **physical iPhone** — no app installed on the device — over Apple's
-CoreDevice "remote control" services (the same path Xcode's device window uses), via
-[`pymobiledevice3`](https://github.com/doronz88/pymobiledevice3). Supported interactions:
-`screenshot`, `gesture-tap`, `gesture-swipe`, `button`, `launch-app`, and `describe` (the
-live on-screen accessibility tree — see the note below). The device shows up in `list-devices` with
-`kind: "device"`. Interactions run through one persistent `pymobiledevice3` helper per
-device (connected once), so a tap/screenshot costs a socket write rather than a fresh
-Python cold-start.
+Argent can drive a connected **physical iPhone** through the same tool interfaces used for an
+iOS simulator. It automatically builds, signs, installs, and reuses
+[WebDriverAgent](https://github.com/appium/WebDriverAgent) for XCTest input and accessibility;
+the target app itself does not need to be modified or instrumented. The phone appears in
+`list-devices` with `kind: "device"`.
+
+The physical backend supports:
+
+- tap, swipe, drag/pan, long press/hold, arbitrary touch sequences, pinch, and rotate gestures;
+- keyboard text and named keys, paste, Home/Power/volume/Action buttons, and orientation;
+- `screenshot`, nested live `describe`, `screenshot-diff`, app launch/restart, deep links, and
+  installing a device-signed `.app`;
+- continuous Apple unified logs with `device-logs-start` / `device-logs-stop`;
+- `native-profiler-*` for any foreground app, including protected system apps such as Maps.
+  Physical profiling records device-wide Time Profiler data and filters CPU/hang analysis to the
+  app PID, avoiding the task-port restriction that prevents a direct Instruments attach.
 
 **Requirements**
 
-- **iOS 27 or later for tap/swipe** — Apple gates host-driven touch input to iOS 27+; on
-  earlier versions those commands report `CoreDeviceError 9021`. Screenshot and hardware
-  buttons work on earlier iOS versions too.
-- macOS with Xcode, and `pymobiledevice3` installed (e.g. `pipx install pymobiledevice3`).
+- macOS with Xcode and an Apple Development team configured in Xcode Settings → Accounts.
+- iOS 17 or later for the complete keyboard/control surface (the backend is tested on iOS 26.2).
 - The iPhone connected, unlocked, trusted, with **Developer Mode** on.
+- [`pymobiledevice3`](https://github.com/doronz88/pymobiledevice3) for physical-device unified
+  log streaming (for example, `pipx install pymobiledevice3`).
 
 **Setup**
 
@@ -74,34 +82,28 @@ Python cold-start.
 2. Connect the iPhone (unlocked, trusted, Developer Mode on).
 
 `list-devices` then includes the iPhone, and the supported tools work against its UDID.
-The first interaction (or `boot-device`) starts the required CoreDevice tunnel
-automatically: Argent shows a standard macOS authorization prompt (Touch ID / password)
-to launch `pymobiledevice3 remote tunneld` as root (creating the tunnel interface needs
-root once; every other command runs unprivileged). No manual `sudo`. When the signed
-`argent-device-auth` helper is installed, the prompt is branded as Argent; otherwise it's
-the system's default admin prompt.
-
-If the prompt is declined or there's no GUI session (headless), start the tunnel manually
-and leave it running: `sudo pymobiledevice3 remote tunneld`.
+The first `boot-device`, `launch-app`, or control call prepares WebDriverAgent. Argent discovers
+the Xcode development team and signing identity, caches the signed runner under
+`~/.argent/webdriveragent`, and keeps one WDA session per phone. No root tunnel or admin prompt is
+needed for the XCTest path. A cold first preparation takes several seconds; later controls reuse
+the session.
 
 **Limitations / notes**
 
-- `describe` returns the device's **live on-screen accessibility tree** — the frontmost app's
-  elements (or the home screen), read app-free via the iOS-26+ accessibility-audit service over
-  CoreDevice. Element labels, values, traits (roles) and reading order are exact. Frames are exact
-  for the elements the accessibility audit reports and **interpolated** from reading-order
-  neighbours for the rest (Apple doesn't expose per-element geometry on a physical device), so
-  they're good enough to tap a row in a vertical list — but confirm with `screenshot` before a
-  precise tap, especially for controls like toggles. (This needs the RSDCheckin handshake iOS 26
-  added; the helper performs it. For pixel-exact in-app frames + taps you'd need an on-device
-  XCUITest runner, which requires code-signing.)
-- Not supported yet (return a clear "not supported" error): keyboard/typing, pinch & rotate
-  (multi-touch), `open-url`, `reinstall-app`, `restart-app`, and the native inspection /
-  profiling tools (`native-*`, `native-profiler-*`, `screenshot-diff`). `launch-app` (via
-  `devicectl`) works independently of the CoreDevice tunnel — it can succeed even before the
-  tunnel setup above has run.
-- Overrides: `ARGENT_PYMOBILEDEVICE3` (path to the binary), `ARGENT_PMD3_TUNNELD_PORT`
-  (defaults to `49151`).
+- Physical controls are registered on a strict local queue and acknowledged on the simulator's
+  gesture cadence. Read operations, log stop, and profiler stop are barriers, so screenshots and
+  artifacts always include all earlier controls even though XCTest may finish them later.
+- `describe` is the frontmost app's exact nested XCTest hierarchy, including labels, values,
+  element roles, and frames in the same normalized coordinate space as the gesture tools.
+- Device-wide profiling provides CPU and potential-hang analysis for protected apps. Apple's
+  Leaks/Allocations instruments require a process-scoped task port, so they are not available for
+  protected system apps.
+- Simulator-only injected `native-*` UIKit/React inspection remains unavailable on a physical
+  target. Use `describe`, screenshots, unified logs, and native profiling instead.
+- XCTest does not expose the App Switcher gesture. Power locks the device; unlocking may still
+  require the device passcode.
+- Signing/logging overrides: `ARGENT_WDA_TEAM_ID`, `ARGENT_WDA_BUNDLE_ID`,
+  `ARGENT_WDA_SIGNING_ID`, and `ARGENT_PYMOBILEDEVICE3`.
 
 ---
 

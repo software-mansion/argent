@@ -12,6 +12,10 @@ import {
   type NativeDevtoolsApi,
 } from "../../../blueprints/native-devtools";
 import { assertPhysicalIosEnabled } from "../../../blueprints/core-device";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../../blueprints/physical-ios-automation";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
@@ -27,24 +31,28 @@ export function makeIosImpl(
   return {
     requires: ["xcrun"],
     handler: async (_services, params, device) => {
-      // Physical iPhones are driven via CoreDevice — launch through devicectl
-      // (the app must already be installed/signed on the device). The
-      // native-devtools precheck is simulator-only, so it is skipped here.
+      // Launch physical apps through devicectl while warming the WDA control
+      // session. The app must already be installed/signed on the device.
       if (device.kind === "device") {
-        // Unlike the CoreDevice-routed tools, launch-app shells devicectl directly
-        // (no CoreDevice service), so it must enforce the opt-in flag itself —
-        // otherwise it would be the one physical-iOS operation reachable while the
-        // feature is disabled.
+        // launch-app shells devicectl before resolving a tool-declared service,
+        // so it enforces the opt-in flag itself.
         assertPhysicalIosEnabled();
         try {
-          await execFileAsync("xcrun", [
-            "devicectl",
-            "device",
-            "process",
-            "launch",
-            "--device",
-            params.udid,
-            params.bundleId,
+          const ref = physicalIosAutomationRef(device);
+          // Warm the persistent WDA transport while devicectl launches the app.
+          // This moves the one-time XCTest session startup out of the first tap
+          // so steady-state control registration matches simulator cadence.
+          await Promise.all([
+            registry.resolveService<PhysicalIosAutomationApi>(ref.urn, ref.options),
+            execFileAsync("xcrun", [
+              "devicectl",
+              "device",
+              "process",
+              "launch",
+              "--device",
+              params.udid,
+              params.bundleId,
+            ]),
           ]);
         } catch (err) {
           // The dominant failure here is "app not installed/signed on the device".

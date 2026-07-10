@@ -568,6 +568,16 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // are declared in @swmansion/argent's dependencies so npm installs them
 // alongside the package; keep them external so the bundle resolves them from
 // node_modules/ at runtime.
+//
+// `appium-xcuitest-driver` owns WebDriverAgent's Xcode project and other runtime
+// assets under its package directory. Inlining only its JavaScript would leave
+// those assets behind and make physical-iOS setup fail after npm installation.
+// Keep the driver external and ship it (plus its Appium peer) as regular
+// @swmansion/argent dependencies.
+// Appium also installs `sharp` as an optional transitive dependency. Argent's
+// Chromium screenshot path loads it dynamically and already degrades when it
+// is absent, so keep the native addon external rather than asking esbuild to
+// inline platform-specific `.node` files.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -577,6 +587,8 @@ buildBundle({
     "tree-sitter",
     "tree-sitter-typescript",
     "electron",
+    "appium-xcuitest-driver",
+    "sharp",
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
   ],

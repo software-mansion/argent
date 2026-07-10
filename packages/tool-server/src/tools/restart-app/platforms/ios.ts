@@ -12,7 +12,10 @@ import {
   type NativeDevtoolsApi,
 } from "../../../blueprints/native-devtools";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { UnsupportedOperationError } from "../../../utils/capability";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../../blueprints/physical-ios-automation";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -29,14 +32,14 @@ export function makeIosImpl(
     handler: async (_services, params, device) => {
       const { udid, bundleId } = params;
       if (device.kind === "device") {
-        // Physical iOS is driven over CoreDevice and has no relaunch path (the
-        // native-devtools injection is simulator-only). UnsupportedOperationError
-        // maps to a clean 400 (a plain Error would surface as a generic 500).
-        throw new UnsupportedOperationError(
-          "restart-app",
-          device,
-          "physical iOS is driven over CoreDevice and has no relaunch path"
+        const ref = physicalIosAutomationRef(device);
+        const physicalIos = await registry.resolveService<PhysicalIosAutomationApi>(
+          ref.urn,
+          ref.options
         );
+        await physicalIos.terminateApp(bundleId).catch(() => false);
+        await physicalIos.launchApp(bundleId);
+        return { restarted: true, bundleId };
       }
       const ndRef = nativeDevtoolsRef(device);
       const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(

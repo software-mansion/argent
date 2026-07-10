@@ -1,11 +1,11 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
+description: Interact with an iOS simulator, connected physical iPhone, Android device, or Chromium (CDP) app using Argent MCP tools. Use when tapping, swiping, pinching, rotating, typing, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for UI state, or validating visible app behavior.
 ---
 
 ## Unified tool surface
 
-All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, anything else → Android adb serial). You use the same tool names on every platform.
+All interaction tools below accept a `udid` parameter and auto-dispatch from `list-devices`: UUID → iOS simulator, CoreDevice UDID such as `00008130-…` → physical iPhone, `chromium-cdp-<port>` → Chromium app, and Android serial → Android. Use the same tool names on every platform.
 
 **Chromium (CDP) app** = any Chromium runtime exposing a Chrome DevTools Protocol endpoint: an Electron app (boot it with `boot-device` + `electronAppPath`), or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`. The latter is auto-discovered by `list-devices` on port `9222` plus anything in `ARGENT_CHROMIUM_PORTS`. The same describe/tap/swipe/keyboard/screenshot surface drives all of them.
 
@@ -19,9 +19,11 @@ For platform-specific caveats (Metro `adb reverse`, locked-screen describe error
 
 ## 1. Before You Start
 
-If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
+If you delegate device tasks to sub-agents, make sure they have MCP permissions.
 
 Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `android`, or `chromium`); booted/ready devices come first. Pick the first entry that matches the platform you need — if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly — no `boot-device` needed. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
+
+For a physical iPhone, first run `argent enable physical-ios-devices`. Keep the connected phone unlocked and trusted with Developer Mode enabled. `boot-device` does not reboot the phone; it prepares the signed WebDriverAgent session. The first call may take several seconds, while later controls reuse it.
 
 **Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred — their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
 
@@ -32,7 +34,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`.
 4. **Tap a text field before typing**, then use `keyboard` to enter text.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
+6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. `native-describe-screen` is simulator-only; physical iPhones use the exact nested XCTest hierarchy returned by `describe`.
 
 ## 3. Opening Apps
 
@@ -339,4 +341,7 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 
 ### iOS
 
-_(no iOS-only gotchas collected here yet — add them as they come up)_
+- A `kind: "device"` entry is a physical iPhone. Enable it with `argent enable physical-ios-devices`, then keep it connected, unlocked, trusted, and in Developer Mode.
+- Physical controls, screenshots, keyboard input, accessibility, app lifecycle, unified logs, and native profiling use the same tools as a simulator.
+- XCTest does not expose App Switcher on a physical phone. Home, Power, volume, and Action buttons are supported; Power may require manual passcode unlock afterward.
+- Injected `native-*` UIKit/React inspection is simulator-only. On a physical phone use `describe`, screenshots, `device-logs-*`, debugger tools for debuggable apps, and `native-profiler-*`.

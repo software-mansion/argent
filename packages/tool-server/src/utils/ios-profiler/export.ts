@@ -1,4 +1,5 @@
 import * as path from "path";
+import { writeFile } from "node:fs/promises";
 import { execFileAsyncWithTimeout } from "./run-with-timeout";
 
 /**
@@ -123,7 +124,10 @@ async function tryCpuExportFallback(
   return false;
 }
 
-export async function exportIosTraceData(traceFile: string): Promise<{
+export async function exportIosTraceData(
+  traceFile: string,
+  options: { tolerateMissingHangs?: boolean } = {}
+): Promise<{
   files: Record<string, string | null>;
   diagnostics: ExportDiagnostics;
 }> {
@@ -194,6 +198,14 @@ export async function exportIosTraceData(traceFile: string): Promise<{
       ]);
       exportedFiles[key] = outPath;
     } catch (err) {
+      if (key === "hangs" && options.tolerateMissingHangs) {
+        // Device-wide Time Profiler omits the potential-hangs node entirely
+        // when no hang occurred, and xctrace reports that as a failed xpath.
+        // It is a valid zero-result capture, not an analysis failure.
+        await writeFile(outPath, "<?xml version=\"1.0\"?><trace-query-result/>\n", "utf8");
+        exportedFiles[key] = outPath;
+        continue;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       diagnostics.errors[key] = msg;
       exportedFiles[key] = null;

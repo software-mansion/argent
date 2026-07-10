@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { resolveDevice } from "../../utils/device-info";
+import { isPhysicalIos, resolveDevice } from "../../utils/device-info";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
+import { physicalIosAutomationRef } from "../../blueprints/physical-ios-automation";
 import type { OpenUrlResult, OpenUrlServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
@@ -42,6 +43,9 @@ Returns { opened, url }. Fails if no app is registered to handle the URI (iOS/An
     const device = resolveDevice(params.udid);
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
+    }
+    if (isPhysicalIos(device)) {
+      return { physicalIos: physicalIosAutomationRef(device) };
     }
     return {};
   },

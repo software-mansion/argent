@@ -237,14 +237,11 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
     if (device.kind === "device") {
       // ax-service uses `xcrun simctl spawn`, which only works on simulators.
-      // Physical iPhones are driven over CoreDevice; their in-app accessibility
-      // tree is Apple-gated (the axAuditDaemon rejects trusted/AppleInternal
-      // callers — see describe/platforms/ios/index.ts). `describe` handles a
-      // physical device itself (via the SpringBoard home-screen layout) and
-      // never resolves ax-service for it — this is a backstop for any other
-      // direct ax-service resolution.
+      // Physical iPhones expose their live XCTest tree through WebDriverAgent.
+      // `describe` routes there directly; this is a backstop for a wrong
+      // ax-service resolution.
       throw new FailureError(
-        `${AX_SERVICE_NAMESPACE} is iOS-simulator-only. The physical device '${device.id}' is driven over CoreDevice; its in-app accessibility tree is Apple-gated, so use describe (SpringBoard home screen) or screenshot instead.`,
+        `${AX_SERVICE_NAMESPACE} is iOS-simulator-only. The physical device '${device.id}' is driven over WebDriverAgent; use describe for its live XCTest tree instead.`,
         {
           error_code: FAILURE_CODES.AX_PHYSICAL_DEVICE_UNSUPPORTED,
           failure_stage: "ax_service_factory_platform",
