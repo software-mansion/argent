@@ -503,7 +503,7 @@ export function extractToolsFromSource(src, filePath = "<source>") {
         // `${`, and an escaped `\${` or `$\{` stays the literal text it renders as.
         const rest = value.slice(valueMatch[0].length);
         const hasInterpolation =
-          delim === "`" && /\$\{/.test(valueMatch[1].replace(/\\[\s\S]/g, " "));
+          delim === "`" && /\$\{/.test(valueMatch[1].replace(/\\[\s\S]/g, " "));
         if (literalIsWholeValue(rest) && !hasInterpolation) {
           // Render the runtime (cooked) text: template literals first normalize
           // line terminators (`\r\n` / `\r` cook to `\n` per spec - relevant on
