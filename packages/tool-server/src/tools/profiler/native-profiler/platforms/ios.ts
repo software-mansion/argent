@@ -362,15 +362,14 @@ async function registerStartupNotify(name: string): Promise<NotifyHandle | null>
   return null;
 }
 
+// Per-capture descriptors (appProcess, traceFile, cpuFilterPid, capture mode)
+// are stamped only after a SUCCESSFUL start, so a failed attempt has nothing
+// to reset beyond the spawned process handles — the previous capture's
+// still-loaded exports stay fully described for analyze (trace name,
+// all-processes filter PID, capture mode).
 function resetStartState(api: NativeProfilerSessionApi): void {
   api.capturePid = null;
   api.captureProcess = null;
-  api.traceFile = null;
-  api.appProcess = null;
-  api.cpuFilterPid = null;
-  // Only the in-flight mode: api.mallocStackLogging still describes the
-  // previous capture's exportedFiles, which a failed start leaves in place.
-  api.recordingMallocStackLogging = null;
 }
 
 export function handleXctraceExit(
@@ -561,19 +560,6 @@ export async function startNativeProfilerIos(
   api.lastExitInfo = null;
 
   const attemptStart = async (): Promise<{ child: ChildProcess; pid: number }> => {
-    api.appProcess = appProcess;
-    api.traceFile = outputFile;
-    // Record the in-flight capture's mode; stop copies it into
-    // api.mallocStackLogging when it writes exportedFiles, so the report layer
-    // names the mode of the data it actually renders — stamping the session's
-    // report-facing flag HERE would re-label the previous capture's
-    // still-loaded exports/parsedData with the new capture's mode.
-    api.recordingMallocStackLogging = useMallocStackLogging;
-    // Null for the device strategy (already scoped by --attach) and for a
-    // malloc_stack_logging cold launch (scoped by --launch on --device); the app
-    // PID only for the host-wide all-processes fallback, to filter the samples.
-    api.cpuFilterPid = strategy ? strategy.cpuFilterPid(detected!) : null;
-
     const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
     const notify = await registerStartupNotify(notifyName);
 
@@ -700,6 +686,20 @@ export async function startNativeProfilerIos(
   }
   const { child: xctraceProcess, pid: xctracePid } = started;
 
+  // Stamp the per-capture descriptors only now, on SUCCESS: a failed start
+  // must leave the previous capture's still-loaded exports fully described
+  // for analyze (trace name, all-processes filter PID, capture mode).
+  api.appProcess = appProcess;
+  api.traceFile = outputFile;
+  // The in-flight capture's mode; stop copies it into api.mallocStackLogging
+  // when it writes exportedFiles, so the report layer names the mode of the
+  // data it actually renders — stamping the report-facing flag here would
+  // re-label the previous capture's still-loaded exports/parsedData.
+  api.recordingMallocStackLogging = useMallocStackLogging;
+  // Null for the device strategy (already scoped by --attach) and for a
+  // malloc_stack_logging cold launch (scoped by --launch on --device); the app
+  // PID only for the host-wide all-processes fallback, to filter the samples.
+  api.cpuFilterPid = strategy ? strategy.cpuFilterPid(detected!) : null;
   api.profilingActive = true;
   api.wallClockStartMs = Date.now();
   api.recordingTimeout = setTimeout(() => {

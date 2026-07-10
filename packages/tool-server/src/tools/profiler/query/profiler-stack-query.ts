@@ -269,14 +269,13 @@ export function renderLeakStacksIos(
   topN: number,
   mallocStackLogging?: boolean | null
 ): string {
-  // Same capture-mode contract as the analyze/combined reports: use the
-  // session's actual malloc_stack_logging flag when known; when unknown (a
-  // session restored from disk), infer it from the FULL capture — any
-  // attributed group means the app was launched under malloc stack logging
-  // (the only way a responsible frame is recorded). Inference deliberately
-  // ignores the object_type filter: filtering out every attributed group must
-  // not flip the note back to blaming `--attach`.
-  const mallocWasOn = mallocStackLogging ?? memoryLeaks.some((l) => l.attributed);
+  // Same capture-mode contract as the analyze/combined reports: attribution
+  // evidence decides first — any attributed group in the FULL capture (never
+  // the object_type-filtered slice) proves the target process ran under
+  // malloc stack logging, however it was launched, so even an explicit
+  // attach-mode flag must not claim "no malloc-stack history" above a row
+  // with a resolved frame. The flag only lifts the zero-attributed case.
+  const mallocWasOn = memoryLeaks.some((l) => l.attributed) || mallocStackLogging === true;
   let filtered = memoryLeaks;
   if (objectTypeFilter) {
     filtered = memoryLeaks.filter((l) =>

@@ -74,6 +74,25 @@ describe("leak attribution rendering", () => {
     expect(res.report).toContain("ran with malloc stack logging enabled");
   });
 
+  it("attribution evidence outranks an explicit attach flag", async () => {
+    // A responsible frame exists ONLY if the target process ran under malloc
+    // stack logging — even when argent itself attached (the app can be launched
+    // with the diagnostic externally, e.g. an Xcode scheme). An attributed
+    // table above a "no malloc-stack history" note would contradict itself, so
+    // attributed>0 must win over mallocStackLogging: false.
+    const res = await renderNativeProfilerReport({
+      payload: payload([
+        leak(true, "hermes::vm::JSTypedArrayBase::createBuffer(...)", "hermes"),
+        leak(false, "<Call stack limit reached>"),
+      ]),
+      traceFile: null,
+      mallocStackLogging: false,
+    });
+    expect(res.report).toContain("malloc stack logging was active");
+    expect(res.report).not.toContain("--attach");
+    expect(res.report).not.toContain("stack logging enabled at launch");
+  });
+
   it("keeps the --attach hint when the capture mode is explicitly attach", async () => {
     const res = await renderNativeProfilerReport({
       payload: payload([leak(false, "<Call stack limit reached>")]),

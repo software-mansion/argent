@@ -540,14 +540,14 @@ function renderFullReport(
  * full analyze report above and the combined React × native report — one
  * source so the wording can't silently diverge between the two.
  *
- * `mallocStackLogging` is the actual capture mode when known (a live session
- * carries it from native-profiler-start). Pass null/undefined when unknown —
- * a session restored from disk has no capture-mode sidecar — and the mode is
- * inferred from the attributed count instead: a responsible frame is only
- * ever recorded when the app was launched under malloc stack logging, so
- * attributed leaks present ⇒ the flag was on. The inference is silent about
- * the one case it cannot see (a malloc capture that attributed nothing), which
- * is exactly why callers that know the mode must pass it.
+ * `mallocStackLogging` is argent's capture mode when known (stamped at stop,
+ * frozen into parsedData); pass null/undefined when unknown (a session
+ * restored from disk has no capture-mode sidecar). Attributed leaks are
+ * stronger evidence than the flag — a responsible frame is only ever recorded
+ * when the target process ran under malloc stack logging, however it was
+ * launched — so the flag matters only for the zero-attributed case: explicit
+ * `true` names the malloc capture that recorded nothing, anything else gets
+ * the `--attach` framing.
  */
 export function renderUnattributedLeaksNote(
   unattributedLeaks: MemoryLeak[],
@@ -556,20 +556,26 @@ export function renderUnattributedLeaksNote(
 ): string {
   const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
   const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
-  const mallocWasOn = mallocStackLogging ?? attributedCount > 0;
-  const hint = !mallocWasOn
-    ? `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
-      `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
-      `stack logging enabled at launch.`
-    : attributedCount > 0
+  // Attribution evidence decides FIRST: a responsible frame exists only if the
+  // target process itself ran under malloc stack logging — true even when
+  // argent attached (the app can be launched with the diagnostic externally,
+  // e.g. via an Xcode scheme), so an explicit `false` capture flag must not
+  // produce a "no malloc-stack history" claim right above an attributed table.
+  // The flag only disambiguates the zero-attributed case.
+  const hint =
+    attributedCount > 0
       ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
         `groups carry no allocation backtrace (freed-region reuse, truncated stack logs, or ` +
         `allocations outside the instrumented malloc zones) and are most likely benign system ` +
         `allocations rather than confirmed app leaks.`
-      : `This capture ran with malloc stack logging enabled, yet none of these leaks carry an allocation ` +
-        `backtrace — the allocator recorded no usable stack for them (freed-region reuse, truncated stack ` +
-        `logs, or allocations outside the instrumented malloc zones). Most likely benign system allocations ` +
-        `rather than confirmed app leaks; re-running with malloc stack logging again is unlikely to attribute them.`;
+      : mallocStackLogging === true
+        ? `This capture ran with malloc stack logging enabled, yet none of these leaks carry an allocation ` +
+          `backtrace — the allocator recorded no usable stack for them (freed-region reuse, truncated stack ` +
+          `logs, or allocations outside the instrumented malloc zones). Most likely benign system allocations ` +
+          `rather than confirmed app leaks; re-running with malloc stack logging again is unlikely to attribute them.`
+        : `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
+          `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
+          `stack logging enabled at launch.`;
   return (
     `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
     `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +

@@ -180,6 +180,54 @@ describe("native-profiler-start malloc_stack_logging", () => {
     expect(efsArgs.some((a) => a.includes("get_app_container"))).toBe(true);
   });
 
+  it("a failed start leaves the previous capture's descriptors fully intact", async () => {
+    // Per-capture descriptors (appProcess, traceFile, cpuFilterPid, capture
+    // mode) are stamped only on a SUCCESSFUL start. A failed attempt must not
+    // clobber them: the previous capture's exports are still loaded, and
+    // analyze pairs them with these fields — nulling cpuFilterPid would render
+    // a host-wide all-processes capture unfiltered, and nulling traceFile
+    // would strip the report's label and file.
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    vi.doMock("child_process", () => ({
+      spawn: spawnFn,
+      execSync: execSyncFn,
+      execFile: vi.fn(),
+      execFileSync: execFileSyncFn,
+    }));
+    vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+      getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+      listenForDarwinNotification: vi.fn(() => {
+        throw new Error("notifyutil unavailable in tests");
+      }),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+      waitForXctraceReady: vi.fn(async () => {
+        throw new Error("xctrace failed to start");
+      }),
+    }));
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    api.appProcess = "PrevApp";
+    api.traceFile = "/tmp/argent-profiler-cwd/previous.trace";
+    api.cpuFilterPid = 777; // previous capture ran via the all-processes fallback
+    api.mallocStackLogging = true;
+    api.exportedFiles = { cpu: "/tmp/prev_cpu.xml", hangs: null, leaks: null };
+
+    await expect(
+      startNativeProfilerIos(api, { device_id: "DEVICE-UDID", app_process: "MyApp" })
+    ).rejects.toThrow(/xctrace failed to start/);
+
+    expect(api.appProcess).toBe("PrevApp");
+    expect(api.traceFile).toBe("/tmp/argent-profiler-cwd/previous.trace");
+    expect(api.cpuFilterPid).toBe(777);
+    expect(api.mallocStackLogging).toBe(true);
+    expect(api.capturePid).toBeNull();
+    expect(api.captureProcess).toBeNull();
+  });
+
   it("stamps only the in-flight capture mode — never the report-facing flag", async () => {
     // api.mallocStackLogging describes the data in exportedFiles/parsedData
     // and is stamped at STOP; a new start stamping it directly would re-label

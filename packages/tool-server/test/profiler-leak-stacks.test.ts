@@ -120,4 +120,14 @@ describe("renderLeakStacksIos — capture-mode-aware unattributed note", () => {
     const out = renderLeakStacksIos([noise(0)], undefined, 10, false);
     expect(out).toContain("xctrace --attach");
   });
+
+  it("attribution evidence outranks an explicit attach flag", () => {
+    // The flag says how ARGENT captured; a recorded frame proves the target
+    // process itself ran under malloc stack logging (e.g. launched with the
+    // Xcode scheme diagnostic, then attached to). The note must not claim "no
+    // malloc-stack history" right above a row with a full responsible frame.
+    const out = renderLeakStacksIos([ATTRIBUTED_SMALL, noise(0)], undefined, 10, false);
+    expect(out).toContain("unattributed");
+    expect(out).not.toContain("--attach");
+  });
 });

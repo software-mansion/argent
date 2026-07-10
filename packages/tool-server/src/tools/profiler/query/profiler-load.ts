@@ -317,6 +317,27 @@ async function loadNativeSession(
   appProcessOverride?: string
 ): Promise<string> {
   assertSafeSessionId(sessionId);
+  // Loading replaces the per-device session's capture state (traceFile,
+  // exportedFiles, parsedData, …). With a recording in flight that would wedge
+  // the session — stop's gate needs traceFile (which the load nulls) while
+  // start refuses with SESSION_ALREADY_RUNNING — and orphan the live capture
+  // unexportable. With a timed-out/crashed capture awaiting recovery, it would
+  // make stop's partial-trace export unreachable (the .trace bundle cannot be
+  // re-ingested; only the raw_*.xml that export writes are loadable). Refuse
+  // until the capture is stopped.
+  if (api.profilingActive || api.recordingTimedOut || api.recordingExitedUnexpectedly) {
+    throw new FailureError(
+      api.profilingActive
+        ? `A native profiling session is recording on this device. Run native-profiler-stop first, then retry profiler-load.`
+        : `A native profiling capture on this device ended unexpectedly and its partial trace has not been exported yet. Run native-profiler-stop first (it recovers the partial trace), then retry profiler-load.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
+        failure_stage: "profiler_load_native_session",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
   // Android .pftrace first — the platform field on the resolved session API
   // tells us which shape to load. If the platform is android but the .pftrace
   // is missing we fall through to the iOS XML path so the user gets the

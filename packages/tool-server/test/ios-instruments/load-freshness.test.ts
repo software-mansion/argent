@@ -149,4 +149,58 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     expect(report).not.toContain("previous-live.trace");
     expect(reportFile).toBeNull();
   });
+
+  it("refuses load_native while a recording is in flight (residue clearing would wedge the session)", async () => {
+    // The residue clearing above nulls traceFile — with a live capture that
+    // would make native-profiler-stop throw NO_ACTIVE_SESSION (its gate needs
+    // traceFile) while native-profiler-start throws SESSION_ALREADY_RUNNING:
+    // wedged both ways, and the in-flight capture is orphaned unexportable.
+    // Loading must refuse up front and leave the live session untouched.
+    const api = await buildIosSession();
+    api.profilingActive = true;
+    api.capturePid = 12345;
+    api.captureProcess = { kill: vi.fn(), pid: 12345 } as never;
+    api.traceFile = join(tempDir, "in-flight.trace");
+
+    const cpuXml = join(tempDir, `native-profiler-${SESSION_ID}_raw_cpu.xml`);
+    await writeFile(cpuXml, "<trace-query-result></trace-query-result>", "utf8");
+
+    await expect(
+      profilerLoadTool.execute({ session: api } as never, {
+        mode: "load_native",
+        session_id: SESSION_ID,
+        port: 8081,
+        device_id: "ios-sim",
+      })
+    ).rejects.toThrow(/native-profiler-stop first/);
+
+    expect(api.traceFile).toBe(join(tempDir, "in-flight.trace"));
+    expect(api.profilingActive).toBe(true);
+  });
+
+  it("refuses load_native while a crashed/timed-out capture awaits recovery export", async () => {
+    // recordingTimedOut / recordingExitedUnexpectedly + traceFile is the state
+    // stop's recovery branch exists for (export the partial trace). A load
+    // nulling traceFile would make that export unreachable forever — the raw
+    // .trace bundle cannot be re-ingested by profiler-load.
+    const api = await buildIosSession();
+    api.recordingExitedUnexpectedly = true;
+    api.lastExitInfo = { code: 137, signal: "SIGKILL" };
+    api.traceFile = join(tempDir, "crashed.trace");
+
+    const cpuXml = join(tempDir, `native-profiler-${SESSION_ID}_raw_cpu.xml`);
+    await writeFile(cpuXml, "<trace-query-result></trace-query-result>", "utf8");
+
+    await expect(
+      profilerLoadTool.execute({ session: api } as never, {
+        mode: "load_native",
+        session_id: SESSION_ID,
+        port: 8081,
+        device_id: "ios-sim",
+      })
+    ).rejects.toThrow(/native-profiler-stop first/);
+
+    expect(api.traceFile).toBe(join(tempDir, "crashed.trace"));
+    expect(api.recordingExitedUnexpectedly).toBe(true);
+  });
 });
