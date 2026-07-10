@@ -296,9 +296,10 @@ function rmEmptyDir(dirPath: string): void {
 
 /**
  * Read a JSON-with-Comments file (line + block comments + trailing commas).
- * Used by callers that need to inspect Zed's settings.json without the
- * `JSON.parse` failure on user-authored comments. For mutations go through
- * {@link editJsoncFile} instead — it preserves comments on write.
+ * Used across the MCP-config adapters to inspect editor config files that may
+ * be JSONC (Zed, Cursor, VS Code, Kiro, ...) without `JSON.parse` failing on a
+ * user-authored comment. For mutations go through {@link editJsoncFile}
+ * instead — it preserves comments on write.
  */
 export function readJsonc(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
@@ -319,12 +320,14 @@ export function readJsonc(filePath: string): Record<string, unknown> {
  *
  * Pass `undefined` as `value` to delete the key. Empty ancestor objects are
  * pruned, and if the document collapses to `{}` the file (and an empty
- * parent directory) is removed — mirroring the JSON `writeJsonOrRemove`
- * semantics used elsewhere.
+ * parent directory) is removed.
  *
- * Use this for editor settings files that are JSONC (Zed). For pure JSON
- * configs go through {@link writeJson} instead — JSONC.modify is overhead
- * when there are no comments to preserve.
+ * This is the shared write path for every MCP-config adapter — including the
+ * strict-JSON ones (Claude's `.mcp.json`, Windsurf, Gemini). JSONC is a
+ * superset of JSON, so routing them here is safe and keeps every argent entry
+ * on one comment- and foreign-server-preserving path. {@link writeJson}
+ * remains for whole-document rewrites that must never delete the file (e.g.
+ * `~/.claude.json`, which holds the user's OAuth state).
  */
 export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unknown): void {
   const { text: initial, hadBom, wasEmpty } = readJsoncFileRaw(filePath);

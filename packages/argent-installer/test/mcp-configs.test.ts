@@ -1907,6 +1907,35 @@ describe("findConfiguredAdapterScopes", () => {
     expect(result.map((r) => `${r.adapter.name}:${r.scope}`)).toContain("Claude Code:global");
     expect(result.map((r) => r.adapter.name)).not.toContain("Hermes");
   });
+
+  it("detects a JSONC (commented) config that strict JSON.parse would have skipped", () => {
+    // The behavior transition this fix is built around: hasArgentEntry reads
+    // through readJsonc, so a comment-carrying config — which the old strict
+    // readJson parsed to {} and `update` silently skipped — is now seen as
+    // configured. A regression back to readJson would make this file parse to
+    // {}, drop the argent entry, and quietly stop refreshing these users (and
+    // stop reaching their allowlist). No other fixture here carries a comment,
+    // so this is the one that pins it.
+    const projectRoot = path.join(tmpDir, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const configPath = cursor.globalPath()!;
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    // A line comment AND a trailing comma — both make strict JSON.parse throw.
+    fs.writeFileSync(
+      configPath,
+      `{\n  // my Cursor MCP config, hand-edited\n  "mcpServers": {\n    "argent": { "command": "argent", "args": ["mcp"] },\n  }\n}`
+    );
+
+    // Guard: the fixture really is invalid strict JSON, so the strict path
+    // would have returned {} and reported "not configured".
+    expect(() => JSON.parse(fs.readFileSync(configPath, "utf8"))).toThrow();
+
+    expect(cursor.hasArgentEntry(configPath)).toBe(true);
+    const result = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
+    expect(result.map((r) => `${r.adapter.name}:${r.scope}`)).toContain("Cursor:global");
+  });
 });
 
 // ── Portability: generated configs must not embed absolute home paths ───────
