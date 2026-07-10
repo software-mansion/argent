@@ -60,9 +60,11 @@ const isMcpServer = command === "mcp";
 
 installFatalHandlers({ isMcpServer });
 
-// One installer row of the command table: the shared one-line summary from
-// INSTALLER_COMMAND_META plus its indented detail lines. Sourcing both from the
-// meta keeps this table and the per-command `--help` from drifting apart.
+// One installer row of the command table: the command's one-line summary plus
+// its indented detail lines, both from INSTALLER_COMMAND_META. The summary is
+// shared with the per-command `--help`, so the two can't drift; the details
+// are table-only prose kept in the meta so each command's help text lives in
+// one place.
 function installerHelpEntry(command: InstallerCommand): string {
   const meta = INSTALLER_COMMAND_META[command];
   const details = (meta.details ?? []).map((line) => `\n              ${line}`).join("");

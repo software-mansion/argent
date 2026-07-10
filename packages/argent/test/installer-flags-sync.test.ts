@@ -36,10 +36,19 @@ const INTERNAL_FLAGS: Record<keyof typeof PARSER_SOURCES, readonly string[]> = {
 };
 
 const FLAG_PARSE_PATTERNS = [
-  /args\.includes\("([^"]+)"\)/g,
+  /(?<![\w.$])args\.includes\("([^"]+)"\)/g,
   /extractFlag\(args,\s*"([^"]+)"\)/g,
   /arg\??\s*===\s*"(-[^"]+)"/g,
   /arg\??\.startsWith\("(-[^"]+)="\)/g,
+];
+
+// The idioms that consume the NEXT argv token: `extractFlag(args, "--x")` and
+// the `arg === "--x"` lookahead branch (which reads `args[i + 1]`). The
+// `--x=value` startsWith form deliberately does NOT count — it is inline and
+// consumes nothing, so its presence must not certify a flag as value-taking.
+const VALUE_CONSUMING_PATTERNS = [
+  /extractFlag\(args,\s*"(-[^"]+)"\)/g,
+  /arg\??\s*===\s*"(-[^"]+)"/g,
 ];
 
 function readSources(command: keyof typeof PARSER_SOURCES): string {
@@ -74,34 +83,29 @@ describe("installer help options stay in sync with the real parsers", () => {
     });
   }
 
-  it("every value-taking flag really consumes a value in the parser", () => {
-    // installerHelpRequested treats a bareword `help` after one of these as
-    // the flag's value rather than a help request — so each entry must match a
-    // parser site that reads the following token (extractFlag or the
-    // `--flag <value>` / `--flag=<value>` lookahead pair).
-    for (const command of ["init", "update", "uninstall"] as const) {
+  for (const command of ["init", "update", "uninstall"] as const) {
+    it(`\`${command}\`'s VALUE_TAKING_FLAGS mirror the parser's token-consuming sites exactly`, () => {
+      // installerHelpRequested treats a bareword `help` after one of these as
+      // the flag's value rather than a help request, so the list must match
+      // the parser in BOTH directions: an entry the parser doesn't consume a
+      // token for would wrongly forward `--x help` to the installer, and a
+      // token-consuming parser flag missing here would wrongly swallow its
+      // `help` value as a help request.
       const source = readSources(command);
-      for (const flag of VALUE_TAKING_FLAGS[command]) {
-        const consumesValue =
-          source.includes(`extractFlag(args, "${flag}")`) || source.includes(`"${flag}="`);
-        expect(consumesValue, `${command}: ${flag} must consume a value`).toBe(true);
+      const consuming = new Set<string>();
+      for (const pattern of VALUE_CONSUMING_PATTERNS) {
+        for (const match of source.matchAll(pattern)) {
+          consuming.add(match[1]!);
+        }
       }
-    }
-  });
+      expect([...consuming].sort()).toEqual([...VALUE_TAKING_FLAGS[command]].sort());
+    });
+  }
 
   it("aliases defer to a target whose value-taking flags they share", () => {
     // The dispatcher forwards `install` to init and `remove` to uninstall, so
     // their bareword-help semantics must match the target's.
     expect(VALUE_TAKING_FLAGS.install).toEqual(VALUE_TAKING_FLAGS.init);
     expect(VALUE_TAKING_FLAGS.remove).toEqual(VALUE_TAKING_FLAGS.uninstall);
-  });
-
-  it("value-taking flags are a subset of the flags the parser consults", () => {
-    for (const command of ["init", "update", "uninstall"] as const) {
-      const parsed = parsedFlags(command);
-      for (const flag of VALUE_TAKING_FLAGS[command]) {
-        expect(parsed, `${command}: ${flag}`).toContain(flag);
-      }
-    }
   });
 });

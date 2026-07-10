@@ -241,8 +241,15 @@ describe("cli dispatcher: non-installer commands and top-level arms", () => {
     const { exitCode, stdout } = await runCli(["--help"], marker);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Usage: argent <command> [options]");
-    // The installer rows come from INSTALLER_COMMAND_META (single source).
-    expect(stdout).toContain("Initialize argent in the current workspace");
+    // Pin the META-sourced rendering, not just any installer text: the summary
+    // wording unique to INSTALLER_COMMAND_META (`+ rules`), the indented detail
+    // lines, and an alias row. A revert to a hand-coded table (or dropping the
+    // details rendering in installerHelpEntry) fails here.
+    expect(stdout).toContain(
+      "Initialize argent in the current workspace (MCP server + skills + rules)"
+    );
+    expect(stdout).toContain("(--global [default] installs on PATH; --local commits a");
+    expect(stdout).toContain("Alias for init");
     expect(fs.existsSync(marker)).toBe(false);
   });
 
