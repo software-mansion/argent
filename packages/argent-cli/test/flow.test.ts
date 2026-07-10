@@ -125,14 +125,18 @@ describe("argent flow run", () => {
       )
     ).rejects.toThrow("process.exit:0");
 
-    expect(toolsClientMock.callTool).toHaveBeenCalledWith("flow-execute", {
-      name: "checkout",
-      project_root: process.cwd(),
-      prerequisiteAcknowledged: true,
-      device: "SIM-1",
-      platform: "ios",
-      updateBaselines: true,
-    });
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith(
+      "flow-execute",
+      {
+        name: "checkout",
+        project_root: process.cwd(),
+        prerequisiteAcknowledged: true,
+        device: "SIM-1",
+        platform: "ios",
+        updateBaselines: true,
+      },
+      { onProgress: expect.any(Function) }
+    );
     expect(logs.join("\n")).toContain("PASS — 1 passed, 0 failed, 0 errored, 0 skipped");
   });
 

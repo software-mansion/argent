@@ -166,10 +166,7 @@ export function renderArtifactLines(report: FlowReport): string[] {
  * copy error warns on stderr and leaves the temp path in place; artifact export
  * must never change a run's verdict.
  */
-export async function exportFailureArtifacts(
-  report: FlowReport,
-  outputDir: string
-): Promise<void> {
+export async function exportFailureArtifacts(report: FlowReport, outputDir: string): Promise<void> {
   for (const s of report.steps) {
     if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
     const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);

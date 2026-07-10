@@ -6,7 +6,7 @@ import {
   renderArtifactLines,
   type FlowReport,
   type StepReport,
-} from "../src/flow";
+} from "../src/flow.js";
 
 function mkReport(steps: StepReport[], overrides: Partial<FlowReport> = {}): FlowReport {
   // Mirror the runner's summarize(): echo narration is not a counted step.
