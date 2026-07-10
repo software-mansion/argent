@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
+import { NON_INJECTABLE_NATIVE_WARNING } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/describe";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
@@ -172,8 +173,11 @@ describe("describe tool", () => {
       elements: [],
     });
 
+    // An injectable (non-Apple) app: the native fallback queries it by the
+    // provided bundleId. (Apple system apps are gated off the native path — see
+    // the non-injectable test below.)
     const nativeApi = makeNativeDevtoolsApi({
-      connectedBundleIds: ["com.apple.Preferences"],
+      connectedBundleIds: ["com.example.settings"],
       describeScreenResult: {
         screenFrame: { x: 0, y: 0, width: 440, height: 956 },
         elements: [
@@ -194,7 +198,7 @@ describe("describe tool", () => {
 
     const result = await tool.execute(
       {},
-      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.settings" }
     );
     expect(result.source).toBe("native-devtools");
     expect(result.description).toMatch(/AXButton\s+"General"/);
@@ -253,6 +257,127 @@ describe("describe tool", () => {
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
     expect(elementLineCount(result.description)).toBe(0);
+  });
+
+  it("does NOT return should_restart for a non-injectable Apple system app (no restart loop)", async () => {
+    // com.apple.* apps can never load the injected dylib, so requiresAppRestart
+    // is always true for them in an unmocked run. Without an injectability gate,
+    // describe returns should_restart:true → the agent restarts the system app →
+    // AX is still empty → describe again → unbounded loop. The fallback must
+    // instead return the (empty) AX result with a screenshot hint.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      requiresRestart: true, // real behavior: a com.apple.* app never connects
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(elementLineCount(result.description)).toBe(0);
+    expect(result.hint).toMatch(/system app/i);
+    // Reached only after describe's own AX path returned empty, so this hint
+    // leads with `screenshot` rather than re-recommending `describe`. It still
+    // carries the same native-* dead-end warning verbatim as the precheck throw
+    // and the native-devtools-status description.
+    expect(result.hint).toMatch(/`screenshot`/);
+    expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
+  });
+
+  it("keeps the degraded re-boot hint for a com.apple.* app when the ax-service is degraded", async () => {
+    // When the sim was not booted through argent, the ax-service is degraded and
+    // returns an empty tree, so describe reaches the non-injectable branch. Here
+    // the empty tree is a fixable sim-config problem, not proof the system app is
+    // undescribable: a proper `boot-device force=true` may let the ax-service
+    // read this app's full tree. So the terminal "use screenshot" hint must NOT
+    // clobber the re-boot guidance — otherwise the agent never learns its sim is
+    // degraded (which affects every describe call). should_restart still stays
+    // unset, so the restart loop remains broken.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      requiresRestart: true,
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(elementLineCount(result.description)).toBe(0);
+    // The degraded re-boot guidance wins over the terminal screenshot hint.
+    expect(result.hint).toMatch(/boot-device/i);
+    expect(result.hint).not.toContain(NON_INJECTABLE_NATIVE_WARNING);
+  });
+
+  it("returns the terminal hint for an explicit system app even when native-devtools is unavailable", async () => {
+    // Injectability of an explicit bundleId is static, so the terminal hint
+    // must not depend on the native-devtools service resolving (a downed
+    // ios-remote tunnel or a dispose race would otherwise swallow it into the
+    // generic catch and return no guidance at all).
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    // No native devtools service provided — resolveService throws for it.
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
+  });
+
+  it("returns the real AX tree for a non-injectable system app when AX is non-empty (early return, before the gate)", async () => {
+    // The common case for a com.apple.* app: its accessibility tree is NON-empty
+    // (Settings et al. expose a rich AX tree). describe must return that real
+    // tree via the `tree.children.length > 0` early return, which is reached
+    // BEFORE the injectability gate — the gate only guards the empty-tree native
+    // fallback. If the gate were ever hoisted above the early return it would
+    // silently replace a real system-app tree with the terminal screenshot hint;
+    // the other non-injectable tests use an empty tree and would not catch that,
+    // so this test is the guard for the populated-tree path.
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          label: "General",
+          frame: { x: 0.045, y: 0.337, width: 0.909, height: 0.046 },
+          traits: ["button"],
+        },
+      ],
+    });
+    // requiresRestart:true mirrors a real com.apple.* app (it never connects);
+    // it must stay irrelevant here because the non-empty tree returns before the
+    // native fallback that would ever consult it.
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      requiresRestart: true,
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.description).toMatch(/AXButton\s+"General"/);
+    expect(elementLineCount(result.description)).toBe(1);
+    // The real tree must be returned untouched, with no terminal non-injectable
+    // hint clobbering it — `hint` is the field the screenshot guidance lands in.
+    expect(result.hint).toBeUndefined();
   });
 
   it("returns empty AX result when native-devtools is unavailable", async () => {
