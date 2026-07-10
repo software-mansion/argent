@@ -66,14 +66,24 @@ function captureWarnings(fn) {
 //   - nonStatic: the rendered text cannot be read statically - a non-literal
 //     initializer (concatenation, interpolation, method call, const reference,
 //     `as const`), a shorthand / getter / method `description` member, a
-//     dynamic computed key, or a spread sibling that may carry or override the
-//     description at runtime.
+//     dynamic computed key, a spread written AFTER the description (it may
+//     override it at runtime; one before it cannot), a spread with no explicit
+//     description at all (it may carry one), or a getter/method `id` beside a
+//     description.
 //   - misordered: a plain-literal description written BEFORE the id - the
 //     extractor's scan is forward-only and cannot capture it.
-// The real tree must keep both buckets empty. Ids with no description-ish
-// member at all (nested payload keys, descriptionless tools) stay out of the
-// emitted set by design (the extractor warn-skips them), and dynamic ids
-// (const references, interpolated templates) are out of scope on both sides.
+// The real tree must keep both buckets empty.
+//
+// The policy buckets apply only to objects that could BE tool definitions: an
+// object literal reached as (part of) another object literal's property value
+// is data (a payload, example, or config fragment - no real tool is written
+// that way), so demanding "make your description static" of it would be a
+// false red. Equality mirroring still covers nested data: an id-then-plain-
+// description data object is emitted by both sides alike. Ids with no
+// description-ish member at all (nested payload keys, descriptionless tools)
+// stay out of the emitted set by design (the extractor warn-skips them), and
+// dynamic ids (const references, shorthand, interpolated templates) are out of
+// scope on both sides.
 function unwrapExpression(node) {
   while (
     ts.isAsExpression(node) ||
@@ -102,6 +112,23 @@ function memberName(prop) {
   return null;
 }
 
+// True when the object literal is (part of) another object literal's property
+// value - possibly through array elements or as/satisfies/paren wrappers. Such
+// an object is data, not a tool-definition site.
+function isNestedDataValue(node) {
+  let cur = node.parent;
+  while (
+    cur &&
+    (ts.isArrayLiteralExpression(cur) ||
+      ts.isAsExpression(cur) ||
+      ts.isSatisfiesExpression(cur) ||
+      ts.isParenthesizedExpression(cur))
+  ) {
+    cur = cur.parent;
+  }
+  return cur !== undefined && ts.isPropertyAssignment(cur);
+}
+
 function oracleFromSource(src, fileName = "oracle.ts") {
   const sourceFile = ts.createSourceFile(fileName, src, ts.ScriptTarget.Latest, true);
   const tools = [];
@@ -111,22 +138,29 @@ function oracleFromSource(src, fileName = "oracle.ts") {
     if (ts.isObjectLiteralExpression(node)) {
       let id = null;
       let idIndex = -1;
+      let hasDynamicIdMember = false;
       let descIndex = -1;
       let descValue = null;
       let descIsPlain = false;
       let hasDescMember = false;
-      let hasSpread = false;
+      let lastSpreadIndex = -1;
       node.properties.forEach((prop, index) => {
         if (ts.isSpreadAssignment(prop)) {
-          hasSpread = true;
+          lastSpreadIndex = index;
           return;
         }
         const name = memberName(prop);
-        if (name === "id" && ts.isPropertyAssignment(prop)) {
-          const init = unwrapExpression(prop.initializer);
-          if (isStaticText(init)) {
-            id = init.text;
-            idIndex = index;
+        if (name === "id") {
+          if (ts.isPropertyAssignment(prop)) {
+            const init = unwrapExpression(prop.initializer);
+            if (isStaticText(init)) {
+              id = init.text;
+              idIndex = index;
+            }
+          } else if (ts.isGetAccessorDeclaration(prop) || ts.isMethodDeclaration(prop)) {
+            // A computed id the lexical extractor can never see; beside a
+            // description it would be a fully silent scan bypass.
+            hasDynamicIdMember = true;
           }
         }
         if (name === "description") {
@@ -141,22 +175,28 @@ function oracleFromSource(src, fileName = "oracle.ts") {
           }
         }
       });
+      const nested = isNestedDataValue(node);
       if (id !== null && hasDescMember) {
         if (descIsPlain && descIndex >= idIndex) {
+          // Mirrors the extractor, nested data included.
           tools.push({ name: id, description: descValue });
-        } else if (descIsPlain) {
-          misordered.push({ id, file: fileName });
-        } else {
-          nonStatic.push({ id, file: fileName });
+          if (!nested && lastSpreadIndex > descIndex) {
+            // Only a spread AFTER the description can override it at runtime.
+            nonStatic.push({ id, file: fileName });
+          }
+        } else if (!nested) {
+          if (descIsPlain) {
+            misordered.push({ id, file: fileName });
+          } else {
+            nonStatic.push({ id, file: fileName });
+          }
         }
-        if (hasSpread && descIsPlain) {
-          // A spread sibling may override the plain literal at runtime.
-          nonStatic.push({ id, file: fileName });
-        }
-      } else if (id !== null && hasSpread) {
+      } else if (!nested && id !== null && lastSpreadIndex >= 0) {
         // No explicit description, but the spread may carry one the extractor
         // (and this oracle) can't see - force it to be written explicitly.
         nonStatic.push({ id, file: fileName });
+      } else if (!nested && id === null && hasDynamicIdMember && hasDescMember) {
+        nonStatic.push({ id: "<dynamic id>", file: fileName });
       }
     }
     ts.forEachChild(node, visit);
@@ -683,6 +723,30 @@ test("a keyword-position regex (return /[\"']/) before a tool does not swallow i
   assert.deepEqual(warnings, []);
 });
 
+test("a keyword-NAMED property access before a slash is division, not a regex opener", () => {
+  // `counts.in / 2` and `i++ / 2` end in values; without the property-access
+  // and postfix checks the following `/` opened a fake regex that, combined
+  // with a second slash on the same line, desynchronized string lexing and
+  // could silently steal description text.
+  const src = `
+    export const t = defineTool({
+      id: "division-after-member-tool",
+      ratio: counts.in / total, path: "per/sec",
+      tally: i++ / 2, unit: "x/y",
+      description: "Real description after member and postfix division.",
+      handler: async () => {},
+    });
+  `;
+  const { result: tools, warnings } = captureWarnings(() =>
+    extractToolsFromSource(src, "fixture.ts")
+  );
+  assert.equal(
+    tools.find((t) => t.name === "division-after-member-tool")?.description,
+    "Real description after member and postfix division."
+  );
+  assert.deepEqual(warnings, []);
+});
+
 test("a nested template literal before a tool is skipped whole (interpolation included)", () => {
   // Without `\${...}` tracking, the inner template's opening backtick "closes"
   // the outer one, the apostrophe in it opens a fake string, and the following
@@ -894,8 +958,8 @@ test("the oracle flags description members it cannot read statically (shorthand,
       'defineTool({ id: "spread-tool", ...common, handler() {} });',
     ],
     [
-      "spread beside a plain description",
-      'defineTool({ id: "spread2-tool", ...common, description: "explicit", handler() {} });',
+      "spread AFTER a plain description (may override it)",
+      'defineTool({ id: "spread2-tool", description: "explicit", ...common, handler() {} });',
     ],
   ]) {
     const oracle = oracleFromSource(src);
@@ -904,6 +968,83 @@ test("the oracle flags description members it cannot read statically (shorthand,
       `${label}: expected the oracle to flag the shape as non-static`
     );
   }
+});
+
+test("a defaults-spread BEFORE the description is fine (it cannot override a later property)", () => {
+  // `{ ...commonDefaults, id, description }` is idiomatic; at runtime a
+  // preceding spread never overrides a later explicit property, so the tool is
+  // fully extractable and must NOT be flagged.
+  const src =
+    'defineTool({ ...commonDefaults, id: "defaults-tool", description: "Explicit and final.", handler() {} });';
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.equal(tools.find((t) => t.name === "defaults-tool")?.description, "Explicit and final.");
+  const oracle = oracleFromSource(src);
+  assert.deepEqual(oracle.nonStatic, [], "a preceding spread must not be flagged");
+  assert.deepEqual(oracle.tools, [{ name: "defaults-tool", description: "Explicit and final." }]);
+});
+
+test("nested data objects never trigger the policy buckets", () => {
+  // An object that is another object's property value is data (a payload,
+  // example, defaults fragment), not a tool definition - the policy tests must
+  // not demand anything of it, whatever its shape.
+  const src = `
+    export const host = defineTool({
+      id: "host-tool",
+      examplePayload: { description: "sample item", id: "item-1" },
+      defaults: { id: "default-profile", ...baseProfile },
+      description: "Host tool description.",
+      handler: async () => {},
+    });
+  `;
+  const oracle = oracleFromSource(src);
+  assert.deepEqual(oracle.misordered, [], "a nested example payload must not demand reordering");
+  assert.deepEqual(oracle.nonStatic, [], "a nested defaults fragment must not be flagged");
+  assert.deepEqual(oracle.tools, [{ name: "host-tool", description: "Host tool description." }]);
+  // The extractor agrees: only the host tool is emitted.
+  const { result: tools } = captureWarnings(() => extractToolsFromSource(src, "fixture.ts"));
+  assert.deepEqual(tools, [{ name: "host-tool", description: "Host tool description." }]);
+});
+
+test("a getter or method id beside a description is flagged, never silently green", () => {
+  // The lexical extractor can never see a computed id, and such an object IS a
+  // runtime-real tool - without this flag it would bypass the scan with zero
+  // signal on any channel.
+  for (const [label, src] of [
+    [
+      "getter id",
+      'defineTool({ get id() { return "getter-id-tool"; }, description: "Real.", handler() {} });',
+    ],
+    [
+      "method id",
+      'defineTool({ id() { return "method-id-tool"; }, description: "Real.", handler() {} });',
+    ],
+  ]) {
+    const oracle = oracleFromSource(src);
+    assert.equal(oracle.nonStatic.length, 1, `${label}: expected a nonStatic flag`);
+  }
+});
+
+test("an escaped id literal is cooked to its runtime name on both sides", () => {
+  // An id written with an escape (\\u002D is "-") names the tool by its COOKED
+  // text at runtime; the scan must see that name, and the oracle and extractor
+  // must agree on it.
+  const src = 'defineTool({ id: "esc\\u002Dtool", description: "Escaped id.", handler() {} });';
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.equal(tools.find((t) => t.name === "esc-tool")?.description, "Escaped id.");
+  assert.deepEqual(oracleFromSource(src).tools, [{ name: "esc-tool", description: "Escaped id." }]);
+});
+
+test("U+2028/U+2029 line continuations cook to nothing, like backslash-newline", () => {
+  // Built programmatically so no raw LS/PS bytes live in this file: the
+  // fixture string contains backslash + U+2028 (and + U+2029), each a legal
+  // LineTerminatorSequence continuation that cooks to the empty string.
+  const src =
+    'defineTool({ id: "ls-tool", description: "before \\\u2028after \\\u2029end", handler() {} });';
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.equal(tools.find((t) => t.name === "ls-tool")?.description, "before after end");
+  assert.deepEqual(oracleFromSource(src).tools, [
+    { name: "ls-tool", description: "before after end" },
+  ]);
 });
 
 test('a computed ["description"] key with a literal value surfaces as an extractor-vs-oracle mismatch', () => {

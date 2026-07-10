@@ -189,11 +189,21 @@ function skipInterpolation(src, i) {
  */
 function isRegexPosition(src, prevSig, prevSigIdx) {
   if (prevSig === null) return true;
+  if (prevSig === "+" || prevSig === "-") {
+    // Postfix `++`/`--` ends a value, so a following `/` is division; a lone
+    // `+`/`-` is a binary/unary operator, after which `/` starts a regex.
+    return src[prevSigIdx - 1] !== prevSig;
+  }
   if (REGEX_PREV_CHARS.has(prevSig)) return true;
   if (/[A-Za-z0-9_$]/.test(prevSig)) {
     let start = prevSigIdx;
     while (start > 0 && /[A-Za-z0-9_$]/.test(src[start - 1])) start--;
-    return REGEX_PREV_KEYWORDS.has(src.slice(start, prevSigIdx + 1));
+    if (!REGEX_PREV_KEYWORDS.has(src.slice(start, prevSigIdx + 1))) return false;
+    // A keyword-NAMED property access (`counts.in`, `obj?.new`) is a value,
+    // not a keyword: the `/` after it is division.
+    let before = start - 1;
+    while (before >= 0 && /\s/.test(src[before])) before--;
+    return src[before] !== ".";
   }
   return false;
 }
@@ -254,7 +264,9 @@ function unescapeJsString(raw) {
       }
       if (u4 !== undefined) return String.fromCharCode(parseInt(u4, 16));
       if (x2 !== undefined) return String.fromCharCode(parseInt(x2, 16));
-      if (single === "\r\n" || single === "\r" || single === "\n") return ""; // line continuation
+      // Line continuations: backslash + any LineTerminatorSequence (LF, CRLF,
+      // CR, U+2028, U+2029) vanishes.
+      if (single === "\r\n" || /^[\n\r\u2028\u2029]$/.test(single)) return "";
       return UNESCAPE_MAP[single] ?? single;
     }
   );
@@ -404,7 +416,10 @@ function findIdLiteralsInCode(src) {
         // A template id containing `${` is interpolated - dynamic, not a static
         // tool id (same class as a const-reference id; out of scope by design).
         if (!(m[1] === "`" && m[2].includes("${"))) {
-          out.push({ id: m[2], end: ID_LITERAL.lastIndex });
+          // Cook the id like any literal - an id written "esc\u002Dtool"
+          // names the tool "esc-tool" at runtime, and the scan must see the
+          // runtime name.
+          out.push({ id: unescapeJsString(m[2]), end: ID_LITERAL.lastIndex });
         }
         i = ID_LITERAL.lastIndex - 1; // resume just past the value (loop's i++ advances)
         prevSig = m[1]; // the id literal's closing delimiter
