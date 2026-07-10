@@ -48,6 +48,7 @@ function frozenParsedData(): NativeProfilerParsedData {
     cpuHotspots: [],
     memoryLeaks: [],
     mallocStackLogging: true,
+    wallClockStartMs: 1_000_000,
   };
 }
 
@@ -99,5 +100,26 @@ describe("profiler-combined-report in-flight guard (pass-4 finding 0)", () => {
     api.lastExitInfo = { code: 137, signal: "SIGKILL" };
 
     await expectRefusal(api, /ended unexpectedly/);
+  });
+
+  it("recovery advice routes through native-profiler-analyze, not just stop+re-run", async () => {
+    // combined-report consumes the FROZEN parsedData, which only
+    // native-profiler-analyze rewrites. "stop then re-run" alone would render
+    // the previous capture; the advice must name analyze.
+    const api = await buildIosSession();
+    api.parsedData = frozenParsedData();
+    api.profilingActive = true;
+
+    let message = "";
+    try {
+      await profilerCombinedReportTool.execute({ nativeSession: api } as never, {
+        port: 8081,
+        device_id: "ios-sim",
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain("native-profiler-analyze");
+    expect(message).toContain("re-run profiler-combined-report");
   });
 });

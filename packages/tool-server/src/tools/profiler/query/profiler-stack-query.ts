@@ -239,7 +239,7 @@ export function renderThreadBreakdownIos(
     const weightMs = Math.round(weight / 1_000_000);
     const pct = totalWeight > 0 ? ((weight / totalWeight) * 100).toFixed(1) : "0";
     const samples = threadSamples.get(thread) ?? 0;
-    lines.push(`| ${thread} | ${weightMs} | ${pct}% | ${samples} |`);
+    lines.push(`| ${escapeMarkdownTableCell(thread)} | ${weightMs} | ${pct}% | ${samples} |`);
   }
 
   if (threadFilter) {

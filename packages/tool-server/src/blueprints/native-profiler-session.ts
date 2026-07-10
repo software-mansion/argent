@@ -40,6 +40,14 @@ export interface NativeProfilerParsedData {
    * session. Null when unknown (session restored from disk).
    */
   mallocStackLogging: boolean | null;
+  /**
+   * Recording start (wall-clock ms) of THIS parsed data, frozen at parse time.
+   * The combined report anchors these hangs to wall-clock time; reading the live
+   * session `wallClockStartMs` instead would pair frozen hangs with a NEWER
+   * capture's start once a second recording re-stamps the session, shifting every
+   * hang. Null for iOS sessions restored from disk (no start-time sidecar).
+   */
+  wallClockStartMs: number | null;
 }
 
 export interface NativeProfilerSessionApi {

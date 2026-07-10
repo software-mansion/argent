@@ -904,6 +904,10 @@ export async function analyzeNativeProfilerIos(
     // consumers (leak_stacks, combined report) stay paired with it even after
     // a newer capture re-stamps the session fields.
     mallocStackLogging: api.mallocStackLogging,
+    // Freeze the recording's start time too — the combined report anchors these
+    // hangs to wall-clock time, and must use THIS capture's start, not whatever
+    // a later native-profiler-start re-stamps onto the live session field.
+    wallClockStartMs: api.wallClockStartMs,
   };
 
   const exportErrors: Record<string, string> = {};

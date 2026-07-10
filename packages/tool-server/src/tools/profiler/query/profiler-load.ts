@@ -422,7 +422,17 @@ async function loadNativeSession(
 
   const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
 
-  api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks, mallocStackLogging: null };
+  // A loaded iOS trace has no start-time sidecar (raw_*.xml only), so its frozen
+  // anchor is null — the combined report will then report a missing native anchor
+  // rather than mis-anchoring to whatever residue the session held.
+  api.parsedData = {
+    cpuSamples,
+    uiHangs,
+    cpuHotspots,
+    memoryLeaks,
+    mallocStackLogging: null,
+    wallClockStartMs: null,
+  };
   api.exportedFiles = files;
   // The raw_*.xml carry no metadata sidecar, so nothing per-capture is known
   // about the loaded trace — clear ALL the session residue an earlier live

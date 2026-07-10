@@ -93,4 +93,36 @@ describe("report table pipe-escaping (finding 5: beyond the leak tables)", () =>
     expect(row).toContain("operator\\|");
     expect(unescapedCells(row!)).toBe(unescapedCells(header!));
   });
+
+  // Pass-5 finding 1: the Function column was escaped but the sibling Thread
+  // column in the same tables was not. Dispatch-queue / thread names are
+  // developer-controlled strings and can contain '|'.
+  const PIPE_THREAD = "com.example|worker";
+
+  it("escapes a '|' in the CPU-Hotspots table Thread column", async () => {
+    const payload: ProfilerPayload = {
+      metadata: { traceFile: null, platform: "iOS", timestamp: "2026-07-09T00:00:00Z" },
+      bottlenecks: [hotspot("plainFunc", PIPE_THREAD)],
+    };
+    const res = await renderNativeProfilerReport({ payload, traceFile: null });
+
+    const header = res.report.split("\n").find((l) => l.startsWith("| # | Function | Thread"));
+    const row = res.report.split("\n").find((l) => l.includes("com.example"));
+    expect(header).toBeDefined();
+    expect(row).toBeDefined();
+    expect(row).toContain("com.example\\|worker");
+    expect(unescapedCells(row!)).toBe(unescapedCells(header!));
+  });
+
+  it("escapes a '|' in the Thread CPU Breakdown table Thread column", () => {
+    const samples = [sample(PIPE_THREAD, ["target"])];
+    const out = renderThreadBreakdownIos(samples, [], undefined, 10);
+
+    const header = out.split("\n").find((l) => l.startsWith("| Thread | Weight (ms)"));
+    const row = out.split("\n").find((l) => l.includes("com.example"));
+    expect(header).toBeDefined();
+    expect(row).toBeDefined();
+    expect(row).toContain("com.example\\|worker");
+    expect(unescapedCells(row!)).toBe(unescapedCells(header!));
+  });
 });
