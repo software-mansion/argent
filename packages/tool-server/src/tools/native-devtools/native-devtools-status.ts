@@ -46,7 +46,7 @@ Call this before using app-scoped native hierarchy tools or native-network-logs.
 If injectable is false: this is a TERMINAL state — the app can never be injected. Do NOT restart/retry. ${NON_INJECTABLE_RECOVERY}
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app, then proceed with the native feature.
-Returns { status: "init_failed", message, attempts } instead when the simulator's native-devtools environment repeatedly failed to initialize (injectable apps only — a non-injectable app always gets its terminal state).
+Returns { status: "init_failed", message, attempts } instead when the simulator's native-devtools environment failed to initialize.
 Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   services: (params) => ({
@@ -70,9 +70,23 @@ Fails if the simulator server is not running for the given UDID.`,
     // injectable path below, there is no point running the precheck's env
     // init or reverifying the env for an app that can never inject.
     if (!isInjectableBundleId(params.bundleId)) {
+      let appRunning: boolean;
+      try {
+        appRunning = await api.isAppRunning(params.bundleId);
+      } catch (err) {
+        // The app-running probe (a simctl spawn) failed — typically a sim that
+        // is shut down or unreachable, exactly where env init fails too. Fall
+        // back to the precheck so a broken sim still surfaces the structured
+        // init_failed guidance (re-booting IS corrective for a dead sim)
+        // instead of a raw subprocess error; with a healthy env, surface the
+        // probe failure itself.
+        const blocked = await precheckNativeDevtools(api, params.udid);
+        if (blocked) return blocked;
+        throw err;
+      }
       return {
         envSetup: api.isEnvSetup(),
-        appRunning: await api.isAppRunning(params.bundleId),
+        appRunning,
         connected: api.isConnected(params.bundleId),
         requiresRestart: false,
         nextLaunchWillBeInjected: false,

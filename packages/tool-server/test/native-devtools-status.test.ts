@@ -223,6 +223,47 @@ describe("native-devtools-status tool", () => {
     // No env work is spent on an app that can never inject.
     expect(ensureEnvReady).not.toHaveBeenCalled();
   });
+
+  it("falls back to init_failed when the sim cannot even be probed (dead sim, broken env)", async () => {
+    // The terminal branch probes isAppRunning (a simctl spawn); on a shut-down
+    // or unreachable sim that rejects — exactly the sims where env init fails
+    // too. A raw subprocess throw here would be unstructured; the precheck's
+    // init_failed guidance (re-boot the simulator) IS corrective for a dead
+    // sim, so it must win when the env is broken.
+    const { api } = makeNativeApi({
+      initFailure: {
+        attempts: MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
+        lastError: "ensureEnv timeout",
+        givenUp: true,
+      },
+    });
+    api.isAppRunning = async () => {
+      throw new Error("simctl spawn failed: current state: Shutdown");
+    };
+
+    await expect(
+      nativeDevtoolsStatusTool.execute(
+        { nativeDevtools: api },
+        { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.apple.Preferences" }
+      )
+    ).resolves.toMatchObject({ status: "init_failed" });
+  });
+
+  it("rethrows the probe failure for a non-injectable app when the env is healthy", async () => {
+    // With a healthy env there is no init_failed to fall back to — a transient
+    // isAppRunning failure must surface, not be swallowed into a made-up state.
+    const { api } = makeNativeApi({ envSetup: true });
+    api.isAppRunning = async () => {
+      throw new Error("transient simctl failure");
+    };
+
+    await expect(
+      nativeDevtoolsStatusTool.execute(
+        { nativeDevtools: api },
+        { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.apple.Preferences" }
+      )
+    ).rejects.toThrow("transient simctl failure");
+  });
 });
 
 describe("isInjectableBundleId", () => {
