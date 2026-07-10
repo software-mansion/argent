@@ -266,8 +266,17 @@ function renderThreadBreakdownIos(
 export function renderLeakStacksIos(
   memoryLeaks: MemoryLeak[],
   objectTypeFilter: string | undefined,
-  topN: number
+  topN: number,
+  mallocStackLogging?: boolean | null
 ): string {
+  // Same capture-mode contract as the analyze/combined reports: use the
+  // session's actual malloc_stack_logging flag when known; when unknown (a
+  // session restored from disk), infer it from the FULL capture — any
+  // attributed group means the app was launched under malloc stack logging
+  // (the only way a responsible frame is recorded). Inference deliberately
+  // ignores the object_type filter: filtering out every attributed group must
+  // not flip the note back to blaming `--attach`.
+  const mallocWasOn = mallocStackLogging ?? memoryLeaks.some((l) => l.attributed);
   let filtered = memoryLeaks;
   if (objectTypeFilter) {
     filtered = memoryLeaks.filter((l) =>
@@ -303,10 +312,14 @@ export function renderLeakStacksIos(
   ];
 
   if (unattributedCount > 0) {
+    const cause = mallocWasOn
+      ? "the capture ran with malloc stack logging, but no allocation backtrace was recorded " +
+        "for these (freed-region reuse, or allocations from before recording started)"
+      : "captured under `xctrace --attach`, which has no malloc-stack history";
     lines.push(
       `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
-        "(`<Call stack limit reached>`, no library) — captured under `xctrace --attach`, which has no " +
-        "malloc-stack history. Most likely benign system allocations, not confirmed app leaks.",
+        `(\`<Call stack limit reached>\`, no library) — ${cause}. ` +
+        "Most likely benign system allocations, not confirmed app leaks.",
       ""
     );
   }
@@ -358,7 +371,12 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         params.top_n
       );
     case "leak_stacks":
-      return renderLeakStacksIos(data.memoryLeaks, params.object_type, params.top_n);
+      return renderLeakStacksIos(
+        data.memoryLeaks,
+        params.object_type,
+        params.top_n,
+        api.mallocStackLogging
+      );
     default:
       throw new FailureError(`Unknown mode: ${params.mode}`, {
         error_code: FAILURE_CODES.PROFILER_QUERY_MODE_INVALID,
