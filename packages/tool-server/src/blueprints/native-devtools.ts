@@ -32,8 +32,9 @@ export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
  * The prefix is matched case-insensitively: iOS treats bundle ids
  * case-insensitively for launch and uniqueness, and Apple reserves the
  * `com.apple` namespace in every casing, so any casing of `com.apple.` is a
- * system app. Apple's real ids are canonically lowercase, but a stray
- * `com.Apple.Preferences` must not slip through as injectable and restart-loop.
+ * system app. Apple's real ids always carry the prefix in lowercase (the
+ * segments after it vary in case — e.g. `com.apple.Preferences`), but a stray
+ * re-cased prefix must not slip through as injectable and restart-loop.
  */
 export function isInjectableBundleId(bundleId: string): boolean {
   return !bundleId.toLowerCase().startsWith("com.apple.");
@@ -51,9 +52,10 @@ export function isInjectableBundleId(bundleId: string): boolean {
  * and *reports* `injectable: false` rather than throwing — see the precheck.)
  */
 export const NON_INJECTABLE_NATIVE_WARNING =
-  "Do not fall back to the native-* tools — including native-view-at-point and " +
-  "native-user-interactable-view-at-point — they run this same injection precheck and return " +
-  "this same error.";
+  "Do not fall back to the native-devtools feature tools (native-describe-screen, " +
+  "native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, " +
+  "native-user-interactable-view-at-point) — they run the same injection precheck and fail " +
+  "with the same non-injectable error.";
 
 /**
  * Full recovery guidance for surfaces reached BEFORE `describe` has been tried

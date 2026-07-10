@@ -191,6 +191,38 @@ describe("native-devtools-status tool", () => {
     // stale-latch reverify path must not run.
     expect(reverifyEnv).not.toHaveBeenCalled();
   });
+
+  it("reports the terminal non-injectable state even when env init has given up", async () => {
+    // The precheck's init_failed block must not mask the statically-knowable
+    // terminal signal: its "re-boot the simulator" guidance can never make a
+    // system app injectable. Mirrors the same ordering inside
+    // precheckNativeDevtools (terminal case before the env plumbing).
+    const { api, ensureEnvReady } = makeNativeApi({
+      appRunning: true,
+      initFailure: {
+        attempts: MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
+        lastError: "ensureEnv timeout",
+        givenUp: true,
+      },
+    });
+
+    await expect(
+      nativeDevtoolsStatusTool.execute(
+        { nativeDevtools: api },
+        { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.apple.Preferences" }
+      )
+    ).resolves.toEqual({
+      envSetup: false,
+      appRunning: true,
+      connected: false,
+      requiresRestart: false,
+      nextLaunchWillBeInjected: false,
+      injectable: false,
+    });
+
+    // No env work is spent on an app that can never inject.
+    expect(ensureEnvReady).not.toHaveBeenCalled();
+  });
 });
 
 describe("isInjectableBundleId", () => {
@@ -293,7 +325,9 @@ describe("non-injectable recovery guidance is consistent and points only at work
     expect(NON_INJECTABLE_RECOVERY).toMatch(/`describe`/);
     expect(NON_INJECTABLE_RECOVERY).toMatch(/`screenshot`/);
     expect(NON_INJECTABLE_RECOVERY).toContain(NON_INJECTABLE_NATIVE_WARNING);
-    expect(NON_INJECTABLE_NATIVE_WARNING).toMatch(/Do not fall back to the native-\* tools/);
+    expect(NON_INJECTABLE_NATIVE_WARNING).toMatch(
+      /Do not fall back to the native-devtools feature tools/
+    );
     expect(NON_INJECTABLE_NATIVE_WARNING).toContain("native-view-at-point");
     // The recommendation clause itself never names a native-* tool outside the
     // warning, so nothing points the agent back at a dead-end.

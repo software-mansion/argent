@@ -104,25 +104,31 @@ export async function describeIos(
     return { tree, source: "ax-service", hint };
   }
 
+  // A non-injectable system app can never connect, so `requiresAppRestart`
+  // would always be true and `should_restart` would loop forever. Return the
+  // (empty) AX result with the terminal screenshot hint instead of restarting.
+  // The gate sits BEFORE the native-devtools fallback: injectability is a
+  // static property of the explicit bundle id, so the terminal hint must not
+  // depend on service resolution succeeding (a downed ios-remote tunnel or a
+  // dispose race would otherwise swallow it into the generic catch below), and
+  // no native-devtools service is spawned for an app that can never inject.
+  // Auto-resolution (no bundleId) needs no gate — it only ever yields a
+  // connected, hence injected, app. If the ax-service was degraded (sim not
+  // booted through argent, so `hint` is DEGRADED_HINT), keep that re-boot
+  // guidance: a proper boot may let the ax-service read this system app's tree
+  // (Settings et al. expose a full AX tree), at which point `describe` — not a
+  // screenshot — is the right tool. On a healthy sim `hint` is undefined and
+  // this falls back to the terminal non-injectable hint.
+  if (params.bundleId && !isInjectableBundleId(params.bundleId)) {
+    return { tree, source: "ax-service", hint: hint ?? NON_INJECTABLE_HINT };
+  }
+
   // AX returned zero elements (or failed entirely) — attempt native-devtools fallback
   try {
     const ndRef = nativeDevtoolsRef(device);
     const nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
 
     const target = await resolveNativeTargetApp(nativeApi, params.bundleId);
-
-    // A non-injectable system app can never connect, so `requiresAppRestart`
-    // would always be true and `should_restart` would loop forever. Return the
-    // (empty) AX result with the terminal screenshot hint instead of restarting
-    // — but if the ax-service was degraded (sim not booted through argent, so
-    // `hint` is DEGRADED_HINT), keep that re-boot guidance: a proper boot may
-    // let the ax-service read this system app's tree (Settings et al. expose a
-    // full AX tree), at which point `describe` — not a screenshot — is the right
-    // tool. On a healthy sim `hint` is undefined and this falls back to the
-    // terminal non-injectable hint.
-    if (!isInjectableBundleId(target.bundleId)) {
-      return { tree, source: "ax-service", hint: hint ?? NON_INJECTABLE_HINT };
-    }
 
     if (await nativeApi.requiresAppRestart(target.bundleId)) {
       return { tree, source: "ax-service", should_restart: true, hint };

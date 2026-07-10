@@ -261,7 +261,7 @@ describe("describe tool", () => {
 
   it("does NOT return should_restart for a non-injectable Apple system app (no restart loop)", async () => {
     // com.apple.* apps can never load the injected dylib, so requiresAppRestart
-    // is always true for them on real hardware. Without an injectability gate,
+    // is always true for them in an unmocked run. Without an injectability gate,
     // describe returns should_restart:true → the agent restarts the system app →
     // AX is still empty → describe again → unbounded loop. The fallback must
     // instead return the (empty) AX result with a screenshot hint.
@@ -316,6 +316,25 @@ describe("describe tool", () => {
     // The degraded re-boot guidance wins over the terminal screenshot hint.
     expect(result.hint).toMatch(/boot-device/i);
     expect(result.hint).not.toContain(NON_INJECTABLE_NATIVE_WARNING);
+  });
+
+  it("returns the terminal hint for an explicit system app even when native-devtools is unavailable", async () => {
+    // Injectability of an explicit bundleId is static, so the terminal hint
+    // must not depend on the native-devtools service resolving (a downed
+    // ios-remote tunnel or a dispose race would otherwise swallow it into the
+    // generic catch and return no guidance at all).
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    // No native devtools service provided — resolveService throws for it.
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
   });
 
   it("returns the real AX tree for a non-injectable system app when AX is non-empty (early return, before the gate)", async () => {

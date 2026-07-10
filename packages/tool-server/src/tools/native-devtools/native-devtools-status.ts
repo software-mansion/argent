@@ -38,15 +38,16 @@ Returns { envSetup, appRunning, connected, requiresRestart, nextLaunchWillBeInje
 - envSetup: DYLD_INSERT_LIBRARIES is configured in the simulator's launchd environment
 - appRunning: the target bundle currently has a running UIKit process on the simulator
 - connected: the dylib is active in the current running process for this bundleId
-- requiresRestart: the app is already running but its current process does not have native devtools injected
-- nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place
+- requiresRestart: the app is already running but its current process does not have native devtools injected (always false for a non-injectable app)
+- nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place (always false for a non-injectable app)
 - injectable: whether native devtools can ever be injected into this app. Apple system apps (bundle ids under com.apple.) are platform binaries with library validation, so the dylib can never load into them.
 
 Call this before using app-scoped native hierarchy tools or native-network-logs.
 If injectable is false: this is a TERMINAL state — the app can never be injected. Do NOT restart/retry. ${NON_INJECTABLE_RECOVERY}
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app, then proceed with the native feature.
-Fails if the simulator server is not running for the given UDID or the bundleId is not found.`,
+Returns { status: "init_failed", message, attempts } instead when the simulator's native-devtools environment repeatedly failed to initialize (injectable apps only — a non-injectable app always gets its terminal state).
+Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
@@ -57,29 +58,33 @@ Fails if the simulator server is not running for the given UDID or the bundleId 
 
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
-    const blocked = await precheckNativeDevtools(api, params.udid);
-    if (blocked) return blocked;
-
-    const injectable = isInjectableBundleId(params.bundleId);
-    const appRunning = await api.isAppRunning(params.bundleId);
-    const connected = api.isConnected(params.bundleId);
-
-    // Non-injectable apps (Apple system apps) can never load the dylib no matter
-    // how many times they relaunch. Report a terminal state so agents stop
-    // looping restart-app → retry: no restart is required and the next launch
-    // will not be injected either. appRunning/connected are still reported and
-    // envSetup is read from the cached latch — unlike the injectable path below,
-    // there is no point reverifying the env for an app that can never inject.
-    if (!injectable) {
+    // Terminal case first, mirroring precheckNativeDevtools: non-injectable
+    // apps (Apple system apps) can never load the dylib no matter how many
+    // times they relaunch, and injectability is a static property of the
+    // bundle id — so a broken env must not mask this terminal state behind the
+    // precheck's init_failed block, whose "re-boot the simulator" guidance can
+    // never make a system app injectable. Report a terminal state so agents
+    // stop looping restart-app → retry: no restart is required and the next
+    // launch will not be injected either. appRunning/connected are still
+    // measured and envSetup is read from the cached latch — unlike the
+    // injectable path below, there is no point running the precheck's env
+    // init or reverifying the env for an app that can never inject.
+    if (!isInjectableBundleId(params.bundleId)) {
       return {
         envSetup: api.isEnvSetup(),
-        appRunning,
-        connected,
+        appRunning: await api.isAppRunning(params.bundleId),
+        connected: api.isConnected(params.bundleId),
         requiresRestart: false,
         nextLaunchWillBeInjected: false,
         injectable: false,
       };
     }
+
+    const blocked = await precheckNativeDevtools(api, params.udid);
+    if (blocked) return blocked;
+
+    const appRunning = await api.isAppRunning(params.bundleId);
+    const connected = api.isConnected(params.bundleId);
 
     // When the app isn't connected, the cached env latch can be stale: an
     // out-of-band simulator reboot wipes DYLD_INSERT_LIBRARIES from launchd
