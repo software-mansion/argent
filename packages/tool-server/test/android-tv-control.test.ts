@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 
 // The Android TV backend drives the device entirely through `adb` helpers.
 // Mock them so the factory + api run without a real device.
@@ -15,7 +16,7 @@ import {
 } from "../src/blueprints/android-tv-control";
 import type { TvControlApi } from "../src/blueprints/tv-control-types";
 import { adbShell, adbExecOutBinary, getAndroidRuntimeKind } from "../src/utils/adb";
-import { UnsupportedOperationError } from "../src/utils/capability";
+import { InvalidToolInputError, UnsupportedOperationError } from "../src/utils/capability";
 
 const mockShell = vi.mocked(adbShell);
 const mockExecOut = vi.mocked(adbExecOutBinary);
@@ -133,6 +134,38 @@ describe("android-tv-control — type", () => {
       expect.stringContaining("input text"),
       expect.anything()
     );
+  });
+
+  // Android TV shares the `adb shell input text` sink with the phone path, and
+  // with it the sink's limitations: an emoji NPEs `sendText` on-device, other
+  // non-ASCII is silently dropped, and a newline truncates the input line. The
+  // shared guard must reject those up front (InvalidToolInputError → 400 +
+  // KEYBOARD_CHARACTER_UNSUPPORTED, same as every other keyboard backend)
+  // instead of letting them surface as a raw adb 500 (hubgan review).
+  it("rejects an emoji before any adb call (400-class + KEYBOARD_CHARACTER_UNSUPPORTED)", async () => {
+    const api = await makeApi();
+    const err = await api.type("ab😀").then(
+      () => {
+        throw new Error("expected type() to reject");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(InvalidToolInputError);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED);
+    expect(mockShell).not.toHaveBeenCalled();
+  });
+
+  it("rejects a newline before any adb call (400-class + KEYBOARD_CHARACTER_UNSUPPORTED)", async () => {
+    const api = await makeApi();
+    const err = await api.type("a\nb").then(
+      () => {
+        throw new Error("expected type() to reject");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(InvalidToolInputError);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED);
+    expect(mockShell).not.toHaveBeenCalled();
   });
 });
 

@@ -2,6 +2,7 @@ import {
   FAILURE_CODES,
   withFailureSignal,
   type DeviceInfo,
+  type FailureSignal,
   type Platform,
   type ToolCapability,
 } from "@argent/registry";
@@ -74,6 +75,39 @@ export class NotImplementedOnPlatformError extends Error {
       failure_stage: "tool_platform_dispatch",
       failure_area: "tool_server",
       error_kind: "not_implemented",
+    });
+  }
+}
+
+/**
+ * Thrown when a tool rejects the *arguments* the caller passed — input that is
+ * well-typed for the zod schema but that this tool/platform cannot carry out
+ * (e.g. an unknown named key on any keyboard backend, a newline in Android/Vega
+ * `keyboard` text that the on-device `input`/`send_text` can't represent, or a
+ * character with no keycode on iOS/chromium). The HTTP dispatcher maps this to
+ * `400 Bad Request`, matching the zod-validation path: it is a client input
+ * error, not an internal fault, so it must not surface as a `500`. The
+ * `.message` is the human-friendly reason, safe to bubble straight to the agent.
+ */
+export class InvalidToolInputError extends Error {
+  /**
+   * @param signal Optional telemetry-signal overrides. The HTTP 400 mapping keys
+   *   off the error *class* (see http.ts), not the `error_code`, so a caller can
+   *   pass a more granular `error_code` / `failure_stage` / `error_kind` — e.g.
+   *   the keyboard backends' `KEYBOARD_KEY_UNSUPPORTED` /
+   *   `KEYBOARD_CHARACTER_UNSUPPORTED` / `VEGA_TEXT_INVALID` classifications
+   *   (from #420) — and keep both the granular telemetry bucket AND the 400
+   *   status. Defaults to the generic `TOOL_INPUT_INVALID` / validation signal.
+   */
+  constructor(message: string, signal?: Partial<FailureSignal>) {
+    super(message);
+    this.name = "InvalidToolInputError";
+    withFailureSignal(this, {
+      error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+      failure_stage: "tool_input_validation",
+      failure_area: "tool_server",
+      error_kind: "validation",
+      ...signal,
     });
   }
 }
