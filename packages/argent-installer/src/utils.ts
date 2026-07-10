@@ -238,10 +238,12 @@ export function writeJson(filePath: string, data: unknown): void {
 }
 
 // ── JSONC helpers ────────────────────────────────────────────────────────────
-// Comment-preserving edits for editor settings files that are JSONC (Zed).
-// Unlike the JSON.parse → mutate → JSON.stringify path used elsewhere, these
-// helpers operate on the source string via jsonc-parser's modify(), so user
-// comments, trailing commas, blank lines, and key ordering all survive.
+// Comment-preserving edits for the editor config files that are JSONC (Zed,
+// Cursor, VS Code, Kiro, ...) — and, since JSONC is a superset of JSON, the
+// shared write path for the strict-JSON adapters too. Unlike the
+// JSON.parse → mutate → JSON.stringify path, these helpers operate on the
+// source string via jsonc-parser's modify(), so user comments, trailing
+// commas, blank lines, and key ordering all survive.
 
 // jsonc-parser's modify() needs a formatting hint for newly-inserted keys.
 // Zed's bundled defaults use 2-space indentation; matching that keeps writes
