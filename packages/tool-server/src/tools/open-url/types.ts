@@ -8,4 +8,7 @@ export interface OpenUrlResult {
   url: string;
 }
 
-export type OpenUrlServices = Record<string, never>;
+export interface OpenUrlServices {
+  physicalIos?: PhysicalIosAutomationApi;
+}
+import type { PhysicalIosAutomationApi } from "../../blueprints/physical-ios-automation";

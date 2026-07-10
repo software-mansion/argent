@@ -332,6 +332,21 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       return buildRemoteInstance(device);
     }
 
+    if (device.platform === "ios" && device.kind === "device") {
+      // Physical iPhones are driven over WebDriverAgent, not simulator-server.
+      // This is a backstop for any tool that resolved the wrong service.
+      throw new FailureError(
+        `simulator-server cannot drive the physical iOS device ${device.id}. ` +
+          `Route the tool through PhysicalIosAutomation instead.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_SERVER_PHYSICAL_DEVICE_UNSUPPORTED,
+          failure_stage: "simulator_server_factory_platform",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
+      );
+    }
+
     if (device.platform === "ios") {
       // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
       // cannot drive the Apple TV focus engine. Its transport (`sendCommand`) is

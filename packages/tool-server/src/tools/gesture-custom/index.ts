@@ -1,7 +1,11 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../blueprints/physical-ios-automation";
+import { isPhysicalIos, resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 import { interpolateEvents } from "../../utils/gesture-utils";
 
@@ -78,15 +82,25 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
   interpolate: 10`,
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    return isPhysicalIos(device)
+      ? { physicalIos: physicalIosAutomationRef(device) }
+      : { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params) {
-    const api = services.simulatorServer as SimulatorServerApi;
     const events =
       params.interpolate && params.interpolate > 0
         ? interpolateEvents(params.events, params.interpolate)
         : params.events;
+
+    if (isPhysicalIos(resolveDevice(params.udid))) {
+      const physicalIos = services.physicalIos as PhysicalIosAutomationApi;
+      await physicalIos.touch(events);
+      return { events: events.length };
+    }
+
+    const api = services.simulatorServer as SimulatorServerApi;
 
     for (const event of events) {
       await sleep(event.delayMs ?? 16);

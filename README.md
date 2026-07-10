@@ -46,6 +46,67 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 
 ---
 
+## Physical iOS devices (experimental)
+
+Argent can drive a connected **physical iPhone** through the same tool interfaces used for an
+iOS simulator. It automatically builds, signs, installs, and reuses
+[WebDriverAgent](https://github.com/appium/WebDriverAgent) for XCTest input and accessibility;
+the target app itself does not need to be modified or instrumented. The phone appears in
+`list-devices` with `kind: "device"`.
+
+The physical backend supports:
+
+- tap, swipe, drag/pan, long press/hold, arbitrary touch sequences, pinch, and rotate gestures;
+- keyboard text and named keys, paste, Home/Power/volume/Action buttons, and orientation;
+- `screenshot`, nested live `describe`, `screenshot-diff`, app launch/restart, deep links, and
+  installing a device-signed `.app`;
+- continuous Apple unified logs with `device-logs-start` / `device-logs-stop`;
+- `native-profiler-*` for any foreground app, including protected system apps such as Maps.
+  Physical profiling records device-wide Time Profiler data and filters CPU/hang analysis to the
+  app PID, avoiding the task-port restriction that prevents a direct Instruments attach.
+
+**Requirements**
+
+- macOS with Xcode and an Apple Development team configured in Xcode Settings → Accounts.
+- iOS 17 or later for the complete keyboard/control surface (the backend is tested on iOS 26.2).
+- The iPhone connected, unlocked, trusted, with **Developer Mode** on.
+- [`pymobiledevice3`](https://github.com/doronz88/pymobiledevice3) for physical-device unified
+  log streaming (for example, `pipx install pymobiledevice3`).
+
+**Setup**
+
+1. Enable the feature flag:
+   ```sh
+   argent enable physical-ios-devices
+   ```
+2. Connect the iPhone (unlocked, trusted, Developer Mode on).
+
+`list-devices` then includes the iPhone, and the supported tools work against its UDID.
+The first `boot-device`, `launch-app`, or control call prepares WebDriverAgent. Argent discovers
+the Xcode development team and signing identity, caches the signed runner under
+`~/.argent/webdriveragent`, and keeps one WDA session per phone. No root tunnel or admin prompt is
+needed for the XCTest path. A cold first preparation takes several seconds; later controls reuse
+the session.
+
+**Limitations / notes**
+
+- Physical controls are registered on a strict local queue and acknowledged on the simulator's
+  gesture cadence. Read operations, log stop, and profiler stop are barriers, so screenshots and
+  artifacts always include all earlier controls even though XCTest may finish them later.
+- `describe` is the frontmost app's exact nested XCTest hierarchy, including labels, values,
+  element roles, and frames in the same normalized coordinate space as the gesture tools.
+- Device-wide profiling provides CPU and potential-hang analysis for protected apps. Apple's
+  Leaks/Allocations instruments require a process-scoped task port, so they are not available for
+  protected system apps.
+- Simulator-only injected `native-*` UIKit/React inspection remains unavailable on a physical
+  target. Use `describe`, screenshots, unified logs, and native profiling instead.
+- XCTest does not expose the App Switcher gesture. Power locks the device; unlocking may still
+  require the device passcode.
+- Signing/logging overrides: `ARGENT_WDA_TEAM_ID`, `ARGENT_WDA_BUNDLE_ID`,
+  `ARGENT_WDA_SIGNING_ID`, and `ARGENT_PYMOBILEDEVICE3`.
+
+---
+
 ## Installation
 
 #### Prerequisites

@@ -6,12 +6,18 @@ import {
   nativeDevtoolsRef,
   NativeDevtoolsApi,
 } from "../../../../blueprints/native-devtools";
+import { isPhysicalIos } from "../../../../utils/device-info";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../../../blueprints/physical-ios-automation";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
 import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
+import { adaptWdaSourceToDescribeResult } from "./ios-wda-ax-adapter";
 
 const DEGRADED_HINT =
   "This simulator was not booted through argent — system dialogs and native modals may not appear. You MUST call boot-device with force=true now to restart the simulator and apply full accessibility settings before continuing.";
@@ -28,6 +34,12 @@ const TVOS_HINT =
   "Use the `describe` tool to read the focused and focusable elements, `tv-remote` " +
   "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
   "See the argent-tv-interact skill.";
+
+// Physical iPhones expose their real nested XCTest hierarchy through WDA.
+const PHYSICAL_IOS_AX_HINT =
+  "This is the live XCTest accessibility tree of the frontmost app (or the home screen), read through " +
+  "WebDriverAgent. Labels, values, traits, reading order, and element frames come from the physical " +
+  "device and use the same normalized coordinate space as gesture-tap and gesture-swipe.";
 
 // Apple system apps (`com.apple.*`) can never load argent's injected dylib, so
 // the native-devtools fallback can't read their view hierarchy and restarting
@@ -75,6 +87,22 @@ export async function describeIos(
   params: DescribeIosParams,
   options: DescribeIosOptions = {}
 ): Promise<DescribeTreeData> {
+  // Physical iPhones are read through the same persistent WDA session used for
+  // control. Source and frames come from XCTest and work in apps and SpringBoard.
+  if (isPhysicalIos(device)) {
+    const ref = physicalIosAutomationRef(device);
+    const physicalIos = await registry.resolveService<PhysicalIosAutomationApi>(
+      ref.urn,
+      ref.options
+    );
+    const [source, screen] = await Promise.all([physicalIos.source(), physicalIos.windowSize()]);
+    return {
+      tree: adaptWdaSourceToDescribeResult(source, screen),
+      source: "wda-ax",
+      hint: PHYSICAL_IOS_AX_HINT,
+    };
+  }
+
   // tvOS short-circuit: the focus-engine accessibility tree is served by the
   // tv-control daemons, not the iOS ax-service. Without this, describe would
   // try to spawn ax-service inside the Apple TV sim, time out on the daemon

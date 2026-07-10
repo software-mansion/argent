@@ -145,13 +145,15 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
     capability,
     // No eagerly-declared service: each step resolves its own services through
     // `invokeSubTool` below (simulator-server for iOS/Android, CDP for
-    // Chromium), so run-sequence itself needs none. An eager resolver can't be
-    // used here because a tvOS udid shape-classifies as `ios` (there is no
-    // `tvos` platform) — declaring simulator-server for it would spawn a
-    // controller it can't drive and hang on the ready timeout before any tv-*
-    // step could run. The sub-tool invocations still pay only their own
-    // first-step spawn cost, and `ctx` is threaded through so nested steps keep
-    // the outer request's telemetry attribution.
+    // Chromium, WebDriverAgent for physical iOS), so run-sequence itself needs
+    // none. An eager resolver can't be used here because a tvOS udid
+    // shape-classifies as `ios` (there is no `tvos` platform) — declaring
+    // simulator-server for it would spawn a controller it can't drive and
+    // hang on the ready timeout before any tv-* step could run; a physical
+    // iOS udid hits the same problem, since simulator-server's guard throws
+    // for kind === "device" before step 1 even runs. The sub-tool invocations
+    // still pay only their own first-step spawn cost, and `ctx` is threaded
+    // through so nested steps keep the outer request's telemetry attribution.
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;

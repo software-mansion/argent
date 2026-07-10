@@ -63,6 +63,23 @@ gh release download "${TAG}" \
   --clobber
 chmod +x "${IOS_BIN_DIR}/ax-service"
 
+# argent-device-auth is the macOS host helper that shows the branded admin
+# prompt to start the physical-iOS CoreDevice tunnel as root. Like ax-service it
+# is a darwin-only binary, resolved at bin/darwin/argent-device-auth.
+# Optional: until the argent-private build publishes it, the release won't carry
+# it — physical-iOS then falls back to the (unbranded) osascript admin prompt,
+# so a missing asset must not fail the whole download.
+echo "  Downloading argent-device-auth..."
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "argent-device-auth" \
+  --dir "${IOS_BIN_DIR}" \
+  --clobber 2>/dev/null; then
+  chmod +x "${IOS_BIN_DIR}/argent-device-auth"
+else
+  echo "    (not in this release yet — physical iOS will use the osascript prompt fallback)"
+fi
+
 # tvOS binaries (Apple TV support). The three tvOS injection dylibs share their
 # filenames with the iOS dylibs, so the release ships them as a tarball
 # (native-devtools-ios-tvos-dylibs.tar.gz) that we extract into dylibs/tvos/ —
@@ -223,6 +240,7 @@ if command -v codesign &>/dev/null; then
     "${TVOS_DYLIBS_DIR}"/*.dylib \
     "${TCP_DYLIBS_DIR}"/*.dylib \
     "${IOS_BIN_DIR}/ax-service" \
+    "${IOS_BIN_DIR}/argent-device-auth" \
     "${IOS_BIN_DIR}/tvos-ax-service" \
     "${IOS_BIN_DIR}/tvos-hid-daemon" \
     "${TCP_BIN_DIR}/ax-service"; do

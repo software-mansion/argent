@@ -311,6 +311,20 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }
       );
     }
+    if (device.kind === "device") {
+      // DYLD injection via `simctl spawn` is simulator-only; a signed app on a
+      // physical device cannot load the devtools dylib. Physical iPhones are
+      // driven over CoreDevice instead.
+      throw new FailureError(
+        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-simulator-only and cannot attach to the physical device '${device.id}'. Native-devtools tools are not supported on physical iOS.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_WRONG_PLATFORM,
+          failure_stage: "native_devtools_factory_options",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
+      );
+    }
     const host = pickIosHost(device);
     // Remote sims can't use unix sockets because the QUIC reverse tunnel
     // only bridges TCP streams.

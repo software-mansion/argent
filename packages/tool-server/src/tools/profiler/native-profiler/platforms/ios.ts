@@ -15,11 +15,17 @@ import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
-import { selectIosCaptureStrategy } from "../../../../utils/ios-profiler/capture-strategy";
+import {
+  physicalAllProcessesStrategy,
+  selectIosCaptureStrategy,
+} from "../../../../utils/ios-profiler/capture-strategy";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 import { formatTraceFreshness } from "../../../../utils/profiler-shared/freshness";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
+import { isPhysicalIosUdid } from "../../../../utils/device-info";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 
 // Two candidates because __dirname differs by runtime: bundled it's argent/dist/
 // (template in argent/assets/); in dev it's tool-server/dist/tools/profiler/
@@ -307,6 +313,156 @@ export interface IosStartParams {
   device_id: string;
   app_process?: string;
   template_path?: string;
+  /** Internal: frontmost bundle id resolved through WDA for a physical device. */
+  active_physical_bundle_id?: string;
+}
+
+interface DevicectlApp {
+  bundleIdentifier: string;
+  url: string;
+}
+
+interface DevicectlProcess {
+  processIdentifier: number;
+  executable: string;
+}
+
+async function resolvePhysicalAppProcess(
+  udid: string,
+  bundleId: string
+): Promise<DetectedApp> {
+  const appsPath = path.join(tmpdir(), `argent-profiler-apps-${randomUUID()}.json`);
+  const processesPath = path.join(tmpdir(), `argent-profiler-processes-${randomUUID()}.json`);
+  try {
+    execFileSync(
+      "xcrun",
+      [
+        "devicectl",
+        "device",
+        "info",
+        "apps",
+        "--device",
+        udid,
+        "--include-all-apps",
+        "--quiet",
+        "--json-output",
+        appsPath,
+      ],
+      { timeout: DETECT_RUNNING_APP_TIMEOUT_MS, maxBuffer: DEFAULT_EXEC_MAX_BUFFER }
+    );
+    execFileSync(
+      "xcrun",
+      [
+        "devicectl",
+        "device",
+        "info",
+        "processes",
+        "--device",
+        udid,
+        "--quiet",
+        "--json-output",
+        processesPath,
+      ],
+      { timeout: DETECT_RUNNING_APP_TIMEOUT_MS, maxBuffer: DEFAULT_EXEC_MAX_BUFFER }
+    );
+    const apps = JSON.parse(await fs.readFile(appsPath, "utf8")) as {
+      result?: { apps?: DevicectlApp[] };
+    };
+    const processes = JSON.parse(await fs.readFile(processesPath, "utf8")) as {
+      result?: { runningProcesses?: DevicectlProcess[] };
+    };
+    const app = apps.result?.apps?.find((item) => item.bundleIdentifier === bundleId);
+    if (!app?.url) {
+      throw new Error(`devicectl did not return an installed app for ${bundleId}`);
+    }
+    const appUrl = app.url.endsWith("/") ? app.url : `${app.url}/`;
+    const process = processes.result?.runningProcesses?.find(
+      (item) => item.executable.startsWith(appUrl) && !item.executable.includes(".appex/")
+    );
+    if (!process) {
+      throw new Error(`no running process matched the frontmost app ${bundleId}`);
+    }
+    const executable = decodeURIComponent(path.basename(new URL(process.executable).pathname));
+    return { executable, pid: process.processIdentifier };
+  } catch (err) {
+    throw new FailureError(
+      `Could not resolve the frontmost physical-device app process for ${bundleId}. ` +
+        `Keep the device unlocked and the app in the foreground, or pass app_process explicitly.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_LIST_FAILED,
+        failure_stage: "native_profiler_detect_physical_process",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata(err, "xcrun_devicectl"),
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
+  } finally {
+    await Promise.all([
+      fs.rm(appsPath, { force: true }).catch(() => {}),
+      fs.rm(processesPath, { force: true }).catch(() => {}),
+    ]);
+  }
+}
+
+async function resolvePhysicalProcessByName(
+  udid: string,
+  requestedName: string
+): Promise<DetectedApp> {
+  const processesPath = path.join(
+    tmpdir(),
+    `argent-profiler-processes-${randomUUID()}.json`
+  );
+  try {
+    execFileSync(
+      "xcrun",
+      [
+        "devicectl",
+        "device",
+        "info",
+        "processes",
+        "--device",
+        udid,
+        "--quiet",
+        "--json-output",
+        processesPath,
+      ],
+      { timeout: DETECT_RUNNING_APP_TIMEOUT_MS, maxBuffer: DEFAULT_EXEC_MAX_BUFFER }
+    );
+    const parsed = JSON.parse(await fs.readFile(processesPath, "utf8")) as {
+      result?: { runningProcesses?: DevicectlProcess[] };
+    };
+    const requested = requestedName.toLocaleLowerCase();
+    const process = parsed.result?.runningProcesses?.find((item) => {
+      const executable = decodeURIComponent(path.basename(new URL(item.executable).pathname));
+      return (
+        executable.toLocaleLowerCase() === requested ||
+        String(item.processIdentifier) === requestedName
+      );
+    });
+    if (!process) {
+      throw new Error(`no running physical-device process matched ${requestedName}`);
+    }
+    return {
+      executable: decodeURIComponent(path.basename(new URL(process.executable).pathname)),
+      pid: process.processIdentifier,
+    };
+  } catch (err) {
+    throw new FailureError(
+      `Could not resolve running physical-device process "${requestedName}". ` +
+        `Launch it first or omit app_process to profile the frontmost app.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_LIST_FAILED,
+        failure_stage: "native_profiler_detect_physical_process",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata(err, "xcrun_devicectl"),
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
+  } finally {
+    await fs.rm(processesPath, { force: true }).catch(() => {});
+  }
 }
 
 export async function startNativeProfilerIos(
@@ -325,20 +481,29 @@ export async function startNativeProfilerIos(
     );
   }
 
-  const templatePath = params.template_path ?? resolveDefaultTemplatePath();
+  const physical = isPhysicalIosUdid(params.device_id);
+  const templatePath =
+    params.template_path ?? (physical ? "Time Profiler" : resolveDefaultTemplatePath());
   const detected = params.app_process
-    ? resolveExplicitApp(params.device_id, params.app_process)
-    : detectRunningApp(params.device_id);
+    ? physical
+      ? await resolvePhysicalProcessByName(params.device_id, params.app_process)
+      : resolveExplicitApp(params.device_id, params.app_process)
+    : physical
+      ? await resolvePhysicalAppProcess(
+          params.device_id,
+          params.active_physical_bundle_id ?? ""
+        )
+      : detectRunningApp(params.device_id);
   const appProcess = detected.executable;
 
   // Pick the capture approach for this environment. On Xcode versions where
   // `xctrace --device` works this is the original device/attach path; on the
   // 26.4–27.0 regression (where --device deadlocks) it is the host-wide
   // --all-processes fallback, filtered to the app PID. See capture-strategy.
-  const strategy = selectIosCaptureStrategy();
+  const strategy = physical ? physicalAllProcessesStrategy : selectIosCaptureStrategy();
   // The all-processes fallback records host-wide and isolates the app by PID, so
   // it can only run when the target is actually running (PID known).
-  if (strategy.name === "all-processes" && detected.pid == null) {
+  if (!strategy.attachesByName && detected.pid == null) {
     throw new FailureError(
       `The all-processes capture fallback needs the target app to be running so its ` +
         `samples can be isolated by PID, but no running PID was found for "${appProcess}". ` +
@@ -480,6 +645,12 @@ export interface IosStopResult {
   warning?: string;
 }
 
+function exportTraceForDevice(api: NativeProfilerSessionApi, traceFile: string) {
+  return isPhysicalIosUdid(api.deviceId)
+    ? exportIosTraceData(traceFile, { tolerateMissingHangs: true })
+    : exportIosTraceData(traceFile);
+}
+
 export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Promise<IosStopResult> {
   if ((api.recordingTimedOut || api.recordingExitedUnexpectedly) && api.traceFile) {
     const traceFile = api.traceFile;
@@ -489,7 +660,7 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
 
-    const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile);
+    const { files: exportedFiles, diagnostics } = await exportTraceForDevice(api, traceFile);
     api.exportedFiles = exportedFiles;
 
     const warning = wasTimeout
@@ -544,7 +715,7 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
   api.recordingExitedUnexpectedly = false;
   api.lastExitInfo = null;
 
-  const { files: exportedFiles, diagnostics } = await exportIosTraceData(api.traceFile);
+  const { files: exportedFiles, diagnostics } = await exportTraceForDevice(api, api.traceFile);
   api.exportedFiles = exportedFiles;
 
   const stopResult: IosStopResult = {

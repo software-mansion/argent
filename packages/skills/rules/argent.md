@@ -1,17 +1,17 @@
 ---
-description: Argent iOS Simulator and Android Emulator Agent — always-on guidance for methodology and tools for working with, interacting, testing and profiling mobile app work
+description: Argent mobile-device agent — always-on guidance for controlling, testing, debugging, and profiling iOS simulators, physical iPhones, Android devices, Chromium apps, and TV targets
 alwaysApply: true
 ---
 
 <description>
-If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`.
+If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulators, connected physical iPhones, Android devices, Chromium (CDP) apps, and Vega (Amazon Fire TV) targets; otherwise see `<availability_check>` below before attempting any argent workflow. A physical iPhone appears in `list-devices` with `platform: "ios"`, `kind: "device"`, and a CoreDevice UDID such as `00008130-…`; enable it once with `argent enable physical-ios-devices`. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
 Use cases:
 
-- User mentions iOS simulator, Android emulator, device, or app interaction
-- The app user is working with is a mobile application which can be run in a simulator/emulator
+- User mentions an iOS simulator, physical iPhone, Android device, or app interaction
+- The app user is working with is a mobile application which can run in a simulator/emulator or on a connected phone
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
 - Any code change that affects visible mobile UI, layout, styling, copy, navigation, or screen composition
 - Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
@@ -60,7 +60,7 @@ Before booting, running, or interacting with any app, call `list-devices` first 
 Decision order:
 
 1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
-2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`.
+2. **Prefer a running device.** iOS simulators have state `Booted`, physical iPhones have `kind: "device"` and state `connected`, and Android devices have state `device`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`.
 3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    </device_selection_rule>
 
@@ -70,7 +70,7 @@ Decision order:
 
 <general_rules>
 
-- All simulator/emulator interactions go through argent MCP tools — never use `xcrun simctl`,
+- All simulator/emulator/physical-iPhone interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
@@ -110,7 +110,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for any TV target use the TV skill below.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating a device, taking standalone screenshots, or verifying a visible UI change. Covers iOS simulators, connected physical iPhones, and Android phones/tablets — for any TV target use the TV skill below.
 
 TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
@@ -135,7 +135,7 @@ When: To measure performance of specific components, to find app-wide bottleneck
 
 NATIVE PROFILING
 Use skill: `argent-native-profiler`
-When: Profiling native performance (CPU hotspots, UI hangs, memory leaks). iOS only today; Android on the roadmap. Useful as a reference for platform-specific investigation when running dual profiling via `argent-react-native-profiler`.
+When: Profiling native performance (CPU hotspots, UI hangs, memory leaks). Supports iOS simulators and physical iPhones; protected system apps on a phone provide device-wide Time Profiler data filtered to the app PID rather than Leaks/Allocations. Android is also supported through Perfetto. Useful as a reference for platform-specific investigation when running dual profiling via `argent-react-native-profiler`.
 
 PERFORMANCE OPTIMIZATION
 Use skill: `argent-react-native-optimization`

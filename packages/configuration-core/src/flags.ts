@@ -58,6 +58,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description: "Expose GET /artifacts for remote artifact inventory consumers.",
   },
   {
+    name: "physical-ios-devices",
+    description:
+      "Discover and control physical iOS devices through an automatically signed WebDriverAgent session. Supports full touch/multi-touch, keyboard, screenshots, accessibility, app lifecycle, device logs, and native Time Profiler capture without a root tunnel.",
+  },
+  {
     name: "tool-server-event-log",
     description: "Write structured tool-server lifecycle events to a JSONL file.",
   },

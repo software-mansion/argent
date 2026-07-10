@@ -104,6 +104,17 @@ const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
 const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
+// argent-device-auth: macOS host helper for the branded physical-iOS tunnel
+// auth prompt. Best-effort — only present once argent-private publishes the
+// signed binary; until then physical iOS falls back to the osascript prompt.
+const DEVICE_AUTH_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/argent-device-auth");
+const DEVICE_AUTH_BIN_DEST = path.resolve(BIN_DIR, "darwin/argent-device-auth");
+// Argent icon shown in that prompt (committed under native-devtools-ios/assets).
+const DEVICE_ICON_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-ios/assets/argent-icon.png"
+);
+const DEVICE_ICON_DEST = path.resolve(__dirname, "../assets/argent-icon.png");
 // tvOS control binaries. Both are macOS-only: tvos-ax-service runs inside an
 // appletvsimulator, tvos-hid-daemon runs on the host. Unix-socket only.
 const TVOS_AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tvos-ax-service");
@@ -207,6 +218,27 @@ const ASSETS = [
     required: false,
     copiedLabel: "ax-service (tcp) binary",
     missLabel: "ax-service (tcp) binary",
+  },
+  // macOS host helper for the branded physical-iOS tunnel auth prompt.
+  // Best-effort: present once argent-private publishes the signed binary;
+  // until then physical iOS falls back to the (unbranded) osascript prompt.
+  {
+    kind: "file",
+    src: DEVICE_AUTH_BIN_SRC,
+    dest: DEVICE_AUTH_BIN_DEST,
+    mode: 0o755,
+    required: false,
+    copiedLabel: "argent-device-auth binary",
+    missLabel: "argent-device-auth binary",
+  },
+  // Argent icon shown in the device-auth prompt (committed; best-effort copy).
+  {
+    kind: "file",
+    src: DEVICE_ICON_SRC,
+    dest: DEVICE_ICON_DEST,
+    required: false,
+    copiedLabel: "device-auth icon",
+    missLabel: "device-auth icon",
   },
   // tvOS AX reader — spawned inside an appletvsimulator via simctl to read
   // the focus-engine accessibility tree. macOS-only, unix-socket transport.
@@ -536,6 +568,16 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // are declared in @swmansion/argent's dependencies so npm installs them
 // alongside the package; keep them external so the bundle resolves them from
 // node_modules/ at runtime.
+//
+// `appium-xcuitest-driver` owns WebDriverAgent's Xcode project and other runtime
+// assets under its package directory. Inlining only its JavaScript would leave
+// those assets behind and make physical-iOS setup fail after npm installation.
+// Keep the driver external and ship it (plus its Appium peer) as regular
+// @swmansion/argent dependencies.
+// Appium also installs `sharp` as an optional transitive dependency. Argent's
+// Chromium screenshot path loads it dynamically and already degrades when it
+// is absent, so keep the native addon external rather than asking esbuild to
+// inline platform-specific `.node` files.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -545,6 +587,8 @@ buildBundle({
     "tree-sitter",
     "tree-sitter-typescript",
     "electron",
+    "appium-xcuitest-driver",
+    "sharp",
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
   ],

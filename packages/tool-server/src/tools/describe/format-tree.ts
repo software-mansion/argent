@@ -184,7 +184,8 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     opts.source === "uiautomator" ||
     opts.source === "android-devtools" ||
     opts.source === "cdp-dom" ||
-    opts.source === "vega-automation"
+    opts.source === "vega-automation" ||
+    opts.source === "wda-ax"
       ? "nested"
       : "flat";
   const isVega = opts.source === "vega-automation";

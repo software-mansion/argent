@@ -12,6 +12,22 @@ describe("package manifest", () => {
     expect(pkg.files).toContain("bin/");
     expect(pkg.files).toContain("skills/");
   });
+
+  it("ships WebDriverAgent with the external physical-iOS driver", () => {
+    const workspaceRoot = path.resolve(import.meta.dirname, "..", "..", "..");
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(workspaceRoot, "packages/argent/package.json"), "utf8")
+    ) as { dependencies?: Record<string, string> };
+    const bundleTools = fs.readFileSync(
+      path.join(workspaceRoot, "packages/argent/scripts/bundle-tools.cjs"),
+      "utf8"
+    );
+
+    expect(pkg.dependencies?.["appium-xcuitest-driver"]).toBeTruthy();
+    expect(pkg.dependencies?.appium).toBeTruthy();
+    expect(bundleTools).toContain('"appium-xcuitest-driver"');
+    expect(bundleTools).toContain('"sharp"');
+  });
 });
 
 // Regression guard for the ax-service-missing-from-release bug (first shipped

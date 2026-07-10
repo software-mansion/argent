@@ -3,7 +3,7 @@
   "name": "@argent/skills",
   "version": "0.15.0",
   "type": "module",
-  "description": "Claude Code skills for iOS simulator and Android emulator interaction via argent",
+  "description": "Agent skills for iOS simulators, physical iPhones, Android devices, Chromium apps, and TV targets via Argent",
   "scripts": {
     "install-skills": "node scripts/install.js"
   },

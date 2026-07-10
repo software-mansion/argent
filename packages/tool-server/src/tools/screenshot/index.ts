@@ -6,7 +6,11 @@ import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../blueprints/physical-ios-automation";
+import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { getScreenshotScale, httpScreenshot } from "../../utils/simulator-client";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
@@ -120,11 +124,12 @@ export async function tvTargetLongSide(file: string, scale: number): Promise<num
 export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {
   return {
     id: "screenshot",
-    description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
+    description: `Capture a screenshot of the device screen (iOS simulator, physical iPhone, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,
-    searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
+    searchHint:
+      "device simulator emulator chromium screen image capture baseline tvos apple tv vega fire tv",
     zodSchema,
     outputHint: "image",
     capability,
@@ -146,6 +151,22 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
           scale: params.scale,
           downscaler: params.downscaler,
         });
+        const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
+        return { image };
+      }
+
+      // A physical iOS device captures over WebDriverAgent, not simulator-server.
+      // WDA returns a full-resolution PNG;
+      // rotation/scale/downscaler are simulator/Chromium-only knobs and don't
+      // apply to the device. Checked before the (async, simulator-only) tvOS
+      // probe below since a physical udid isn't a simulator runtime at all.
+      if (isPhysicalIos(device)) {
+        const ref = physicalIosAutomationRef(device);
+        const physicalIos = (await registry.resolveService(
+          ref.urn,
+          ref.options
+        )) as PhysicalIosAutomationApi;
+        const { path: capturedPath } = await physicalIos.screenshot();
         const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
         return { image };
       }

@@ -1,7 +1,11 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../blueprints/physical-ios-automation";
+import { isPhysicalIos, resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
@@ -30,10 +34,17 @@ Use to test layout in a different orientation. Re-run \`describe\` afterwards â€
 Returns { orientation }. Fails if the target device is not booted.`,
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    return isPhysicalIos(device)
+      ? { physicalIos: physicalIosAutomationRef(device) }
+      : { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params) {
+    if (isPhysicalIos(resolveDevice(params.udid))) {
+      await (services.physicalIos as PhysicalIosAutomationApi).rotate(params.orientation);
+      return { orientation: params.orientation };
+    }
     const api = services.simulatorServer as SimulatorServerApi;
     sendCommand(api, { cmd: "rotate", direction: params.orientation });
     return { orientation: params.orientation };

@@ -12,7 +12,11 @@ import type {
   ToolDefinition,
 } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import {
+  physicalIosAutomationRef,
+  type PhysicalIosAutomationApi,
+} from "../../blueprints/physical-ios-automation";
+import { isPhysicalIos, resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
@@ -112,7 +116,10 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
     // for pure static-PNG diffs, which fails on tvOS simulators that have no
     // SimulatorServer backend.
     if (params.captureBaseline || params.captureCurrent) {
-      return { simulatorServer: simulatorServerRef(resolveDevice(params.udid)) };
+      const device = resolveDevice(params.udid);
+      return isPhysicalIos(device)
+        ? { physicalIos: physicalIosAutomationRef(device) }
+        : { simulatorServer: simulatorServerRef(device) };
     }
     return {};
   },
@@ -191,7 +198,8 @@ async function resolveInputPaths(
 
   const baselinePath = params.captureBaseline
     ? await captureLiveInput({
-        api: requireSimulatorServer(services),
+        api: services.physicalIos ? undefined : requireSimulatorServer(services),
+        physicalIos: services.physicalIos as PhysicalIosAutomationApi | undefined,
         outputDir,
         name: "baseline",
         rotation: params.rotation,
@@ -202,7 +210,8 @@ async function resolveInputPaths(
 
   const currentPath = params.captureCurrent
     ? await captureLiveInput({
-        api: requireSimulatorServer(services),
+        api: services.physicalIos ? undefined : requireSimulatorServer(services),
+        physicalIos: services.physicalIos as PhysicalIosAutomationApi | undefined,
         outputDir,
         name: "current",
         rotation: params.rotation,
@@ -273,7 +282,8 @@ function requireSimulatorServer(services: Record<string, unknown>): SimulatorSer
 async function captureLiveInput(params: {
   // Resolved and validated by requireSimulatorServer at the call site, so it is
   // never undefined here.
-  api: SimulatorServerApi;
+  api?: SimulatorServerApi;
+  physicalIos?: PhysicalIosAutomationApi;
   outputDir: string;
   name: "baseline" | "current";
   rotation?: Params["rotation"];
@@ -288,10 +298,18 @@ async function captureLiveInput(params: {
   // normalization in diffPngFiles keeps a scaled capture diff-compatible with a
   // baseline saved at any scale. Full-res is preserved wherever it works (iOS).
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
-  try {
-    capture = await params.captureScreenshot(params.api, params.rotation, params.signal, 1.0);
-  } catch {
-    capture = await params.captureScreenshot(params.api, params.rotation, params.signal);
+  if (params.physicalIos) {
+    if (params.rotation) await params.physicalIos.rotate(params.rotation);
+    await params.physicalIos.flushControls();
+    const physicalCapture = await params.physicalIos.screenshot();
+    capture = { ...physicalCapture, url: "" };
+  } else {
+    if (!params.api) throw new Error("Live screenshot capture requires a device service.");
+    try {
+      capture = await params.captureScreenshot(params.api, params.rotation, params.signal, 1.0);
+    } catch {
+      capture = await params.captureScreenshot(params.api, params.rotation, params.signal);
+    }
   }
   const suffix = crypto.randomBytes(4).toString("hex");
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);

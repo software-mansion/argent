@@ -2,13 +2,18 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import type { PhysicalIosAutomationApi } from "../../../blueprints/physical-ios-automation";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
 
 const execFileAsync = promisify(execFile);
 
 export const iosImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult> = {
   requires: ["xcrun"],
-  handler: async (_services, params) => {
+  handler: async (services, params, device) => {
+    if (device.kind === "device") {
+      await (services.physicalIos as PhysicalIosAutomationApi).openUrl(params.url);
+      return { opened: true, url: params.url };
+    }
     try {
       await execFileAsync("xcrun", ["simctl", "openurl", params.udid, params.url]);
     } catch (err) {
