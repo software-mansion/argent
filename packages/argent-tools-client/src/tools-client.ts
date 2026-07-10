@@ -89,8 +89,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     const meta = await fetchTool(name);
     if (meta?.fileInputs?.length) {
       const { url: routedUrl } = await getResolvedToolsUrl();
+      const isRemote = routedUrl !== null;
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
-        includeContent: routedUrl !== null,
+        includeContent: isRemote,
+        uploadEndpoint: isRemote ? { url, token } : undefined,
       });
     }
 

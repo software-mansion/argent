@@ -243,7 +243,7 @@ interface PruneOptions {
   includeSystem: boolean;
 }
 
-function attrIsTrue(attrs: Record<string, string>, key: string): boolean {
+export function attrIsTrue(attrs: Record<string, string>, key: string): boolean {
   return attrs[key] === "true";
 }
 
@@ -262,7 +262,7 @@ function isInteractive(attrs: Record<string, string>): boolean {
   return false;
 }
 
-function labelOf(attrs: Record<string, string>): string {
+export function labelOf(attrs: Record<string, string>): string {
   // The DescribeNode contract surfaces the screen-reader-meaningful label and
   // the user-typed text separately, so we prefer `content-desc` (the role
   // description / placeholder) and let `text` come through as `value` when
@@ -313,6 +313,17 @@ function descendantText(parsed: ParsedXmlNode, maxChars = 120): string {
   const stack: ParsedXmlNode[] = [parsed];
   while (stack.length > 0) {
     const x = stack.pop()!;
+    // A password field's `text` is the secret. Never mine it — or its subtree —
+    // into a borrowed container label; this walk reads the raw XML and would
+    // otherwise bypass the "[password]" redaction the rest of the parser
+    // applies to a password node's own label. Substitute the redacted marker.
+    if (attrIsTrue(x.attrs, "password")) {
+      if (!seen.has("[password]")) {
+        seen.add("[password]");
+        parts.push("[password]");
+      }
+      continue;
+    }
     for (const k of ["text", "content-desc"] as const) {
       const v = (x.attrs[k] ?? "").trim();
       if (v && !seen.has(v)) {
@@ -451,6 +462,15 @@ function computeNodeOutput(
   const interactive = isInteractive(attrs);
   let label = labelOf(attrs);
 
+  // Password fields: keep the ref but never leak the value. Redact HERE, at the
+  // point the label is derived, not just before `makeUiNode` — the collapse
+  // sites below copy this node's `label` onto a surviving child and return
+  // early, so a late redaction would be bypassed and the secret would ride out
+  // on the collapsed tap target. Redacting at the source covers every path.
+  if (attrIsTrue(attrs, "password")) {
+    label = "[password]";
+  }
+
   // Decorative ImageView (no clickable, no label) — drop, pass through any
   // surviving descendants. Most decorative images have zero kept children
   // and the entire branch evaporates.
@@ -486,6 +506,14 @@ function computeNodeOutput(
   if (interactive && bounds && keptChildren.length === 1) {
     const c = keptChildren[0]!;
     if (c.clickable && c.pixelBounds && rectsEqual(c.pixelBounds, bounds)) {
+      // The inner node is usually the more specific one, so prefer its own
+      // label/identifier. But the accessibility label can live ONLY on the
+      // outer wrapper (an RN `Pressable accessibilityLabel` wrapping a bare
+      // clickable native view) — fall back to the wrapper's values so the
+      // collapsed tap target isn't left anonymous instead of dropping them.
+      if (!c.label && label) c.label = label;
+      const rid = attrs["resource-id"];
+      if (!c.identifier && rid) c.identifier = rid;
       return [c];
     }
   }
@@ -504,11 +532,6 @@ function computeNodeOutput(
           !c.clickable
         )
     );
-  }
-
-  // Password fields: keep the ref but never leak the value.
-  if (attrIsTrue(attrs, "password")) {
-    label = "[password]";
   }
 
   const node = makeUiNode(attrs, deriveUiAutomatorRole(cls), bounds, label, keptChildren);
@@ -568,12 +591,17 @@ function finalizeUiNode(
       height: sh > 0 ? clipped.h / sh : 0,
     };
   } else {
-    // No bounds: drop empty wrappers, pass through single-child wrappers, and
-    // synthesise a union frame for 2+ children. Replacing the whole subtree
-    // with `null` silently dropped every child on Compose hierarchies that
-    // emit bounds-less group containers — preserved here for that case.
+    // No bounds: drop empty wrappers, pass through single-child scaffold
+    // wrappers, and synthesise a union frame for 2+ children. Replacing the
+    // whole subtree with `null` silently dropped every child on Compose
+    // hierarchies that emit bounds-less group containers — preserved here for
+    // that case. A single-child wrapper that carries its OWN label/identifier
+    // (e.g. a bounds-less Compose group container with a content-desc) must NOT
+    // be flattened into its child: doing so discards that accessibility label.
+    // Keep it as a node whose frame is the union of its (here, sole) child so
+    // neither the wrapper's nor the child's label is dropped.
     if (children.length === 0) return null;
-    if (children.length === 1) return children[0]!;
+    if (children.length === 1 && !n.label && !n.identifier) return children[0]!;
     const x1 = Math.min(...children.map((c) => c.frame.x));
     const y1 = Math.min(...children.map((c) => c.frame.y));
     const x2 = Math.max(...children.map((c) => c.frame.x + c.frame.width));

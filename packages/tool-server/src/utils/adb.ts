@@ -116,6 +116,15 @@ export interface AdbRunResult {
 // process blocked on a hung daemon can ignore — leaving the parent waiting
 // past the deadline. SIGKILL guarantees the child is reaped at the timeout
 // boundary so callers' overall budgets actually hold.
+//
+// Unlike `runVega` (which spawns `detached` and reaps the whole process group on
+// timeout), execFile's single-child SIGKILL is sufficient here: an `adb <command>`
+// invocation is a *single-process client* that talks to the persistent, shared
+// `adb server` daemon over a socket — it forks no `python3 → node → vda` worker
+// tree to orphan, so killing the direct child reaps it completely. A group kill
+// would also be wrong: the daemon is deliberately long-lived and shared across all
+// adb calls, so it must survive a single command's timeout. (A wedged *device* is
+// instead bounded by per-call timeouts + the list-devices branch deadline.)
 const ADB_KILL_SIGNAL = "SIGKILL" as const;
 
 function describeAdbFailure(args: string[], err: unknown): Error {
@@ -218,6 +227,13 @@ export interface AndroidDevice {
   model: string | null;
   avdName: string | null;
   sdkLevel: number | null;
+  /**
+   * "tv" for an Android TV (leanback) device/emulator, "mobile" otherwise.
+   * Mirrors `IosSimulator.runtimeKind` so a TV target is identified the same
+   * way across platforms. Populated only for devices in the "device" state
+   * (it needs a `getprop` round-trip); undefined when unknown.
+   */
+  runtimeKind?: "mobile" | "tv";
 }
 
 // Set of states `adb devices` actually emits — filtering to this set rejects
@@ -276,14 +292,37 @@ export function consolePortFromAdbSerial(serial: string): number | null {
   return null;
 }
 
+// Tight bound for the `adb devices` shell-out on the `alwaysLoad` `list-devices`
+// hot path. Callers opt in by passing this as `devicesTimeoutMs`; omitting it keeps
+// runAdb's 30s default. list-devices needs the bound because a slow/cold/wedged `adb
+// server` (the exact condition this fix targets) would otherwise stall the Android
+// branch for up to 30s + the ~5s enrichment — well past list-devices'
+// BRANCH_DEADLINE_MS (25s), at which point the backstop substitutes `[]` and drops
+// EVERY Android device from the result. `adb devices` only queries the local daemon
+// (autostarting it on a cold call, ~1-2s); 6s is a generous multiple of that, and
+// keeps the Android branch's worst case (6s here + ~5s enrichment = ~11s) comfortably
+// under the deadline so a completing branch is never truncated. A genuine daemon hang
+// past 6s fails fast to `[]` via listAndroidDevices' `.catch`, the same degraded result
+// the deadline would give — just sooner and with adb's own error logged.
+//
+// Deliberately NOT applied globally: boot-device's before/after device snapshots call
+// listAndroidDevices() WITHOUT this bound, keeping the 30s default. A snapshot that
+// timed out to `[]` there could misidentify an already-connected emulator as "newly
+// booted" (the very race boot-device's `adb start-server` + snapshot guards against),
+// and boot-device is not latency-sensitive the way the alwaysLoad list-devices is.
+export const ADB_DEVICES_TIMEOUT_MS = 6_000;
+
 /**
  * Light-weight listing for callers that only need which serials exist.
  * Skips the per-device getprop round-trips so the call is one `adb devices`
  * shell-out, not 1 + 3N. Used by `listAndroidDevices` as the first hop before
- * it enriches each entry.
+ * it enriches each entry. `devicesTimeoutMs` bounds the `adb devices` call;
+ * omit it to inherit runAdb's 30s default (see ADB_DEVICES_TIMEOUT_MS).
  */
-async function listAndroidSerials(): Promise<Array<{ serial: string; state: string }>> {
-  const { stdout } = await runAdb(["devices"]);
+async function listAndroidSerials(
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<Array<{ serial: string; state: string }>> {
+  const { stdout } = await runAdb(["devices"], { timeoutMs: options.devicesTimeoutMs });
   return parseAdbDevices(stdout);
 }
 
@@ -292,32 +331,222 @@ async function listAndroidSerials(): Promise<Array<{ serial: string; state: stri
 // the hot path of the boot loop — a single mid-attach device can stall the
 // stage budget for 30 s × 3 getprops = the entire adb-register window. 5 s
 // is plenty for a getprop on any responsive device.
-const ENRICH_TIMEOUT_MS = 5_000;
+//
+// Exported so list-devices' BRANCH_DEADLINE_MS accounting can include it: the
+// Android branch's worst case is one bounded `adb devices` call
+// (ADB_DEVICES_TIMEOUT_MS) plus this enrichment (all devices and all per-device
+// getprops run concurrently, so the enrichment caps at one ENRICH_TIMEOUT_MS, not
+// a multiple), and that sum has to stay under the branch deadline.
+export const ENRICH_TIMEOUT_MS = 5_000;
 
 /**
  * Resolve the AVD name of a running emulator. The property moved from
  * `ro.kernel.qemu.avd_name` to `ro.boot.qemu.avd_name` in emulator release 30
- * (Android 11+); we probe the newer one first and fall back to the legacy
- * name so both old and new images work.
+ * (Android 11+); we still prefer the newer name and fall back to the legacy one
+ * so both old and new images work.
+ *
+ * The two getprops run concurrently rather than back-to-back: a wedged emulator
+ * (e.g. an unresponsive VVD that also shows on adb) otherwise costs the full
+ * `2 × ENRICH_TIMEOUT_MS` here, doubling the Android branch of the `alwaysLoad`
+ * `list-devices` tool. `.catch(() => "")` handles a rejected probe; the timeout
+ * handles a slow one.
  */
 async function readAvdName(serial: string): Promise<string | null> {
-  const modern = await adbShell(serial, "getprop ro.boot.qemu.avd_name", {
+  const [modern, legacy] = await Promise.all([
+    adbShell(serial, "getprop ro.boot.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
+      () => ""
+    ),
+    adbShell(serial, "getprop ro.kernel.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
+      () => ""
+    ),
+  ]);
+  return modern.trim() || legacy.trim() || null;
+}
+
+/**
+ * Detect whether an Android target is a TV (leanback) device. Android TV AVDs
+ * and devices share the `emulator-NNNN` serial shape and `isEmulator` flag with
+ * phones, so the serial alone can't tell them apart — only a device capability
+ * can.
+ *
+ * The authoritative signal is the system feature list (`pm list features`):
+ * `android.software.leanback` / `android.hardware.type.television` are exactly
+ * what `PackageManager.hasSystemFeature(FEATURE_LEANBACK)` checks, and they are
+ * present on every Android TV / Google TV image (physical and emulator). We do
+ * NOT rely on `ro.build.characteristics` containing `tv`: it's correct on most
+ * physical TV devices but the Google ATV *emulator* images report
+ * `characteristics=emulator` (no `tv`), so a characteristics-only check
+ * misclassifies every TV AVD as a phone. We keep the characteristics token as a
+ * secondary fallback for the rare image where `pm list features` is unavailable.
+ *
+ * Returns "mobile" only on a populated, non-leanback `pm list features`. An
+ * empty feature list returns undefined (not "mobile"), even when
+ * `ro.build.characteristics` answers: that property can only confirm a TV (its
+ * `tv` token), never a phone (the ATV emulator reports `emulator`, no `tv`).
+ * Indeterminate results are left uncached so a still-booting TV re-probes
+ * instead of being pinned to "mobile" for the process lifetime.
+ */
+async function readRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
+  const features = await adbShell(serial, "pm list features", {
     timeoutMs: ENRICH_TIMEOUT_MS,
   }).catch(() => "");
-  if (modern.trim()) return modern.trim();
-  const legacy = await adbShell(serial, "getprop ro.kernel.qemu.avd_name", {
+  if (/feature:android\.(software\.leanback|hardware\.type\.television)\b/.test(features)) {
+    return "tv";
+  }
+
+  // A populated, non-leanback feature list is authoritative: the feature list is
+  // the primary signal, so a device that answered it and lacks leanback is a
+  // determinate "mobile". Return now rather than second-guessing it with the
+  // characteristics token (which would let a stray `tv` there override the
+  // primary verdict) — and skip the extra round-trip on the common phone path.
+  if (features.trim()) return "mobile";
+
+  // Feature list came back empty (mid-boot / timeout / image without `pm`). Fall
+  // back to the `tv` token in ro.build.characteristics — correct on most physical
+  // TV hardware, though absent on the ATV emulator (hence feature-list primary).
+  const characteristics = await adbShell(serial, "getprop ro.build.characteristics", {
     timeoutMs: ENRICH_TIMEOUT_MS,
   }).catch(() => "");
-  return legacy.trim() || null;
+  const isTv = characteristics
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .includes("tv");
+  if (isTv) return "tv";
+
+  // No `tv` token here proves nothing: the ATV emulator reports
+  // `characteristics=emulator` while its feature list (still empty above) is the
+  // only place leanback shows. Stay indeterminate rather than caching "mobile".
+  return undefined;
+}
+
+// A device's form factor is fixed for the life of its boot (a phone image can't
+// become a TV one), so memoize to keep the hot describe/navigate path off the
+// `pm list features` / characteristics round-trips. Mirrors `runtimeKindCache`
+// in ios-devices — but, unlike a stable iOS UDID, an `emulator-NNNN` serial is a
+// positional console slot the next emulator reclaims after the current one
+// stops. So the cache is keyed by serial AND avdName: booting a different AVD on
+// the same slot changes avdName and forces a re-probe, instead of inheriting the
+// prior occupant's verdict. Only definitive "tv"/"mobile" results are stored; an
+// indeterminate probe is never cached.
+const androidRuntimeKindCache = new Map<
+  string,
+  { avdName: string | null; kind: "mobile" | "tv" }
+>();
+
+/** Test-only: clear the runtime-kind memo so cases don't leak verdicts across serials. */
+export function __resetAndroidRuntimeKindCacheForTesting(): void {
+  androidRuntimeKindCache.clear();
+}
+
+/**
+ * Probe (or return the cached) runtime kind for a serial, keyed by its current
+ * avdName so a reclaimed emulator slot can't inherit the prior AVD's verdict.
+ * Indeterminate probes return undefined and are not cached. Shared by the
+ * `listAndroidDevices` enrichment and `getAndroidRuntimeKind` so both honor the
+ * same cache and a re-list of a known device skips the feature probe.
+ */
+async function resolveRuntimeKindCached(
+  serial: string,
+  avdName: string | null
+): Promise<"mobile" | "tv" | undefined> {
+  const cached = androidRuntimeKindCache.get(serial);
+  if (cached && cached.avdName === avdName) return cached.kind;
+  const kind = await readRuntimeKind(serial);
+  if (kind === undefined) return undefined;
+  androidRuntimeKindCache.set(serial, { avdName, kind });
+  return kind;
+}
+
+/**
+ * Resolve the runtime kind ("mobile" | "tv") of an Android serial, or undefined
+ * when the device isn't currently listed in the "device" state (so a TV-only
+ * tool can surface a clear error rather than driving an offline target) or its
+ * form factor can't yet be determined.
+ *
+ * `resolveDevice` classifies by serial shape alone and tags every Android
+ * target `platform: "android"`; code paths that must branch on Android TV
+ * (the tv-* tools) call this for the real form factor. Parallels
+ * `getSimulatorRuntimeKind` on the iOS side.
+ *
+ * The readiness check goes through the cheap `adb devices` listing (no getprops)
+ * rather than the full `listAndroidDevices` enrichment. The avdName getprop is
+ * read only for `emulator-NNNN` serials, where it detects a reused console slot;
+ * a physical serial is never reclaimed and has no qemu avd_name, so it keys on
+ * null directly instead of paying two getprops per call.
+ */
+export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
+  const serials = await listAndroidSerials();
+  const ready = serials.find((d) => d.serial === serial && d.state === "device");
+  if (!ready) {
+    // Gone / offline: drop any cached verdict so a future occupant of this slot
+    // (emulator serials are reused) starts from a clean re-probe.
+    androidRuntimeKindCache.delete(serial);
+    return undefined;
+  }
+  const avdName = serial.startsWith("emulator-") ? await readAvdName(serial) : null;
+  return resolveRuntimeKindCached(serial, avdName);
+}
+
+/** True when the given Android serial is an Android TV (leanback) target. */
+export async function isAndroidTv(serial: string): Promise<boolean> {
+  return (await getAndroidRuntimeKind(serial)) === "tv";
+}
+
+/**
+ * Synchronous, cache-only view of a serial's runtime kind: returns the memoized
+ * "mobile"/"tv" verdict if a prior probe resolved it, otherwise undefined. It
+ * NEVER runs `adb` — callers on a latency-sensitive hot path (telemetry platform
+ * inference) use this to distinguish Android TV from a phone/tablet only when the
+ * kind is already known, falling back to the coarse `android` platform otherwise
+ * rather than paying a `pm list features` round-trip per call. The cache is
+ * warmed by the describe/launch/keyboard/tv-control paths any real Android TV
+ * session exercises.
+ *
+ * The verdict is returned regardless of the caller supplying an avdName: unlike
+ * the async path this can't cheaply re-read `ro.boot.qemu.avd_name` to detect a
+ * reclaimed `emulator-NNNN` slot, so if a TV AVD's slot is later reclaimed by a
+ * phone AVD (or the reverse) within one tool-server lifetime, this can report the
+ * prior occupant's kind. Acceptable for best-effort coarse telemetry — no crash,
+ * and no dispatch impact since dispatch stays TV-agnostic: the TV→phone direction
+ * mislabels a phone as `android-tv`, the phone→TV direction only falls back to
+ * the coarse `android`. The stale entry is corrected only when an async path
+ * re-touches the serial: `getAndroidRuntimeKind`/`isAndroidTv` (via
+ * describe/launch/restart/keyboard/tv-control) delete it when the serial has gone
+ * offline and re-probe it on an avdName mismatch, while the `list-devices`
+ * enrichment re-probes on an avdName mismatch too (so a live reclaiming AVD fixes
+ * it) but does not evict a merely-offline entry. A session that triggers none of
+ * these (e.g. a describe-free, gesture-only replay) keeps the stale verdict — so
+ * the mislabel is bounded to that process, not guaranteed transient.
+ */
+export function getCachedAndroidRuntimeKind(serial: string): "mobile" | "tv" | undefined {
+  return androidRuntimeKindCache.get(serial)?.kind;
 }
 
 /**
  * List all Android devices + emulators known to adb, enriched with model,
  * AVD name, and SDK level via `getprop`. Use `listAndroidSerials` when you
  * only need the state-scoped serial list — it avoids the extra round-trips.
+ *
+ * `runtimeKind` (TV vs mobile) is NOT resolved unless `opts.runtimeKind` is set,
+ * because detecting it costs an extra `pm list features` (+ a characteristics
+ * fallback) round-trip per device, and `pm` is often not yet answering mid-boot
+ * — so each probe can block up to ENRICH_TIMEOUT_MS. Callers that don't consume
+ * the kind must not pay that; the boot-loop pollers stay off it entirely by
+ * going through the cheap `listAndroidSerials` instead of this enrichment.
+ * `list-devices` is the only caller and opts in because it surfaces the kind to
+ * the agent; the tv-* tools resolve form factor via `getAndroidRuntimeKind`
+ * (which also reuses the shared cache) rather than this list.
+ *
+ * `devicesTimeoutMs` bounds the initial `adb devices` call; omit it to inherit
+ * runAdb's 30s default. The alwaysLoad `list-devices` tool passes
+ * ADB_DEVICES_TIMEOUT_MS (6s) so its Android branch self-bounds under the fan-out
+ * deadline; boot-device omits it so its before/after snapshots aren't truncated to
+ * `[]` under a slow-but-alive daemon (see ADB_DEVICES_TIMEOUT_MS).
  */
-export async function listAndroidDevices(): Promise<AndroidDevice[]> {
-  const basic = await listAndroidSerials();
+export async function listAndroidDevices(
+  opts: { runtimeKind?: boolean; devicesTimeoutMs?: number } = {}
+): Promise<AndroidDevice[]> {
+  const basic = await listAndroidSerials({ devicesTimeoutMs: opts.devicesTimeoutMs });
 
   const enriched = await Promise.all(
     basic.map(async (d): Promise<AndroidDevice> => {
@@ -340,6 +569,13 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
         ),
         readAvdName(d.serial),
       ]);
+      // Resolve runtime kind only when asked, and through the shared cache
+      // (keyed by serial+avdName) so a re-list of a device whose form factor is
+      // already known skips the feature probe, and a reclaimed emulator slot
+      // re-probes instead of inheriting the previous AVD's verdict.
+      const runtimeKind = opts.runtimeKind
+        ? await resolveRuntimeKindCached(d.serial, avd)
+        : undefined;
       const sdkLevel = parseInt(sdk.trim(), 10);
       return {
         serial: d.serial,
@@ -348,6 +584,7 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
         model: model.trim() || null,
         avdName: avd,
         sdkLevel: Number.isFinite(sdkLevel) ? sdkLevel : null,
+        runtimeKind,
       };
     })
   );

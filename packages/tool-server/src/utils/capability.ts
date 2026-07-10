@@ -85,6 +85,8 @@ function platformMatrix(
   switch (platform) {
     case "ios":
       return capability.apple;
+    case "ios-remote":
+      return capability.appleRemote;
     case "android":
       return capability.android;
     case "chromium":

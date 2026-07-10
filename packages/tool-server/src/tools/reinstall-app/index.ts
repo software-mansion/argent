@@ -4,6 +4,7 @@ import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import type { ReinstallAppResult, ReinstallAppServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
+import { iosRemoteImpl } from "./platforms/ios-remote";
 import { vegaImpl } from "./platforms/vega";
 
 // Mirror launch-app / restart-app: the leading-letter rule keeps a value like
@@ -33,6 +34,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   vega: { vvd: true },
 };
@@ -44,6 +46,7 @@ Use for a full reinstall after rebuilding, or to start from a clean app state.
 Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .apk for Android, .vpkg for Vega).`,
   zodSchema,
   capability,
+  fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
   services: () => ({}),
   execute: dispatchByPlatform<
     ReinstallAppServices,
@@ -52,12 +55,14 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
     ReinstallAppResult,
     // No chromium branch — falls back to the ChromiumServices default.
     Record<string, unknown>,
+    ReinstallAppServices,
     ReinstallAppServices
   >({
     toolId: "reinstall-app",
     capability,
     ios: iosImpl,
     android: androidImpl,
+    iosRemote: iosRemoteImpl,
     vega: vegaImpl,
   }),
 };

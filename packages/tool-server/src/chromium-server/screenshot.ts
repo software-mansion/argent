@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import { mediaDir } from "./cdp-session";
 import type { DownscalerType, MediaReady, Rotation, ScreenshotOpts } from "./types";
@@ -89,7 +90,12 @@ export async function captureScreenshot(
     captureBeyondViewport: false,
   })) as { data?: string };
   if (!cdpResult.data) {
-    throw new Error("Chromium CDP: Page.captureScreenshot returned no data.");
+    throw new FailureError("Chromium CDP: Page.captureScreenshot returned no data.", {
+      error_code: FAILURE_CODES.CHROMIUM_SCREENSHOT_FAILED,
+      failure_stage: "chromium_screenshot_capture",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+    });
   }
   let bytes = Buffer.from(cdpResult.data, "base64");
 
@@ -191,6 +197,10 @@ export async function copyScreenshotToClipboard(
   )) as { result?: { value?: { ok?: boolean; error?: string } } };
   const v = out.result?.value;
   if (!v?.ok) {
+    // Plain Error, not a classified FailureError: copyScreenshotToClipboard has
+    // no production caller (only wired into the chromium-server object / type),
+    // and even the sibling clipboard route reformats errors before any registry
+    // boundary — so a code here could never reach telemetry.
     throw new Error(
       `Chromium clipboard image copy failed: ${v?.error ?? "renderer rejected the write"}`
     );

@@ -9,9 +9,10 @@ import type {
 } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
+import { isTvOsSimulator } from "../../utils/ios-devices";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { sleepOrAbort } from "../../utils/timing";
+import { pollDescribeTree } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
@@ -317,46 +318,6 @@ function timeoutNote(
   return appendDiagnostics(base, lastData);
 }
 
-// ── Per-fetch deadline / abort ─────────────────────────────────────────────
-
-type Settled<T> =
-  | { type: "value"; value: T }
-  | { type: "error"; error: string }
-  | { type: "timeout" }
-  | { type: "aborted" };
-
-// Race a tree fetch against the remaining wait budget and the abort signal. The
-// underlying describe fetch isn't cancellable (no AbortSignal reaches adb /
-// AXRuntime), so a slow or hung fetch — e.g. the Android `uiautomator dump`
-// fallback, which allows up to 20s — would otherwise blow past `timeoutMs` and
-// ignore an abort that arrives mid-fetch. We can't kill the orphaned fetch, but
-// we stop waiting on it; its eventual settle is consumed here (handlers attached
-// up front) so it can't surface as an unhandled rejection.
-function settleWithin<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<Settled<T>> {
-  return new Promise((resolve) => {
-    let done = false;
-    const teardown: Array<() => void> = [];
-    const finish = (r: Settled<T>) => {
-      if (done) return;
-      done = true;
-      for (const fn of teardown) fn();
-      resolve(r);
-    };
-    // Attach the settle handlers up front so a late settle from an abandoned
-    // fetch is always consumed (no unhandled rejection) even after we've moved on.
-    p.then(
-      (value) => finish({ type: "value", value }),
-      (err) => finish({ type: "error", error: err instanceof Error ? err.message : String(err) })
-    );
-    if (signal?.aborted) return finish({ type: "aborted" });
-    const onAbort = () => finish({ type: "aborted" });
-    signal?.addEventListener("abort", onAbort, { once: true });
-    teardown.push(() => signal?.removeEventListener("abort", onAbort));
-    const timer = setTimeout(() => finish({ type: "timeout" }), Math.max(0, ms));
-    teardown.push(() => clearTimeout(timer));
-  });
-}
-
 // ── Tool ─────────────────────────────────────────────────────────────────
 
 // `await-ui-element` is a factory (like `describe`) because the iOS / Android
@@ -367,10 +328,11 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
   async function fetchTree(
     device: DeviceInfo,
     params: Params,
-    services: Record<string, unknown>
+    services: Record<string, unknown>,
+    isTvOs: boolean
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
-      return describeIos(registry, device, { bundleId: params.bundleId });
+      return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
     }
     if (device.platform === "android") {
       return describeAndroid(registry, device.id);
@@ -413,6 +375,18 @@ or before tapping an element that appears asynchronously.`,
     },
     async execute(services, params, ctx?: ToolContext) {
       const signal = ctx?.signal;
+
+      const device = resolveDevice(params.udid);
+      assertSupported(AWAIT_UI_ELEMENT_TOOL_ID, capability, device);
+      if (device.platform === "ios") await ensureDeps(iosRequires);
+      else if (device.platform === "android") await ensureDeps(androidRequires);
+
+      // Resolve once, outside the poll loop — re-probing `xcrun` per fetch would
+      // blow the per-fetch budget for a fake UDID that never caches.
+      const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
+
+      // Start the wait clock after setup so its fixed cost isn't charged against
+      // timeoutMs (the deadline should bound polling, not device resolution).
       const start = Date.now();
       const cancelled = (): WaitResult => ({
         success: false,
@@ -420,55 +394,21 @@ or before tapping an element that appears asynchronously.`,
         note: "wait was cancelled before the condition was met",
       });
 
-      const device = resolveDevice(params.udid);
-      assertSupported(AWAIT_UI_ELEMENT_TOOL_ID, capability, device);
-      if (device.platform === "ios") await ensureDeps(iosRequires);
-      else if (device.platform === "android") await ensureDeps(androidRequires);
-
       const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-      const deadline = start + timeoutMs;
       const selector = params.selector;
 
-      let lastTree: DescribeNode | null = null;
-      let lastData: DescribeTreeData | null = null;
-      let fetchError: string | undefined;
       // For `hidden`: did the selector ever match across polls? Distinguishes
       // "the element was there and disappeared" from "the selector never matched
       // at all" — otherwise a typo'd selector is an instant false-positive.
       let everMatched = false;
 
-      for (;;) {
-        if (signal?.aborted) return cancelled();
-
-        // Bound each fetch to the time left before the deadline so a slow / hung
-        // describe can't overshoot timeoutMs, and an abort mid-fetch is observed
-        // promptly instead of after the fetch resolves.
-        const remaining = Math.max(0, deadline - Date.now());
-        const settled = await settleWithin(fetchTree(device, params, services), remaining, signal);
-
-        if (settled.type === "aborted") return cancelled();
-        if (settled.type === "timeout") {
-          // The fetch outran the time left before the deadline. Two cases:
-          //  - We never got a usable tree (a genuinely slow/hung fetch, e.g. the
-          //    Android 20s dump under a small timeoutMs) → report that as the
-          //    cause so the agent knows the screen was never read.
-          //  - We already have a tree from an earlier poll and this final fetch
-          //    merely straddled the deadline (describe latency varies) → fall
-          //    through to the normal condition-not-met note built from lastTree,
-          //    which is far more useful than "fetch did not complete".
-          if (lastTree === null) {
-            fetchError ??= `tree fetch did not complete within the ${timeoutMs}ms wait budget`;
-          }
-          break;
-        }
-        if (settled.type === "error") {
-          fetchError = settled.error;
-        } else {
-          const data = settled.value;
-          lastData = data;
-          lastTree = data.tree;
-          fetchError = undefined;
+      const poll = await pollDescribeTree<WaitResult>({
+        fetchTree: () => fetchTree(device, params, services, isTvOs),
+        timeoutMs,
+        pollIntervalMs,
+        signal,
+        onSample: (data) => {
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
           // Compute `blind` after `everMatched` so an empty tree that follows an
@@ -481,23 +421,19 @@ or before tapping an element that appears asynchronously.`,
                 "condition met immediately — the selector never matched any element, " +
                 "so it may have already been hidden before the wait, or the selector is wrong";
             }
-            return result;
+            return { done: true, result };
           }
-        }
+          return { done: false };
+        },
+      });
 
-        if (Date.now() >= deadline) break;
-        // Clamp the poll sleep to the time left before the deadline so a large
-        // pollIntervalMs can't overshoot timeoutMs. The next iteration then does
-        // one final poll at the deadline before the loop breaks, so the
-        // condition still gets its full time budget.
-        const sleepMs = Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()));
-        if (!(await sleepOrAbort(sleepMs, signal))) return cancelled();
-      }
+      if (poll.aborted) return cancelled();
+      if (poll.result) return poll.result;
 
       return {
         success: false,
         elapsed: Date.now() - start,
-        note: timeoutNote(params, lastTree, fetchError, lastData),
+        note: timeoutNote(params, poll.lastData?.tree ?? null, poll.lastError, poll.lastData),
       };
     },
   };

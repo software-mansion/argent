@@ -1,17 +1,23 @@
+import * as path from "node:path";
+import { homedir } from "node:os";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
 import {
   init as telemetryInit,
   attachRegistryTelemetry,
   track as telemetryTrack,
   shutdown as telemetryShutdown,
+  warmTelemetryIdentity,
   aiTelemetryFromMeta,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
+import { attachRegistryEventLogger, createToolServerEventLog } from "./event-log";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import { variantProposalStore } from "./utils/variant-proposals";
+import { shutdownOwnedDevices } from "./utils/device-shutdown";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 const DEFAULT_PORT = "3001";
@@ -66,6 +72,8 @@ export function start(): void {
   // crash arriving mid-shutdown would be swallowed by the re-entrancy guard and
   // the in-flight shutdown(0) would exit 0, hiding the crash from supervisors.
   let finalExitCode = 0;
+  let shutdownReason: "idle" | "signal" | "crash" = "signal";
+  let shutdownFailureSignal: FailureSignal | null = null;
   let shutdown: ((exitCode?: number) => Promise<void>) | null = null;
 
   // The crash classification is passed in explicitly rather than re-derived from
@@ -121,14 +129,45 @@ export function start(): void {
   // ── Bootstrap ─────────────────────────────────────────────────────
   const registry = createRegistry();
   attachRegistryLogger(registry);
+  let eventLog: ReturnType<typeof createToolServerEventLog> | null = null;
+  if (isFlagEnabled("tool-server-event-log")) {
+    const eventLogPath =
+      process.env.ARGENT_EVENT_LOG || path.join(homedir(), ".argent", "tool-server-events.jsonl");
+    try {
+      eventLog = createToolServerEventLog({ filePath: eventLogPath });
+    } catch (err) {
+      process.stderr.write(
+        `[tool-server] Failed to create event log at ${eventLogPath}: ${String(err)}\n`
+      );
+    }
+  }
+  if (eventLog) {
+    attachRegistryEventLogger(registry, eventLog);
+  }
+  if (eventLog) {
+    process.stderr.write(`[tool-server] Event log: ${eventLog.filePath}\n`);
+  }
 
   // Tool events use the queued client; shutdown gets a bounded final flush.
   telemetryInit("tool_server");
   const telemetryHandle = attachRegistryTelemetry(registry);
-  const serverStartedAt = Date.now();
-  let shutdownReason: "idle" | "signal" | "crash" = "signal";
-  let shutdownFailureSignal: FailureSignal | null = null;
 
+  // Establish the telemetry identity OFF the accept path: this resolves the host
+  // fingerprint asynchronously (no event-loop stall) and persists it before we
+  // advertise readiness, so `toolserver:start` and every inbound request find
+  // the stable id already on disk instead of a blocking spawn in the listen()
+  // callback. Runs concurrently with the watcher below — never throws.
+  const identityWarm = warmTelemetryIdentity();
+  // The fingerprint resolve's internal timeout watchdog is unref'd (so it never
+  // holds a short-lived CLI open at exit). During startup the server has no work
+  // of its own yet, so hold the loop open with a ref'd handle until warm-up
+  // settles — otherwise, if the binary wedged, the process could exit before
+  // listen() ever binds. Self-clearing and a no-op once warm-up (usually <100ms,
+  // capped at the resolve timeout) settles; makes readiness independent of any
+  // incidental liveness from the watcher.
+  const warmKeepAlive = setInterval(() => {}, 1_000);
+  void identityWarm.finally(() => clearInterval(warmKeepAlive));
+  const serverStartedAt = Date.now();
   const updateChecker = startUpdateChecker();
 
   const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
@@ -176,13 +215,39 @@ export function start(): void {
   };
   const onSelectionSubmitted = (): void => {
     cancelPendingClose();
+    // A CLI-driven Lens session (`argent lens`) keeps the window open across
+    // rounds — the user iterates and their feedback is piped into the spawned
+    // terminal, so a submit must never animate-close the window.
+    if (variantProposalStore.isCliSession()) return;
     pendingCloseTimer = setTimeout(() => {
       pendingCloseTimer = null;
       previewWindow.requestClose();
     }, PREVIEW_CLOSE_DELAY_MS);
   };
+  // `argent lens` toggles a CLI session: begin ⇒ open the window now (no await
+  // needed — the agent proposes without blocking), end ⇒ close it.
+  const onCliSessionChanged = (active: boolean): void => {
+    cancelPendingClose();
+    if (active) {
+      const url = previewWindowBaseUrl();
+      if (url) previewWindow.ensureOpen(url);
+    } else {
+      previewWindow.requestClose();
+      // Tear down any simulator Lens booted itself for this session (the picker
+      // "boot it first" action). Devices the user had already running were never
+      // marked owned, so they're left alone. Fire-and-forget — teardown must not
+      // block the session-end response.
+      const owned = variantProposalStore.takeOwnedDevices();
+      if (owned.length) {
+        void shutdownOwnedDevices(owned).catch(() => {
+          /* best-effort: a device already gone must not surface here */
+        });
+      }
+    }
+  };
   variantProposalStore.events.on("awaitParked", onAwaitParked);
   variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
+  variantProposalStore.events.on("cliSessionChanged", onCliSessionChanged);
 
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
@@ -192,10 +257,29 @@ export function start(): void {
     if (exitCode > finalExitCode) finalExitCode = exitCode;
     if (shuttingDown) return;
     shuttingDown = true;
-
+    eventLog?.info({
+      type: "tool_server.stopping",
+      msg: "Tool server is stopping.",
+      exitCode: finalExitCode,
+    });
     variantProposalStore.events.off("awaitParked", onAwaitParked);
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
+    variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
     cancelPendingClose();
+
+    // Drain any simulators Lens booted headless for a CLI session. The happy
+    // path drains via onCliSessionChanged(false) when the CLI ends the session,
+    // but a server-initiated exit (signal, idle timeout) never gets that POST —
+    // without this the headless sim (no GUI window) is left Booted and orphaned.
+    // Idempotent: takeOwnedDevices drains the set once, so it's [] here if the
+    // CLI already ended cleanly.
+    const ownedDevices = variantProposalStore.takeOwnedDevices();
+    if (ownedDevices.length) {
+      await shutdownOwnedDevices(ownedDevices).catch(() => {
+        /* best-effort: a device already gone must not block shutdown */
+      });
+    }
+
     previewWindow.dispose();
     updateChecker.dispose();
     stopWatcher();
@@ -212,6 +296,11 @@ export function start(): void {
       await registry.dispose();
     } catch (err) {
       process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
+    }
+    try {
+      await eventLog?.dispose();
+    } catch (err) {
+      process.stderr.write(`[tool-server] event log dispose failed: ${String(err)}\n`);
     }
 
     // Capture toolserver:stop, then drain — the final telemetry action, so the
@@ -260,8 +349,10 @@ export function start(): void {
 
   // Block advertising readiness until the first watcher poll completes — this
   // guarantees DYLD_INSERT_LIBRARIES is set in launchd for all currently-booted
-  // simulators before any agent tool call (e.g. launch-app) can arrive.
-  watcherReady
+  // simulators before any agent tool call (e.g. launch-app) can arrive. Also
+  // wait for the identity warm-up (started above, runs concurrently) so the
+  // fingerprint resolve is done before the accept path opens, never on it.
+  Promise.all([watcherReady, identityWarm])
     .then(() => {
       server = httpHandle.app.listen(PORT, HOST, () => {
         const addr = server!.address();
@@ -270,6 +361,13 @@ export function start(): void {
         process.stdout.write(`Tools server listening on ${origin}\n`);
         process.stderr.write(`  GET  ${origin}/tools\n`);
         process.stderr.write(`  POST ${origin}/tools/:name\n`);
+        eventLog?.info({
+          type: "tool_server.started",
+          msg: `Tool server started on ${origin}.`,
+          origin,
+          host: HOST,
+          port: boundPort,
+        });
         if (idleTimeoutMs > 0) {
           process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
         }
@@ -282,11 +380,28 @@ export function start(): void {
       });
       // Surface bind failures (EADDRINUSE / EACCES on privileged ports) as a
       // clean exit instead of routing through uncaughtException → crashShutdown.
-      server.on("error", (err: NodeJS.ErrnoException) => {
+      server.on("error", async (err: NodeJS.ErrnoException) => {
         const code = err.code ? `${err.code}: ` : "";
         process.stderr.write(
           `[tool-server] Failed to bind ${HOST}:${PORT} — ${code}${err.message}\n`
         );
+        eventLog?.error({
+          type: "tool_server.bind_failed",
+          msg: `Tool server failed to bind ${HOST}:${PORT}.`,
+          host: HOST,
+          port: PORT,
+          failureSignal: {
+            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+            failure_stage: "toolserver_bind",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          },
+        });
+        try {
+          await eventLog?.dispose();
+        } catch (err) {
+          process.stderr.write(`[tool-server] event log dispose failed: ${String(err)}\n`);
+        }
         process.exit(1);
       });
       // Bolt the per-Chromium-device WebSocket upgrade handler onto the live
@@ -299,6 +414,16 @@ export function start(): void {
         process.stderr.write(
           `[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`
         );
+        eventLog?.error({
+          type: "tool_server.start_failed",
+          msg: "Tool server failed to start.",
+          failureSignal: {
+            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+            failure_stage: "toolserver_start",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          },
+        });
         shutdownReason = "crash";
         await shutdown?.(1);
       })();

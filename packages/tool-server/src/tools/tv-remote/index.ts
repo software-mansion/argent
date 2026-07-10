@@ -1,15 +1,18 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { resolveDevice } from "../../utils/device-info";
-import { UnsupportedOperationError } from "../../utils/capability";
-import { REMOTE_BUTTONS, type RemoteButton, injectVegaButtons } from "../../utils/vega-input";
+import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { REMOTE_BUTTONS, type RemoteButton } from "../../utils/vega-input";
+import type { TvRemoteParams, TvRemoteResult } from "./types";
+import { makeIosImpl } from "./platforms/ios";
+import { makeAndroidImpl } from "./platforms/android";
+import { vegaImpl } from "./platforms/vega";
 
 const BUTTONS = [...REMOTE_BUTTONS] as [RemoteButton, ...RemoteButton[]];
 
 // `button` accepts a single button OR a path of buttons. A path runs in ONE
-// device round-trip + one tool call, so it is strongly preferred for any
-// multi-step move. Some MCP clients serialize array arguments as a JSON (or
-// comma-separated) string, so coerce those back to an array before validating.
+// tool call (and, on Vega, one device round-trip), so it is strongly preferred
+// for any multi-step move. Some MCP clients serialize array arguments as a JSON
+// (or comma-separated) string, so coerce those back to an array before validating.
 const buttonSchema = z
   .preprocess(
     (val) => {
@@ -36,12 +39,17 @@ const buttonSchema = z
     "A single TV-remote button, or a path of them run in one call. " +
       "Buttons: up/down/left/right (D-pad), select (OK), back, home, menu, playPause, " +
       "rewind, fastForward, next, previous, volumeUp, volumeDown, mute. " +
+      "The media-transport and volume keys work on Android TV and Vega; on the Apple TV " +
+      "simulator they are rejected (its HID stack ignores them) — the D-pad/select/back/menu/" +
+      "home/playPause core works on all three. " +
       'For multi-step navigation pass an array, e.g. ["up","right","right","select"] — ' +
       "strongly prefer this over multiple `tv-remote` calls: the whole path runs in a single call."
   );
 
 const zodSchema = z.object({
-  udid: z.string().describe("Target Vega device id from `list-devices`."),
+  udid: z
+    .string()
+    .describe("Target TV device id from `list-devices` (Apple TV, Android TV, or Vega)."),
   button: buttonSchema,
   repeat: z
     .number()
@@ -57,49 +65,52 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
-  pressed: RemoteButton[];
-  count: number;
-}
-
 const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  android: { emulator: true, device: true, unknown: true },
   vega: { vvd: true },
 };
 
-export const tvRemoteTool: ToolDefinition<Params, Result> = {
-  id: "tv-remote",
-  description: `Press a TV remote / D-pad button (or a whole path of them) on a Vega (Fire TV) device.
-Vega apps are navigated with a directional remote, not touch — use this instead of gesture-tap/swipe (which do not apply on Vega). Move focus with up/down/left/right, confirm with select, go back with back, and use home/menu/playPause/rewind/fastForward/next/previous/volumeUp/volumeDown/mute for the corresponding remote keys.
+// `tv-remote` drives the directional remote on every TV platform through
+// `dispatchByPlatform`: Apple TV (tvOS HID daemon) and Android TV (`adb input
+// keyevent`) share the focus-engine subset of buttons; Vega (Fire TV) injects
+// the full remote vocabulary over `inputd-cli`. The ios/android branches
+// runtime-probe their TV kind inside resolveTvApi (a tvOS sim is "ios", an
+// Android TV emulator "android" by id shape) and reject non-TV targets there.
+// No eager service: the backend is resolved lazily per platform.
+export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, TvRemoteResult> {
+  return {
+    id: "tv-remote",
+    description: `Press a TV remote / D-pad button (or a whole path of them) on a TV device — Apple TV (tvOS), Android TV (leanback), or Vega (Fire TV).
+A TV is navigated with a directional remote, not touch — use this instead of gesture-tap/swipe (which do not apply on a TV). Move focus with up/down/left/right, confirm with select, go back with back/menu, exit with home, and use playPause/rewind/fastForward/next/previous/volumeUp/volumeDown/mute for the corresponding remote keys. (On the Apple TV simulator the media-transport and volume keys are rejected — its HID stack ignores them; they work on Android TV and Vega.)
 Single press: { button: "down" }. Repeat the same button: { button: "down", repeat: 3 }.
 Multi-step navigation: pass a path as { button: ["up","right","right","select"] } — it runs in one tool call, far cheaper than separate presses.
+Read the screen with \`describe\` before and after to see where focus landed.
 Returns { pressed, count }.`,
-  alwaysLoad: true,
-  // A path (≤64 buttons) × repeat (≤50) flattens to thousands of presses that
-  // settle ~0.3s apart in one held `adb shell` — minutes of wall-clock. Mark
-  // long-running so the MCP adapter doesn't abort it at its per-request fetch
-  // timeout and the idle-shutdown timer is kept warm for the call's duration.
-  longRunning: true,
-  searchHint:
-    "vega fire tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward sequence path",
-  zodSchema,
-  capability,
-  // All work goes over `adb` (`inputd-cli` via `adbShell`); the `vega`/`kepler`
-  // CLI is never invoked here. Preflighting on `adb` (not `vega`) means a host
-  // with a running VVD but an unsourced `~/vega/env` can still drive the D-pad.
-  requires: ["adb"],
-  services: () => ({}),
-  async execute(_services, params) {
-    // Guard the platform explicitly: the HTTP layer gates on `capability`, but
-    // internal callers (run-sequence, tests) reach execute directly.
-    const device = resolveDevice(params.udid);
-    if (device.platform !== "vega") {
-      throw new UnsupportedOperationError("tv-remote", device, "tv-remote is Vega-only");
-    }
-    const base = Array.isArray(params.button) ? params.button : [params.button];
-    const repeat = Math.max(1, Math.floor(params.repeat ?? 1));
-    const buttons = repeat === 1 ? base : Array.from({ length: repeat }, () => base).flat();
-    // Inject the whole path in one `adb shell inputd-cli` round-trip.
-    await injectVegaButtons(buttons);
-    return { pressed: buttons, count: buttons.length };
-  },
-};
+    alwaysLoad: true,
+    // A path (≤64 buttons) × repeat (≤50) flattens to thousands of presses that
+    // settle apart in one held device session — minutes of wall-clock. Mark
+    // long-running so the MCP adapter doesn't abort it at its per-request fetch
+    // timeout and the idle-shutdown timer is kept warm for the call's duration.
+    longRunning: true,
+    searchHint:
+      "tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward sequence path apple tv tvos android tv leanback vega fire tv",
+    zodSchema,
+    capability,
+    services: () => ({}),
+    execute: dispatchByPlatform<
+      Record<string, unknown>,
+      Record<string, unknown>,
+      TvRemoteParams,
+      TvRemoteResult,
+      Record<string, unknown>,
+      Record<string, unknown>
+    >({
+      toolId: "tv-remote",
+      capability,
+      ios: makeIosImpl(registry),
+      android: makeAndroidImpl(registry),
+      vega: vegaImpl,
+    }),
+  };
+}

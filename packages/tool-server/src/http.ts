@@ -1,15 +1,26 @@
 import express, { Request, Response } from "express";
+import bytesUtil from "bytes";
+import { createWriteStream } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isFlagEnabled } from "@argent/configuration-core";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
   type FailureSignal,
   type FileInputSpec,
-  type Platform,
+  // The tool-server's coarse *device* platform (TV-agnostic). Telemetry's own
+  // Platform (imported below) is a superset that also carries `tvos`/`android-tv`.
+  type Platform as DevicePlatform,
   type Registry,
   type ResolvedFileInput,
 } from "@argent/registry";
-import { AI_CLIENTS, type AiTelemetryProps } from "@argent/telemetry";
+import {
+  AI_CLIENTS,
+  type AiTelemetryProps,
+  type Platform as TelemetryPlatform,
+} from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
@@ -18,13 +29,15 @@ import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./ut
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
 import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
-import { FileInputError, resolveFileInputs } from "./file-inputs";
+import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
+import { getCachedSimulatorRuntimeKind } from "./utils/ios-devices";
+import { getCachedAndroidRuntimeKind } from "./utils/adb";
 import type { Server as HttpServer } from "node:http";
 import {
   CHROMIUM_CDP_NAMESPACE,
@@ -66,9 +79,16 @@ function extractBearerToken(authHeader: string | undefined): string | null {
 // `~/.argent/flags.json` (and project override) each time — so toggling
 // `argent enable/disable <flag>` takes effect on the next `tools/list` without
 // restarting the long-lived tool-server. Tools without a `featureFlag` are
-// always exposed (no flag read).
-function isToolExposed(def: { featureFlag?: string } | undefined): boolean {
-  return !!def && (!def.featureFlag || isFlagEnabled(def.featureFlag));
+// always exposed (no flag read). A `hideWhen` predicate (also re-checked here per
+// request) hides a tool against live server state even when its flag is on — used
+// so `await_user_selection` vanishes during an `argent lens` CLI session.
+function isToolExposed(
+  def: { featureFlag?: string; hideWhen?: () => boolean } | undefined
+): boolean {
+  if (!def) return false;
+  if (def.featureFlag && !isFlagEnabled(def.featureFlag)) return false;
+  if (def.hideWhen?.()) return false;
+  return true;
 }
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
@@ -96,16 +116,41 @@ function extractDeviceArg(data: unknown): string | null {
   return null;
 }
 
-type InvocationMeta = { platform?: Platform } & AiTelemetryProps;
+type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
 // Only coarse platform context is retained for failure telemetry. The raw
 // device id (UDID / serial) is used transiently to infer platform and never
 // stored or forwarded.
-type HttpFailureMeta = { platform?: Platform } & AiTelemetryProps;
+type HttpFailureMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
 
-function inferPlatform(deviceId: string | null): HttpFailureMeta["platform"] | null {
+/**
+ * Split a TV target out of its base mobile platform for telemetry, using only
+ * the already-memoized runtime kind — never a fresh `simctl`/`adb` probe, since
+ * this runs on the per-tool-call hot path. A tvOS simulator and an iPhone
+ * simulator share the same UDID shape (both classify as `ios`); an Android TV
+ * emulator and a phone share the `emulator-NNNN` serial shape (both `android`).
+ * The device platform stays coarse (a TV is a `runtimeKind`, not its own device
+ * platform — capability gating and dispatch are TV-agnostic); we refine it to
+ * `tvos` / `android-tv` here for reporting only when the cache already knows the
+ * kind, and leave it coarse otherwise. The first tool call on a device may land
+ * before the cache is warm and report the base platform; subsequent calls, once
+ * a describe/interaction path has warmed the runtime-kind cache (the per-platform
+ * warmers are listed on `getCachedSimulatorRuntimeKind` /
+ * `getCachedAndroidRuntimeKind`), report the TV variant.
+ */
+function refineTvPlatform(basePlatform: DevicePlatform, deviceId: string): TelemetryPlatform {
+  if (basePlatform === "ios" && getCachedSimulatorRuntimeKind(deviceId) === "tv") {
+    return "tvos";
+  }
+  if (basePlatform === "android" && getCachedAndroidRuntimeKind(deviceId) === "tv") {
+    return "android-tv";
+  }
+  return basePlatform;
+}
+
+function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
   if (!deviceId) return null;
   try {
-    return resolveDevice(deviceId).platform;
+    return refineTvPlatform(resolveDevice(deviceId).platform, deviceId);
   } catch {
     return null;
   }
@@ -142,11 +187,21 @@ function extractInvocationMeta(
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
-/** Coarse platform from a tool call's device arg (`udid` / `device_id` / `avdName`), or null. */
-function platformFromArgs(data: unknown): Platform | null {
+/**
+ * Telemetry platform from a tool call's device arg, or null when it carries none.
+ * A `udid` / `device_id` resolves through the runtime-kind cache and refines to
+ * `tvos` / `android-tv` once that cache is warm (coarse `ios` / `android` until
+ * then); only the `avdName`-only fallback is unconditionally coarse.
+ */
+function platformFromArgs(data: unknown): TelemetryPlatform | null {
   if (!data || typeof data !== "object") return null;
   const deviceArg = extractDeviceArg(data);
   if (deviceArg) return inferPlatform(deviceArg) ?? null;
+  // An `avdName`-only call (boot-device before the emulator exists) has no serial
+  // to resolve a runtime kind from, so it stays the coarse `android` platform.
+  // Once the emulator is up, later `udid` / `device_id` calls refine an Android TV
+  // AVD to `android-tv` — from the call after describe/launch has warmed the cache,
+  // not the first (see `refineTvPlatform`).
   if (typeof (data as Record<string, unknown>).avdName === "string") return "android";
   return null;
 }
@@ -179,6 +234,10 @@ export interface HttpAppOptions {
    * opted into network exposure (and is warned at startup).
    */
   bindHost?: string;
+  /** Max bytes accepted by a single `POST /upload` (tar-upload inputs). Defaults to 2 GiB. */
+  maxUploadBytes?: number;
+  /** Max total bytes of unconsumed uploads held on disk. Defaults to 8 GiB. */
+  maxPendingUploadBytes?: number;
   /** Optional telemetry hook for per-invocation platform/device metadata. */
   recordInvocation?: (toolInvocationId: string, meta: InvocationMeta) => () => void;
   /** Optional telemetry hook for HTTP failures that happen before registry invocation. */
@@ -270,12 +329,44 @@ export function isWebsocketUpgradeAllowed(
   return true;
 }
 
+// The tool call that consumes an upload arrives right after it (same client
+// invocation), so the TTL only has to outlive that gap — generously.
+const UPLOAD_TTL_MS = 15 * 60 * 1000; // 15 minutes
+// Bounds a single tar-upload so a bad client can't fill the host disk.
+const MAX_UPLOAD_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
+// Bounds the total of unconsumed uploads, so many small ones can't do the same.
+const MAX_PENDING_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024; // 8 GiB
+
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
   // 48mb: file-input wrappers may inline base64 file content (saved PNG
   // baselines, flow YAMLs) when the client is remote. Bounds the whole encoded
   // request; the decoded per-file ceiling is enforced in file-inputs.ts.
   app.use(express.json({ limit: "48mb" }));
+
+  const maxUploadBytes = options?.maxUploadBytes ?? MAX_UPLOAD_STREAM_BYTES;
+  const maxPendingUploadBytes = options?.maxPendingUploadBytes ?? MAX_PENDING_UPLOAD_BYTES;
+
+  // Pending tar-upload archives, keyed by uploadId. Consumed by the first tool
+  // call that references them; the TTL sweeper clears orphans from aborted or
+  // failed calls.
+  const uploads = new Map<string, UploadEntry & { expireAt: number; bytes: number }>();
+  // Bytes already written to disk (settled Map) plus bytes of streams still
+  // in flight, so the cap holds against concurrent uploads — not just settled
+  // ones, which a burst of parallel requests would otherwise slip past.
+  let inFlightUploadBytes = 0;
+  const pendingUploadBytes = (): number =>
+    inFlightUploadBytes + [...uploads.values()].reduce((total, e) => total + e.bytes, 0);
+  const uploadSweeper = setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of uploads) {
+      if (entry.expireAt < now) {
+        uploads.delete(id);
+        rm(entry.tarPath, { force: true }).catch(() => {});
+      }
+    }
+  }, 60_000);
+  uploadSweeper.unref();
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
@@ -422,6 +513,85 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     });
   });
 
+  // Streaming upload for tar-upload inputs: the client tars a file or dir and
+  // streams it here before the tool call. express.json() ignores this body
+  // (wrong Content-Type), so we pipe it straight to disk.
+  app.post("/upload", (req: Request, res: Response) => {
+    idleTimer.touch();
+    if (pendingUploadBytes() >= maxPendingUploadBytes) {
+      res.status(507).json({
+        error:
+          `Pending uploads exceed the ${bytesUtil(maxPendingUploadBytes, { unitSeparator: " " })} ` +
+          `storage limit; retry once earlier uploads are consumed.`,
+      });
+      return;
+    }
+    const id = randomUUID();
+    const tarPath = join(tmpdir(), `argent-upload-${id}.tar.gz`);
+    const ws = createWriteStream(tarPath);
+
+    let received = 0;
+    let released = false;
+    // Drop this stream's in-flight contribution exactly once (on success it
+    // moves into the Map; on failure it's discarded), so the running total
+    // can't leak or double-count.
+    const releaseInFlight = (): void => {
+      if (released) return;
+      released = true;
+      inFlightUploadBytes -= received;
+    };
+
+    const abort = (status: number, message: string): void => {
+      releaseInFlight();
+      ws.destroy();
+      rm(tarPath, { force: true }).catch(() => {});
+      if (!res.headersSent) res.status(status).json({ error: message });
+    };
+
+    const digest = createHash("sha256");
+    req.on("data", (chunk: Buffer) => {
+      // Once released (aborted or finished) stop accounting — the socket may
+      // keep flowing after ws.destroy(), and re-counting would leak the
+      // in-flight total upward and eventually 507 every upload.
+      if (released) return;
+      received += chunk.length;
+      inFlightUploadBytes += chunk.length;
+      digest.update(chunk);
+      if (received > maxUploadBytes) {
+        abort(
+          413,
+          `Upload exceeds the ${bytesUtil(maxUploadBytes, { unitSeparator: " " })} limit.`
+        );
+      } else if (pendingUploadBytes() > maxPendingUploadBytes) {
+        abort(
+          507,
+          `Pending uploads exceed the ${bytesUtil(maxPendingUploadBytes, { unitSeparator: " " })} ` +
+            `storage limit; retry once earlier uploads are consumed.`
+        );
+      }
+    });
+    req.pipe(ws);
+    // pipe() leaves ws open if the client disconnects mid-upload.
+    req.on("close", () => {
+      if (req.readableEnded) return;
+      releaseInFlight();
+      ws.destroy();
+      rm(tarPath, { force: true }).catch(() => {});
+    });
+    ws.on("finish", () => {
+      releaseInFlight();
+      if (res.headersSent) return;
+      uploads.set(id, {
+        tarPath,
+        sha256: digest.digest("hex"),
+        expireAt: Date.now() + UPLOAD_TTL_MS,
+        bytes: received,
+      });
+      res.json({ uploadId: id });
+    });
+    ws.on("error", (err: Error) => abort(500, err.message));
+  });
+
   app.get("/tools", (_req: Request, res: Response) => {
     idleTimer.touch();
     const snapshot = registry.getSnapshot();
@@ -513,7 +683,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
       try {
-        const resolved = await resolveFileInputs(def, req.body);
+        const resolved = await resolveFileInputs(def, req.body, (id) => {
+          const entry = uploads.get(id);
+          if (entry) uploads.delete(id);
+          return entry;
+        });
         bodyArgs = resolved.args;
         resolvedFileInputs = resolved.fileInputs;
         // Materialized uploads are call-scoped: remove them once the response
@@ -702,6 +876,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.status(424).json({ error: depErr.message, missing: depErr.missing });
           return;
         }
+        // Unwrap the cause chain: these are thrown from inside execute() / a
+        // service factory and reach here wrapped in ToolExecutionError, so a
+        // top-level instanceof would miss them and fall through to a 500.
         const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
         if (unsupportedErr) {
           res.status(400).json({ error: unsupportedErr.message });
@@ -735,7 +912,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
   return {
     app,
-    dispose: () => idleTimer.dispose(),
+    dispose: () => {
+      idleTimer.dispose();
+      clearInterval(uploadSweeper);
+      for (const entry of uploads.values()) rm(entry.tarPath, { force: true }).catch(() => {});
+      uploads.clear();
+    },
     getLastActivityAt: () => idleTimer.getLastActivityAt(),
     attachChromiumWebsockets: (httpServer: HttpServer) => {
       attachChromiumServerWebsocket(
