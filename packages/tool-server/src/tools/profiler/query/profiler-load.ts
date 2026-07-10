@@ -404,6 +404,10 @@ async function loadNativeSession(
 
   api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
   api.exportedFiles = files;
+  // The raw_*.xml carry no capture-mode sidecar, so the loaded trace's mode is
+  // unknown — clear any flag left by an earlier live capture in this process,
+  // or the report would attribute THIS trace to the previous session's mode.
+  api.mallocStackLogging = null;
 
   const lines: string[] = [
     `Loaded native profiler session \`${sessionId}\`.`,

@@ -110,4 +110,25 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     const { report } = await analyzeNativeProfilerIos(api);
     expect(report).toContain("Stale trace");
   });
+
+  it("clears a previous live capture's mallocStackLogging on load (the loaded trace's mode is unknown)", async () => {
+    // Same staleness class as wallClockStartMs, but this one IS resettable at
+    // load time: a live malloc_stack_logging capture stamps the session flag,
+    // and the raw_*.xml carry no capture-mode sidecar — so restoring an OLDER
+    // session must clear the flag, or analyze/combined-report would attribute
+    // the loaded trace to the previous session's capture mode.
+    const api = await buildIosSession();
+    api.mallocStackLogging = true; // what native-profiler-start(malloc) leaves behind
+
+    const cpuXml = join(tempDir, `native-profiler-${SESSION_ID}_raw_cpu.xml`);
+    await writeFile(cpuXml, "<trace-query-result></trace-query-result>", "utf8");
+    await profilerLoadTool.execute({ session: api } as never, {
+      mode: "load_native",
+      session_id: SESSION_ID,
+      port: 8081,
+      device_id: "ios-sim",
+    });
+
+    expect(api.mallocStackLogging).toBeNull();
+  });
 });
