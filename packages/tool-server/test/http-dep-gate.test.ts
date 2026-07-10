@@ -192,6 +192,13 @@ describe("http dependency gate", () => {
     const res = await request(app).post("/tools/picky-input").send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("that argument can't be carried out on this device");
+    // An InvalidToolInputError thrown FROM execute() is recorded once, by the
+    // registry's failure listener (the error carries its own signal out of
+    // execute) — the HTTP layer must NOT also record it, or the failure
+    // double-counts. `emitHttpFailure` fires only on pre-execute HTTP-layer
+    // faults (zod / capability / device-resolution / dep-preflight), never on
+    // this execute-catch 400 path.
+    expect(recordFailure).not.toHaveBeenCalled();
   });
 
   it("does not call the dep probe for tools without a `requires` declaration", async () => {
