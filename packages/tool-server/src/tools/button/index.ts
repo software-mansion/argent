@@ -5,6 +5,8 @@ import { coreDeviceRef, type CoreDeviceApi } from "../../blueprints/core-device"
 import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
+import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../../utils/android-input";
+import { ensureDep } from "../../utils/check-deps";
 
 // Argent button name → pymobiledevice3 CoreDevice HID button name. CoreDevice
 // exposes the physical buttons only; appSwitch (a SpringBoard gesture) and the
@@ -42,7 +44,7 @@ interface Result {
  * rejection — an unsupported button would otherwise be a silent no-op that the
  * tool still reports as a successful `{ pressed }`.
  */
-const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>> = {
+export const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>> = {
   "ios": new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),
   // Remote iOS sims expose the same hardware buttons as local iOS.
   "ios-remote": new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),
@@ -64,14 +66,20 @@ const capability: ToolCapability = {
 
 export const buttonTool: ToolDefinition<Params, Result> = {
   id: "button",
-  description: `Press a device hardware button (iOS simulator or Android emulator). Sends Down then Up events automatically.
+  description: `Press a device hardware button (iOS simulator, Android emulator or device). iOS sends a Down then Up event automatically; Android injects a single \`adb\` key event.
 Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
 On a physical iPhone, button presses route over CoreDevice (home, power, volumeUp, volumeDown).
-Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Fails if the device backend is not reachable — the simulator-server for iOS, or \`adb\` for Android (Android presses are injected with \`adb shell input keyevent\`).`,
   zodSchema,
   capability,
+  // Android presses go over `adb shell input keyevent` (see execute), not the
+  // simulator-server's HID transport, so declaring the service for an Android
+  // target would needlessly resolve + spawn a sim-server the tool never uses (up
+  // to a 30s ready-wait) and could throw ServiceInitializationError before the
+  // adb path even runs. Declare it only for the iOS / ios-remote path that
+  // actually consumes it (mirrors the sibling `keyboard` tool's lazy services).
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
     if (isPhysicalIos(device)) {
@@ -82,7 +90,7 @@ Fails if the simulator-server / emulator backend is not reachable for the given 
       if (!COREDEVICE_BUTTON[params.button]) return {};
       return { coreDevice: coreDeviceRef(device) };
     }
-    return { simulatorServer: simulatorServerRef(device) };
+    return device.platform === "android" ? {} : { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params) {
     const device = resolveDevice(params.udid);
@@ -104,6 +112,21 @@ Fails if the simulator-server / emulator backend is not reachable for the given 
       }
       const coreDevice = services.coreDevice as CoreDeviceApi;
       await coreDevice.button(name);
+      return { pressed: params.button };
+    }
+    if (device.platform === "android") {
+      // Android presses go over `adb shell input keyevent`, not the
+      // simulator-server's HID transport, which the guest silently drops on AVDs
+      // created with `hw.keyboard = no` / `hw.mainKeys = no`. adb lands
+      // regardless and surfaces a failure as a throw. The BUTTONS_BY_PLATFORM
+      // guard above guarantees a keycode exists for every accepted button.
+      //
+      // Preflight adb here (the tool declares no global `requires` because the
+      // iOS path doesn't need it, and `services` skips the sim-server for
+      // Android) so a missing binary fails with the clean 424 install hint,
+      // mirroring the sibling `keyboard` tool's per-platform `requires: ["adb"]`.
+      await ensureDep("adb");
+      await injectAndroidKeycode(params.udid, ANDROID_BUTTON_KEYCODES[params.button]!);
       return { pressed: params.button };
     }
     const api = services.simulatorServer as SimulatorServerApi;

@@ -34,6 +34,12 @@ import type * as Mcp from "@argent/mcp";
 import type * as Cli from "@argent/cli";
 import { BUNDLED_RUNTIME_PATHS } from "./bundled-paths.js";
 import { installFatalHandlers } from "./fatal-handlers.js";
+import {
+  INSTALLER_COMMAND_META,
+  installerHelpRequested,
+  printInstallerHelp,
+  type InstallerCommand,
+} from "./installer-help.js";
 
 const PACKAGE_NAME = "@swmansion/argent";
 
@@ -54,6 +60,17 @@ const isMcpServer = command === "mcp";
 
 installFatalHandlers({ isMcpServer });
 
+// One installer row of the command table: the command's one-line summary plus
+// its indented detail lines, both from INSTALLER_COMMAND_META. The summary is
+// shared with the per-command `--help`, so the two can't drift; the details
+// are table-only prose kept in the meta so each command's help text lives in
+// one place.
+function installerHelpEntry(command: InstallerCommand): string {
+  const meta = INSTALLER_COMMAND_META[command];
+  const details = (meta.details ?? []).map((line) => `\n              ${line}`).join("");
+  return `${meta.summary}${details}`;
+}
+
 function printHelp(): void {
   const version = getInstalledVersion() ?? "unknown";
   console.log(`
@@ -63,17 +80,11 @@ Usage: argent <command> [options]
 
 Commands:
   mcp         Start the MCP stdio server (used by editors)
-  init        Initialize argent in the current workspace (MCP server + skills)
-              (--global [default] installs on PATH; --local commits a
-              devDependency setup the whole team gets on \`npm install\`)
-  install     Alias for init
-  update      Check for updates and refresh configuration
-              (acts on the present install — both when a global install and a
-              project devDependency coexist; --global/--local select explicitly)
-  uninstall   Remove argent configuration from the workspace
-              (--global/--local choose which install — package and its
-              configs — is removed)
-  remove      Alias for uninstall
+  init        ${installerHelpEntry("init")}
+  install     ${installerHelpEntry("install")}
+  update      ${installerHelpEntry("update")}
+  uninstall   ${installerHelpEntry("uninstall")}
+  remove      ${installerHelpEntry("remove")}
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
   server      Manage the shared tool-server (start / status / stop / logs)
@@ -109,6 +120,17 @@ async function loadCli(): Promise<typeof Cli> {
 }
 
 async function main(): Promise<void> {
+  // The installer subcommands (init / install / update / uninstall / remove)
+  // forward their argv straight to the side-effecting installer functions,
+  // which do not short-circuit on `--help` — so `argent uninstall --help`
+  // would run the real (destructive) command. Intercept help for exactly that
+  // set before dispatching. All other subcommands handle `--help` themselves.
+  if (installerHelpRequested(command, rest)) {
+    // installerHelpRequested only returns true for an InstallerCommand.
+    printInstallerHelp(command as Parameters<typeof printInstallerHelp>[0]);
+    return;
+  }
+
   switch (command) {
     case "mcp":
       return (await loadMcp()).startMcpServer({ paths: BUNDLED_RUNTIME_PATHS });
