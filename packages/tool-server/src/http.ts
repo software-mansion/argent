@@ -32,6 +32,7 @@ import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
 import {
   assertSupported,
+  InvalidToolInputError,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
@@ -882,6 +883,26 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
         if (unsupportedErr) {
           res.status(400).json({ error: unsupportedErr.message });
+          return;
+        }
+        // A tool rejecting its arguments (e.g. an unknown named key on any
+        // keyboard backend, a newline in Android/Vega keyboard text, an
+        // un-typeable character on iOS/chromium) is a client input error, not an
+        // internal fault — surface it as 400, matching the zod-validation path,
+        // instead of a misleading 500.
+        //
+        // Ordering invariant: this check runs AFTER `findDependencyMissing`
+        // above, which walks the entire cause chain. That is unambiguous only
+        // because `InvalidToolInputError` is always thrown as a leaf (no
+        // `.cause`) — if a throw site ever nested a `DependencyMissingError` as
+        // the cause of an `InvalidToolInputError`, the earlier whole-chain scan
+        // would surface the dependency error and map the response to 424 first.
+        // Keep `InvalidToolInputError` causeless, or reorder these two checks.
+        // That 424-wins precedence is pinned by the dual-class-chain case in
+        // http-dep-gate.test.ts, so reordering is a visible, deliberate change.
+        const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
+        if (invalidInputErr) {
+          res.status(400).json({ error: invalidInputErr.message });
           return;
         }
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
