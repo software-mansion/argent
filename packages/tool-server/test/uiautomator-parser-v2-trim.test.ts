@@ -59,6 +59,28 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(all[0]?.role).toBe("Button");
   });
 
+  it("surfaces the focused uiautomator node", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.widget.EditText" bounds="[0,0][100,40]" focusable="true" focused="true" content-desc="Email"/>
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 100, 40);
+    const field = flatten(tree).find((n) => n.role === "TextField");
+    expect(field?.focused).toBe(true);
+  });
+
+  it("preserves outer focused state when collapsing duplicate clickable wrappers", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.widget.FrameLayout" bounds="[0,0][100,100]" clickable="true" focused="true">
+    <node class="android.widget.Button" bounds="[0,0][100,100]" clickable="true" content-desc="Continue"/>
+  </node>
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 100, 100);
+    const button = flatten(tree).find((n) => n.role === "Button");
+    expect(button?.focused).toBe(true);
+  });
+
   it("redacts the value of password fields", () => {
     const xml = `<?xml version='1.0' encoding='UTF-8'?>
 <hierarchy>

@@ -38,6 +38,7 @@ describe("native describe screen contract", () => {
           traits: ["header"],
           label: "Settings",
           viewClassName: "UILabel",
+          focused: true,
         },
       ],
     });
@@ -46,6 +47,7 @@ describe("native describe screen contract", () => {
     expect(result.elements).toHaveLength(1);
     expect(result.elements[0]?.normalizedFrame.x).toBeCloseTo(0.041025641, 6);
     expect(result.elements[0]?.normalizedTapPoint.y).toBeCloseTo(125 / 844, 6);
+    expect(result.elements[0]?.focused).toBe(true);
   });
 
   it("requires screenFrame metadata", () => {

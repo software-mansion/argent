@@ -24,6 +24,7 @@ export const nativeDescribeElementSchema = z
     value: z.string().optional(),
     identifier: z.string().optional(),
     viewClassName: z.string().optional(),
+    focused: z.boolean().optional(),
   })
   .passthrough();
 

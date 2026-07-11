@@ -37,6 +37,7 @@ import { createKeyboardTool } from "../tools/keyboard";
 import { rotateTool } from "../tools/rotate";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
+import { createKeyboardScenarioTool } from "../tools/keyboard-scenario";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { debuggerStatusTool } from "../tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../tools/debugger/debugger-evaluate";
@@ -128,6 +129,7 @@ export function createRegistry(): Registry {
   registry.registerTool(rotateTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));
+  registry.registerTool(createKeyboardScenarioTool(registry));
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(debuggerStatusTool);
   registry.registerTool(debuggerEvaluateTool);

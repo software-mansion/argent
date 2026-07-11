@@ -1,6 +1,10 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
-import type { DescribeResult } from "../contract";
-import { formatDescribeTree } from "../format-tree";
+import type { DescribeNode, DescribeResult } from "../contract";
+import {
+  formatDescribeSelection,
+  formatDescribeTree,
+  type FormatDescribeSelectionOptions,
+} from "../format-tree";
 import { resolveTvApi } from "../../tv/tv-service";
 import { describeAndroid } from "./android";
 import type {
@@ -112,7 +116,11 @@ function renderFocusView(res: TvDescribeResponse): string {
  * agent uses one `describe` for every target and never has to know up front
  * whether a UDID is a phone or an Apple TV.
  */
-export async function describeTv(registry: Registry, device: DeviceInfo): Promise<DescribeResult> {
+export async function describeTv(
+  registry: Registry,
+  device: DeviceInfo,
+  compact?: Omit<FormatDescribeSelectionOptions, "source">
+): Promise<DescribeResult> {
   const api: TvControlApi = await resolveTvApi(registry, device.id);
 
   // Ride out a brief post-launch / transition window where the focus engine
@@ -153,6 +161,14 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
     // overlay, or an adb-level failure), all strictly more useful than masking
     // it as the generic "app is probably still launching" EMPTY_HINT below.
     const data = await describeAndroid(registry, device.id, undefined, true);
+    if (compact) {
+      const formatted = formatDescribeSelection(data.tree, { source: data.source, ...compact });
+      return {
+        source: data.source,
+        hint: ANDROID_FOCUS_EMPTY_HINT,
+        ...formatted,
+      };
+    }
     return {
       description: `${ANDROID_FOCUS_EMPTY_HINT}\n\n${formatDescribeTree(data.tree, {
         source: data.source,
@@ -163,6 +179,28 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
   }
 
   const empty = isEmpty(res);
+  if (compact) {
+    const elements = res.focusable.slice();
+    if (res.focused && !elements.includes(res.focused)) elements.unshift(res.focused);
+    const tree: DescribeNode = {
+      role: "tv-root",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: elements.map((element) => ({
+        role: element.traits?.[0] ?? "focusable",
+        label: element.label,
+        value: element.value,
+        focused: Boolean(element.isFocused || element === res.focused),
+        frame: { x: 0, y: 0, width: 0, height: 0 },
+        children: [],
+      })),
+    };
+    const formatted = formatDescribeSelection(tree, { source: "tv-focus", ...compact });
+    return {
+      source: "tv-focus",
+      ...(empty ? { hint: EMPTY_HINT } : {}),
+      ...formatted,
+    };
+  }
   const description = empty
     ? `${renderFocusView(res)}\n\nNote: ${EMPTY_HINT}`
     : renderFocusView(res);

@@ -81,6 +81,17 @@ describe("describe ax-service adapter", () => {
     expect(node).toBeNull();
   });
 
+  it("propagates focused state from the AX service", () => {
+    const node = adaptAXElement({
+      label: "Email",
+      frame: { x: 0.05, y: 0.1, width: 0.9, height: 0.04 },
+      traits: ["searchField"],
+      focused: true,
+    });
+
+    expect(node?.focused).toBe(true);
+  });
+
   it("preserves label and value", () => {
     const node = adaptAXElement({
       label: "Search",

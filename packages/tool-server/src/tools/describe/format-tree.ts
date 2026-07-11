@@ -1,4 +1,5 @@
 import type { DescribeFrame, DescribeNode, DescribeSource } from "./contract";
+import { findDescribeMatches, type DescribeSelector } from "./selectors";
 
 // Token-efficient view of a pruned DescribeNode tree. The previous shape sent
 // the full JSON tree to the agent, which on a typical iOS screen ran ~6× the
@@ -219,4 +220,204 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
   const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
   const body = mode === "flat" ? renderFlat(root, contentRoles) : renderNested(root, contentRoles);
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
+}
+
+export const DESCRIBE_FIELDS = [
+  "role",
+  "label",
+  "value",
+  "identifier",
+  "package",
+  "flags",
+  "frame",
+] as const;
+export type DescribeField = (typeof DESCRIBE_FIELDS)[number];
+export type DescribeProjection = "matches" | "matches-and-ancestors" | "full";
+
+export interface FormatDescribeSelectionOptions {
+  source: DescribeSource;
+  selector: DescribeSelector;
+  projection: DescribeProjection;
+  fields: readonly DescribeField[];
+  limit: number;
+  maxChars: number;
+}
+
+export interface FormattedDescribeSelection {
+  description: string;
+  matched: number;
+  emitted: number;
+  truncated: boolean;
+}
+
+interface SelectedLine {
+  node: DescribeNode;
+  depth: number;
+  matched: boolean;
+}
+
+function selectionLine(
+  node: DescribeNode,
+  depth: number,
+  fields: ReadonlySet<DescribeField>,
+  matched: boolean
+): string {
+  const parts: string[] = [];
+  if (fields.has("role")) parts.push(node.role);
+  if (fields.has("label") && node.label) parts.push(formatLabel(node.label));
+  if (fields.has("value") && node.value && node.value !== node.label) {
+    parts.push(`value="${escapeForLine(node.value)}"`);
+  }
+  if (fields.has("identifier") && node.identifier) {
+    parts.push(`id="${escapeForLine(node.identifier)}"`);
+  }
+  if (fields.has("package") && node.packageName) {
+    parts.push(`package="${escapeForLine(node.packageName)}"`);
+  }
+  if (fields.has("flags")) {
+    const flags = formatFlags(node).trim();
+    if (flags) parts.push(flags);
+  }
+  // Match highlighting is projection metadata rather than a node field. Keep it
+  // even when `flags` is omitted so a `full` projection remains interpretable.
+  if (matched) parts.push("[match]");
+  if (fields.has("frame")) parts.push(fmtFrame(node.frame));
+  return `${"  ".repeat(depth)}${parts.join(" ") || "[element]"}`;
+}
+
+function isNestedSource(source: DescribeSource): boolean {
+  return (
+    source === "uiautomator" ||
+    source === "android-devtools" ||
+    source === "cdp-dom" ||
+    source === "vega-automation"
+  );
+}
+
+function orderedFlatChildren(root: DescribeNode): DescribeNode[] {
+  return root.children.slice().sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x);
+}
+
+function collectFullSelection(
+  root: DescribeNode,
+  source: DescribeSource,
+  matchSet: ReadonlySet<DescribeNode>
+): SelectedLine[] {
+  const contentRoles = source === "vega-automation" ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
+  if (!isNestedSource(source)) {
+    return orderedFlatChildren(root)
+      .filter((node) => shouldEmit(node, contentRoles))
+      .map((node) => ({ node, depth: 1, matched: matchSet.has(node) }));
+  }
+
+  const lines: SelectedLine[] = [];
+  const stack = root.children
+    .slice()
+    .reverse()
+    .map((node) => ({ node, depth: 1 }));
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop()!;
+    if (shouldEmit(node, contentRoles) || node.children.length > 0) {
+      lines.push({ node, depth, matched: matchSet.has(node) });
+    }
+    for (let index = node.children.length - 1; index >= 0; index--) {
+      stack.push({ node: node.children[index]!, depth: depth + 1 });
+    }
+  }
+  return lines;
+}
+
+function collectMatchedPaths(
+  root: DescribeNode,
+  matchSet: ReadonlySet<DescribeNode>
+): SelectedLine[] {
+  const lines: SelectedLine[] = [];
+  function visit(node: DescribeNode, depth: number): boolean {
+    const start = lines.length;
+    const ownMatch = matchSet.has(node);
+    lines.push({ node, depth, matched: ownMatch });
+    let descendantMatch = false;
+    for (const child of node.children) {
+      if (visit(child, depth + 1)) descendantMatch = true;
+    }
+    if (!ownMatch && !descendantMatch) lines.splice(start);
+    return ownMatch || descendantMatch;
+  }
+  for (const child of root.children) visit(child, 1);
+  return lines;
+}
+
+function renderBoundedSelection(
+  header: readonly string[],
+  candidateLines: readonly string[],
+  matched: number,
+  limit: number,
+  maxChars: number
+): { description: string; emitted: number; truncated: boolean } {
+  let lines = candidateLines.slice(0, limit);
+  let truncated = candidateLines.length > limit;
+
+  const assemble = (body: readonly string[], isTruncated: boolean): string => {
+    const sections = [...header, ...body];
+    if (isTruncated) {
+      sections.push(`… truncated (matched=${matched}, emitted=${body.length}).`);
+    }
+    return `${sections.join("\n")}\n`;
+  };
+
+  let description = assemble(lines, truncated);
+  if (description.length > maxChars) {
+    truncated = true;
+    while (lines.length > 0 && assemble(lines, true).length > maxChars) lines.pop();
+    description = assemble(lines, true);
+    // The schema minimum leaves room for the compact header and marker. Keep a
+    // defensive bounded fallback in case future header copy grows.
+    if (description.length > maxChars) {
+      const marker = `… truncated (matched=${matched}, emitted=0).\n`;
+      description = `${header.join("\n").slice(0, Math.max(0, maxChars - marker.length - 1))}\n${marker}`;
+      lines = [];
+    }
+  }
+
+  return { description, emitted: lines.length, truncated };
+}
+
+export function formatDescribeSelection(
+  root: DescribeNode,
+  opts: FormatDescribeSelectionOptions
+): FormattedDescribeSelection {
+  const matches = findDescribeMatches(root, opts.selector);
+  const matchSet = new Set(matches);
+  let selected: SelectedLine[];
+
+  switch (opts.projection) {
+    case "matches": {
+      const ordered = isNestedSource(opts.source)
+        ? matches.map((node) => ({ node, depth: 0, matched: true }))
+        : orderedFlatChildren(root)
+            .filter((node) => matchSet.has(node))
+            .map((node) => ({ node, depth: 0, matched: true }));
+      selected = ordered.map((line) => ({ ...line, depth: 0 }));
+      break;
+    }
+    case "matches-and-ancestors":
+      selected = collectMatchedPaths(root, matchSet);
+      break;
+    case "full":
+      selected = collectFullSelection(root, opts.source, matchSet);
+      break;
+  }
+
+  const fields = new Set(opts.fields);
+  const body = selected.map(({ node, depth, matched }) =>
+    selectionLine(node, depth, fields, matched)
+  );
+  const header = [
+    `Source: ${opts.source}`,
+    `Projection: ${opts.projection}`,
+    `Matched: ${matches.length}`,
+    "",
+  ];
+  const bounded = renderBoundedSelection(header, body, matches.length, opts.limit, opts.maxChars);
+  return { matched: matches.length, ...bounded };
 }

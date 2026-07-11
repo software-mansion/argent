@@ -14,6 +14,11 @@ import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
+import {
+  describeSelectorSchema,
+  findDescribeMatches,
+  type DescribeSelector,
+} from "../describe/selectors";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
@@ -42,36 +47,8 @@ export function isUnmetUiWaitResult(tool: string, result: unknown): boolean {
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 400;
 
-// A selector locates a node in the accessibility / DOM tree returned by
-// `describe`. Every provided field must match (logical AND); matching is a
-// case-insensitive substring test so the agent doesn't need the exact label.
-const selectorSchema = z
-  .object({
-    text: z
-      .string()
-      .min(1)
-      .optional()
-      .describe("Case-insensitive substring of the element's visible label or value."),
-    identifier: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Case-insensitive substring of the element's identifier (accessibilityIdentifier / resource-id / testid)."
-      ),
-    role: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Case-insensitive substring of the element's role (e.g. AXButton, button, TextView)."
-      ),
-  })
-  .refine((s) => Boolean(s.text || s.identifier || s.role), {
-    message: "selector needs at least one of text, identifier, or role",
-  });
-
-type Selector = z.infer<typeof selectorSchema>;
+// Selector matching is shared with `describe` so both tools interpret the same
+// selector identically.
 
 const zodSchema = z
   .object({
@@ -87,7 +64,9 @@ const zodSchema = z
           "or zero-area. `text`: the first match in reading order (topmost) contains expectedText — if a loose " +
           "selector hits several elements, only that topmost one is checked, so narrow it to target the intended element."
       ),
-    selector: selectorSchema.describe("Element to match (text / identifier / role)."),
+    selector: describeSelectorSchema.describe(
+      "Element to match (text / identifier / role / Android package)."
+    ),
     expectedText: z
       .string()
       .min(1)
@@ -143,30 +122,6 @@ function nodeText(node: DescribeNode): string {
   return [node.label, node.value].filter(Boolean).join(" ");
 }
 
-function includesCI(haystack: string | undefined, needle: string): boolean {
-  return Boolean(haystack) && haystack!.toLowerCase().includes(needle.toLowerCase());
-}
-
-function matchNode(node: DescribeNode, selector: Selector): boolean {
-  if (selector.text !== undefined) {
-    if (!includesCI(node.label, selector.text) && !includesCI(node.value, selector.text)) {
-      return false;
-    }
-  }
-  if (selector.identifier !== undefined && !includesCI(node.identifier, selector.identifier)) {
-    return false;
-  }
-  if (selector.role !== undefined && !includesCI(node.role, selector.role)) {
-    return false;
-  }
-  return true;
-}
-
-function collectMatches(node: DescribeNode, selector: Selector, acc: DescribeNode[]): void {
-  if (matchNode(node, selector)) acc.push(node);
-  for (const child of node.children) collectMatches(child, selector, acc);
-}
-
 // Every node matching the selector in the subtree, EXCLUDING `root` itself.
 //
 // `root` is the top-level container describe puts at the head of the tree. On
@@ -192,10 +147,8 @@ function collectMatches(node: DescribeNode, selector: Selector, acc: DescribeNod
 // `visible`/`exists` selector is broad. A substring selector can also match
 // several real nodes, so conditions are evaluated across the whole set (see
 // evaluateMatches). Exported for unit tests.
-export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
-  const acc: DescribeNode[] = [];
-  for (const child of root.children) collectMatches(child, selector, acc);
-  return acc;
+export function findAll(root: DescribeNode, selector: DescribeSelector): DescribeNode[] {
+  return findDescribeMatches(root, selector);
 }
 
 // describe prunes off-screen / zero-size nodes on Chromium and the compressed
@@ -242,7 +195,10 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
       return !matches.some(isVisible);
     case "text": {
       const first = firstInReadingOrder(matches);
-      return first !== undefined && includesCI(nodeText(first), params.expectedText!);
+      return (
+        first !== undefined &&
+        nodeText(first).toLowerCase().includes(params.expectedText!.toLowerCase())
+      );
     }
     default:
       return false;
@@ -352,7 +308,7 @@ Conditions:
              substring). A loose selector can match several elements; only that topmost one is inspected, so if a
              lower match is the one holding the text the wait still reports failure — narrow the selector to target it.
 
-The selector is { text?, identifier?, role? }; every provided field must match (case-insensitive substring).
+The selector is { text?, identifier?, role?, package? }; every provided field must match (case-insensitive substring).
 text matches the element's label or value. It polls the same accessibility / DOM tree as \`describe\`
 (iOS AXRuntime, Android uiautomator, Chromium CDP) every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms)
 until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).

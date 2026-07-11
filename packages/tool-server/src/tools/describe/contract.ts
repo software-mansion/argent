@@ -16,6 +16,7 @@ export interface DescribeNode {
   label?: string;
   identifier?: string;
   value?: string;
+  packageName?: string;
   // Interactivity flags surfaced by the Android uiautomator dump. iOS
   // consumers leave these unset; adding them as optional avoids breaking
   // existing payloads. `scrollHidden` counts children that fell outside an
@@ -32,7 +33,8 @@ export interface DescribeNode {
   // `focused` is the element holding input focus; `selected` is the visually
   // highlighted / active item (e.g. the current nav tab). On Vega the toolkit
   // often reports the highlighted item via `selected` while `focused` stays
-  // false, so both are surfaced. Other platforms leave these unset.
+  // false, so both are surfaced. iOS and Android also surface `focused` when
+  // their native accessibility providers report an element holding input focus.
   focused?: boolean;
   selected?: boolean;
 }
@@ -46,6 +48,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       label: z.string().optional(),
       identifier: z.string().optional(),
       value: z.string().optional(),
+      packageName: z.string().optional(),
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),
@@ -98,6 +101,10 @@ export interface DescribeResult {
   source: DescribeSource;
   should_restart?: boolean;
   hint?: string;
+  // Present only for selector-driven compact describe calls.
+  matched?: number;
+  emitted?: number;
+  truncated?: boolean;
 }
 
 export function parseDescribeResult(input: unknown): DescribeNode {

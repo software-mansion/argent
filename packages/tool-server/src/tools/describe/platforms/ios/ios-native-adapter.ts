@@ -51,7 +51,7 @@ export function adaptNativeDescribeElementToDescribeNode(
   const frame = clampNormalizedFrame(element.normalizedFrame);
   if (!frame) return null;
 
-  return {
+  const node: DescribeNode = {
     role: mapNativeTraitsToDescribeRole(element.traits),
     frame,
     children: [],
@@ -59,6 +59,8 @@ export function adaptNativeDescribeElementToDescribeNode(
     identifier: element.identifier,
     value: element.value,
   };
+  if (element.focused) node.focused = true;
+  return node;
 }
 
 export function adaptNativeDescribeToDescribeResult(

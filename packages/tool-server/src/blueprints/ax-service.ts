@@ -57,6 +57,7 @@ export interface AXDescribeElement {
   traits?: string[];
   value?: string;
   identifier?: string;
+  focused?: boolean;
 }
 
 export interface AXDescribeResponse {

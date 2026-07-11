@@ -17,39 +17,107 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-c
 import { resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
-import { formatDescribeTree } from "./format-tree";
+import { DESCRIBE_FIELDS, formatDescribeSelection, formatDescribeTree } from "./format-tree";
+import { describeSelectorSchema } from "./selectors";
 
 // In-between layer between the per-platform adapters (which still own all
 // pruning — the Android v2 trimmer in uiautomator-parser stays untouched) and
 // the public DescribeResult. The internal `tree` is converted to a token-
 // efficient text rendering here and then dropped, so the caller (LLM) never
 // pays for the JSON tree.
-function withDescription(data: DescribeTreeData): DescribeResult {
-  const out: DescribeResult = {
-    description: formatDescribeTree(data.tree, { source: data.source }),
-    source: data.source,
-  };
+function compactOptions(params: Params) {
+  if (!params.selector) return undefined;
+  return {
+    selector: params.selector,
+    projection: params.projection ?? "matches",
+    fields: params.fields ?? DESCRIBE_FIELDS,
+    limit: params.limit ?? 50,
+    maxChars: params.maxChars ?? 12_000,
+  } as const;
+}
+
+function withDescription(data: DescribeTreeData, params: Params): DescribeResult {
+  // The selector-less path deliberately stays byte-for-byte compatible with
+  // the original formatter and response shape.
+  const options = compactOptions(params);
+  const compact = options
+    ? formatDescribeSelection(data.tree, { source: data.source, ...options })
+    : undefined;
+  const out: DescribeResult = compact
+    ? { source: data.source, ...compact }
+    : {
+        description: formatDescribeTree(data.tree, { source: data.source }),
+        source: data.source,
+      };
   if (data.should_restart) out.should_restart = data.should_restart;
   if (data.hint) out.hint = data.hint;
   return out;
 }
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id)."
-    ),
-  bundleId: z
-    .string()
-    .optional()
-    .describe(
-      "Optional app bundle ID. Used as a target hint on iOS when the AX-service returns no elements " +
-        "and the describe tool falls back to native-devtools inspection. " +
-        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium."
-    ),
-});
+const zodSchema = z
+  .object({
+    udid: z
+      .string()
+      .min(1)
+      .describe(
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id)."
+      ),
+    bundleId: z
+      .string()
+      .optional()
+      .describe(
+        "Optional app bundle ID. Used as a target hint on iOS when the AX-service returns no elements " +
+          "and the describe tool falls back to native-devtools inspection. " +
+          "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium."
+      ),
+    selector: describeSelectorSchema
+      .optional()
+      .describe(
+        "Optional element selector. When omitted, describe preserves its full legacy output exactly."
+      ),
+    projection: z
+      .enum(["matches", "matches-and-ancestors", "full"])
+      .optional()
+      .describe(
+        "Selector output shape (default `matches`): matching elements only, their ancestor paths, or the full tree with matches highlighted."
+      ),
+    fields: z
+      .array(z.enum(DESCRIBE_FIELDS))
+      .min(1)
+      .optional()
+      .describe(
+        "Element fields to render in selector mode. Defaults to role, label, value, identifier, package, flags, and frame."
+      ),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .optional()
+      .describe("Maximum element lines emitted in selector mode (default 50)."),
+    maxChars: z
+      .number()
+      .int()
+      .min(256)
+      .max(100_000)
+      .optional()
+      .describe("Maximum description characters in selector mode (default 12000)."),
+  })
+  .superRefine((params, ctx) => {
+    if (
+      params.selector === undefined &&
+      (params.projection !== undefined ||
+        params.fields !== undefined ||
+        params.limit !== undefined ||
+        params.maxChars !== undefined)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["selector"],
+        message: "projection, fields, limit, and maxChars require selector",
+      });
+    }
+  });
 
 type Params = z.infer<typeof zodSchema>;
 
@@ -104,8 +172,8 @@ function makeDescribeExecute(
       handler: async (_services, params, device) =>
         // Probe tvOS once here, then pass the verdict into describeIos.
         (await isTvOsSimulator(device.id))
-          ? describeTv(registry, device)
-          : withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+          ? describeTv(registry, device, compactOptions(params))
+          : withDescription(await describeIos(registry, device, params, { isTvOs: false }), params),
     },
     iosRemote: {
       // describeIos already handles both ax-service (TCP) and native-devtools
@@ -114,7 +182,7 @@ function makeDescribeExecute(
       // (never tvOS), so the isTvOs verdict is always false.
       requires: ["sim-remote"],
       handler: async (_services, params, device) =>
-        withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+        withDescription(await describeIos(registry, device, params, { isTvOs: false }), params),
     },
     android: {
       requires: androidRequires,
@@ -123,15 +191,20 @@ function makeDescribeExecute(
         // focus-driven describe, a phone to the uiautomator tree — and pass the
         // known `isTv: false` through so describeAndroid doesn't re-probe.
         (await isAndroidTv(device.id))
-          ? describeTv(registry, device)
-          : withDescription(await describeAndroid(registry, params.udid, params.bundleId, false)),
+          ? describeTv(registry, device, compactOptions(params))
+          : withDescription(
+              await describeAndroid(registry, params.udid, params.bundleId, false),
+              params
+            ),
     },
     chromium: {
-      handler: async (services) => withDescription(await describeChromium(services.chromium)),
+      handler: async (services, params) =>
+        withDescription(await describeChromium(services.chromium), params),
     },
     vega: {
       requires: vegaRequires,
-      handler: async (_services, params) => withDescription(await describeVega(params.udid)),
+      handler: async (_services, params) =>
+        withDescription(await describeVega(params.udid), params),
     },
   });
 }
@@ -156,6 +229,13 @@ Returns \`{ description, source }\` where \`description\` is a text rendering of
 line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
 are normalized [0,1] fractions of the screen / window width/height (not pixels) — the same space as
 gesture-tap / gesture-swipe / gesture-pinch.
+
+For a smaller targeted response, pass selector \`{ text?, identifier?, role?, package? }\`; every supplied
+field matches as a case-insensitive substring. Selector mode defaults to projection \`matches\`, all
+fields (including Android package provenance), limit 50, and maxChars 12000. Use \`matches-and-ancestors\` to retain the path to each match,
+or \`full\` to retain the complete tree while highlighting matches. Selector responses also return
+\`matched\`, \`emitted\`, and \`truncated\`; truncation is marked in the description. Omitting selector
+preserves the original full description and response shape exactly.
 
 To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
 \`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
