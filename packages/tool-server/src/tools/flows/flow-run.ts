@@ -27,7 +27,13 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-device";
-import { runDirective, invokeOnDevice, type ActionEnv } from "./flow-actions";
+import {
+  runDirective,
+  invokeOnDevice,
+  ABORTED_OUTCOME,
+  type ActionEnv,
+  type DirectiveOutcome,
+} from "./flow-actions";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
@@ -286,7 +292,9 @@ async function treeSourceGate(
  * tree source (see {@link treeSourceGate}), so a slow cold start doesn't eat
  * into the next step's auto-wait budget or degrade it to the wrong tree.
  * Failures are reported as step outcomes, not thrown, so the run still returns
- * a structured report.
+ * a structured report; a run cancelled mid-launch returns the shared aborted
+ * outcome (reported as a skip), never a pass that verified nothing or an error
+ * blaming the app.
  *
  * Chromium can't relaunch in place: `execute` boots a fresh instance before
  * step 1 (`state.chromiumBooted`), so here the step just settles it. The
@@ -298,12 +306,13 @@ async function treeSourceGate(
  * value is an app *path*, which `launch-app`'s bundleId grammar rejects (and
  * its chromium handler is this same viewport refresh anyway).
  */
-async function runLaunch(state: ExecState, app: Launch): Promise<{ ok: boolean; reason?: string }> {
+async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
   const { registry, device, signal } = state;
 
   if (device.platform === "chromium") {
     if (state.chromiumBooted) {
-      await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal); // already booted + fronted; just settle
+      // already booted + fronted; just settle
+      if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
       return { ok: true };
     }
     if (!appIdForPlatform(app, "chromium")) {
@@ -319,7 +328,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<{ ok: boolean; 
         reason: `could not attach to chromium instance "${device.id}": ${errMsg(err)}`,
       };
     }
-    await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
+    if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
     return { ok: true };
   }
 
@@ -333,10 +342,16 @@ async function runLaunch(state: ExecState, app: Launch): Promise<{ ok: boolean; 
   try {
     await invokeOnDevice(state, "restart-app", { bundleId });
   } catch (err) {
+    // A cancellation makes the sub-tool itself reject; that rejection is the
+    // abort, not an app failure, so it must not be attributed to restart-app.
+    if (signal?.aborted) return ABORTED_OUTCOME;
     return { ok: false, reason: `restart-app failed: ${errMsg(err)}` };
   }
-  await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal);
+  if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
+  // The gate returns null (ready) on abort — check the signal before trusting
+  // it, or a cancelled gate would read as a launch that verified readiness.
+  if (signal?.aborted) return ABORTED_OUTCOME;
   if (gate) return { ok: false, reason: gate };
   return { ok: true };
 }
@@ -741,6 +756,9 @@ async function execLeafStep(
 
     case "launch": {
       const r = await runLaunch(state, step.app);
+      // A run cancelled mid-launch is a skip (matching the pre-step guard and
+      // the directives), never a step failure — the app did nothing wrong.
+      if (r.aborted) return { ...base, status: "skip", reason: r.reason };
       return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
     }
 

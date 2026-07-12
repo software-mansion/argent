@@ -45,12 +45,17 @@ export interface DirectiveOutcome {
 }
 
 /**
- * The uniform outcome for a directive cut short by run cancellation. The runner
- * reports it as skip + "run aborted" (matching the pre-step guard and `wait`) —
- * an aborted run says nothing about the app, so it must never read as a genuine
- * step failure with a misleading reason.
+ * The uniform outcome for a step cut short by run cancellation (directives
+ * here, `launch` in flow-run.ts). The runner reports it as skip + "run aborted"
+ * (matching the pre-step guard and `wait`) — an aborted run says nothing about
+ * the app, so it must never read as a genuine step failure with a misleading
+ * reason.
  */
-const ABORTED_OUTCOME: DirectiveOutcome = { ok: false, aborted: true, reason: "run aborted" };
+export const ABORTED_OUTCOME: DirectiveOutcome = {
+  ok: false,
+  aborted: true,
+  reason: "run aborted",
+};
 
 /** The selector-acting steps {@link runDirective} handles. */
 export type DirectiveStep = Extract<

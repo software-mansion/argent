@@ -152,3 +152,66 @@ describe("run cancellation mid-directive", () => {
     expect(result.steps[0].reason).toBe("run aborted");
   });
 });
+
+describe("run cancellation mid-launch", () => {
+  // Like mockRegistry, but the restart-app call runs a scripted hook first —
+  // tripping the abort deterministically inside the launch step.
+  function launchRegistry(calls: string[], onRestartApp: () => unknown): Registry {
+    return {
+      invokeTool: vi.fn(async (id: string) => {
+        calls.push(id);
+        if (id === "list-devices") return { devices: [] };
+        if (id === "restart-app") return onRestartApp();
+        return { ok: true };
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+  }
+
+  it("reports a launch cancelled during the post-launch settle as a skip", async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    // restart-app succeeds, but the run is cancelled right after — the abort
+    // lands in the post-launch settle / tree-source gate.
+    const registry = launchRegistry(calls, () => {
+      controller.abort();
+      return { ok: true };
+    });
+
+    await writeFlow("cancelled-launch-settle", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.acme.app" }],
+    });
+
+    const result = await run("cancelled-launch-settle", registry, controller.signal);
+
+    // A skip with the uniform abort reason — NOT a pass: the settle and the
+    // tree-source gate were cut short, so the launch verified nothing.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(calls).toContain("restart-app");
+  });
+
+  it("reports a launch cancelled during restart-app as a skip, not an error", async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    // The cancellation makes the restart-app sub-tool itself reject: that
+    // rejection is the abort, not an app failure.
+    const registry = launchRegistry(calls, () => {
+      controller.abort();
+      throw new Error("This operation was aborted");
+    });
+
+    await writeFlow("cancelled-launch-restart", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.acme.app" }],
+    });
+
+    const result = await run("cancelled-launch-restart", registry, controller.signal);
+
+    // A skip with the uniform abort reason — NOT an error blaming restart-app.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(calls).toContain("restart-app");
+  });
+});
