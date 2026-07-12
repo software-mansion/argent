@@ -816,7 +816,15 @@ function fromYamlStep(raw: YamlStep): FlowStep {
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
-  return yamlStringify(doc);
+  // blockQuote: false — a block scalar is not round-trip-safe for our free-text
+  // fields: whitespace-only lines inside a multi-line value are silently
+  // stripped on re-parse (" \n" comes back as "\n"), and a block scalar at the
+  // document tail exposes its raw last line to parseFlow's content.trim(). So
+  // parseFlow(serializeFlow(x)) was not the identity. Disabling blockQuote
+  // emits multi-line values as double-quoted scalars (escape-exact both ways);
+  // single-line values still serialize plain, and legacy files that contain
+  // block scalars still parse.
+  return yamlStringify(doc, { blockQuote: false });
 }
 
 /** Validate cross-field invariants that are checkable without other files. */

@@ -511,6 +511,60 @@ describe("parseFlow", () => {
     );
   });
 
+  it("round-trips free-text values exactly, including whitespace-only lines", () => {
+    // The parser stores every free-text field verbatim — `type.text`, `echo`,
+    // await/assert `contains`/`equals`, and `executionPrerequisite` are never
+    // trimmed — so serialization must be byte-exact too. Default yamlStringify
+    // emits multi-line values as block scalars, whose chomping silently strips
+    // whitespace-only lines on re-parse (" \n" came back as "\n"); serializeFlow
+    // disables blockQuote so these values round-trip via double-quoted escapes.
+    const values = [
+      "line1\nline2",
+      "line1\nline2 ", // trailing space on the final content line
+      " \n", // whitespace-only line — silently corrupted by a block scalar
+      "  \n \n",
+      "\t\n",
+      "  hi  ",
+      "plain single line",
+    ];
+    for (const value of values) {
+      const flow: FlowFile = {
+        executionPrerequisite: value,
+        steps: [
+          { kind: "echo", message: value },
+          { kind: "type", into: { text: "email", loose: true }, text: value },
+          {
+            kind: "await",
+            condition: "text",
+            selector: { identifier: "counter" },
+            expectedText: value,
+            textMatch: "contains",
+            timeout: 5000,
+          },
+          {
+            kind: "assert",
+            condition: "text",
+            selector: { identifier: "total" },
+            expectedText: value,
+            textMatch: "equals",
+          },
+        ],
+      };
+      expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+    }
+  });
+
+  it("never serializes a whitespace-only-line value as a block scalar", () => {
+    const steps = [{ kind: "echo", message: "step one \n \ndone" }] as FlowFile["steps"];
+    const yaml = serializeFlow({ executionPrerequisite: "", steps });
+    // Block (|) and folded (>) scalars are not round-trip-safe for this shape;
+    // the value must be emitted as a double-quoted flow scalar instead.
+    expect(yaml).not.toContain("|");
+    expect(yaml).not.toContain(">");
+    expect(yaml).toContain("\\n"); // newlines spelled as escapes inside quotes
+    expect(parseFlow(yaml).steps).toEqual(steps);
+  });
+
   it("roundtrips: serialize then parse", () => {
     const flow: FlowFile = {
       executionPrerequisite: "App freshly loaded on home screen",
