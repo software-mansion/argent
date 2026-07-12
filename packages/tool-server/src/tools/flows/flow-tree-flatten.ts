@@ -1,4 +1,5 @@
 import type { DescribeNode } from "../describe/contract";
+import { includesCI } from "../../utils/ui-tree-match";
 
 /**
  * Shared flatten + text-hoisting skeleton for the flow tree adapters
@@ -44,8 +45,10 @@ export type NodeProjection<T> = (node: T) => FlatNode<T>;
 /**
  * Flatten `node`'s subtree into `out`, hoisting descendant text onto container
  * leaves. Post-order: a node's children contribute their text first, then the
- * node's own text plus that child text becomes its `subtreeText` — stamped only
- * when it adds something over the node's own text (so a plain leaf gets none).
+ * node's own text plus that child text becomes its `subtreeText` — the own text
+ * is dropped when the child text already contains it (a label the child also
+ * renders), and the result is stamped only when it adds something over the
+ * node's own text (so a plain leaf gets none).
  * Returns the text this node contributes to its parent: `""` when it shields.
  */
 export function flattenHoisting<T>(
@@ -62,7 +65,18 @@ export function flattenHoisting<T>(
     if (t) childText.push(t);
   }
 
-  const subtree = [view.ownText, ...childText].filter(Boolean).join(" ");
+  // A labelled container often wraps a child that renders the same text (a
+  // testID button labelled "Submit" over a `<Text>Submit</Text>`): prepending
+  // the own label unconditionally would hoist "Submit Submit", failing an
+  // `equals` assert against exactly what the screen shows. Drop the own label
+  // when the joined descendant text already contains it (case-insensitive,
+  // mirroring the matcher's `contains` semantics); an additive label
+  // ("Volume" over "50%") is still preserved.
+  const descendantText = childText.join(" ");
+  const subtree =
+    view.ownText && !includesCI(descendantText, view.ownText)
+      ? [view.ownText, descendantText].filter(Boolean).join(" ")
+      : descendantText || view.ownText;
   if (view.leaf) {
     if (subtree && subtree !== view.ownText) view.leaf.subtreeText = subtree;
     out.push(view.leaf);

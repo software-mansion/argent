@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import {
+  assertText,
   evaluateCondition,
   findAll,
   selectorToFrame,
@@ -102,6 +103,67 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(
       evaluateCondition("text", "Submit", findAll(tree, { identifier: "submit-button" }))
     ).toBe(true);
+  });
+
+  // A labelled container whose child renders the same text (an accessible
+  // button with content-desc "Submit" over a TextView "Submit") must not hoist
+  // the duplicate — "Submit Submit" would fail an `equals` assert against
+  // exactly what the screen shows.
+  it("does not duplicate a container's own label that its child also renders", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" resource-id="submit-button" content-desc="Submit" package="com.acme.app" bounds="[40,1700][1040,1800]">
+      <node index="0" class="android.widget.TextView" text="Submit" package="com.acme.app" bounds="[440,1730][640,1770]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const submit = findAll(tree, { identifier: "submit-button" });
+
+    // The child text adds nothing over the own label, so nothing is stamped
+    // and the assert reads the node's own "Submit" — not "Submit Submit".
+    expect(submit[0]!.subtreeText).toBeUndefined();
+    expect(assertText(submit[0]!)).toBe("Submit");
+    expect(evaluateCondition("text", "Submit", submit, "equals")).toBe(true);
+  });
+
+  // ...but an additive own label (a slider named "Volume" whose child shows the
+  // value "50%") still composes with the descendant text.
+  it("keeps an additive own label alongside hoisted child text", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" resource-id="volume" content-desc="Volume" package="com.acme.app" bounds="[40,400][1040,500]">
+      <node index="0" class="android.widget.TextView" text="50%" package="com.acme.app" bounds="[900,420][1020,480]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const volume = findAll(tree, { identifier: "volume" });
+
+    expect(volume[0]!.subtreeText).toBe("Volume 50%");
+    expect(evaluateCondition("text", "50%", volume)).toBe(true);
+  });
+
+  // Partial overlap: a container labelled "Submit" over a child rendering
+  // "Submit now" hoists the child's fuller text once, not "Submit Submit now".
+  it("drops an own label the child text already contains", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" resource-id="submit-button" content-desc="Submit" package="com.acme.app" bounds="[40,1700][1040,1800]">
+      <node index="0" class="android.widget.TextView" text="Submit now" package="com.acme.app" bounds="[340,1730][740,1770]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const submit = findAll(tree, { identifier: "submit-button" });
+
+    expect(assertText(submit[0]!)).toBe("Submit now");
+    expect(evaluateCondition("text", "Submit now", submit, "equals")).toBe(true);
+    expect(evaluateCondition("text", "Submit", submit, "equals")).toBe(false);
+    expect(evaluateCondition("text", "Submit", submit, "contains")).toBe(true);
   });
 
   // Visibility: text hoists only from on-screen nodes. A row dumped with

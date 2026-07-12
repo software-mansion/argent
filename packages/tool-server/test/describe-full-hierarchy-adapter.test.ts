@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { adaptFullHierarchyToDescribeResult } from "../src/tools/flows/flow-ios-tree";
-import { evaluateCondition, findAll, selectorToFrame } from "../src/utils/ui-tree-match";
+import {
+  assertText,
+  evaluateCondition,
+  findAll,
+  selectorToFrame,
+} from "../src/utils/ui-tree-match";
 
 // A getFullHierarchy payload shaped like SerializeView output: a window spanning
 // the screen, an `accessible` carousel container carrying a testID, and its
@@ -155,6 +160,46 @@ describe("describe full-hierarchy adapter", () => {
     // Exact `equals` rejects a partial expectation the substring would accept.
     expect(evaluateCondition("text", "1", square, "contains")).toBe(true);
     expect(evaluateCondition("text", "Taps: 1", square, "equals")).toBe(false);
+  });
+
+  // A labelled container whose child renders the same text (a testID button
+  // with accessibilityLabel "Submit" over a `<Text>Submit</Text>`) must not
+  // hoist the duplicate — "Submit Submit" would fail an `equals` assert
+  // against exactly what the screen shows.
+  it("does not duplicate a container's own label that its child also renders", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTView",
+              identifier: "submit-button",
+              label: "Submit",
+              windowFrame: { x: 24, y: 304, width: 200, height: 48 },
+              children: [
+                {
+                  className: "RCTTextView",
+                  label: "Submit",
+                  windowFrame: { x: 80, y: 316, width: 88, height: 24 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+    const submit = findAll(tree, { identifier: "submit-button" });
+
+    // The child text adds nothing over the own label, so nothing is stamped
+    // and the assert reads the node's own "Submit" — not "Submit Submit".
+    expect(submit[0]!.subtreeText).toBeUndefined();
+    expect(assertText(submit[0]!)).toBe("Submit");
+    expect(evaluateCondition("text", "Submit", submit, "equals")).toBe(true);
   });
 
   // The classic contains-vs-equals split: a counter reading "10" satisfies a
