@@ -186,6 +186,16 @@ export function renderArtifactLines(report: FlowReport): string[] {
 }
 
 /**
+ * Names spliced into artifact-export destinations. Mirrors the tool-server's
+ * FLOW_NAME_PATTERN, which every legitimate `report.flow` and `snapshotKey`
+ * already satisfies (`assertSafeFlowName`'d flow name; `<name>__<platform>-WxH`
+ * key). Re-checked here because the destination root is an operator-chosen
+ * filesystem path (`--output`) and the values arrive over the wire — a
+ * malicious or buggy server must not steer the copy outside that directory.
+ */
+const SAFE_ARTIFACT_NAME = /^[A-Za-z0-9_-]+$/;
+
+/**
  * Copy each failed snapshot's artifacts into a durable, globbable location —
  * `<outputDir>/<flow>/<key>-<role>.png`, where `<key>` is the snapshot's
  * baseline key (`name__platform-WxH`), so a run that hits several
@@ -197,19 +207,29 @@ export function renderArtifactLines(report: FlowReport): string[] {
  * of a temp path. Failure-only: a clean pass carries no artifacts, and a
  * seeded baseline is already durable under `__baselines__/`. Best-effort per
  * file — a copy error warns on stderr and leaves the source path in place;
- * artifact export must never change a run's verdict.
+ * artifact export must never change a run's verdict. Server-supplied names
+ * that fail `SAFE_ARTIFACT_NAME` are skipped the same way — before any
+ * materialization, so nothing is downloaded for a step that won't be written.
  */
 export async function exportFailureArtifacts(
   report: FlowReport,
   outputDir: string,
   ctx: MaterializeContext
 ): Promise<void> {
+  if (!SAFE_ARTIFACT_NAME.test(report.flow)) {
+    console.error(
+      `warning: skipping artifact export for unsafe flow name ${JSON.stringify(report.flow)}`
+    );
+    return;
+  }
   for (const s of report.steps) {
     if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
     // Key first: a legacy tool-server sends plain path strings, and
     // keyFromBaselinePath needs that original baseline path, not a rewrite.
+    // The pattern check also hardens the fallback, whose basename can still
+    // be ".." for a path ending in "/..".
     const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
-    if (!key) continue;
+    if (!key || !SAFE_ARTIFACT_NAME.test(key)) continue;
     // Materialize only this snapshot's artifacts (local read or remote
     // download) — never the whole report.
     const { result } = await materializeArtifacts(s.artifacts, ctx);
@@ -218,6 +238,11 @@ export async function exportFailureArtifacts(
     for (const [role, value] of Object.entries(s.artifacts)) {
       if (typeof value !== "string") continue; // null = failed materialization
       const dest = path.join(dir, `${key}-${role}.png`);
+      // Same resolved-path check as the server's getFlowPath: even if the
+      // pattern above is ever weakened, the copy stays inside --output. Also
+      // covers `role`, the third server-supplied piece of the destination.
+      const rel = path.relative(outputDir, dest);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
       try {
         await fsp.mkdir(dir, { recursive: true });
         await fsp.copyFile(value, dest);

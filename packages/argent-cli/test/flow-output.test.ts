@@ -217,6 +217,86 @@ describe("exportFailureArtifacts", () => {
     }
   });
 
+  it("refuses a flow name with path traversal: warns, writes nothing, downloads nothing", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // A remote handle (no hostPath) would force a download — proving the
+      // guard fires before materialization, not just before the copy.
+      const handle = {
+        __argentArtifact: true,
+        id: "diff-1",
+        filename: "remote-diff.png",
+        mimeType: "image/png",
+        size: 10,
+      };
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { diff: handle },
+      };
+      const fetchSpy = vi.fn(async () => new Response("diff-bytes"));
+
+      await exportFailureArtifacts({ ...mkReport([step]), flow: "../escape" }, outDir, {
+        toolsUrl: "http://tools.invalid",
+        fetchImpl: fetchSpy as unknown as typeof fetch,
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(step.artifacts?.diff).toBe(handle);
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unsafe flow name"));
+      // The would-be destination outside --output must not exist.
+      await expect(fs.access(path.join(tmpDir, "escape"))).rejects.toThrow();
+      await expect(fs.access(outDir)).rejects.toThrow();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("skips a step whose snapshotKey contains path traversal, still exporting safe steps", async () => {
+    const evil = await writeFile("evil.png", "evil-bytes");
+    const good = await writeFile("good.png", "good-bytes");
+    const badStep: StepReport = {
+      index: 0,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: "../../pwned",
+      artifacts: { current: evil },
+    };
+    const goodStep: StepReport = {
+      index: 1,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: "home__ios-390x844",
+      artifacts: { current: good },
+    };
+
+    await exportFailureArtifacts(mkReport([badStep, goodStep]), outDir, ctx);
+
+    // Untouched — the join would have resolved to <tmpDir>/pwned-current.png.
+    expect(badStep.artifacts?.current).toBe(evil);
+    await expect(fs.access(path.join(tmpDir, "pwned-current.png"))).rejects.toThrow();
+    expect(goodStep.artifacts?.current).toBe(
+      path.join(outDir, "checkout", "home__ios-390x844-current.png")
+    );
+  });
+
+  it("skips a step whose baseline-derived key reduces to '..'", async () => {
+    // path.basename("<dir>/..") is ".." — the fallback alone can't contain it.
+    const step: StepReport = {
+      index: 0,
+      kind: "snapshot",
+      status: "fail",
+      artifacts: { baseline: `${tmpDir}${path.sep}..` },
+    };
+
+    await exportFailureArtifacts(mkReport([step]), outDir, ctx);
+
+    expect(step.artifacts?.baseline).toBe(`${tmpDir}${path.sep}..`);
+    await expect(fs.access(outDir)).rejects.toThrow();
+  });
+
   it("warns and keeps the temp path when a source file is unreadable", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
