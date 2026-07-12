@@ -247,6 +247,56 @@ describe("native-profiler-stop recovery branch", () => {
     expect(api.recordingExitedUnexpectedly).toBe(false);
     expect(api.lastExitInfo).toBeNull();
   });
+
+  it("pairs the exports with the in-flight recording's capture mode (happy path)", async () => {
+    // start stamps only recordingMallocStackLogging; the report-facing
+    // mallocStackLogging must flip when stop writes exportedFiles — never
+    // before (a new start must not re-label the previous capture's data).
+    vi.useFakeTimers();
+    const api = await buildSession();
+    const child = new FakeChild();
+    child.respondsTo = new Set<NodeJS.Signals>(["SIGINT"]);
+    child.respondAfterMs = 10;
+    child.on("exit", (code, signal) => handleXctraceExit(api, code, signal));
+
+    api.profilingActive = true;
+    api.capturePid = 4321;
+    api.captureProcess = asChild(child);
+    api.traceFile = FAKE_TRACE;
+    api.recordingMallocStackLogging = true; // in-flight malloc capture
+    api.mallocStackLogging = false; // previous capture was attach-mode
+
+    const promise = nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    await promise;
+
+    expect(api.mallocStackLogging).toBe(true);
+  });
+
+  it("pairs the exports with the capture mode on the recovery branch too", async () => {
+    const api = await buildSession();
+    api.traceFile = FAKE_TRACE;
+    api.recordingExitedUnexpectedly = true;
+    api.lastExitInfo = { code: 137, signal: "SIGKILL" };
+    api.recordingMallocStackLogging = true;
+    api.mallocStackLogging = false;
+
+    await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
+
+    expect(api.mallocStackLogging).toBe(true);
+  });
 });
 
 describe("native-profiler-start fresh-start reset", () => {
