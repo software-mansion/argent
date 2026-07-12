@@ -257,6 +257,14 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     process.exit(2);
   }
 
+  // Checked before parseRunArgs so --help wins even when it trails a
+  // value-taking flag (`--device --help` would otherwise throw "requires a
+  // value" instead of printing help).
+  if (rest.includes("--help") || rest.includes("-h")) {
+    printHelp();
+    return;
+  }
+
   let args: ReturnType<typeof parseRunArgs>;
   try {
     args = parseRunArgs(rest);

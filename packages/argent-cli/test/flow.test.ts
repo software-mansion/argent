@@ -238,4 +238,16 @@ describe("argent flow run", () => {
     expect(logs.join("\n")).toContain("Usage: argent flow");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
+
+  it("prints help instead of running when --help follows the flow name", async () => {
+    await flow(["run", "checkout", "--help"], opts);
+    expect(logs.join("\n")).toContain("Options (run):");
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("prints help instead of running when -h trails other run flags", async () => {
+    await flow(["run", "checkout", "--device", "SIM-1", "-h"], opts);
+    expect(logs.join("\n")).toContain("Usage: argent flow");
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
 });
