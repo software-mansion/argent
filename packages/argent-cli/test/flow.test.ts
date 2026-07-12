@@ -81,8 +81,55 @@ describe("parseRunArgs", () => {
     );
   });
 
-  it("ignores unknown flags and extra positionals (current design)", () => {
-    expect(parseRunArgs(["checkout", "--verbose", "extra"])).toEqual({
+  it("accepts the --flag=value form for every value-taking flag", () => {
+    expect(parseRunArgs(["checkout", "--device=SIM-1", "--platform=ios", "--output=dir"])).toEqual({
+      name: "checkout",
+      device: "SIM-1",
+      platform: "ios",
+      output: "dir",
+      updateBaselines: false,
+      json: false,
+    });
+  });
+
+  it("mixes = and space-separated forms freely", () => {
+    expect(parseRunArgs(["checkout", "--device=SIM-1", "--platform", "ios"])).toEqual({
+      name: "checkout",
+      device: "SIM-1",
+      platform: "ios",
+      updateBaselines: false,
+      json: false,
+    });
+  });
+
+  it("does not consume the next token when the value was inline", () => {
+    // Guards the index bookkeeping: --device=SIM-1 must not swallow --json.
+    const out = parseRunArgs(["checkout", "--device=SIM-1", "--json"]);
+    expect(out.device).toBe("SIM-1");
+    expect(out.json).toBe(true);
+  });
+
+  it("throws when a boolean flag is given an inline value", () => {
+    expect(() => parseRunArgs(["checkout", "--json=true"])).toThrow(FlagParseException);
+    expect(() => parseRunArgs(["checkout", "--json=true"])).toThrow("--json does not take a value");
+    expect(() => parseRunArgs(["checkout", "--update-baselines=1"])).toThrow(
+      "--update-baselines does not take a value"
+    );
+  });
+
+  it("throws when an inline value is empty", () => {
+    expect(() => parseRunArgs(["checkout", "--device="])).toThrow("--device requires a value");
+  });
+
+  it("rejects unknown flags instead of silently dropping them", () => {
+    expect(() => parseRunArgs(["checkout", "--verbose"])).toThrow(FlagParseException);
+    expect(() => parseRunArgs(["checkout", "--verbose"])).toThrow(/unknown flag/);
+    // A typo'd value flag must not fall back to device auto-detection.
+    expect(() => parseRunArgs(["checkout", "--platfrom=ios"])).toThrow(/unknown flag/);
+  });
+
+  it("still ignores extra bare positionals (only flags are rejected)", () => {
+    expect(parseRunArgs(["checkout", "extra"])).toEqual({
       name: "checkout",
       updateBaselines: false,
       json: false,
@@ -154,6 +201,40 @@ describe("argent flow run", () => {
 
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     expect(errs.join("\n")).toContain("--platform requires a value");
+  });
+
+  it("forwards --flag=value forms to flow-execute like the space-separated ones", async () => {
+    await expect(
+      flow(["run", "checkout", "--platform=ios", "--device=SIM-1"], opts)
+    ).rejects.toThrow("process.exit:0");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith(
+      "flow-execute",
+      {
+        name: "checkout",
+        project_root: process.cwd(),
+        prerequisiteAcknowledged: true,
+        device: "SIM-1",
+        platform: "ios",
+      },
+      { onProgress: expect.any(Function) }
+    );
+  });
+
+  it("exits 2 without calling the tool when a boolean flag is given a value", async () => {
+    await expect(flow(["run", "checkout", "--json=x"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(errs.join("\n")).toContain("--json does not take a value");
+  });
+
+  it("exits 2 without calling the tool on a typo'd flag instead of auto-detecting a device", async () => {
+    await expect(flow(["run", "checkout", "--platfrom=ios"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(errs.join("\n")).toContain("unknown flag");
   });
 
   it("exits 2 when no flow name is given", async () => {

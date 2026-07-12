@@ -95,11 +95,26 @@ export function parseRunArgs(argv: string[]): {
   const out = { updateBaselines: false, json: false } as ReturnType<typeof parseRunArgs>;
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
-    // A value-taking flag must consume a real value. A missing one (the flag is
-    // the final token, or the next token is itself a flag) would otherwise be
-    // dropped silently and the run would fall back to device auto-detection —
-    // running against whatever happens to be booted instead of erroring.
+    if (!tok.startsWith("-")) {
+      // The first bare token is the flow name; later ones stay ignored.
+      if (!out.name) out.name = tok;
+      continue;
+    }
+    // Accept `--flag=value` alongside `--flag value`, like the `argent run` /
+    // `argent tools` parser (flag-parser.ts) does.
+    const eq = tok.startsWith("--") ? tok.indexOf("=") : -1;
+    const flag = eq === -1 ? tok : tok.slice(0, eq);
+    const inline = eq === -1 ? undefined : tok.slice(eq + 1);
+    // A value-taking flag must consume a real value. A missing one (`--flag=`
+    // with nothing after the `=`, the flag as the final token, or a next token
+    // that is itself a flag) would otherwise be dropped silently and the run
+    // would fall back to device auto-detection — running against whatever
+    // happens to be booted instead of erroring.
     const takeValue = (name: string): string => {
+      if (inline !== undefined) {
+        if (inline === "") throw new FlagParseException(`${name} requires a value`);
+        return inline;
+      }
       const v = argv[i + 1];
       if (v === undefined || v.startsWith("-")) {
         throw new FlagParseException(`${name} requires a value`);
@@ -107,12 +122,22 @@ export function parseRunArgs(argv: string[]): {
       i += 1;
       return v;
     };
-    if (tok === "--update-baselines") out.updateBaselines = true;
-    else if (tok === "--json") out.json = true;
-    else if (tok === "--device") out.device = takeValue("--device");
-    else if (tok === "--platform") out.platform = takeValue("--platform");
-    else if (tok === "--output") out.output = takeValue("--output");
-    else if (!tok.startsWith("-") && !out.name) out.name = tok;
+    const noValue = (name: string): void => {
+      if (inline !== undefined) throw new FlagParseException(`${name} does not take a value`);
+    };
+    if (flag === "--update-baselines") {
+      noValue("--update-baselines");
+      out.updateBaselines = true;
+    } else if (flag === "--json") {
+      noValue("--json");
+      out.json = true;
+    } else if (flag === "--device") out.device = takeValue("--device");
+    else if (flag === "--platform") out.platform = takeValue("--platform");
+    else if (flag === "--output") out.output = takeValue("--output");
+    // Any other flag-shaped token is an error — a typo like --platfrom must
+    // not silently fall back to device auto-detection. --help/-h never reach
+    // this parser: flow() intercepts them before calling parseRunArgs.
+    else throw new FlagParseException(`unknown flag ${tok}`);
   }
   return out;
 }
