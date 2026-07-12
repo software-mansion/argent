@@ -3,6 +3,7 @@ import * as path from "node:path";
 import {
   serializeFlow,
   parseFlow,
+  describeSelector,
   setActiveFlow,
   getActiveFlow,
   getActiveFlowOrNull,
@@ -56,6 +57,26 @@ describe("serializeFlow", () => {
     const result = serializeFlow(flow);
     expect(result).toContain("- tool: screenshot");
     expect(result).not.toContain("args:");
+  });
+});
+
+// ── describeSelector ─────────────────────────────────────────────────
+
+describe("describeSelector", () => {
+  it("spells identifier as id, the flow-YAML spelling", () => {
+    expect(describeSelector({ identifier: "submit" })).toBe('id="submit"');
+  });
+
+  it("renders a text selector", () => {
+    expect(describeSelector({ text: "Login" })).toBe('text="Login"');
+  });
+
+  it("drops the internal loose flag", () => {
+    expect(describeSelector({ text: "Login", loose: true })).toBe('text="Login"');
+  });
+
+  it("joins multiple keys with spaces", () => {
+    expect(describeSelector({ text: "Login", role: "button" })).toBe('text="Login" role="button"');
   });
 });
 

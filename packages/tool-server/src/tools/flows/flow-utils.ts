@@ -382,6 +382,21 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   return identifier === undefined ? { ...rest } : { ...rest, id: identifier };
 }
 
+/**
+ * Render a selector for a human-readable message (failure reasons, recording
+ * warnings). The internal `loose` flag is dropped.
+ */
+export function describeSelector(s: FlowSelector): string {
+  return (
+    Object.entries(s)
+      .filter(([k]) => k !== "loose")
+      // `identifier` is spelled `id` in flow YAML — print the spelling the flow
+      // file uses so the message reads like the step it refers to.
+      .map(([k, v]) => `${k === "identifier" ? "id" : k}="${v}"`)
+      .join(" ")
+  );
+}
+
 /** Sugar an await/assert step into the condition-as-key YAML body. */
 function waitToYaml(
   condition: WaitCondition,

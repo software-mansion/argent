@@ -21,7 +21,12 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
-import type { FlowSelector, FlowStep, ScrollDirection } from "./flow-utils";
+import {
+  describeSelector,
+  type FlowSelector,
+  type FlowStep,
+  type ScrollDirection,
+} from "./flow-utils";
 
 /** Everything a directive needs to act on the run's device. */
 export interface ActionEnv {
@@ -159,17 +164,6 @@ function axisFullyInside(
 // Playwright's web-first assertions, assert retries for a short grace window so
 // it absorbs that latency; a genuinely-false assertion still fails quickly.
 const DEFAULT_ASSERT_TIMEOUT_MS = 1000;
-
-function describeSelector(s: FlowSelector): string {
-  return (
-    Object.entries(s)
-      .filter(([k]) => k !== "loose")
-      // `identifier` is spelled `id` in flow YAML — print the spelling the flow
-      // file uses so a failure reads like the step that caused it.
-      .map(([k, v]) => `${k === "identifier" ? "id" : k}="${v}"`)
-      .join(" ")
-  );
-}
 
 /**
  * The strict selectors a flow selector resolves through, in order. A loose

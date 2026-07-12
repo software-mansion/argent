@@ -9,6 +9,7 @@ import {
   parseFlow,
   isE2eFlow,
   assertSafeFlowName,
+  describeSelector,
   type FlowSavedTo,
   type FlowStep,
   type RecordingSession,
@@ -41,16 +42,6 @@ const zodSchema = z.object({
     .optional()
     .describe("Milliseconds to sleep before executing this step during replay."),
 });
-
-function formatSelector(selector: Selector): string {
-  return (
-    Object.entries(selector)
-      // `identifier` is spelled `id` in flow YAML — warnings should quote the
-      // selector the way the recorded file will spell it.
-      .map(([k, v]) => `${k === "identifier" ? "id" : k}="${v}"`)
-      .join(" ")
-  );
-}
 
 // The full-hierarchy source replay gates on per platform (`treeSourceGate` in
 // flow-run.ts). A capture from the fallback source was derived against a tree
@@ -103,7 +94,7 @@ async function captureTapSelector(
     const resolved = selectorToFrame(tree, selector);
     if (!resolved || !frameContains(resolved, point.x, point.y)) {
       return {
-        warning: `selector ${formatSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
+        warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
     return { selector, warning: fallbackSourceWarning(source, device.platform) };
