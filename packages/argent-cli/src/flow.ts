@@ -2,7 +2,9 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import {
   createToolsClient,
+  isArtifactHandle,
   materializeArtifacts,
+  type MaterializeContext,
   type ToolsServerPaths,
 } from "@argent/tools-client";
 import { FlagParseException } from "./flag-parser.js";
@@ -31,8 +33,11 @@ export interface StepReport {
   snapshotKey?: string;
   /**
    * Snapshot-step artifacts keyed by role (baseline/current/diff). The wire
-   * value is an artifact handle; materializeArtifacts has already rewritten
-   * each to a local path string (or null when unfetchable) by render time.
+   * value is an artifact handle (or a plain path string from a legacy
+   * tool-server); by render time each has been rewritten to a string — a
+   * durable local copy for the failed snapshots `--output` exports, otherwise
+   * the handle's server-side hostPath/filename — or null when a needed
+   * download failed.
    */
   artifacts?: Record<string, unknown>;
 }
@@ -181,21 +186,34 @@ export function renderArtifactLines(report: FlowReport): string[] {
 }
 
 /**
- * Copy each failed snapshot's materialized artifacts into a durable, globbable
- * location — `<outputDir>/<flow>/<key>-<role>.png`, where `<key>` is the
- * snapshot's baseline key (`name__platform-WxH`), so a run that hits several
- * flows/snapshots can't clobber itself. Rewrites each copied role's path in the
- * report so the renderers and `--json` print the durable location instead of a
- * temp path. Failure-only: a clean pass carries no artifacts, and a seeded
- * baseline is already durable under `__baselines__/`. Best-effort per file — a
- * copy error warns on stderr and leaves the temp path in place; artifact export
- * must never change a run's verdict.
+ * Copy each failed snapshot's artifacts into a durable, globbable location —
+ * `<outputDir>/<flow>/<key>-<role>.png`, where `<key>` is the snapshot's
+ * baseline key (`name__platform-WxH`), so a run that hits several
+ * flows/snapshots can't clobber itself. This is the only place the CLI needs
+ * artifact bytes, so materialization happens here, scoped to each failed
+ * snapshot's artifacts — a co-located tool-server resolves them in place, a
+ * remote one downloads just these files. Rewrites each copied role's path in
+ * the report so the renderers and `--json` print the durable location instead
+ * of a temp path. Failure-only: a clean pass carries no artifacts, and a
+ * seeded baseline is already durable under `__baselines__/`. Best-effort per
+ * file — a copy error warns on stderr and leaves the source path in place;
+ * artifact export must never change a run's verdict.
  */
-export async function exportFailureArtifacts(report: FlowReport, outputDir: string): Promise<void> {
+export async function exportFailureArtifacts(
+  report: FlowReport,
+  outputDir: string,
+  ctx: MaterializeContext
+): Promise<void> {
   for (const s of report.steps) {
     if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
+    // Key first: a legacy tool-server sends plain path strings, and
+    // keyFromBaselinePath needs that original baseline path, not a rewrite.
     const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
     if (!key) continue;
+    // Materialize only this snapshot's artifacts (local read or remote
+    // download) — never the whole report.
+    const { result } = await materializeArtifacts(s.artifacts, ctx);
+    s.artifacts = result as Record<string, unknown>;
     const dir = path.join(outputDir, report.flow);
     for (const [role, value] of Object.entries(s.artifacts)) {
       if (typeof value !== "string") continue; // null = failed materialization
@@ -222,6 +240,26 @@ function keyFromBaselinePath(artifacts: Record<string, unknown>): string | null 
   const baseline = artifacts.baseline;
   if (typeof baseline !== "string") return null;
   return path.basename(baseline).replace(/\.png$/, "");
+}
+
+/**
+ * Rewrite any artifact handle left in the report to a printable string — the
+ * tool-server's hostPath, or the bare filename — with zero fetches. The CLI
+ * renders artifact paths as text only (never inline images), so downloading
+ * the bytes just to print a path would be pure waste against a remote
+ * tool-server — the same economy the MCP renderer applies to baseline/current.
+ * The renderers and `--json` expect string values; a raw handle object would
+ * fail their `typeof v === "string"` filter and vanish from the output. Runs
+ * after the optional `--output` export, which has already replaced the failed
+ * snapshots' handles with durable local copies.
+ */
+export function resolveArtifactDisplayPaths(report: FlowReport): void {
+  for (const s of report.steps) {
+    if (!s.artifacts || typeof s.artifacts !== "object") continue;
+    for (const [role, value] of Object.entries(s.artifacts)) {
+      if (isArtifactHandle(value)) s.artifacts[role] = value.hostPath ?? value.filename;
+    }
+  }
 }
 
 export function renderReport(report: FlowReport): string {
@@ -344,9 +382,13 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       payload,
       args.json ? undefined : { onProgress: onStepReport }
     );
-    const { url, token } = await baseUrl();
-    const materialized = await materializeArtifacts(resp.data, { toolsUrl: url, authToken: token });
-    report = materialized.result as FlowReport;
+    // Deliberately NOT materialized here: the CLI prints artifact paths as
+    // text and renders no images (StepReport has no `result` field, so
+    // tool-step results are never displayed). Deep-walking the report would
+    // download every tool-step screenshot and all three PNGs of each failed
+    // snapshot just to show a path. Only the failed-snapshot artifacts that
+    // --output copies are fetched, below.
+    report = resp.data as FlowReport;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
@@ -357,10 +399,20 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     process.exit(2);
   }
 
-  // Durable diff output: copy failed-snapshot images out of the temp cache
-  // before any renderer prints paths, so every output mode shows the durable
-  // location.
-  if (args.output) await exportFailureArtifacts(report, path.resolve(args.output));
+  // Durable diff output: copy failed-snapshot images out of the tool-server's
+  // cache before any renderer prints paths, so every output mode shows the
+  // durable location. The only artifact bytes the CLI ever fetches; baseUrl is
+  // resolved lazily so a run without --output makes no extra round-trip.
+  if (args.output) {
+    const { url, token } = await baseUrl();
+    await exportFailureArtifacts(report, path.resolve(args.output), {
+      toolsUrl: url,
+      authToken: token,
+    });
+  }
+  // Whatever handles remain (all of them without --output; passing snapshots
+  // and unexported roles with it) print as server-side paths.
+  resolveArtifactDisplayPaths(report);
 
   if (args.json) {
     console.log(JSON.stringify(report, null, 2));

@@ -6,11 +6,18 @@ const toolsClientMock = vi.hoisted(() => ({
   callTool: vi.fn(),
   baseUrl: vi.fn(async () => ({ url: "http://127.0.0.1:4141", token: "tok" })),
 }));
+// Identity materialization; a spy so tests can assert it is only invoked for
+// the failed-snapshot artifacts that --output actually copies.
+const materializeArtifactsMock = vi.hoisted(() =>
+  vi.fn(async (data: unknown) => ({ result: data, images: [] }))
+);
 
-vi.mock("@argent/tools-client", () => ({
+vi.mock("@argent/tools-client", async (importOriginal) => ({
+  // Keep the real isArtifactHandle — the display-path fallback under test
+  // must recognize genuine wire handles.
+  ...(await importOriginal<typeof import("@argent/tools-client")>()),
   createToolsClient: vi.fn(() => toolsClientMock),
-  // Identity materialization — flow reports carry no artifact handles here.
-  materializeArtifacts: vi.fn(async (data: unknown) => ({ result: data, images: [] })),
+  materializeArtifacts: materializeArtifactsMock,
 }));
 
 interface StepFixture {
@@ -22,7 +29,22 @@ interface StepFixture {
   tool?: string;
   flow?: string;
   message?: string;
+  snapshotKey?: string;
   artifacts?: Record<string, unknown>;
+  /** Wire-only tool-step payload; the CLI StepReport type has no such field. */
+  result?: unknown;
+}
+
+/** A wire artifact handle as the tool-server emits it (image/png). */
+function handle(hostPath?: string): Record<string, unknown> {
+  return {
+    __argentArtifact: true,
+    id: "art-1",
+    filename: "art.png",
+    mimeType: "image/png",
+    size: 4,
+    ...(hostPath ? { hostPath } : {}),
+  };
 }
 
 function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -291,6 +313,156 @@ describe("argent flow run", () => {
   it("prints the raw report with --json", async () => {
     await expect(flow(["run", "checkout", "--json"], opts)).rejects.toThrow("process.exit:0");
     expect(JSON.parse(logs.join("\n"))).toEqual(report());
+  });
+
+  it("renders failed-snapshot handles as server paths without fetching when --output is absent", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [
+          {
+            index: 0,
+            kind: "snapshot",
+            status: "fail",
+            reason: "1.2% differs",
+            snapshotKey: "home__ios-390x844",
+            artifacts: {
+              baseline: handle("/srv/base.png"),
+              current: handle("/srv/cur.png"),
+              diff: handle("/srv/diff.png"),
+            },
+          },
+        ],
+      }),
+    });
+
+    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:1");
+
+    // Nothing to download: paths come straight off the handles, and the
+    // server URL is never even resolved.
+    expect(materializeArtifactsMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.baseUrl).not.toHaveBeenCalled();
+    const out = logs.join("\n");
+    expect(out).toContain("baseline: /srv/base.png");
+    expect(out).toContain("current: /srv/cur.png");
+    expect(out).toContain("diff: /srv/diff.png");
+  });
+
+  it("never materializes tool-step results (the CLI renders no images)", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        steps: [
+          {
+            index: 0,
+            kind: "tool",
+            tool: "screenshot",
+            status: "pass",
+            result: { image: handle("/srv/shot.png") },
+          },
+        ],
+      }),
+    });
+
+    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:0");
+
+    expect(materializeArtifactsMock).not.toHaveBeenCalled();
+    const out = logs.join("\n");
+    expect(out).toMatch(/✓ {2}1 tool screenshot/);
+    expect(out).toContain("PASS — 1 passed");
+  });
+
+  it("materializes only the failed snapshot's artifacts when --output is set", async () => {
+    const failedArtifacts = { baseline: handle("/srv/base.png") };
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        ok: false,
+        failed: 1,
+        steps: [
+          {
+            index: 0,
+            kind: "tool",
+            tool: "screenshot",
+            status: "pass",
+            result: { image: handle("/srv/shot.png") },
+          },
+          {
+            index: 1,
+            kind: "snapshot",
+            status: "fail",
+            snapshotKey: "home__ios-390x844",
+            artifacts: failedArtifacts,
+          },
+        ],
+      }),
+    });
+
+    await expect(flow(["run", "checkout", "--output", "flow-artifacts"], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    // One materialization, scoped to the failed snapshot's artifacts object —
+    // not the whole report (which would pull the tool-step screenshot too).
+    expect(toolsClientMock.baseUrl).toHaveBeenCalledTimes(1);
+    expect(materializeArtifactsMock).toHaveBeenCalledTimes(1);
+    expect(materializeArtifactsMock).toHaveBeenCalledWith(failedArtifacts, {
+      toolsUrl: "http://127.0.0.1:4141",
+      authToken: "tok",
+    });
+  });
+
+  it("emits string artifact paths in --json without --output (hostPath, or filename)", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [
+          {
+            index: 0,
+            kind: "snapshot",
+            status: "fail",
+            snapshotKey: "home__ios-390x844",
+            artifacts: { baseline: handle("/srv/base.png"), diff: handle() },
+          },
+        ],
+      }),
+    });
+
+    await expect(flow(["run", "checkout", "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(materializeArtifactsMock).not.toHaveBeenCalled();
+    const parsed = JSON.parse(logs.join("\n")) as {
+      steps: { artifacts?: Record<string, unknown> }[];
+    };
+    // Strings, not handle objects: hostPath when present, filename otherwise.
+    expect(parsed.steps[0]?.artifacts).toEqual({ baseline: "/srv/base.png", diff: "art.png" });
+  });
+
+  it("prints legacy string artifact paths as-is (pre-handle tool-server)", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [
+          {
+            index: 0,
+            kind: "snapshot",
+            status: "fail",
+            artifacts: { baseline: "/tmp/snaps/home.png", diff: "/tmp/snaps/home-diff.png" },
+          },
+        ],
+      }),
+    });
+
+    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(materializeArtifactsMock).not.toHaveBeenCalled();
+    const out = logs.join("\n");
+    expect(out).toContain("baseline: /tmp/snaps/home.png");
+    expect(out).toContain("diff: /tmp/snaps/home-diff.png");
   });
 
   it("exits 1 with the error message when the tool call fails", async () => {
