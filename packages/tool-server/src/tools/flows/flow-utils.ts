@@ -315,20 +315,22 @@ type YamlSelector = string | (Omit<Selector, "identifier"> & { id?: string });
 type TapBody = YamlSelector | { x: number; y: number };
 
 /**
- * The body of an `await`/`assert` step. The condition is the key, not a separate
- * `condition:` field:
+ * The condition of an `await`/`assert` step. The condition is the key, not a
+ * separate `condition:` field:
  *   - `{ visible: "Account" }`            ← exists/visible/hidden take a selector
  *   - `{ text: { in: "Taps:", contains: "Taps: 0" } }`  ← substring check
  *   - `{ text: { in: "Taps:", equals: "Taps: 0" } }`    ← exact-text check
- *   - `{ visible: "Account", timeout: 10000 }`            ← custom timeout (await only)
+ * Only `await` takes an optional `timeout` sibling key (milliseconds):
+ *   - `{ visible: "Account", timeout: 10000 }`
+ * An `assert` carrying one is rejected at parse — an assert is an immediate
+ * check; a check that needs time to become true is a wait, spelled `await`.
  */
-type YamlWaitBody = (
+type YamlWaitCondition =
   | { exists: YamlSelector }
   | { visible: YamlSelector }
   | { hidden: YamlSelector }
   | { text: { in: YamlSelector; contains: string } }
-  | { text: { in: YamlSelector; equals: string } }
-) & { timeout?: number };
+  | { text: { in: YamlSelector; equals: string } };
 
 /** `scroll-to` body: a bare target (scrolls down), or a map with options. */
 type YamlScrollBody =
@@ -342,8 +344,8 @@ type YamlStep =
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
   | { type: { into: YamlSelector; text: string; submit?: boolean } }
-  | { await: YamlWaitBody }
-  | { assert: YamlWaitBody }
+  | { await: YamlWaitCondition & { timeout?: number } }
+  | { assert: YamlWaitCondition }
   | { wait: number }
   | { "scroll-to": YamlScrollBody }
   | { snapshot: string | { name: string; maxMismatch?: number } };
@@ -387,9 +389,9 @@ function waitToYaml(
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
   timeoutMs: number | undefined
-): YamlWaitBody {
+): YamlWaitCondition & { timeout?: number } {
   const sel = selectorToYaml(selector);
-  let body: YamlWaitBody;
+  let body: YamlWaitCondition & { timeout?: number };
   switch (condition) {
     case "exists":
       body = { exists: sel };
@@ -539,7 +541,8 @@ type WaitFields = {
  * optional expected text. The condition is the key and its value is the
  * selector (`{ visible: "Home" }`, `{ text: { in, contains } }`). The `text`
  * check takes exactly one of `contains` (substring) or `equals` (exact text).
- * `await` additionally accepts an optional `timeout` sibling key (milliseconds).
+ * `await` additionally accepts an optional `timeout` sibling key (milliseconds);
+ * an `assert` carrying one is rejected rather than silently ignored.
  */
 function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   if (raw === null || typeof raw !== "object") {
@@ -558,7 +561,13 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   const condition = present[0]!;
 
   let timeout: number | undefined;
-  if (kind === "await" && "timeout" in b) {
+  if ("timeout" in b) {
+    if (kind === "assert") {
+      badEntry(
+        { [kind]: b },
+        "assert has no timeout — it is an immediate check; use `await` for a timed wait"
+      );
+    }
     // Like `wait`, reject non-finite values: YAML `.inf` (or an overflowing
     // literal like 1e400) parses to Infinity — typeof number and > 0 — which
     // would make the runner's poll deadline unreachable and the await unbounded.

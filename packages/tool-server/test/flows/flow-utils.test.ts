@@ -310,6 +310,8 @@ describe("parseFlow", () => {
     expect(yaml).toContain('equals: "1"');
     expect(yaml).toContain("id: counter");
     expect(yaml).not.toContain("identifier:");
+    // An assert never emits a `timeout` key (the parser would reject it back).
+    expect(yaml).not.toContain("timeout");
   });
 
   it("roundtrips the sugared step kinds through YAML", () => {
@@ -416,6 +418,18 @@ describe("parseFlow", () => {
         "await.timeout needs a positive number of milliseconds"
       );
     }
+  });
+
+  it("rejects a timeout on an assert step (an assert is an immediate check)", () => {
+    // The internal assert step has no timeout field, so a YAML `timeout` used
+    // to be silently dropped; reject it loudly instead — a check that needs
+    // time to become true is a wait, spelled `await`.
+    expect(() => parseFlow("steps:\n  - assert: { visible: Account, timeout: 9000 }\n")).toThrow(
+      /assert has no timeout/
+    );
+    expect(() =>
+      parseFlow('steps:\n  - assert: { text: { in: counter, equals: "0" }, timeout: 5000 }\n')
+    ).toThrow(/assert has no timeout/);
   });
 
   it("rejects a scroll-to with an invalid direction", () => {
