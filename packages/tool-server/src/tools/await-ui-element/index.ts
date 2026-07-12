@@ -63,8 +63,9 @@ const zodSchema = z
       .describe(
         "What to wait for. `exists`: selector is anywhere in the tree. " +
           "`visible`: selector is present with a non-zero on-screen frame. `hidden`: selector is absent " +
-          "or zero-area. `text`: the first match in reading order (topmost) contains (or, with textMatch `equals`, exactly matches) " +
-          "expectedText — if a loose selector hits several elements, only that topmost one is checked, so narrow it to target the intended element."
+          "or zero-area. `text`: the first visible match in reading order (topmost), falling back to the first match overall if none is visible, " +
+          "contains (or, with textMatch `equals`, exactly matches) " +
+          "expectedText — if a loose selector hits several elements, only that one is checked, so narrow it to target the intended element."
       ),
     selector: selectorSchema.describe("Element to match (text / identifier / role)."),
     expectedText: z
@@ -72,7 +73,7 @@ const zodSchema = z
       .min(1)
       .optional()
       .describe(
-        "For condition `text`: the string the first matched element (topmost in reading order) must contain (default) or equal — see `textMatch`. Case-insensitive."
+        "For condition `text`: the string the first visible matched element (topmost in reading order; the first match overall if none is visible) must contain (default) or equal — see `textMatch`. Case-insensitive."
       ),
     textMatch: z
       .enum(["contains", "equals"])
@@ -179,7 +180,9 @@ function timeoutNote(
   let base: string;
   switch (params.condition) {
     case "text": {
-      const first = firstInReadingOrder(matches);
+      // Visible-first, mirroring evaluateCondition — the note must quote the
+      // same element the check read, or the two can contradict each other.
+      const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
       base = first
         ? `element matched but its text was "${nodeText(first)}" (wanted to ${wanted} "${params.expectedText}")`
@@ -237,10 +240,11 @@ Conditions:
   exists   — the selector matches an element anywhere in the tree.
   visible  — the selector matches an element with a non-zero on-screen frame.
   hidden   — the selector matches nothing, or only a zero-area element (e.g. a spinner that disappeared).
-  text     — the FIRST match in reading order (topmost, then leftmost) contains expectedText (case-insensitive
-             substring), or exactly matches it when textMatch is \`equals\`. A loose selector can match several
-             elements; only that topmost one is inspected, so if a lower match is the one holding the text the wait
-             still reports failure — narrow the selector to target it.
+  text     — the first VISIBLE match in reading order (topmost, then leftmost; falling back to the first match
+             overall if none is visible) contains expectedText (case-insensitive substring), or exactly matches
+             it when textMatch is \`equals\`. A loose selector can match several elements; only that one is
+             inspected, so if a different match is the one holding the text the wait still reports failure —
+             narrow the selector to target it.
 
 The selector is { text?, identifier?, role? }; every provided field must match. text and role match as
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),

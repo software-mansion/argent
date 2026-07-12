@@ -336,6 +336,62 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/Loading/);
   });
 
+  it("`text` check and timeout note both read the visible match, not a zero-area shadow", async () => {
+    // A stale zero-area "Total 0" sits above the visible "Total 42". Both the
+    // condition and the note must read the visible node — otherwise the check
+    // fails against the shadow while the note quotes the visible element,
+    // producing a self-contradictory message. Driven through the Chromium path
+    // because the iOS AX adapter prunes zero-area elements before they reach
+    // the tree, while Chromium deliberately keeps zero-height anchors.
+    const tree = {
+      role: "html",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "generic",
+          label: "Total 0",
+          frame: { x: 0.1, y: 0.1, width: 0, height: 0 },
+          children: [],
+        },
+        {
+          role: "generic",
+          label: "Total 42",
+          frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 },
+          children: [],
+        },
+      ],
+    };
+    const tool = createAwaitUiElementTool(makeMockRegistry({}));
+
+    const met = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      {
+        udid: CHROMIUM_ID,
+        condition: "text",
+        selector: { text: "Total" },
+        expectedText: "42",
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+    expect(met.success).toBe(true);
+
+    const unmet = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      {
+        udid: CHROMIUM_ID,
+        condition: "text",
+        selector: { text: "Total" },
+        expectedText: "99",
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+    expect(unmet.success).toBe(false);
+    expect(unmet.note).toMatch(/its text was "Total 42"/);
+    expect(unmet.note).not.toMatch(/Total 0/);
+  });
+
   // ── Cancellation ─────────────────────────────────────────────────────────
 
   it("aborts promptly when the request signal fires mid-wait", async () => {

@@ -159,7 +159,11 @@ export function firstInReadingOrder(matches: DescribeNode[]): DescribeNode | und
 
 // Evaluate a wait/assert condition over ALL elements matching a selector.
 // `visible` holds if ANY match is on-screen; `hidden` only if NONE is; `text`
-// inspects the first match in reading order.
+// inspects the first VISIBLE match in reading order (falling back to the first
+// overall if none is visible) — so a stale zero-area node can't shadow the
+// element the check was meant to read, and the check agrees with the failure
+// messages (flow assertReason, await-ui-element's timeout note), which quote
+// the same visible-first node.
 export function evaluateCondition(
   condition: WaitCondition,
   expectedText: string | undefined,
@@ -174,7 +178,7 @@ export function evaluateCondition(
     case "hidden":
       return !matches.some(isVisible);
     case "text": {
-      const first = firstInReadingOrder(matches);
+      const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       return (
         first !== undefined &&
         expectedText !== undefined &&

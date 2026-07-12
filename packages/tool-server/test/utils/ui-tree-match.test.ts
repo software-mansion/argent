@@ -148,6 +148,35 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("exists", undefined, findAll(root, { text: "Nope" }))).toBe(false);
   });
 
+  it("evaluateCondition `text` prefers the visible match over a zero-area shadow", () => {
+    // A stale zero-area node at the top of the screen must not shadow the
+    // visible element the check was meant to read — the failure messages
+    // (flow assertReason, await-ui-element's timeout note) quote the visible
+    // node, and the check must read the same element.
+    const tree = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ label: "Total 0", frame: { x: 0.1, y: 0.1, width: 0, height: 0 } }),
+        node({ label: "Total 42", frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 } }),
+      ],
+    });
+    const matches = findAll(tree, { text: "Total" });
+    expect(matches).toHaveLength(2);
+    expect(evaluateCondition("text", "42", matches, "contains")).toBe(true);
+    expect(evaluateCondition("text", "Total 42", matches, "equals")).toBe(true);
+  });
+
+  it("evaluateCondition `text` falls back to all matches when none is visible", () => {
+    const tree = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [node({ label: "Total 42", frame: { x: 0.1, y: 0.1, width: 0, height: 0 } })],
+    });
+    const matches = findAll(tree, { text: "Total" });
+    expect(evaluateCondition("text", "42", matches, "contains")).toBe(true);
+  });
+
   it("treeFingerprint is stable for an unchanged tree and changes when a frame moves", () => {
     const a = node({
       role: "AXGroup",
