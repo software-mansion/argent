@@ -238,10 +238,12 @@ export function writeJson(filePath: string, data: unknown): void {
 }
 
 // ── JSONC helpers ────────────────────────────────────────────────────────────
-// Comment-preserving edits for editor settings files that are JSONC (Zed).
-// Unlike the JSON.parse → mutate → JSON.stringify path used elsewhere, these
-// helpers operate on the source string via jsonc-parser's modify(), so user
-// comments, trailing commas, blank lines, and key ordering all survive.
+// Comment-preserving edits for the editor config files that are JSONC (Zed,
+// Cursor, VS Code, Kiro, ...) — and, since JSONC is a superset of JSON, the
+// shared write path for the strict-JSON adapters too. Unlike the
+// JSON.parse → mutate → JSON.stringify path, these helpers operate on the
+// source string via jsonc-parser's modify(), so user comments, trailing
+// commas, blank lines, and key ordering all survive.
 
 // jsonc-parser's modify() needs a formatting hint for newly-inserted keys.
 // Zed's bundled defaults use 2-space indentation; matching that keeps writes
@@ -253,13 +255,16 @@ function setJsoncIn(text: string, jsonPath: JSONPath, value: unknown): string {
   return applyJsoncEdits(text, edits);
 }
 
-function readJsoncFileRaw(filePath: string): { text: string; hadBom: boolean } {
-  if (!fs.existsSync(filePath)) return { text: "{}", hadBom: false };
+function readJsoncFileRaw(filePath: string): { text: string; hadBom: boolean; wasEmpty: boolean } {
+  if (!fs.existsSync(filePath)) return { text: "{}", hadBom: false, wasEmpty: true };
   let text = fs.readFileSync(filePath, "utf8");
   const hadBom = text.charCodeAt(0) === 0xfeff;
   if (hadBom) text = text.slice(1);
-  if (text.trim() === "") text = "{}";
-  return { text, hadBom };
+  // A whitespace-only file has no real content whose formatting we'd preserve —
+  // it is substituted with "{}" and synthesized fresh, like a non-existent file.
+  const wasEmpty = text.trim() === "";
+  if (wasEmpty) text = "{}";
+  return { text, hadBom, wasEmpty };
 }
 
 function getAtJsoncPath(value: unknown, jsonPath: JSONPath): unknown {
@@ -293,9 +298,10 @@ function rmEmptyDir(dirPath: string): void {
 
 /**
  * Read a JSON-with-Comments file (line + block comments + trailing commas).
- * Used by callers that need to inspect Zed's settings.json without the
- * `JSON.parse` failure on user-authored comments. For mutations go through
- * {@link editJsoncFile} instead — it preserves comments on write.
+ * Used across the MCP-config adapters to inspect editor config files that may
+ * be JSONC (Zed, Cursor, VS Code, Kiro, ...) without `JSON.parse` failing on a
+ * user-authored comment. For mutations go through {@link editJsoncFile}
+ * instead — it preserves comments on write.
  */
 export function readJsonc(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
@@ -316,15 +322,17 @@ export function readJsonc(filePath: string): Record<string, unknown> {
  *
  * Pass `undefined` as `value` to delete the key. Empty ancestor objects are
  * pruned, and if the document collapses to `{}` the file (and an empty
- * parent directory) is removed — mirroring the JSON `writeJsonOrRemove`
- * semantics used elsewhere.
+ * parent directory) is removed.
  *
- * Use this for editor settings files that are JSONC (Zed). For pure JSON
- * configs go through {@link writeJson} instead — JSONC.modify is overhead
- * when there are no comments to preserve.
+ * This is the shared write path for every MCP-config adapter — including the
+ * strict-JSON ones (Claude's `.mcp.json`, Windsurf, Gemini). JSONC is a
+ * superset of JSON, so routing them here is safe and keeps every argent entry
+ * on one comment- and foreign-server-preserving path. {@link writeJson}
+ * remains for whole-document rewrites that must never delete the file (e.g.
+ * `~/.claude.json`, which holds the user's OAuth state).
  */
 export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unknown): void {
-  const { text: initial, hadBom } = readJsoncFileRaw(filePath);
+  const { text: initial, hadBom, wasEmpty } = readJsoncFileRaw(filePath);
   let text = setJsoncIn(initial, jsonPath, value);
 
   if (value === undefined) {
@@ -344,7 +352,14 @@ export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unkno
   }
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, (hadBom ? "﻿" : "") + text);
+  // A synthesized document — a fresh file, or an existing file that was empty /
+  // whitespace-only and so had no real content to preserve — gets a trailing
+  // newline, matching writeJson/TOML (POSIX text-file convention, avoids a git
+  // "\ No newline at end of file"). An existing file with real content keeps its
+  // own EOL/formatting untouched — setJsoncIn edits in place — so we never
+  // rewrite its trailing byte.
+  const out = wasEmpty && !text.endsWith("\n") ? text + "\n" : text;
+  fs.writeFileSync(filePath, (hadBom ? "﻿" : "") + out);
 }
 
 // ── Directory helpers ─────────────────────────────────────────────────────────
