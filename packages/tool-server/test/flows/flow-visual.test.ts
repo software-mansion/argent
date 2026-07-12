@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
 import { ArtifactStore } from "../../src/artifacts";
-import type { ActionEnv } from "../../src/tools/flows/flow-actions";
+import { settleTree, invokeOnDevice, type ActionEnv } from "../../src/tools/flows/flow-actions";
 
 // Stub settle + capture so the tests exercise only the baseline write/diff decision.
 const h = vi.hoisted(() => ({
@@ -194,6 +194,35 @@ describe("runSnapshot baselines", () => {
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
     expect(r.artifacts?.diff).toBeUndefined();
+  });
+});
+
+describe("runSnapshot settle", () => {
+  it("proceeds to capture when the tree source is down", async () => {
+    // settleTree throws when every read in its window failed (native devtools
+    // disconnected). The capture reads pixels, not the tree — the snapshot
+    // must still capture and compare instead of reporting an error.
+    vi.mocked(settleTree).mockRejectedValueOnce(new Error("native devtools is unavailable"));
+    vi.mocked(invokeOnDevice).mockClear();
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("pass");
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(env, "screenshot", expect.anything());
+  });
+
+  it("skips without capturing when the run was aborted during settle", async () => {
+    vi.mocked(settleTree).mockResolvedValueOnce(undefined);
+    vi.mocked(invokeOnDevice).mockClear();
+    const abortedEnv = { ...env, signal: { aborted: true } } as unknown as ActionEnv;
+
+    const r = await runSnapshot(abortedEnv, opts());
+
+    expect(r.status).toBe("skip");
+    expect(r.reason).toContain("aborted");
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
   });
 });
 

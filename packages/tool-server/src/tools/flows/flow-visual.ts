@@ -94,8 +94,15 @@ export async function runSnapshot(
 ): Promise<VisualOutcome> {
   // Wait for the UI to settle (a transition/reflow finished) so the capture is
   // stable run-to-run, rather than guessing a fixed delay. `settleTree` returns
-  // undefined only on abort; a best-effort timeout still proceeds to capture.
-  await settleTree(env);
+  // undefined only on abort and throws only on a sustained tree-source outage
+  // (e.g. native devtools disconnected). The capture reads pixels, not the
+  // describe tree — so short of an explicit abort, proceed best-effort; a
+  // genuinely dead device still surfaces via the screenshot invoke below.
+  try {
+    await settleTree(env);
+  } catch {
+    // tree-source outage — capture anyway, see above
+  }
   if (env.signal?.aborted) {
     return { status: "skip", reason: "run aborted during snapshot settle" };
   }
