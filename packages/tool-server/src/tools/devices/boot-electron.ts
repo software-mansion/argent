@@ -186,20 +186,54 @@ function killChildEscalating(child: ChildProcess): void {
 }
 
 /**
- * Terminate a Chromium/Electron app by pid — the only handle left once
- * {@link bootElectronApp} returns (the child is detached + unref'd). Same
- * escalation as {@link killChildEscalating}: SIGTERM, then SIGKILL after a grace
- * period. An already-exited process is a no-op, not an error.
+ * ChildProcess handles for the Electron apps this tool-server booted, keyed by
+ * CDP port. Retained so teardown can kill through the handle: its
+ * exitCode/signalCode guard lets {@link killChildEscalating} skip the delayed
+ * SIGKILL once the child has exited, so the kill can never land on a recycled
+ * pid — a raw pid offers no such guard. Entries are dropped when the child
+ * exits or a kill consumes them. Holding the handle does not re-ref the
+ * unref'd child, so the tool-server's event loop still isn't kept alive by it.
  */
-export function killChromiumByPid(pid: number): void {
+const liveChildren = new Map<number, ChildProcess>();
+
+/**
+ * Terminate a Chromium/Electron app this tool-server booted on `port`.
+ * Prefers the retained ChildProcess handle ({@link liveChildren}) and kills it
+ * with {@link killChildEscalating}, whose exit-status guard makes the delayed
+ * SIGKILL safe against pid recycling. Only when no handle is held (the child
+ * already exited, or it was booted by an earlier tool-server process) does it
+ * fall back to best-effort raw-pid signalling. An already-exited process is a
+ * no-op, not an error.
+ */
+export function killChromiumByPort(port: number, pid?: number): void {
+  const child = liveChildren.get(port);
+  if (child) {
+    liveChildren.delete(port);
+    killChildEscalating(child);
+    return;
+  }
+  if (pid !== undefined) killChromiumByPidFallback(pid);
+}
+
+/**
+ * Raw-pid fallback: SIGTERM, then SIGKILL after a grace period. Unlike
+ * {@link killChildEscalating} there is no exit-status guard here — only a
+ * liveness re-probe (signal 0) right before the SIGKILL, which skips it when
+ * the process already exited during the grace window. A process exiting
+ * between that probe and the kill could still hand its pid to a newcomer
+ * (an inherent raw-pid TOCTOU); that residual window is why the handle path in
+ * {@link killChromiumByPort} is preferred whenever a handle exists.
+ */
+function killChromiumByPidFallback(pid: number): void {
   if (signalPid(pid, "SIGTERM") === "gone") return; // already exited, nothing to escalate
   setTimeout(() => {
+    if (signalPid(pid, 0) === "gone") return; // exited during the grace period — don't SIGKILL a recycled pid
     signalPid(pid, "SIGKILL");
   }, 2000).unref();
 }
 
-/** Send a signal to a pid, reporting "gone" on ESRCH (no such process). */
-function signalPid(pid: number, signal: NodeJS.Signals): "sent" | "gone" {
+/** Send a signal (or the 0 liveness probe) to a pid, reporting "gone" on ESRCH (no such process). */
+function signalPid(pid: number, signal: NodeJS.Signals | 0): "sent" | "gone" {
   try {
     process.kill(pid, signal);
     return "sent";
@@ -367,6 +401,17 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // The child is intentionally long-lived; any later exit / error belongs
   // to whatever code subsequently manages the session, not to this boot fn.
   detachBootListeners();
+
+  // Retain the handle so a later teardown (killChromiumByPort) can kill via
+  // the ChildProcess instead of a recyclable raw pid — see liveChildren.
+  // Unlike the boot-time onExit just detached, this listener only clears the
+  // map entry; it can't reject anything, so a natural exit long after boot
+  // stays inert. The identity check keeps a stale child's exit from evicting
+  // a newer boot that reused the same fixed port.
+  liveChildren.set(port, child);
+  child.once("exit", () => {
+    if (liveChildren.get(port) === child) liveChildren.delete(port);
+  });
 
   trackChromiumPort(port);
 

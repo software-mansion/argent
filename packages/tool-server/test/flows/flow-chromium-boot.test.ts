@@ -16,12 +16,12 @@ const bootElectronApp = vi.fn(async (opts: { appPath: string; extraArgs?: string
   appPath: opts.appPath,
   booted: true as const,
 }));
-const killChromiumByPid = vi.fn();
+const killChromiumByPort = vi.fn();
 vi.mock("../../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (...args: unknown[]) =>
     (bootElectronApp as (...a: unknown[]) => unknown)(...args),
-  killChromiumByPid: (...args: unknown[]) =>
-    (killChromiumByPid as (...a: unknown[]) => unknown)(...args),
+  killChromiumByPort: (...args: unknown[]) =>
+    (killChromiumByPort as (...a: unknown[]) => unknown)(...args),
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
 
@@ -77,7 +77,7 @@ async function runFlow(
 
 beforeEach(() => {
   bootElectronApp.mockClear();
-  killChromiumByPid.mockClear();
+  killChromiumByPort.mockClear();
 });
 
 afterEach(async () => {
@@ -114,8 +114,9 @@ describe("flow-execute chromium boot", () => {
     expect(invokedTools).not.toContain("launch-app");
     expect(invokedTools).not.toContain("restart-app");
 
-    // Teardown kills the process the runner spawned.
-    expect(killChromiumByPid).toHaveBeenCalledWith(4242);
+    // Teardown kills the instance the runner booted — port first (the handle
+    // registry key), pid as the raw fallback.
+    expect(killChromiumByPort).toHaveBeenCalledWith(12345, 4242);
   });
 
   it("forwards extra CLI args and boots when --platform chromium disambiguates a multi-platform launch", async () => {
@@ -137,7 +138,7 @@ describe("flow-execute chromium boot", () => {
       extraArgs: ["--e2e"],
     });
     expect(result.ok).toBe(true);
-    expect(killChromiumByPid).toHaveBeenCalledWith(4242);
+    expect(killChromiumByPort).toHaveBeenCalledWith(12345, 4242);
   });
 
   it("takes an absolute launch path as-is", async () => {
@@ -167,7 +168,7 @@ describe("flow-execute chromium boot", () => {
 
     // Explicit device: attach, never boot/teardown.
     expect(bootElectronApp).not.toHaveBeenCalled();
-    expect(killChromiumByPid).not.toHaveBeenCalled();
+    expect(killChromiumByPort).not.toHaveBeenCalled();
     expect(result.device).toBe("chromium-cdp-9999");
 
     // The launch step attaches in place over CDP (viewport refresh). It must

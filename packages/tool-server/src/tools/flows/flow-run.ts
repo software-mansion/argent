@@ -41,7 +41,7 @@ import {
   CHROMIUM_CDP_NAMESPACE,
   type ChromiumCdpApi,
 } from "../../blueprints/chromium-cdp";
-import { bootElectronApp, killChromiumByPid } from "../devices/boot-electron";
+import { bootElectronApp, killChromiumByPort } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
@@ -558,7 +558,7 @@ async function teardownBootedChromium(registry: Registry, booted: BootedChromium
   } catch {
     /* the kill below frees the real resource regardless */
   }
-  killChromiumByPid(booted.pid);
+  killChromiumByPort(booted.port, booted.pid);
   untrackChromiumPort(booted.port);
 }
 
