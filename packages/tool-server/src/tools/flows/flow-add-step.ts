@@ -92,7 +92,16 @@ async function captureTapSelector(
     // now and require the winning frame to cover the tapped point; otherwise
     // the recorded step would silently retarget, and coordinates are safer.
     const resolved = selectorToFrame(tree, selector);
-    if (!resolved || !frameContains(resolved, point.x, point.y)) {
+    if (!resolved) {
+      // Defensive: a selector derived from a visible node matches that node
+      // under matchNode's semantics, so re-resolving the same tree should
+      // always find something. Keep the guard (and an accurate message) in
+      // case derivation and matching ever drift apart again.
+      return {
+        warning: `selector ${describeSelector(selector)} matches no element on this screen; kept coordinates (brittle)`,
+      };
+    }
+    if (!frameContains(resolved, point.x, point.y)) {
       return {
         warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };

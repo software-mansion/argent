@@ -104,6 +104,22 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Add to cart" } }]);
   });
 
+  it("records a text selector for a labelled control that also exposes a value", async () => {
+    // The label+value join ("Volume 50%") exists on no single node — matchNode
+    // compares a text selector against label and value individually — so the
+    // derived selector must use the label alone and still pass the re-resolve
+    // check instead of degrading to coordinates.
+    setTree([
+      n({ label: "Volume", value: "50%", frame: { x: 0.2, y: 0.4, width: 0.6, height: 0.08 } }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.44 });
+
+    expect(result.message).not.toContain("resolves to a different element");
+    expect(result.message).not.toContain("matches no element");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Volume" } }]);
+  });
+
   it("keeps coordinates when the selector would retarget to another element", async () => {
     // Two "Add" labels: replay's selectorToFrame ranking (exact → smallest
     // frame) elects the smaller node at the top, not the tapped one — so the

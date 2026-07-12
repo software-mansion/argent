@@ -329,7 +329,12 @@ const GENERIC_ROLES = new Set([
 
 export function deriveSelector(node: DescribeNode): Selector | null {
   if (node.identifier && node.identifier.trim()) return { identifier: node.identifier };
-  const text = nodeText(node).trim();
+  // Derive text from label OR value individually — never nodeText's joined
+  // form: matchNode compares a text selector against label and value
+  // separately, so a joined "Volume 50%" would match nothing, not even the
+  // node it was derived from. Label first — a value like "50%" is the
+  // volatile part of a control, the label is the stabler replay anchor.
+  const text = [node.label, node.value].map((t) => t?.trim()).find(Boolean);
   if (text) return { text };
   if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) return { role: node.role };
   return null;

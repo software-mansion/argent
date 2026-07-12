@@ -138,6 +138,34 @@ describe("ui-tree-match", () => {
     ).toEqual({ role: "AXButton" });
   });
 
+  it("deriveSelector derives text from the label alone — never the label+value join", () => {
+    // matchNode compares a text selector against label and value individually,
+    // so a selector derived from nodeText's join ("Volume 50%") would match no
+    // node at all — including the one it was derived from. The label wins over
+    // the value: "50%" is the volatile part of a control between runs.
+    const volume = node({
+      label: "Volume",
+      value: "50%",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.1 },
+    });
+    const selector = deriveSelector(volume);
+    expect(selector).toEqual({ text: "Volume" });
+    // And the derived selector must self-match: the recorder's re-resolve
+    // check finds exactly the node it came from.
+    const tree = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [volume],
+    });
+    expect(findAll(tree, selector!)).toHaveLength(1);
+  });
+
+  it("deriveSelector falls back to the value when the node has no label", () => {
+    expect(
+      deriveSelector(node({ value: "50%", frame: { x: 0, y: 0, width: 0.1, height: 0.1 } }))
+    ).toEqual({ text: "50%" });
+  });
+
   it("evaluateCondition handles exists/visible/hidden/text", () => {
     const matches = findAll(root, { text: "Login" });
     expect(evaluateCondition("exists", undefined, matches)).toBe(true);
