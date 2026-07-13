@@ -7,6 +7,26 @@ const variant = (name: string, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+const KNOWN_PLATFORMS = new Set(["ios", "ios-remote", "android", "chromium", "vega"]);
+
+/**
+ * Assert a Lens telemetry payload carries only privacy-safe primitives: numbers,
+ * booleans, `undefined`, or (only for `platform`) a known platform enum. Any
+ * leaked user content — an element name, comment, id, or path — would be an
+ * arbitrary string that is none of these, so this fails without needing to know
+ * the specific text (strictly stronger than a literal blocklist).
+ */
+function assertPrivacySafe(payload: unknown): void {
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    const ok =
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      value === undefined ||
+      (key === "platform" && typeof value === "string" && KNOWN_PLATFORMS.has(value));
+    expect(ok, `field ${key}=${JSON.stringify(value)} is not a privacy-safe primitive`).toBe(true);
+  }
+}
+
 describe("VariantProposalStore — proposing (non-blocking)", () => {
   it("accumulates variants per element and across elements", () => {
     const s = new VariantProposalStore();
@@ -508,5 +528,452 @@ describe("VariantProposalStore — Lens-owned devices", () => {
     s.markDeviceOwned(" udid-3 ");
     expect(s.isDeviceOwned("udid-3")).toBe(true);
     expect(s.takeOwnedDevices()).toEqual(["udid-3"]);
+  });
+});
+
+describe("VariantProposalStore — roundCompleted telemetry event", () => {
+  it("emits once per round with privacy-safe aggregate stats", async () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") }); // v1
+    s.proposeVariant({ element: "Foo", variant: variant("Ghost") }); // v2
+    s.proposeVariant({ element: "Bar", variant: variant("Large") }); // v3
+    s.proposeVariant({ element: "Baz", variant: variant("Shadow") }); // v4
+    const foo = s.snapshot().proposals.find((p) => p.element === "Foo")!;
+    const bar = s.snapshot().proposals.find((p) => p.element === "Bar")!;
+    const baz = s.snapshot().proposals.find((p) => p.element === "Baz")!;
+
+    const p = s.awaitSelection({ timeoutMs: 5000 }); // park a waiter
+    await Promise.resolve();
+    s.submitSelection({
+      selections: [
+        { elementId: foo.id, variantId: foo.variants[1]!.id }, // chosen
+        { elementId: bar.id, variantId: null, comment: "tweak this" }, // skipped + comment
+        { elementId: baz.id, variantId: null }, // skipped, no comment
+      ],
+      globalComment: "ship it",
+      annotations: [
+        { target: "Header", match: { by: "text", value: "Header" }, comment: "move up" },
+      ],
+    });
+    await p;
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      round: 1,
+      element_count: 3,
+      variant_count: 4,
+      annotation_count: 1,
+      element_comment_count: 1, // only Bar carried a per-element comment
+      skipped_comment_count: 1, // and Bar was skipped, so that comment is a skip comment
+      has_global_comment: true,
+      is_cli_session: false,
+      had_parked_await: true,
+    });
+    // No device was bound (no udid passed), so platform is omitted.
+    expect((stats[0] as { platform?: string }).platform).toBeUndefined();
+    const dur = (stats[0] as { round_duration_ms: number }).round_duration_ms;
+    expect(typeof dur).toBe("number");
+    expect(dur).toBeGreaterThanOrEqual(0);
+    // Payload must be counts/booleans only — no element names, comments, ids.
+    expect(JSON.stringify(stats[0])).not.toMatch(/ship it|tweak this|move up|Foo|Bar|Baz|Header/);
+    // Content-agnostic guard (strictly stronger than the literal blocklist): every
+    // value must be a number, a boolean, or (only for `platform`) a known platform
+    // enum — any leaked free-text would be a string that is none of those.
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("captures platform and variant counts from the bound device", () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+
+    // Bind a chromium device via udid; propose one element with two variants.
+    s.proposeVariant({ element: "Foo", udid: "chromium-cdp-9222", variant: variant("Bold") });
+    s.proposeVariant({ element: "Foo", variant: variant("Ghost") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      element_count: 1,
+      variant_count: 2,
+      platform: "chromium",
+    });
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("counts element_comment_count and skipped_comment_count independently (chosen-with-comment vs skipped-with-comment)", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ element_comment_count: number; skipped_comment_count: number }> = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    s.proposeVariant({ element: "Bar", variant: variant("Large") });
+    const foo = s.snapshot().proposals.find((p) => p.element === "Foo")!;
+    const bar = s.snapshot().proposals.find((p) => p.element === "Bar")!;
+
+    s.submitSelection({
+      selections: [
+        { elementId: foo.id, variantId: foo.variants[0]!.id, comment: "keep this" }, // CHOSEN + comment
+        { elementId: bar.id, variantId: null, comment: "needs work" }, // SKIPPED + comment
+      ],
+    });
+
+    expect(stats).toHaveLength(1);
+    // Both elements carry a per-element comment (element_comment_count = 2), but
+    // only the skipped one is a skip-comment (skipped_comment_count = 1). The two
+    // counts MUST differ here — if the two filters (chosen vs skipped) were
+    // swapped or aliased, this asymmetric case fails, unlike a 1/1 case where a
+    // swap is invisible. So chosen-with-comment = 2 - 1 = 1 is pinned.
+    expect(stats[0]!.element_comment_count).toBe(2);
+    expect(stats[0]!.skipped_comment_count).toBe(1);
+  });
+
+  it("does NOT re-emit on a resubmit of the same round", () => {
+    const s = new VariantProposalStore();
+    let count = 0;
+    s.events.on("roundCompleted", () => count++);
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    const foo = s.snapshot().proposals[0]!;
+
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: null }] }); // resubmit
+    expect(count).toBe(1);
+  });
+
+  it("re-emits for a fresh round after an auto-roll, with had_parked_await=false when queued", () => {
+    const s = new VariantProposalStore();
+    const rounds: number[] = [];
+    s.events.on("roundCompleted", (x) => rounds.push(x.round));
+
+    // Round 1: submit with no await parked -> queued, had_parked_await=false.
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo1 = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo1.id, variantId: foo1.variants[0]!.id }] });
+
+    // Next propose auto-rolls into round 2; submit again.
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+    const bar = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: bar.id, variantId: bar.variants[0]!.id }] });
+
+    expect(rounds).toEqual([1, 2]);
+  });
+
+  it("flags is_cli_session and had_parked_await=false on the CLI path", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ is_cli_session: boolean; had_parked_await: boolean }> = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+    s.setCliSession(true, []);
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.is_cli_session).toBe(true);
+    expect(stats[0]!.had_parked_await).toBe(false);
+  });
+
+  it("forwards the UI's inspector_used / offscreen_revealed usage flags", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ inspector_used: boolean; offscreen_revealed: boolean }> = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    // Asymmetric on purpose (true/false) so a swap or aliasing of the two flags
+    // is caught — a matching pair would hide it.
+    s.submitSelection({
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+      inspectorUsed: true,
+      offscreenRevealed: false,
+    });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.inspector_used).toBe(true);
+    expect(stats[0]!.offscreen_revealed).toBe(false);
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("defaults inspector_used / offscreen_revealed to false when the UI omits them", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ inspector_used: boolean; offscreen_revealed: boolean }> = [];
+    s.events.on("roundCompleted", (x) => stats.push(x));
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    // An older UI (or a bare submit) sends no usage flags — they must read false,
+    // never undefined, so the sanitizer's bool validator keeps them.
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.inspector_used).toBe(false);
+    expect(stats[0]!.offscreen_revealed).toBe(false);
+  });
+
+  it("rejects a stale cross-round submit (round token mismatch) without minting a completion", () => {
+    const s = new VariantProposalStore();
+    const rounds: number[] = [];
+    s.events.on("roundCompleted", (x) => rounds.push(x.round));
+
+    // Round 1: propose + submit (no await parked) → completes round 1.
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({
+      round: 1,
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+    });
+
+    // The agent proposes again → auto-roll into round 2 with fresh proposals.
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+    expect(s.snapshot().round).toBe(2);
+
+    // A second, STALE click from the round-1 browser tab now lands: it carries
+    // round token 1 and round-1 element ids. Without the token it would pass the
+    // proposals-staged check (round 2 has Bar), filter every selection out as
+    // non-current, and mint a phantom lens:round_completed for round 2 wearing
+    // round 1's carried-over usage flags — for a round nobody reviewed.
+    const res = s.submitSelection({
+      round: 1,
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+      inspectorUsed: true,
+      offscreenRevealed: true,
+    });
+
+    expect(res.stale).toBe(true);
+    expect(res.resolved).toBe(0);
+    // No phantom completion; round 2 stays open for its real review.
+    expect(rounds).toEqual([1]);
+    expect(s.snapshot().completed).toBe(false);
+  });
+
+  it("honors a submit whose round token matches the current round", () => {
+    const s = new VariantProposalStore();
+    const rounds: number[] = [];
+    s.events.on("roundCompleted", (x) => rounds.push(x.round));
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    const res = s.submitSelection({
+      round: 1,
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+    });
+    expect(res.stale).toBeFalsy();
+    expect(rounds).toEqual([1]);
+  });
+
+  it("still completes when the UI omits the round token (backward compatible)", () => {
+    const s = new VariantProposalStore();
+    const rounds: number[] = [];
+    s.events.on("roundCompleted", (x) => rounds.push(x.round));
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+    expect(rounds).toEqual([1]);
+  });
+});
+
+describe("VariantProposalStore — cliSessionStarted telemetry event", () => {
+  it("emits once on a begin transition with the picker size", () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("cliSessionStarted", (x) => stats.push(x));
+
+    s.setCliSession(true, [
+      { id: "claude", name: "Claude" },
+      { id: "cursor", name: "Cursor" },
+    ]);
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toEqual({ agent_choice_count: 2 });
+    // Privacy: only an aggregate count leaves — never the agent ids/names.
+    assertPrivacySafe(stats[0]);
+    expect(JSON.stringify(stats[0])).not.toMatch(/claude|cursor|Claude|Cursor/);
+  });
+
+  it("reports agent_choice_count 0 when no picker is offered", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ agent_choice_count: number }> = [];
+    s.events.on("cliSessionStarted", (x) => stats.push(x));
+    s.setCliSession(true, []);
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.agent_choice_count).toBe(0);
+  });
+
+  it("emits once per begin (every invocation) with the current picker, never on session end", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ agent_choice_count: number }> = [];
+    s.events.on("cliSessionStarted", (x) => stats.push(x));
+
+    s.setCliSession(true, [{ id: "claude", name: "Claude" }]); // invocation 1 (1 agent)
+    s.setCliSession(false, []); // end never counts
+    expect(stats).toHaveLength(1);
+
+    s.setCliSession(true, []); // invocation 2 (clean re-begin, no picker)
+    // A begin while the store is STILL marked active — a prior session's end
+    // never landed (e.g. `argent lens` was killed) — is a real new invocation
+    // and MUST count. A transition-only guard would miss it and under-count the
+    // very metric this event exists for. Its payload must also reflect THIS
+    // begin's picker size, not a stale one.
+    s.setCliSession(true, [{ id: "cursor", name: "Cursor" }]); // invocation 3, no transition (1 agent)
+    expect(stats.map((x) => x.agent_choice_count)).toEqual([1, 0, 1]);
+  });
+});
+
+describe("VariantProposalStore — roundAbandoned telemetry event", () => {
+  it("emits once with aggregate stats when a staged round is discarded via reset()", () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    s.proposeVariant({ element: "Foo", udid: "chromium-cdp-9222", variant: variant("Bold") });
+    s.proposeVariant({ element: "Foo", variant: variant("Ghost") });
+    s.proposeVariant({ element: "Bar", variant: variant("Large") });
+    s.reset(); // human closed the window / session ended without submitting
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      round: 1,
+      element_count: 2,
+      variant_count: 3,
+      had_parked_await: false,
+      is_cli_session: false,
+      platform: "chromium",
+    });
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("does NOT emit for the happy-path roll after a completed round", () => {
+    const s = new VariantProposalStore();
+    let abandoned = 0;
+    let completed = 0;
+    s.events.on("roundAbandoned", () => abandoned++);
+    s.events.on("roundCompleted", () => completed++);
+
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+    // This propose auto-rolls (reset on a COMPLETED round) — not an abandonment.
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+
+    expect(completed).toBe(1);
+    expect(abandoned).toBe(0);
+  });
+
+  it("does NOT emit when reset() runs on an empty round", () => {
+    const s = new VariantProposalStore();
+    let abandoned = 0;
+    s.events.on("roundAbandoned", () => abandoned++);
+    s.reset(); // nothing staged
+    expect(abandoned).toBe(0);
+  });
+
+  it("flags had_parked_await=true when a parked await is superseded by reset()", async () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ had_parked_await: boolean }> = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const parked = s.awaitSelection({ timeoutMs: 5000 });
+    await Promise.resolve();
+    s.reset(); // supersede the round out from under the parked await
+
+    const outcome = await parked; // the await must settle, not hang
+    expect(outcome.status).toBe("no_proposals");
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.had_parked_await).toBe(true);
+  });
+
+  it("emits exactly once per abandoned round (a second reset can't double count)", () => {
+    const s = new VariantProposalStore();
+    let abandoned = 0;
+    s.events.on("roundAbandoned", () => abandoned++);
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    s.reset();
+    s.reset(); // round now empty — no second emit
+    expect(abandoned).toBe(1);
+  });
+
+  it("labels a CLI-exit abandonment is_cli_session:true (the flagship drop-off path)", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ round: number; is_cli_session: boolean; platform?: string }> = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    s.setCliSession(true, []);
+    s.proposeVariant({ element: "Foo", udid: "chromium-cdp-9222", variant: variant("A") });
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+    // `argent lens` exited mid-review (setCliSession(false)) with the round still
+    // staged. Correct is_cli_session:true attribution depends on reset() reading
+    // `this.cliSession` BEFORE setCliSession flips it — pin it so a reorder that
+    // hoists the assignment above the transition block can't silently flip it.
+    s.setCliSession(false, []);
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      round: 1,
+      element_count: 2,
+      variant_count: 2,
+      is_cli_session: true,
+      platform: "chromium",
+    });
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("labels a begin-swept leftover (non-CLI) round is_cli_session:false", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ round: number; is_cli_session: boolean }> = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    // A leftover non-CLI round staged before any CLI session.
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    // A CLI session begins and sweeps it — still labeled non-CLI (it was one).
+    s.setCliSession(true, []);
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({ round: 1, is_cli_session: false });
+  });
+
+  it("sweeps a dead session's staged round on a re-begin while still active (killed `argent lens`)", () => {
+    const s = new VariantProposalStore();
+    const abandoned: Array<{ round: number; element_count: number; is_cli_session: boolean }> = [];
+    const started: unknown[] = [];
+    s.events.on("roundAbandoned", (x) => abandoned.push(x));
+    s.events.on("cliSessionStarted", (x) => started.push(x));
+
+    s.setCliSession(true, []); // invocation 1
+    s.proposeVariant({ element: "Foo", variant: variant("A") }); // staged, never submitted
+    // The invocation-1 `argent lens` was SIGKILLed: no {active:false} POST landed,
+    // so the store is still marked active. A NEW invocation begins — a re-begin
+    // with no transition. Its staged round must be swept, not bled forward.
+    s.setCliSession(true, []); // invocation 2
+
+    expect(abandoned).toHaveLength(1);
+    expect(abandoned[0]).toMatchObject({ round: 1, element_count: 1, is_cli_session: true });
+    expect(started).toHaveLength(2); // both begins counted as invocations
+    const snap = s.snapshot();
+    expect(snap.round).toBe(2); // rolled clean
+    expect(snap.proposals).toHaveLength(0); // dead round not bled into invocation 2
+  });
+
+  it("flushAbandonedRound emits abandonment for a staged round and is a no-op otherwise", () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    // Empty round → no-op ("server exited with nothing staged").
+    expect(s.flushAbandonedRound()).toBe(false);
+    expect(stats).toHaveLength(0);
+
+    // Staged, unsubmitted round → "server died mid-review" abandonment.
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    expect(s.flushAbandonedRound()).toBe(true);
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({ round: 1, element_count: 1 });
+
+    // A completed round is the happy path, never a loss → no-op.
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+    const bar = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: bar.id, variantId: bar.variants[0]!.id }] });
+    expect(s.flushAbandonedRound()).toBe(false);
+    expect(stats).toHaveLength(1);
   });
 });

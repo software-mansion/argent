@@ -94,6 +94,8 @@ async function buildSessionWithTrace(): Promise<{
     wallClockStartMs: null,
     parsedData: null,
     cpuFilterPid: null,
+    recordingMallocStackLogging: null,
+    mallocStackLogging: null,
     recordingTimeout: null,
     recordingTimedOut: false,
     recordingExitedUnexpectedly: false,

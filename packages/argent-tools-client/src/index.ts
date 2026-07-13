@@ -29,6 +29,7 @@ export {
   type ToolsClient,
   type ToolMeta,
   type ToolInvocationResult,
+  type CallToolOptions,
   type CreateToolsClientOptions,
 } from "./tools-client.js";
 

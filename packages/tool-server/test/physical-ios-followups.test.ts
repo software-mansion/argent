@@ -11,6 +11,8 @@
  *    UnsupportedOperationError, not a generic 500 (open-url/reinstall/restart,
  *    describe, native-profiler), while staying supported on simulators/Android;
  *  - run-sequence must not eagerly hold simulator-server for a physical iPhone;
+ *  - gesture-swipe routes to CoreDevice, and rejects the simulator-only `settle`
+ *    flag rather than silently returning a flinging swipe;
  *  - swipe duration clamping + timeout scaling.
  */
 import { describe, it, expect, vi } from "vitest";
@@ -226,6 +228,44 @@ describe("gesture-swipe routes physical iOS to the CoreDevice backend", () => {
       } as never
     );
     expect(coreDevice.swipe).toHaveBeenCalledWith(0.2, 0.2, 0.8, 0.8, 300);
+  });
+
+  // `settle` (momentum-free swipe) is a simulator/emulator behavior: it is built
+  // out of an eased train of individual touch events. CoreDevice instead performs
+  // one HID drag with a fixed linear trajectory, so the flag cannot be honored —
+  // and silently dropping it would return a flinging swipe while the caller
+  // believes it scrolled a deterministic distance.
+  const settlingSwipe = {
+    udid: PHYSICAL_UDID,
+    fromX: 0.5,
+    fromY: 0.7,
+    toX: 0.5,
+    toY: 0.3,
+    settle: true,
+  };
+
+  it("rejects settle:true instead of silently performing a flinging swipe", async () => {
+    const coreDevice = { swipe: vi.fn().mockResolvedValue(undefined) };
+    await expect(
+      gestureSwipeTool.execute({ coreDevice } as never, settlingSwipe as never)
+    ).rejects.toBeInstanceOf(UnsupportedOperationError);
+    expect(coreDevice.swipe).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve the CoreDevice service for a settling swipe", () => {
+    // services() runs before execute(), so eagerly resolving coreDevice would pay
+    // for tunnel setup just to reject the swipe afterward (cf. `button` above).
+    expect(gestureSwipeTool.services!(settlingSwipe as never).coreDevice).toBeUndefined();
+    // ...but a plain swipe still resolves it.
+    expect(
+      gestureSwipeTool.services!({ ...settlingSwipe, settle: false } as never).coreDevice
+    ).toBeDefined();
+  });
+
+  it("still honors settle on a simulator (no regression to simulator support)", () => {
+    const services = gestureSwipeTool.services!({ ...settlingSwipe, udid: SIM_UDID } as never);
+    expect(services.simulatorServer).toBeDefined();
+    expect(services.coreDevice).toBeUndefined();
   });
 });
 

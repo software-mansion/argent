@@ -500,6 +500,62 @@ describe("sanitize", () => {
     });
   });
 
+  describe("lens telemetry events", () => {
+    it("keeps the round_completed usage flags and drops leaked content", () => {
+      const out = sanitize("lens:round_completed", {
+        round: 2,
+        element_count: 3,
+        variant_count: 5,
+        annotation_count: 1,
+        element_comment_count: 2,
+        skipped_comment_count: 1,
+        has_global_comment: true,
+        inspector_used: true,
+        offscreen_revealed: false,
+        is_cli_session: true,
+        had_parked_await: false,
+        round_duration_ms: 1234,
+        platform: "ios",
+        // Content that must never survive:
+        element_name: "Checkout button",
+        comment_text: "make it pop",
+      });
+      expect(out).toEqual({
+        round: 2,
+        element_count: 3,
+        variant_count: 5,
+        annotation_count: 1,
+        element_comment_count: 2,
+        skipped_comment_count: 1,
+        has_global_comment: true,
+        inspector_used: true,
+        offscreen_revealed: false,
+        is_cli_session: true,
+        had_parked_await: false,
+        round_duration_ms: 1234,
+        platform: "ios",
+      });
+    });
+
+    it("drops a non-boolean inspector_used / offscreen_revealed", () => {
+      const out = sanitize("lens:round_completed", {
+        round: 1,
+        inspector_used: "yes",
+        offscreen_revealed: 1,
+      });
+      // The bool validator rejects non-booleans, so both keys are removed.
+      expect(out).toEqual({ round: 1 });
+    });
+
+    it("keeps agent_choice_count on cli_session_started and drops extras", () => {
+      const out = sanitize("lens:cli_session_started", {
+        agent_choice_count: 2,
+        agent_names: ["claude", "cursor"], // must be dropped
+      });
+      expect(out).toEqual({ agent_choice_count: 2 });
+    });
+  });
+
   describe("ALLOWED ↔ EVENT_NAMES sync", () => {
     it("every declared event name has a sanitizer entry", () => {
       for (const name of EVENT_NAMES) {

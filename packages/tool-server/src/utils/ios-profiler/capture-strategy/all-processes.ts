@@ -1,7 +1,7 @@
 import type { IosCaptureStrategy, RecordArgsInput, CaptureTarget } from "./types";
 
 /**
- * Degraded-environment fallback for Xcode 26.4–27.0, where `xctrace record
+ * Degraded-environment fallback for Xcode 26.4 and later, where `xctrace record
  * --device <sim>` deadlocks at the recording-start handshake and never captures.
  *
  * Instead of targeting the simulator device, record the HOST with
