@@ -87,6 +87,11 @@ describe("tool-server startup telemetry", () => {
       expect(telemetryMock.shutdown).toHaveBeenCalledWith(1500);
     });
 
+    // This path (watcher-ready rejection) fails the server before the listener
+    // binds and without routing through the uncaughtException/unhandledRejection
+    // handlers, so no crash-diagnostic fields (error_name / error_syscall /
+    // crash_fingerprint / crash_phase) are attached — the stop event stays the
+    // bare crash shape.
     expect(telemetryMock.track).toHaveBeenCalledWith("toolserver:stop", {
       reason: "crash",
       uptime_ms: expect.any(Number),

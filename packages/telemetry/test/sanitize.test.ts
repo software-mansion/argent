@@ -411,6 +411,92 @@ describe("sanitize", () => {
     });
   });
 
+  describe("crash diagnostics on stop events", () => {
+    it("passes the coded crash fields through when well-formed", () => {
+      expect(
+        sanitize("toolserver:stop", {
+          reason: "crash",
+          uptime_ms: 480,
+          total_tool_calls: 0,
+          error_code: "TOOLSERVER_UNCAUGHT_EXCEPTION",
+          failure_stage: "toolserver_uncaught_exception",
+          failure_area: "tool_server",
+          error_kind: "crash",
+          error_name: "TypeError",
+          error_syscall: "EADDRINUSE",
+          crash_fingerprint: "0123456789abcdef",
+          crash_phase: "startup",
+        })
+      ).toEqual({
+        reason: "crash",
+        uptime_ms: 480,
+        total_tool_calls: 0,
+        error_code: "TOOLSERVER_UNCAUGHT_EXCEPTION",
+        failure_stage: "toolserver_uncaught_exception",
+        failure_area: "tool_server",
+        error_kind: "crash",
+        error_name: "TypeError",
+        error_syscall: "EADDRINUSE",
+        crash_fingerprint: "0123456789abcdef",
+        crash_phase: "startup",
+      });
+    });
+
+    it("accepts ERR_*-style Node error codes as a syscall", () => {
+      const out = sanitize("toolserver:stop", {
+        reason: "crash",
+        uptime_ms: 1,
+        total_tool_calls: 0,
+        error_syscall: "ERR_MODULE_NOT_FOUND",
+      });
+      expect(out).toMatchObject({ error_syscall: "ERR_MODULE_NOT_FOUND" });
+    });
+
+    it("drops a message masquerading as error_name (spaces / punctuation / path)", () => {
+      const out = sanitize("toolserver:stop", {
+        reason: "crash",
+        uptime_ms: 1,
+        total_tool_calls: 0,
+        error_name: "Error: ENOENT /Users/alice/.ssh/id_rsa",
+      });
+      expect(out).not.toHaveProperty("error_name");
+    });
+
+    it("drops a path-like or lowercase error_syscall", () => {
+      for (const bad of ["/Users/alice/x", "eaddrinuse", "listen 127.0.0.1:3001", "PORT_9229"]) {
+        const out = sanitize("toolserver:stop", {
+          reason: "crash",
+          uptime_ms: 1,
+          total_tool_calls: 0,
+          error_syscall: bad,
+        });
+        expect(out).not.toHaveProperty("error_syscall");
+      }
+    });
+
+    it("drops a fingerprint that is not exactly 16 lowercase hex chars", () => {
+      for (const bad of ["0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", "zzzz", ""]) {
+        const out = sanitize("toolserver:stop", {
+          reason: "crash",
+          uptime_ms: 1,
+          total_tool_calls: 0,
+          crash_fingerprint: bad,
+        });
+        expect(out).not.toHaveProperty("crash_fingerprint");
+      }
+    });
+
+    it("drops an unknown crash_phase", () => {
+      const out = sanitize("toolserver:stop", {
+        reason: "crash",
+        uptime_ms: 1,
+        total_tool_calls: 0,
+        crash_phase: "booting",
+      });
+      expect(out).not.toHaveProperty("crash_phase");
+    });
+  });
+
   describe("package action telemetry", () => {
     it("accepts the requested package-action enum set", () => {
       for (const action of [

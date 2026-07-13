@@ -172,6 +172,17 @@ export interface ToolserverStopProps extends FailureTelemetryProps {
   reason: "idle" | "signal" | "crash";
   uptime_ms: number;
   total_tool_calls: number;
+  // Crash-only diagnostics (see crash-diagnostics.ts). All anonymous: a coded
+  // class name, a coded syscall, and a hash — never the message or a raw stack.
+  // Absent on clean (idle/signal) stops.
+  /** Error class name, e.g. "TypeError". */
+  error_name?: string;
+  /** Node system-error code, e.g. "EADDRINUSE". */
+  error_syscall?: string;
+  /** 16 hex chars: hash of the de-identified top stack frames. */
+  crash_fingerprint?: string;
+  /** Whether the crash landed before or after the HTTP listener bound. */
+  crash_phase?: "startup" | "serving";
 }
 
 // Discriminated union for typed-track()
