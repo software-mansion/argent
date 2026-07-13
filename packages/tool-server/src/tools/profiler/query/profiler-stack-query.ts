@@ -15,7 +15,7 @@ import {
   type AndroidStackQueryMode,
 } from "../../../utils/android-profiler/pipeline/index";
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
-import { formatBytes } from "../../../utils/profiler-shared/format";
+import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-shared/format";
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 
 const zodSchema = z.object({
@@ -135,7 +135,7 @@ function renderHangStacksIos(
   return lines.join("\n");
 }
 
-function renderFunctionCallersIos(
+export function renderFunctionCallersIos(
   cpuSamples: CpuSample[],
   functionName: string,
   topN: number
@@ -182,7 +182,7 @@ function renderFunctionCallersIos(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallers) {
-      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
+      lines.push(`| \`${escapeMarkdownTableCell(demangleSymbol(name))}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -194,7 +194,7 @@ function renderFunctionCallersIos(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallees) {
-      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
+      lines.push(`| \`${escapeMarkdownTableCell(demangleSymbol(name))}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -202,7 +202,7 @@ function renderFunctionCallersIos(
   return lines.join("\n");
 }
 
-function renderThreadBreakdownIos(
+export function renderThreadBreakdownIos(
   cpuSamples: CpuSample[],
   cpuHotspots: CpuHotspot[],
   threadFilter: string | undefined,
@@ -239,7 +239,7 @@ function renderThreadBreakdownIos(
     const weightMs = Math.round(weight / 1_000_000);
     const pct = totalWeight > 0 ? ((weight / totalWeight) * 100).toFixed(1) : "0";
     const samples = threadSamples.get(thread) ?? 0;
-    lines.push(`| ${thread} | ${weightMs} | ${pct}% | ${samples} |`);
+    lines.push(`| ${escapeMarkdownTableCell(thread)} | ${weightMs} | ${pct}% | ${samples} |`);
   }
 
   if (threadFilter) {
@@ -254,7 +254,7 @@ function renderThreadBreakdownIos(
       lines.push("|---|---|---|---|");
       for (const h of threadHotspots.slice(0, topN)) {
         lines.push(
-          `| \`${demangleSymbol(h.dominantFunction)}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
+          `| \`${escapeMarkdownTableCell(demangleSymbol(h.dominantFunction))}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
         );
       }
     }
@@ -266,8 +266,16 @@ function renderThreadBreakdownIos(
 export function renderLeakStacksIos(
   memoryLeaks: MemoryLeak[],
   objectTypeFilter: string | undefined,
-  topN: number
+  topN: number,
+  mallocStackLogging?: boolean | null
 ): string {
+  // Same capture-mode contract as the analyze/combined reports: attribution
+  // evidence decides first — any attributed group in the FULL capture (never
+  // the object_type-filtered slice) proves the target process ran under
+  // malloc stack logging, however it was launched, so even an explicit
+  // attach-mode flag must not claim "no malloc-stack history" above a row
+  // with a resolved frame. The flag only lifts the zero-attributed case.
+  const mallocWasOn = memoryLeaks.some((l) => l.attributed) || mallocStackLogging === true;
   let filtered = memoryLeaks;
   if (objectTypeFilter) {
     filtered = memoryLeaks.filter((l) =>
@@ -303,10 +311,15 @@ export function renderLeakStacksIos(
   ];
 
   if (unattributedCount > 0) {
+    const cause = mallocWasOn
+      ? "the capture ran with malloc stack logging, but no allocation backtrace was recorded " +
+        "for these (freed-region reuse, truncated stack logs, or allocations outside the " +
+        "instrumented malloc zones)"
+      : "captured under `xctrace --attach`, which has no malloc-stack history";
     lines.push(
       `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
-        "(`<Call stack limit reached>`, no library) — captured under `xctrace --attach`, which has no " +
-        "malloc-stack history. Most likely benign system allocations, not confirmed app leaks.",
+        `(\`<Call stack limit reached>\`, no library) — ${cause}. ` +
+        "Most likely benign system allocations, not confirmed app leaks.",
       ""
     );
   }
@@ -318,7 +331,7 @@ export function renderLeakStacksIos(
 
   for (const l of sorted) {
     lines.push(
-      `| \`${l.objectType}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${demangleSymbol(l.responsibleFrame)}\` | ${l.responsibleLibrary || "—"} |`
+      `| \`${escapeMarkdownTableCell(l.objectType)}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${escapeMarkdownTableCell(demangleSymbol(l.responsibleFrame))}\` | ${escapeMarkdownTableCell(l.responsibleLibrary) || "—"} |`
     );
   }
 
@@ -358,7 +371,15 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         params.top_n
       );
     case "leak_stacks":
-      return renderLeakStacksIos(data.memoryLeaks, params.object_type, params.top_n);
+      // Capture mode comes from parsedData — frozen at analyze/load time with
+      // the leaks it describes — not the live session field, which a recording
+      // started after the analyze would have re-stamped.
+      return renderLeakStacksIos(
+        data.memoryLeaks,
+        params.object_type,
+        params.top_n,
+        data.mallocStackLogging
+      );
     default:
       throw new FailureError(`Unknown mode: ${params.mode}`, {
         error_code: FAILURE_CODES.PROFILER_QUERY_MODE_INVALID,

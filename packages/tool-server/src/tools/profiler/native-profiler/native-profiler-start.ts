@@ -29,6 +29,23 @@ const zodSchema = z.object({
       "iOS-only: path to an Instruments .tracetemplate file (defaults to bundled Argent template). " +
         "Ignored on Android."
     ),
+  malloc_stack_logging: z
+    .boolean()
+    .optional()
+    .describe(
+      "iOS-only. When true, cold-launches the app under the profiler with Malloc Stack Logging " +
+        "enabled so memory leaks carry an allocation backtrace (responsible frame + library). " +
+        "Without it, leaks are still detected but unattributable — Instruments reports " +
+        "'<Call stack limit reached>'. Trade-offs: this RESTARTS the app (current state is lost), " +
+        "adds memory/CPU overhead, and makes the app noticeably slow to launch (every startup " +
+        "allocation records a backtrace), so leave it off for pure CPU/hang profiling. Requires a " +
+        "non-degraded Xcode: on Xcode 26.4 and later the cold-launch path is broken, so the call is " +
+        "rejected up front (re-run without the flag, or set ARGENT_IOS_CAPTURE=device to override if the " +
+        "device path works on your host). ARGENT_IOS_CAPTURE=all-processes — e.g. exported globally " +
+        "for the normal capture path — also rejects this flag up front, since that fallback cannot " +
+        "cold-launch; unset it (or set it to device) first. " +
+        "Ignored on Android."
+    ),
 });
 
 const capability = {

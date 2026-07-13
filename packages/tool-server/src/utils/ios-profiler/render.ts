@@ -3,6 +3,7 @@ import * as path from "path";
 import bytesUtil from "bytes";
 import type { TraceProcessorUnavailableError } from "@argent/native-devtools-android";
 import { demangleSymbol } from "../profiler-shared/demangle";
+import { escapeMarkdownTableCell } from "../profiler-shared/format";
 import type {
   ProfilerPayload,
   Bottleneck,
@@ -23,6 +24,14 @@ interface RenderInput {
   exportErrors?: Record<string, string>;
   /** Optional markdown warning shown in the header when the trace is stale. */
   freshnessNote?: string;
+  /**
+   * Whether the capture cold-launched the app with MallocStackLogging=1
+   * (native-profiler-start's malloc_stack_logging flag). Null/undefined when
+   * unknown — a session restored from disk has no capture-mode sidecar — in
+   * which case the unattributed-leaks note infers the mode from the
+   * attributed-leak count.
+   */
+  mallocStackLogging?: boolean | null;
 }
 
 interface InlineCap {
@@ -38,7 +47,7 @@ interface InlineCap {
 export async function renderNativeProfilerReport(
   input: RenderInput
 ): Promise<NativeProfilerAnalyzeResult> {
-  const { payload, traceFile, freshnessNote } = input;
+  const { payload, traceFile, freshnessNote, mallocStackLogging } = input;
   const exportErrors = input.exportErrors ?? {};
   const bottlenecksTotal = payload.bottlenecks.length;
   const status: "ok" | "analysis_failed" =
@@ -57,7 +66,8 @@ export async function renderNativeProfilerReport(
             hotspotLimit: Infinity,
             hangLimit: Infinity,
           },
-          freshnessNote
+          freshnessNote,
+          mallocStackLogging
         );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
@@ -73,7 +83,8 @@ export async function renderNativeProfilerReport(
             hotspotLimit: MAX_INLINE_HOTSPOTS,
             hangLimit: MAX_INLINE_HANGS,
           },
-          freshnessNote
+          freshnessNote,
+          mallocStackLogging
         );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
@@ -197,7 +208,8 @@ function renderFullReport(
   payload: ProfilerPayload,
   exportErrors?: Record<string, string>,
   cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity },
-  freshnessNote?: string
+  freshnessNote?: string,
+  mallocStackLogging?: boolean | null
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -251,7 +263,7 @@ function renderFullReport(
     cpuHotspots.forEach((b, i) => {
       const hangFlag = b.duringHang ? "Yes" : "—";
       lines.push(
-        `| ${i + 1} | \`${demangleSymbol(b.dominantFunction)}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
+        `| ${i + 1} | \`${escapeMarkdownTableCell(demangleSymbol(b.dominantFunction))}\` | ${escapeMarkdownTableCell(b.thread)} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
       );
     });
 
@@ -403,7 +415,7 @@ function renderFullReport(
       );
       attributedLeaks.forEach((b, i) => {
         lines.push(
-          `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${demangleSymbol(b.responsibleFrame)}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
+          `| ${i + 1} | \`${escapeMarkdownTableCell(b.objectType)}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${escapeMarkdownTableCell(demangleSymbol(b.responsibleFrame))}\` | ${escapeMarkdownTableCell(b.responsibleLibrary) || "—"} | ${severityEmoji(b.severity)} |`
         );
       });
     } else {
@@ -411,15 +423,9 @@ function renderFullReport(
     }
 
     if (unattributedLeaks.length > 0) {
-      const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
-      const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
       lines.push(
         ``,
-        `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
-          `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
-          `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
-          `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
-          `stack logging enabled at launch.`
+        renderUnattributedLeaksNote(unattributedLeaks, attributedLeaks.length, mallocStackLogging)
       );
     }
   }
@@ -529,6 +535,54 @@ function renderFullReport(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * The single low-confidence caveat line for unattributed leaks, shared by the
+ * full analyze report above and the combined React × native report — one
+ * source so the wording can't silently diverge between the two.
+ *
+ * `mallocStackLogging` is argent's capture mode when known (stamped at stop,
+ * frozen into parsedData); pass null/undefined when unknown (a session
+ * restored from disk has no capture-mode sidecar). Attributed leaks are
+ * stronger evidence than the flag — a responsible frame is only ever recorded
+ * when the target process ran under malloc stack logging, however it was
+ * launched — so the flag matters only for the zero-attributed case: explicit
+ * `true` names the malloc capture that recorded nothing, anything else gets
+ * the `--attach` framing.
+ */
+export function renderUnattributedLeaksNote(
+  unattributedLeaks: MemoryLeak[],
+  attributedCount: number,
+  mallocStackLogging?: boolean | null
+): string {
+  const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
+  const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+  // Attribution evidence decides FIRST: a responsible frame exists only if the
+  // target process itself ran under malloc stack logging — true even when
+  // argent attached (the app can be launched with the diagnostic externally,
+  // e.g. via an Xcode scheme), so an explicit `false` capture flag must not
+  // produce a "no malloc-stack history" claim right above an attributed table.
+  // The flag only disambiguates the zero-attributed case.
+  const hint =
+    attributedCount > 0
+      ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
+        `groups carry no allocation backtrace (freed-region reuse, truncated stack logs, or ` +
+        `allocations outside the instrumented malloc zones) and are most likely benign system ` +
+        `allocations rather than confirmed app leaks.`
+      : mallocStackLogging === true
+        ? `This capture ran with malloc stack logging enabled, yet none of these leaks carry an allocation ` +
+          `backtrace — the allocator recorded no usable stack for them (freed-region reuse, truncated stack ` +
+          `logs, or allocations outside the instrumented malloc zones). Most likely benign system allocations ` +
+          `rather than confirmed app leaks; re-running with malloc stack logging again is unlikely to attribute them.`
+        : `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
+          `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
+          `stack logging enabled at launch.`;
+  return (
+    `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
+    `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
+    hint
+  );
+}
 
 function renderExportErrors(exportErrors?: Record<string, string>): string[] {
   if (!exportErrors || Object.keys(exportErrors).length === 0) return [];

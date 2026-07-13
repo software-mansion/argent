@@ -124,6 +124,15 @@ jobs:
       - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
+      # TCP-transport (sim-remote / ios-remote) binaries — the ax-service and
+      # native-devtools variants the remote code path spawns/injects over a
+      # sim-remote-tunnelled TCP socket. Absent from 0.15.0 because the release
+      # never built them; gate the publish so they can't silently regress again.
+      # (Host=darwin here, so axServiceBinaryPathTcp() resolves bin/darwin/tcp.)
+      - run: test -x packages/argent/bin/darwin/tcp/ax-service
+      - run: test -f packages/argent/dylibs/tcp/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/tcp/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/tcp/libArgentInjectionBootstrap.dylib
       - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
       - run: test -d packages/argent/assets/queries
       - run: test -f packages/argent/assets/manifest.json

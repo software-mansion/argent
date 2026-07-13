@@ -53,6 +53,21 @@ export interface FileInputWire {
    * another field.
    */
   contentOmitted?: "size-limit";
+  /**
+   * Upload ID returned by `POST /upload` on the tool-server. Required together with
+   * {@link contentHash} for `kind: "tar-upload"` remote sessions — the client
+   * tars the file or directory and streams it to `/upload` before the tool
+   * call, avoiding the base64-in-JSON body limit. Absent for co-located
+   * sessions (the server reads the path in place). Pair with {@link contentHash}
+   * so the server can verify tarball integrity before extraction.
+   */
+  uploadId?: string;
+  /**
+   * SHA-256 hex digest of the streamed tarball bytes. Required whenever
+   * {@link uploadId} is set; the server recomputes the digest while receiving
+   * receiving `POST /upload` and rejects a mismatch before extraction.
+   */
+  contentHash?: string;
 }
 
 /**
@@ -69,8 +84,15 @@ export interface FileInputWire {
  *                 server host and adapts (e.g. flow recording switches to
  *                 client-side persistence, screenshot-diff falls back to a
  *                 temp output dir).
+ * - `"tar-upload"` — the tool reads a file or directory that the client owns
+ *                 (e.g. an iOS `.app` bundle, an Android `.apk`, a Vega
+ *                 `.vpkg`). Co-located: used in place when path + stat match.
+ *                 Remote: the client tars the path, streams it to `POST /upload`,
+ *                 sets `uploadId` and `contentHash` on the wire, and the server
+ *                 always extracts from the upload (even if the path also exists
+ *                 locally). Extraction lands in a hash-prefixed temp dir.
  */
-export type FileInputKind = "file" | "directory" | "probe";
+export type FileInputKind = "file" | "directory" | "probe" | "tar-upload";
 
 /**
  * Declaration of one file-boundary arg on a {@link ToolDefinition}. Shipped

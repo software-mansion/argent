@@ -169,7 +169,7 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 { "udid": "<UDID>", "text": "search query", "key": "enter" }
 ```
 
-Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms).
+Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
 ### rotate — Change orientation
 
