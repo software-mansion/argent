@@ -26,14 +26,14 @@ hard assertion failed (skips do not fail the run).
 
 ## What it does (phases)
 
-| phase | needs | covers |
-|---|---|---|
-| `install` | npm + network | `npm i -g <tgz>`, bundled binaries, `init` (global + `--local`), `update`, `uninstall`, telemetry, MCP-config generation |
-| `introspection` | — | `--version/--help`, `tools`, `tools describe` for **all 70** tools, feature flags, `server start/status/logs/stop`, `link/unlink` |
-| `validation` | — | for every tool: missing-required / bad-enum / bad-type rejection (deterministic, no hardware) |
-| `android` | Android emulator | happy-path of every touch/gesture/screenshot/app-lifecycle tool |
-| `chromium` | Electron (bundled optional dep) + a display | boots a generated Electron app; drives CDP tools (scroll/drag/tabs/cookies/storage) |
-| `rn` | `~/dev/bluesky` + Android device | debugger + react/native profiler + network chain against the real Bluesky app |
+| phase           | needs                                       | covers                                                                                                                            |
+| --------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `install`       | npm + network                               | `npm i -g <tgz>`, bundled binaries, `init` (global + `--local`), `update`, `uninstall`, telemetry, MCP-config generation          |
+| `introspection` | —                                           | `--version/--help`, `tools`, `tools describe` for **all 70** tools, feature flags, `server start/status/logs/stop`, `link/unlink` |
+| `validation`    | —                                           | for every tool: missing-required / bad-enum / bad-type rejection (deterministic, no hardware)                                     |
+| `android`       | Android emulator                            | happy-path of every touch/gesture/screenshot/app-lifecycle tool                                                                   |
+| `chromium`      | Electron (bundled optional dep) + a display | boots a generated Electron app; drives CDP tools (scroll/drag/tabs/cookies/storage)                                               |
+| `rn`            | `~/dev/bluesky` + Android device            | debugger + react/native profiler + network chain against the real Bluesky app                                                     |
 
 Tiers auto-skip (with a recorded reason) when their prerequisites are missing, so
 a partial run still produces a meaningful report. iOS / tvOS / Vega tiers are
