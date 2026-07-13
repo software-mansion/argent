@@ -20,7 +20,7 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
   const height = y2 - y1;
   if (width <= 0 || height <= 0) return null;
 
-  return {
+  const node: DescribeNode = {
     role: mapNativeTraitsToDescribeRole(el.traits ?? []),
     frame: {
       x: roundNormalized(x1),
@@ -33,6 +33,8 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
     value: el.value,
     identifier: el.identifier,
   };
+  if (el.focused) node.focused = true;
+  return node;
 }
 
 export function adaptAXDescribeToDescribeResult(response: AXDescribeResponse): DescribeNode {

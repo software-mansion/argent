@@ -36,6 +36,19 @@ describe("describe native adapter", () => {
     });
   });
 
+  it("propagates focused state from native describe elements", () => {
+    const node = adaptNativeDescribeElementToDescribeNode({
+      frame: { x: 16, y: 80, width: 100, height: 44 },
+      tapPoint: { x: 66, y: 102 },
+      normalizedFrame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+      normalizedTapPoint: { x: 0.25, y: 0.25 },
+      traits: ["searchField"],
+      focused: true,
+    });
+
+    expect(node?.focused).toBe(true);
+  });
+
   it("clamps partially off-screen normalized frames into the public [0,1] contract", () => {
     const node = adaptNativeDescribeElementToDescribeNode({
       frame: { x: -10, y: 800, width: 420, height: 100 },

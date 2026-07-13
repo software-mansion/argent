@@ -233,6 +233,8 @@ interface UiNode {
   checked: boolean;
   disabled: boolean;
   password: boolean;
+  packageName?: string;
+  focused: boolean;
   scrollHidden: number;
   children: UiNode[];
 }
@@ -252,7 +254,8 @@ function isInteractive(attrs: Record<string, string>): boolean {
     attrIsTrue(attrs, "clickable") ||
     attrIsTrue(attrs, "long-clickable") ||
     attrIsTrue(attrs, "checkable") ||
-    attrIsTrue(attrs, "scrollable")
+    attrIsTrue(attrs, "scrollable") ||
+    attrIsTrue(attrs, "focused")
   ) {
     return true;
   }
@@ -359,6 +362,8 @@ function makeUiNode(
     checked: attrIsTrue(attrs, "checked"),
     disabled: attrs.enabled === "false",
     password: attrIsTrue(attrs, "password"),
+    focused: attrIsTrue(attrs, "focused"),
+    packageName: attrs.package || undefined,
     scrollHidden: 0,
   };
   if (label) out.label = label;
@@ -514,6 +519,8 @@ function computeNodeOutput(
       if (!c.label && label) c.label = label;
       const rid = attrs["resource-id"];
       if (!c.identifier && rid) c.identifier = rid;
+      if (!c.packageName && attrs.package) c.packageName = attrs.package;
+      if (attrIsTrue(attrs, "focused")) c.focused = true;
       return [c];
     }
   }
@@ -601,7 +608,7 @@ function finalizeUiNode(
     // Keep it as a node whose frame is the union of its (here, sole) child so
     // neither the wrapper's nor the child's label is dropped.
     if (children.length === 0) return null;
-    if (children.length === 1 && !n.label && !n.identifier) return children[0]!;
+    if (children.length === 1 && !n.label && !n.identifier && !n.focused) return children[0]!;
     const x1 = Math.min(...children.map((c) => c.frame.x));
     const y1 = Math.min(...children.map((c) => c.frame.y));
     const x2 = Math.max(...children.map((c) => c.frame.x + c.frame.width));
@@ -623,6 +630,8 @@ function finalizeUiNode(
   if (n.checked) out.checked = true;
   if (n.disabled) out.disabled = true;
   if (n.password) out.password = true;
+  if (n.packageName) out.packageName = n.packageName;
+  if (n.focused) out.focused = true;
   if (n.scrollHidden > 0) out.scrollHidden = n.scrollHidden;
   return out;
 }

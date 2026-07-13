@@ -122,6 +122,9 @@ describe("describe tool", () => {
     expect(result.source).toBe("ax-service");
     expect(result.description).toContain("ROOT  AXGroup");
     expect(result.description).toMatch(/AXButton\s+"General"/);
+    expect(result.matched).toBeUndefined();
+    expect(result.emitted).toBeUndefined();
+    expect(result.truncated).toBeUndefined();
   });
 
   it("returns dialog elements when alertVisible is true", async () => {
