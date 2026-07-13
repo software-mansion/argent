@@ -133,9 +133,13 @@ describe("describeCrash", () => {
 
   describe("resilience to hostile errors", () => {
     it("never throws, even when name/code/stack getters throw", () => {
-      // An Error instance so errorName reads `.name` (the throwing getter)
-      // rather than the constructor name.
-      const hostile = new Error("real message");
+      // `Object.create(Error.prototype)` (not `new Error()`) keeps
+      // `instanceof Error` true — so errorName/stackOf take the `.name`/`.stack`
+      // branch and hit the throwing getters — while avoiding V8's real-Error
+      // lazy-stack machinery, which on some Node versions would run the `name`
+      // getter (and throw) during the `defineProperty(…, "stack", …)` setup
+      // itself, before describeCrash is ever called.
+      const hostile = Object.create(Error.prototype) as Record<string, unknown>;
       const throwing = () => {
         throw new Error("boom in getter");
       };
