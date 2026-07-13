@@ -24,8 +24,8 @@
  * parked is preserved across that roll and delivered on the next await.
  */
 
-import { TypedEventEmitter, type Platform } from "@argent/registry";
-import { classifyDevice } from "./device-info";
+import { TypedEventEmitter } from "@argent/registry";
+import { classifyDeviceForTelemetry, type TelemetryPlatform } from "./telemetry-platform";
 
 /** How the preview UI locates the live on-screen element for a proposal. */
 export interface VariantMatch {
@@ -170,8 +170,12 @@ export interface StoreSnapshot {
  * it as `lens:round_completed` telemetry WITHOUT the store depending on the
  * telemetry package. Only counts/booleans/durations — never element names,
  * comment text, variant code, file paths, or device identifiers. Structurally
- * assignable to `LensRoundCompletedProps` in @argent/telemetry; if the two
- * drift, the `track()` call site in index.ts fails to compile.
+ * assignable to `LensRoundCompletedProps` in @argent/telemetry. The relay in
+ * index.ts passes this as a VARIABLE, so `track()`'s excess-property check does
+ * NOT fire on it — a field ADDED here without extending the telemetry props (and
+ * `sanitize()`) would compile and be silently dropped downstream. index.ts adds
+ * an explicit bidirectional key-set drift guard (`assertSameKeys`) that turns
+ * that added/removed/renamed field into a compile error in either direction.
  */
 export interface RoundCompletedStats {
   round: number;
@@ -188,7 +192,7 @@ export interface RoundCompletedStats {
   is_cli_session: boolean;
   had_parked_await: boolean;
   round_duration_ms: number;
-  platform?: Platform;
+  platform?: TelemetryPlatform;
 }
 
 /**
@@ -203,7 +207,7 @@ export interface RoundAbandonedStats {
   variant_count: number;
   had_parked_await: boolean;
   is_cli_session: boolean;
-  platform?: Platform;
+  platform?: TelemetryPlatform;
 }
 
 /**
@@ -253,11 +257,14 @@ type StoreEvents = {
    */
   cliSessionChanged: (active: boolean) => void;
   /**
-   * Emitted once on a CLI session BEGIN transition (not on end, not on a
-   * re-begin while already active) — i.e. once per `argent lens` invocation.
-   * The tool-server relays it as `lens:cli_session_started` telemetry; kept
-   * separate from `cliSessionChanged` (which drives the window and fires on both
-   * begin and end) so the per-invocation metric is counted exactly once.
+   * Emitted once per `argent lens` invocation — on EVERY begin (`active=true`),
+   * including a re-begin while the store is still marked active because a prior
+   * session's clean end never landed (its `argent lens` was killed); never on an
+   * end. Counting only clean begin *transitions* would under-count that killed-
+   * predecessor case, the exact metric this event exists for. The tool-server
+   * relays it as `lens:cli_session_started` telemetry; kept separate from
+   * `cliSessionChanged` (which drives the window and fires only on a real
+   * begin/end transition) so the per-invocation metric is counted once per run.
    */
   cliSessionStarted: (stats: CliSessionStartedStats) => void;
 };
@@ -375,13 +382,22 @@ export class VariantProposalStore {
 
   /** Begin a fresh round, discarding the previous one's proposals/selections. */
   reset(): void {
-    // Drop-off telemetry: a round with staged proposals that is being discarded
-    // WITHOUT a submit is an abandonment (window closed, `argent lens` exited
-    // mid-review, or the round superseded). Emit BEFORE clearing state, and only
-    // for this case — a completed round reaching reset() is the happy-path roll
-    // (autoRollIfCompleted runs only when completed), not a loss. proposals.length
-    // is 0 after a reset, so re-entering reset() for the same round can't double
-    // count. Everything here is a privacy-safe aggregate — no names/text/raw ids.
+    // Drop-off telemetry: a round with staged proposals that reaches reset()
+    // WITHOUT having been submitted is an abandonment. Emit BEFORE clearing
+    // state, and only for this case — a completed round reaching reset() is the
+    // happy-path roll (autoRollIfCompleted runs only when completed), not a loss.
+    // proposals.length is 0 after a reset, so re-entering reset() for the same
+    // round can't double count. All aggregate — no names/text/raw ids.
+    //
+    // Which real callers land here with a staged, non-completed round:
+    //   - a CLI session boundary: `argent lens` exiting mid-review, or a leftover
+    //     round swept when a new session begins (setCliSession → reset());
+    //   - a superseded round: a second caller proposes/resets while an earlier
+    //     round's await is still parked;
+    //   - server shutdown with a round still staged (flushAbandonedRound()).
+    // NOT covered: a bare-MCP walk-away where the human just closes the preview
+    // window and the process keeps running — nothing routes that through reset(),
+    // so it is not counted here (the honest limit of this signal).
     if (!this.completed && this.proposals.length > 0) {
       this.events.emit("roundAbandoned", {
         round: this.round,
@@ -389,7 +405,7 @@ export class VariantProposalStore {
         variant_count: this.proposals.reduce((n, p) => n + p.variants.length, 0),
         had_parked_await: this.waitersList.some((w) => !w.settled),
         is_cli_session: this.cliSession,
-        platform: this.device ? classifyDevice(this.device) : undefined,
+        platform: this.device ? classifyDeviceForTelemetry(this.device) : undefined,
       });
     }
     // Any await still parked on the round being discarded must not hang
@@ -418,6 +434,23 @@ export class VariantProposalStore {
     this.variantSeq = 0;
     this.lastOutcome = null;
     this.events.emit("changed");
+  }
+
+  /**
+   * Emit the drop-off signal for a round still staged (proposals present, not
+   * completed) at process shutdown — "the server died mid-review". The
+   * tool-server calls this on its shutdown path, before the final telemetry
+   * drain, so a round the human never got to submit is counted as an abandonment
+   * instead of vanishing into the unattributable opens-minus-completions
+   * residue. Routes through reset() — the single abandonment choke point, guarded
+   * so a completed or empty round is a no-op — which also settles any await still
+   * parked on the dying round rather than letting it hang. Returns whether an
+   * abandonment was emitted (for the caller's logging / tests).
+   */
+  flushAbandonedRound(): boolean {
+    if (this.completed || this.proposals.length === 0) return false;
+    this.reset();
+    return true;
   }
 
   /** Look up a stored variant (used to resolve a preview-image path safely). */
@@ -566,8 +599,8 @@ export class VariantProposalStore {
    */
   setCliSession(active: boolean, agents: Array<{ id: string; name: string }> = []): void {
     const transitioned = this.cliSession !== active;
-    // A CLI session boundary — begin OR end — must start the next flow from a
-    // clean round when there is leftover round state to clear.
+    // A CLI session boundary — every begin, and any end transition — must start
+    // the next flow from a clean round when there is leftover round state.
     //
     // On BEGIN: `autoRollIfCompleted` (run by propose_variant) only rolls a
     // *completed* round, so an unsubmitted round with staged proposals would
@@ -577,6 +610,18 @@ export class VariantProposalStore {
     // removed, `consumed` still false) and was then submitted, leaving
     // completed=true/consumed=false — is rolled here too so the session starts
     // clean.
+    //
+    // The BEGIN sweep runs on EVERY begin (`active`), not only a clean
+    // transition: a begin that arrives while the store is STILL marked active —
+    // a prior session whose clean end never landed because its `argent lens` was
+    // SIGKILLed (no `active:false` POST, and the server has no dead-session
+    // detection) — is not a transition but IS a fresh invocation. Without
+    // sweeping it, the dead session's staged, unsubmitted round would neither be
+    // counted as abandoned nor cleared: it would bleed into this invocation's
+    // first round (inflating its round_completed counts) and, until the next real
+    // transition, mislabel MCP-driven rounds as `is_cli_session:true`. Sweeping
+    // here discards it (counted as an abandonment, is_cli_session:true — the dead
+    // round WAS a CLI round, since `this.cliSession` is still the old value).
     //
     // On END: a proposal staged during the session but never submitted (the
     // human closed the window / the `argent lens` process exited mid-review)
@@ -588,7 +633,7 @@ export class VariantProposalStore {
     // Reset only when such state exists so a clean start isn't needlessly bumped
     // past round 1. (reset() does not clear cliSession / device / owned-devices,
     // so it's safe to call here.)
-    if (transitioned) {
+    if (active || transitioned) {
       if (this.completed || this.proposals.length > 0) this.reset();
       // A session boundary is a genuine fresh start: also drop any queued-but-
       // undelivered outcome from a prior (possibly non-CLI) flow so it can't
@@ -687,6 +732,17 @@ export class VariantProposalStore {
     globalComment?: string;
     annotations?: ElementAnnotation[];
     /**
+     * Round the UI built this submit against. The submit route is unauthenticated
+     * and carries no session, so a submit posted from a tab whose round has since
+     * rolled (the human submitted round N, the agent auto-rolled to N+1, and a
+     * second stale click landed) must NOT be honored against the current round —
+     * with all its selections filtered out as non-current, it would otherwise
+     * pass the proposals-staged check and mint a phantom `lens:round_completed`
+     * for a round the human never reviewed. Best-effort: an older UI omits it and
+     * the guard is skipped. See the stale-round check below.
+     */
+    round?: number;
+    /**
      * UI usage signals for this round (privacy-safe booleans only), forwarded to
      * `lens:round_completed` telemetry. Both are best-effort — an older UI omits
      * them and they read as `false`, never affecting the delivered outcome.
@@ -697,7 +753,20 @@ export class VariantProposalStore {
     ok: true;
     round: number;
     resolved: number;
+    /** True when the submit was rejected as stale (its round had already rolled). */
+    stale?: boolean;
   } {
+    // Reject a stale cross-round submit up front, before any state mutation or
+    // telemetry: if the UI told us which round it built this against and that
+    // round has already rolled, the human's click was for a round that no longer
+    // exists. Honoring it here would (a) freeze/complete the CURRENT round with a
+    // submit its human never made and (b) emit a phantom `lens:round_completed`
+    // (wearing the previous round's carried-over usage flags), the exact funnel
+    // corruption this guard exists to prevent. The real review of the current
+    // round is still pending; the tab's next /variants poll will resync it.
+    if (typeof input.round === "number" && input.round !== this.round) {
+      return { ok: true, round: this.round, resolved: 0, stale: true };
+    }
     const cleanAnnotations = (input.annotations ?? [])
       .filter((a) => a && typeof a.comment === "string" && a.comment.trim())
       // Bound the count (the submit route is unauthenticated) before mapping, so
@@ -831,7 +900,7 @@ export class VariantProposalStore {
         is_cli_session: this.cliSession,
         had_parked_await: toSettle.length > 0,
         round_duration_ms: Math.max(0, outcome.completedAt - firstCreatedAt),
-        platform: this.device ? classifyDevice(this.device) : undefined,
+        platform: this.device ? classifyDeviceForTelemetry(this.device) : undefined,
       });
     }
     return { ok: true, round, resolved: this.submitted.length };

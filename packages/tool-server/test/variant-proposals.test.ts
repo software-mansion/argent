@@ -710,6 +710,66 @@ describe("VariantProposalStore — roundCompleted telemetry event", () => {
     expect(stats[0]!.inspector_used).toBe(false);
     expect(stats[0]!.offscreen_revealed).toBe(false);
   });
+
+  it("rejects a stale cross-round submit (round token mismatch) without minting a completion", () => {
+    const s = new VariantProposalStore();
+    const rounds: number[] = [];
+    s.events.on("roundCompleted", (x) => rounds.push(x.round));
+
+    // Round 1: propose + submit (no await parked) → completes round 1.
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({
+      round: 1,
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+    });
+
+    // The agent proposes again → auto-roll into round 2 with fresh proposals.
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+    expect(s.snapshot().round).toBe(2);
+
+    // A second, STALE click from the round-1 browser tab now lands: it carries
+    // round token 1 and round-1 element ids. Without the token it would pass the
+    // proposals-staged check (round 2 has Bar), filter every selection out as
+    // non-current, and mint a phantom lens:round_completed for round 2 wearing
+    // round 1's carried-over usage flags — for a round nobody reviewed.
+    const res = s.submitSelection({
+      round: 1,
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+      inspectorUsed: true,
+      offscreenRevealed: true,
+    });
+
+    expect(res.stale).toBe(true);
+    expect(res.resolved).toBe(0);
+    // No phantom completion; round 2 stays open for its real review.
+    expect(rounds).toEqual([1]);
+    expect(s.snapshot().completed).toBe(false);
+  });
+
+  it("honors a submit whose round token matches the current round", () => {
+    const s = new VariantProposalStore();
+    const rounds: number[] = [];
+    s.events.on("roundCompleted", (x) => rounds.push(x.round));
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    const res = s.submitSelection({
+      round: 1,
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+    });
+    expect(res.stale).toBeFalsy();
+    expect(rounds).toEqual([1]);
+  });
+
+  it("still completes when the UI omits the round token (backward compatible)", () => {
+    const s = new VariantProposalStore();
+    const rounds: number[] = [];
+    s.events.on("roundCompleted", (x) => rounds.push(x.round));
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    const foo = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+    expect(rounds).toEqual([1]);
+  });
 });
 
 describe("VariantProposalStore — cliSessionStarted telemetry event", () => {
@@ -831,5 +891,89 @@ describe("VariantProposalStore — roundAbandoned telemetry event", () => {
     s.reset();
     s.reset(); // round now empty — no second emit
     expect(abandoned).toBe(1);
+  });
+
+  it("labels a CLI-exit abandonment is_cli_session:true (the flagship drop-off path)", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ round: number; is_cli_session: boolean; platform?: string }> = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    s.setCliSession(true, []);
+    s.proposeVariant({ element: "Foo", udid: "chromium-cdp-9222", variant: variant("A") });
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+    // `argent lens` exited mid-review (setCliSession(false)) with the round still
+    // staged. Correct is_cli_session:true attribution depends on reset() reading
+    // `this.cliSession` BEFORE setCliSession flips it — pin it so a reorder that
+    // hoists the assignment above the transition block can't silently flip it.
+    s.setCliSession(false, []);
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      round: 1,
+      element_count: 2,
+      variant_count: 2,
+      is_cli_session: true,
+      platform: "chromium",
+    });
+    assertPrivacySafe(stats[0]);
+  });
+
+  it("labels a begin-swept leftover (non-CLI) round is_cli_session:false", () => {
+    const s = new VariantProposalStore();
+    const stats: Array<{ round: number; is_cli_session: boolean }> = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    // A leftover non-CLI round staged before any CLI session.
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    // A CLI session begins and sweeps it — still labeled non-CLI (it was one).
+    s.setCliSession(true, []);
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({ round: 1, is_cli_session: false });
+  });
+
+  it("sweeps a dead session's staged round on a re-begin while still active (killed `argent lens`)", () => {
+    const s = new VariantProposalStore();
+    const abandoned: Array<{ round: number; element_count: number; is_cli_session: boolean }> = [];
+    const started: unknown[] = [];
+    s.events.on("roundAbandoned", (x) => abandoned.push(x));
+    s.events.on("cliSessionStarted", (x) => started.push(x));
+
+    s.setCliSession(true, []); // invocation 1
+    s.proposeVariant({ element: "Foo", variant: variant("A") }); // staged, never submitted
+    // The invocation-1 `argent lens` was SIGKILLed: no {active:false} POST landed,
+    // so the store is still marked active. A NEW invocation begins — a re-begin
+    // with no transition. Its staged round must be swept, not bled forward.
+    s.setCliSession(true, []); // invocation 2
+
+    expect(abandoned).toHaveLength(1);
+    expect(abandoned[0]).toMatchObject({ round: 1, element_count: 1, is_cli_session: true });
+    expect(started).toHaveLength(2); // both begins counted as invocations
+    const snap = s.snapshot();
+    expect(snap.round).toBe(2); // rolled clean
+    expect(snap.proposals).toHaveLength(0); // dead round not bled into invocation 2
+  });
+
+  it("flushAbandonedRound emits abandonment for a staged round and is a no-op otherwise", () => {
+    const s = new VariantProposalStore();
+    const stats: unknown[] = [];
+    s.events.on("roundAbandoned", (x) => stats.push(x));
+
+    // Empty round → no-op ("server exited with nothing staged").
+    expect(s.flushAbandonedRound()).toBe(false);
+    expect(stats).toHaveLength(0);
+
+    // Staged, unsubmitted round → "server died mid-review" abandonment.
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    expect(s.flushAbandonedRound()).toBe(true);
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({ round: 1, element_count: 1 });
+
+    // A completed round is the happy path, never a loss → no-op.
+    s.proposeVariant({ element: "Bar", variant: variant("B") });
+    const bar = s.snapshot().proposals[0]!;
+    s.submitSelection({ selections: [{ elementId: bar.id, variantId: bar.variants[0]!.id }] });
+    expect(s.flushAbandonedRound()).toBe(false);
+    expect(stats).toHaveLength(1);
   });
 });

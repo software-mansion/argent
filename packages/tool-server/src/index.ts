@@ -6,6 +6,7 @@ import {
   shutdown as telemetryShutdown,
   warmTelemetryIdentity,
   aiTelemetryFromMeta,
+  type EventPropertyMap,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
@@ -24,6 +25,27 @@ const PROCESS_TIMEOUT_MS = 5_000;
 const DEFAULT_PORT = "3001";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_IDLE_TIMEOUT_MINUTES = "0";
+
+// Compile-time bidirectional drift guard between the store's privacy-safe stat
+// structs and the telemetry event props they are relayed as. `track()`'s
+// excess-property check only fires on an object LITERAL; the relays below pass
+// these stats as VARIABLES, so a field ADDED to a struct without extending the
+// telemetry props (and sanitize()) would otherwise compile and be silently
+// dropped downstream — a metric that never arrives, not a build break. This
+// asserts the key sets match EXACTLY in both directions, so adding, removing, or
+// renaming a field on either side fails the build here until the counterpart is
+// updated too. (Field value types are still checked by the relay track() call.)
+type SameKeys<A, B> = [keyof A] extends [keyof B]
+  ? [keyof B] extends [keyof A]
+    ? true
+    : never
+  : never;
+const _lensStatDriftGuards: [
+  SameKeys<RoundCompletedStats, EventPropertyMap["lens:round_completed"]>,
+  SameKeys<RoundAbandonedStats, EventPropertyMap["lens:round_abandoned"]>,
+  SameKeys<CliSessionStartedStats, EventPropertyMap["lens:cli_session_started"]>,
+] = [true, true, true];
+void _lensStatDriftGuards;
 
 // Format an HTTP origin for display. Bracket IPv6 literals per RFC 3986 §3.2.2.
 function formatOrigin(host: string, port: number): string {
@@ -265,13 +287,23 @@ export function start(): void {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    variantProposalStore.events.off("awaitParked", onAwaitParked);
-    variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
-    variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
-    variantProposalStore.events.off("roundCompleted", onRoundCompleted);
-    variantProposalStore.events.off("roundAbandoned", onRoundAbandoned);
-    variantProposalStore.events.off("cliSessionStarted", onCliSessionStarted);
+    // The store-event relays (roundCompleted / roundAbandoned / …) stay attached
+    // until AFTER the HTTP server closes (see the end of shutdown). The server
+    // keeps accepting requests until `server.close()`, so a human clicking
+    // Complete during this drain still emits `roundCompleted` — detaching the
+    // relays here would silently drop it while `toolserver:stop` from this same
+    // shutdown is still delivered. (A submit landing after the telemetry drain
+    // below is inherently unobservable — the queue is already closing.)
     cancelPendingClose();
+
+    // "Server died mid-review": a round still staged (proposals, unsubmitted) at
+    // exit is a drop-off the funnel must see. Flush it as an abandonment now —
+    // while the roundAbandoned relay is attached and BEFORE the telemetry drain
+    // below — so it lands in this process's final batch instead of vanishing into
+    // the unattributable opens-minus-completions residue. A completed or empty
+    // round is a no-op (guarded inside flushAbandonedRound). On a clean CLI end
+    // the session-boundary reset already swept the round, so this is a no-op too.
+    variantProposalStore.flushAbandonedRound();
 
     // Drain any simulators Lens booted headless for a CLI session. The happy
     // path drains via onCliSessionChanged(false) when the CLI ends the session,
@@ -325,6 +357,16 @@ export function start(): void {
       await new Promise<void>((resolve) => server!.close(() => resolve()));
       clearTimeout(forceExit);
     }
+    // Detach the store-event relays now that the server is closed (no more
+    // requests can emit). Kept until here so a submit during the drain above was
+    // still relayed; removing them matters for a repeated in-process start()
+    // (tests) since the store is a module singleton that outlives one server.
+    variantProposalStore.events.off("awaitParked", onAwaitParked);
+    variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
+    variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
+    variantProposalStore.events.off("roundCompleted", onRoundCompleted);
+    variantProposalStore.events.off("roundAbandoned", onRoundAbandoned);
+    variantProposalStore.events.off("cliSessionStarted", onCliSessionStarted);
     process.exit(finalExitCode);
   };
 

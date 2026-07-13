@@ -42,8 +42,14 @@ beforeEach(() => {
   variantProposalStore.reset();
 });
 
-describe("GET /preview/ — lens:preview_opened telemetry", () => {
-  it("emits once when a human loads the preview during a live proposal round", async () => {
+describe("POST /preview/opened — lens:preview_opened telemetry", () => {
+  // `lens:preview_opened` is emitted only from an explicit client trigger — the
+  // UI posts `/opened` when it renders a round in a VISIBLE window. The server
+  // reads counts/platform from its own snapshot (the body's `round` is a trigger
+  // only), and dedups per round. These cases pin the server side of that signal;
+  // the visibility gate itself is client-side (see index.html reportPreviewOpened).
+
+  it("emits once when the client reports a live proposal round", async () => {
     const a = app();
     variantProposalStore.proposeVariant({
       element: "Foo",
@@ -51,18 +57,16 @@ describe("GET /preview/ — lens:preview_opened telemetry", () => {
     });
     const round = variantProposalStore.snapshot().round;
 
-    const res = await request(a).get("/");
+    const res = await request(a).post("/opened").send({ round });
 
     expect(res.status).toBe(200);
     const calls = previewOpenedCalls();
     expect(calls).toHaveLength(1);
     const payload = calls[0]![1] as Record<string, unknown>;
-    // This test binds no udid, but the store `device` is a process singleton NOT
-    // cleared by reset() (see variant-proposals.ts), so `platform` can carry over
-    // from an earlier test (e.g. under --sequence.shuffle). Assert only the fields
-    // this test controls, and separately pin the exact key set so an unexpected
-    // field still can't leak in — rather than a `platform: undefined` toEqual that
-    // is order-fragile. (A fresh-store test pins platform=undefined directly.)
+    // No udid bound here, but the store `device` is a process singleton NOT cleared
+    // by reset(), so `platform` can carry over from an earlier test under
+    // --sequence.shuffle. Assert the controlled fields, pin the exact key set, and
+    // check platform is a safe enum or undefined — never leaked content.
     expect(payload).toMatchObject({
       round,
       element_count: 1,
@@ -76,7 +80,6 @@ describe("GET /preview/ — lens:preview_opened telemetry", () => {
       "round",
       "variant_count",
     ]);
-    // Any carried-over platform must still be a known-safe enum, never content.
     expect(payload.platform === undefined || typeof payload.platform === "string").toBe(true);
   });
 
@@ -93,7 +96,7 @@ describe("GET /preview/ — lens:preview_opened telemetry", () => {
     });
     const round = variantProposalStore.snapshot().round;
 
-    await request(a).get("/");
+    await request(a).post("/opened").send({ round });
 
     const calls = previewOpenedCalls();
     expect(calls).toHaveLength(1);
@@ -106,32 +109,31 @@ describe("GET /preview/ — lens:preview_opened telemetry", () => {
     });
   });
 
-  it("dedups within the same round (a refresh counts once)", async () => {
+  it("dedups within the same round (repeated triggers count once)", async () => {
     const a = app();
     variantProposalStore.proposeVariant({
       element: "Foo",
       variant: { name: "Bold", summary: "s" },
     });
+    const round = variantProposalStore.snapshot().round;
 
-    await request(a).get("/");
-    await request(a).get("/"); // refresh, same round
+    await request(a).post("/opened").send({ round });
+    await request(a).post("/opened").send({ round }); // e.g. a second tab, same round
 
     expect(previewOpenedCalls()).toHaveLength(1);
   });
 
-  it("re-emits on the FIRST load of a NEW round (dedup is per-round, not once-ever)", async () => {
+  it("re-emits on a NEW round (dedup is per-round, not once-ever)", async () => {
     const a = app();
-    // Round N: stage a proposal and open the preview — first emit.
     variantProposalStore.proposeVariant({
       element: "Foo",
       variant: { name: "Bold", summary: "s" },
     });
     const roundN = variantProposalStore.snapshot().round;
-    await request(a).get("/");
+    await request(a).post("/opened").send({ round: roundN });
     expect(previewOpenedCalls()).toHaveLength(1);
 
-    // Finalize round N, then propose again — proposeVariant auto-rolls into a
-    // fresh round N+1 once the prior round is completed.
+    // Finalize round N; the next propose auto-rolls into a fresh round N+1.
     const foo = variantProposalStore.snapshot().proposals[0]!;
     variantProposalStore.submitSelection({
       selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
@@ -143,14 +145,11 @@ describe("GET /preview/ — lens:preview_opened telemetry", () => {
     const roundNext = variantProposalStore.snapshot().round;
     expect(roundNext).toBe(roundN + 1);
 
-    // The first load of the NEW round MUST emit again. A regression to a
-    // fire-once boolean (instead of the `round !== lastOpenedRound` guard) would
-    // wrongly suppress this and leave the count at 1.
-    await request(a).get("/");
+    // The client rendering the NEW round reports it — a second event. A regression
+    // to a fire-once guard would wrongly suppress this and leave the count at 1.
+    await request(a).post("/opened").send({ round: roundNext });
     const calls = previewOpenedCalls();
     expect(calls).toHaveLength(2);
-    // platform is intentionally not asserted: the store `device` is a process
-    // singleton not cleared by reset(), so it can carry over from a prior test.
     expect(calls[1]![1]).toMatchObject({
       round: roundNext,
       element_count: 1,
@@ -159,141 +158,71 @@ describe("GET /preview/ — lens:preview_opened telemetry", () => {
     });
   });
 
-  it("does NOT emit for a bare load with nothing staged and no CLI session", async () => {
+  it("does NOT emit when nothing is staged and no CLI session (a stray trigger)", async () => {
     const a = app();
-    // Fresh router + no proposals staged this round: a stray preview load isn't
-    // a real "opened" signal, so it must not be counted.
-    const res = await request(a).get("/");
+    const res = await request(a).post("/opened").send({ round: 1 });
 
     expect(res.status).toBe(200);
     expect(previewOpenedCalls()).toHaveLength(0);
   });
 
-  it("emits for a CLI up-front open with zero proposals staged", async () => {
+  it("emits for a CLI up-front open with zero proposals, OMITTING the (stale) platform", async () => {
     const a = app();
-    // An `argent lens` CLI session opens the window before any variant is staged,
-    // so the `cliSession` disjunct — not proposals — is what makes the load count.
+    // Bind a device via an earlier round, then roll it away: `device` survives
+    // reset() on the store singleton, so it is still set with zero proposals.
+    variantProposalStore.proposeVariant({
+      element: "Foo",
+      udid: "chromium-cdp-9222",
+      variant: { name: "Bold", summary: "s" },
+    });
+    variantProposalStore.reset();
+    // An `argent lens` session opens the window up front — zero proposals staged.
     variantProposalStore.setCliSession(true, []);
     const round = variantProposalStore.snapshot().round;
+    expect(variantProposalStore.snapshot().device).toBe("chromium-cdp-9222"); // still bound
 
-    await request(a).get("/");
+    await request(a).post("/opened").send({ round });
 
     const calls = previewOpenedCalls();
     expect(calls).toHaveLength(1);
-    // `cliSession` is the deciding disjunct here (zero proposals staged). Assert
-    // the CLI-relevant fields via toMatchObject rather than toEqual: `device`
-    // persists across reset() on the process singleton, so `platform` depends on
-    // whatever a prior test bound and isn't this test's subject.
-    expect(calls[0]![1]).toMatchObject({
+    // element_count 0 (CLI up-front) AND platform OMITTED: a zero-count open must
+    // not inherit a prior flow's device platform (the store's `device` survives
+    // reset()). This pins the "platform tied to proposals presence" fix.
+    expect(calls[0]![1]).toEqual({
       round,
       element_count: 0,
       variant_count: 0,
       is_cli_session: true,
     });
 
-    variantProposalStore.setCliSession(false, []); // don't leak session state to later tests
+    variantProposalStore.setCliSession(false, []); // don't leak session state
   });
 });
 
-describe("GET /preview/variants — per-round lens:preview_opened in a reused window", () => {
-  // In an `argent lens` CLI session the preview window is opened ONCE up front and
-  // reused: the UI swaps rounds client-side off the /variants poll (~1.2s) without
-  // ever re-loading `/`, and `await_user_selection` is hidden so the window is
-  // never re-foregrounded. `GET /` therefore fires exactly once for the whole
-  // session, so the open leg is counted off the poll instead. These cases pin that
-  // per-round emission and its cross-surface dedup with `GET /`.
+describe("GET /preview/ and /preview/variants — no longer emit preview_opened", () => {
+  // The page load and the poll are NOT proof a human is looking (a reused CLI
+  // window loads `/` once for a whole session; a browser tab keeps polling
+  // /variants while backgrounded). Emission moved to the visibility-gated client
+  // trigger, so these surfaces must stay silent — a regression guard.
 
-  it("emits for each new round observed via the poll (the reused-window CLI path)", async () => {
-    const a = app();
-    // CLI session begins → window opens up front; `GET /` counts round 1's open.
-    variantProposalStore.setCliSession(true, []);
-    const round1 = variantProposalStore.snapshot().round;
-    await request(a).get("/");
-    expect(previewOpenedCalls()).toHaveLength(1);
-    expect(previewOpenedCalls()[0]![1]).toMatchObject({ round: round1, is_cli_session: true });
-
-    // The reused window keeps polling /variants for round 1 — same round, no
-    // re-emit (the `GET /` above already claimed it via `lastOpenedRound`).
-    await request(a).get("/variants");
-    await request(a).get("/variants");
-    expect(previewOpenedCalls()).toHaveLength(1);
-
-    // Human submits round 1, then the agent proposes round 2. In a CLI session the
-    // window is NOT re-loaded, so `/` never fires again — only the poll observes
-    // round 2. Without the /variants emission this round's open would be lost and
-    // the funnel would show more decisions than opens.
-    variantProposalStore.proposeVariant({
-      element: "Foo",
-      variant: { name: "Bold", summary: "s" },
-    });
-    const foo = variantProposalStore.snapshot().proposals[0]!;
-    variantProposalStore.submitSelection({
-      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
-    });
-    variantProposalStore.proposeVariant({
-      element: "Bar",
-      variant: { name: "Ghost", summary: "s" },
-    });
-    const round2 = variantProposalStore.snapshot().round;
-    expect(round2).toBe(round1 + 1);
-
-    await request(a).get("/variants");
-    const calls = previewOpenedCalls();
-    expect(calls).toHaveLength(2);
-    expect(calls[1]![1]).toMatchObject({
-      round: round2,
-      element_count: 1,
-      variant_count: 1,
-      is_cli_session: true,
-    });
-
-    variantProposalStore.setCliSession(false, []); // don't leak session state to later tests
-  });
-
-  it("counts the open from the poll alone when the page load didn't fire it", async () => {
-    const a = app();
-    // Proposals are live but the human's open reaches the router only as a
-    // /variants poll (e.g. the reused window was already loaded before this round).
-    variantProposalStore.proposeVariant({
-      element: "Foo",
-      variant: { name: "Bold", summary: "s" },
-    });
-    const round = variantProposalStore.snapshot().round;
-
-    await request(a).get("/variants");
-
-    const calls = previewOpenedCalls();
-    expect(calls).toHaveLength(1);
-    expect(calls[0]![1]).toMatchObject({
-      round,
-      element_count: 1,
-      variant_count: 1,
-      is_cli_session: false,
-    });
-  });
-
-  it("dedups across surfaces — a `GET /` then repeated /variants polls count once", async () => {
+  it("GET / does not emit even with a live round", async () => {
     const a = app();
     variantProposalStore.proposeVariant({
       element: "Foo",
       variant: { name: "Bold", summary: "s" },
     });
-
-    await request(a).get("/"); // page load claims the round
-    await request(a).get("/variants");
-    await request(a).get("/variants");
-
-    // The MCP path both loads `/` and polls /variants for the same round; the
-    // shared `lastOpenedRound` guard must keep that to a single event.
-    expect(previewOpenedCalls()).toHaveLength(1);
+    const res = await request(a).get("/");
+    expect(res.status).toBe(200);
+    expect(previewOpenedCalls()).toHaveLength(0);
   });
 
-  it("does NOT emit for a poll with nothing staged and no CLI session", async () => {
+  it("GET /variants does not emit even with a live round", async () => {
     const a = app();
-    // A stray poll of an empty preview (no proposals, no CLI session) is not a
-    // real "opened" signal, exactly as for a bare `GET /`.
+    variantProposalStore.proposeVariant({
+      element: "Foo",
+      variant: { name: "Bold", summary: "s" },
+    });
     const res = await request(a).get("/variants");
-
     expect(res.status).toBe(200);
     expect(previewOpenedCalls()).toHaveLength(0);
   });
@@ -355,5 +284,40 @@ describe("POST /preview/variants/selection — inspector/offscreen usage flags",
     expect(stats).toHaveLength(1);
     expect(stats[0]!.inspector_used).toBe(false);
     expect(stats[0]!.offscreen_revealed).toBe(false);
+  });
+
+  it("forwards the round token so a stale cross-round submit is rejected (no phantom completion)", async () => {
+    const a = app();
+    // Round N: propose + submit (matching token) → completes round N. (The store
+    // is a process singleton; round numbers accumulate across tests, so capture
+    // them dynamically rather than assuming 1/2.)
+    variantProposalStore.proposeVariant({ element: "Foo", variant: { name: "A", summary: "s" } });
+    const foo = variantProposalStore.snapshot().proposals[0]!;
+    const roundN = variantProposalStore.snapshot().round;
+    await request(a)
+      .post("/variants/selection")
+      .send({ round: roundN, selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+
+    // Agent proposes again → auto-roll to round N+1.
+    variantProposalStore.proposeVariant({ element: "Bar", variant: { name: "B", summary: "s" } });
+    expect(variantProposalStore.snapshot().round).toBe(roundN + 1);
+
+    const completed: number[] = [];
+    const onCompleted = (x: { round: number }) => completed.push(x.round);
+    variantProposalStore.events.on("roundCompleted", onCompleted);
+
+    // A stale click from the round-N tab: round token N, current round is N+1. The
+    // route must forward the token so the store rejects it (regression guard —
+    // the route previously dropped `round`, letting the phantom through).
+    const res = await request(a)
+      .post("/variants/selection")
+      .send({ round: roundN, selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }] });
+
+    variantProposalStore.events.off("roundCompleted", onCompleted);
+    expect(res.status).toBe(200);
+    expect(res.body.stale).toBe(true);
+    expect(res.body.resolved).toBe(0);
+    expect(completed).toEqual([]); // no phantom lens:round_completed for round 2
+    expect(variantProposalStore.snapshot().completed).toBe(false);
   });
 });

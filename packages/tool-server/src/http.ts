@@ -5,9 +5,6 @@ import {
   FAILURE_CODES,
   type FailureSignal,
   type FileInputSpec,
-  // The tool-server's coarse *device* platform (TV-agnostic). Telemetry's own
-  // Platform (imported below) is a superset that also carries `tvos`/`android-tv`.
-  type Platform as DevicePlatform,
   type Registry,
   type ResolvedFileInput,
 } from "@argent/registry";
@@ -31,8 +28,7 @@ import {
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
-import { getCachedSimulatorRuntimeKind } from "./utils/ios-devices";
-import { getCachedAndroidRuntimeKind } from "./utils/adb";
+import { refineTvPlatform } from "./utils/telemetry-platform";
 import type { Server as HttpServer } from "node:http";
 import {
   CHROMIUM_CDP_NAMESPACE,
@@ -117,30 +113,10 @@ type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
 // stored or forwarded.
 type HttpFailureMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
 
-/**
- * Split a TV target out of its base mobile platform for telemetry, using only
- * the already-memoized runtime kind — never a fresh `simctl`/`adb` probe, since
- * this runs on the per-tool-call hot path. A tvOS simulator and an iPhone
- * simulator share the same UDID shape (both classify as `ios`); an Android TV
- * emulator and a phone share the `emulator-NNNN` serial shape (both `android`).
- * The device platform stays coarse (a TV is a `runtimeKind`, not its own device
- * platform — capability gating and dispatch are TV-agnostic); we refine it to
- * `tvos` / `android-tv` here for reporting only when the cache already knows the
- * kind, and leave it coarse otherwise. The first tool call on a device may land
- * before the cache is warm and report the base platform; subsequent calls, once
- * a describe/interaction path has warmed the runtime-kind cache (the per-platform
- * warmers are listed on `getCachedSimulatorRuntimeKind` /
- * `getCachedAndroidRuntimeKind`), report the TV variant.
- */
-function refineTvPlatform(basePlatform: DevicePlatform, deviceId: string): TelemetryPlatform {
-  if (basePlatform === "ios" && getCachedSimulatorRuntimeKind(deviceId) === "tv") {
-    return "tvos";
-  }
-  if (basePlatform === "android" && getCachedAndroidRuntimeKind(deviceId) === "tv") {
-    return "android-tv";
-  }
-  return basePlatform;
-}
+// `refineTvPlatform` — splitting a TV target out of its coarse mobile platform
+// for telemetry from the warm runtime-kind cache — now lives in
+// ./utils/telemetry-platform so the Lens funnel events can share the exact same
+// TV attribution as the per-tool-call path here (a single source of truth).
 
 function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
   if (!deviceId) return null;

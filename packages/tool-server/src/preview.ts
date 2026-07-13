@@ -7,7 +7,8 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import type { Registry } from "@argent/registry";
 import { track } from "@argent/telemetry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
-import { resolveDevice, classifyDevice } from "./utils/device-info";
+import { resolveDevice } from "./utils/device-info";
+import { classifyDeviceForTelemetry } from "./utils/telemetry-platform";
 import { shutdownDevice } from "./utils/device-shutdown";
 import { listDevicesTool } from "./tools/devices/list-devices";
 import {
@@ -59,30 +60,34 @@ function wsUrlFromHttp(httpUrl: string): string {
 export function createPreviewRouter(registry: Registry): Router {
   const router = express.Router();
 
-  // Last proposal round for which we emitted `lens:preview_opened`. Shared by the
-  // two emit surfaces below (`GET /` and the `/variants` poll — see
-  // `trackPreviewOpenedOnce`): it both collapses repeated views of one round to a
-  // single event (a browser refresh, or the ~1.2s poll) AND serializes the two
-  // surfaces so a round is counted once no matter which observes it first. Round
-  // numbers only ever increase (the store bumps on reset), so "!= last" suffices.
+  // Last proposal round for which we emitted `lens:preview_opened`. The dedup for
+  // the single emit surface (`POST /opened`, see `trackPreviewOpenedOnce`): it
+  // collapses repeated signals for one round — several open tabs, or the same tab
+  // re-reporting — to a single event. Round numbers only ever increase (the store
+  // bumps on reset), so "!= last" suffices.
   let lastOpenedRound = -1;
 
-  // Emit `lens:preview_opened` at most once per proposal round. Called from BOTH
-  // `GET /` (a fresh page load) and the `/variants` poll, because the two human
-  // surfaces reach a new round differently:
-  //   - MCP path: each round respawns the preview window, so `GET /` fires per
-  //     round on its own.
+  // Emit `lens:preview_opened` at most once per proposal round, driven by an
+  // explicit client signal (`POST /opened`) rather than inferred server-side.
+  //
+  // The client posts this only when it actually RENDERS a new round in a VISIBLE
+  // window (`document.visibilityState === "visible"`), which is the true "a human
+  // opened the preview" signal:
+  //   - MCP path: each round respawns the preview window; the fresh page renders
+  //     round N and posts once.
   //   - `argent lens` CLI path: the window is opened ONCE up front and reused for
   //     the whole session — the UI swaps rounds client-side off the `/variants`
-  //     poll without ever re-loading `/`, and `await_user_selection` is hidden so
-  //     the window is never re-foregrounded. `GET /` alone would then emit once
-  //     per session while `round_completed`/`round_abandoned` fire once per round,
-  //     making the open-to-decision funnel show more decisions than opens for any
-  //     2+-round session. Emitting from the poll the reused window DOES make (one
-  //     that only an open window issues — the agent never speaks HTTP) restores a
-  //     per-round open. The shared `lastOpenedRound` guard keeps the two call
-  //     sites idempotent: whichever surface first observes a round emits, the
-  //     other no-ops, so a round is never double-counted.
+  //     poll without ever re-loading `/`. It posts on each new round it renders,
+  //     so the reused window still yields one open per round (the fix for the
+  //     open-to-decision funnel showing more decisions than opens in 2+-round CLI
+  //     sessions).
+  // Inferring the open from `GET /` (fires once per reused CLI session) or from
+  // the `/variants` poll (a forgotten BACKGROUND tab keeps polling with nobody
+  // looking, and its counts freeze at the first ~1.2s tick before staging
+  // settles) both misreport; the visibility-gated client post avoids both. The
+  // server stays the source of truth for the payload — counts and platform are
+  // read from the live snapshot here, never taken from the untrusted client,
+  // which sends only the round as a trigger.
   const trackPreviewOpenedOnce = (snap: StoreSnapshot): void => {
     if (!(snap.proposals.length > 0 || snap.cliSession) || snap.round === lastOpenedRound) return;
     lastOpenedRound = snap.round;
@@ -91,7 +96,14 @@ export function createPreviewRouter(registry: Registry): Router {
       element_count: snap.proposals.length,
       variant_count: snap.proposals.reduce((n, p) => n + p.variants.length, 0),
       is_cli_session: snap.cliSession,
-      platform: snap.device ? classifyDevice(snap.device) : undefined,
+      // Report platform ONLY for a round that actually staged proposals: the
+      // store's `device` deliberately survives reset(), so a CLI up-front open
+      // (element_count 0, no device bound THIS round) would otherwise inherit a
+      // prior flow's platform — a stale value next to a zero-count open.
+      platform:
+        snap.proposals.length > 0 && snap.device
+          ? classifyDeviceForTelemetry(snap.device)
+          : undefined,
     });
   };
 
@@ -293,13 +305,22 @@ export function createPreviewRouter(registry: Registry): Router {
   // Live proposal state for the UI to poll. Invisible to MCP (only /tools).
   router.get("/variants", (_req: Request, res: Response) => {
     res.set("Cache-Control", "no-store");
-    // This poll is only ever issued by an OPEN preview window (the agent mutates
-    // the store in-process and never speaks HTTP), so a poll observing a new
-    // round is the reused CLI window's per-round "opened" signal. Count it here;
-    // the `lastOpenedRound` dedup keeps it exclusive with the `GET /` emission.
-    const snap = variantProposalStore.snapshot();
-    trackPreviewOpenedOnce(snap);
-    res.json(snap);
+    res.json(variantProposalStore.snapshot());
+  });
+
+  // `lens:preview_opened` trigger. The preview UI posts here when it renders a
+  // new round in a VISIBLE window (see the client's `reportPreviewOpened`), which
+  // is the one signal that a HUMAN actually looked at the round — as opposed to
+  // `GET /` (fires once per reused CLI session, undercounting later rounds) or the
+  // `/variants` poll (a forgotten background tab keeps issuing it with nobody
+  // looking, overcounting). Tokenless like the rest of /preview and effectively
+  // read-only — it only fires a telemetry event, never mutating store state. The
+  // body's `round` is a trigger only; the payload's counts/platform are read from
+  // the live snapshot server-side, and `trackPreviewOpenedOnce` dedups per round
+  // so several open tabs still yield one event.
+  router.post("/opened", (_req: Request, res: Response) => {
+    trackPreviewOpenedOnce(variantProposalStore.snapshot());
+    res.json({ ok: true });
   });
 
   // ── CLI-driven Lens session (`argent lens`) ──────────────────────────
@@ -570,6 +591,10 @@ export function createPreviewRouter(registry: Registry): Router {
     }
     try {
       const result = variantProposalStore.submitSelection({
+        // The round the UI built this submit against (if it sent one). The store
+        // rejects it as stale when the round has since rolled, so a click from a
+        // tab whose round already completed/rolled can't mint a phantom completion.
+        round: typeof body.round === "number" ? body.round : undefined,
         selections,
         annotations,
         globalComment: typeof body.globalComment === "string" ? body.globalComment : undefined,
@@ -734,16 +759,11 @@ export function createPreviewRouter(registry: Registry): Router {
       res.status(404).type("text/plain").send("Preview UI not found");
       return;
     }
-    // The preview page loaded — the one request BOTH human surfaces make (the
-    // Electron renderer's loadURL and a human's browser) and the agent NEVER
-    // makes (propose_variant/await_user_selection mutate the store in-process,
-    // issuing no HTTP). So this is the "a human opened the preview" signal the
-    // generic tool:* path can't give us. Gated on a live round (staged proposals,
-    // or a CLI session whose window opens up front) so a stray load of an empty
-    // preview isn't counted, and deduped per round (see `trackPreviewOpenedOnce`).
-    // In a reused CLI window `GET /` fires only once for the whole session; the
-    // `/variants` poll picks up each subsequent round's open.
-    trackPreviewOpenedOnce(variantProposalStore.snapshot());
+    // `lens:preview_opened` is NOT emitted here. A page load alone doesn't prove a
+    // human is looking (a reused CLI window loads `/` once for a whole multi-round
+    // session; a browser tab can be backgrounded), so the signal is driven from
+    // the client instead — it posts `/opened` when it renders a round in a visible
+    // window. See `trackPreviewOpenedOnce` and the `/opened` route above.
     serveUiFile(res, p, "text/html");
   });
 
