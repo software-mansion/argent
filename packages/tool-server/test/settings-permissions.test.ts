@@ -464,6 +464,68 @@ describe("settings-permissions iOS branch", () => {
     await rejection.toThrow(/must be booted first — use boot-device/);
     await rejection.not.toThrow(/the app is not installed/);
   });
+
+  it("an unrecognized install-probe failure is not a 'not installed' verdict — the grant falls through", async () => {
+    // The probe's contract reserves `false` for a definitive "not installed"
+    // (the shapes get_app_container emits for a missing app) and `undefined`
+    // for "couldn't answer". A stale/deleted UDID ("Invalid device") or a probe
+    // killed at its timeout (no recognizable text) must NOT become a definitive
+    // verdict: the guard is skipped and the privacy call decides. Regression
+    // guard: a blanket catch→false steered the agent to install an app that was
+    // already installed whenever the probe itself broke.
+    for (const probeError of [
+      `Invalid device: ${IOS_UDID}`,
+      "Command failed: xcrun simctl get_app_container", // killed at timeout — no stderr text
+    ]) {
+      execFileMock.mockImplementation(
+        (
+          _cmd: string,
+          args: string[],
+          _opts: unknown,
+          cb: (err: unknown, out?: unknown) => void
+        ) => {
+          if (args[0] === "simctl" && args[1] === "get_app_container") {
+            cb(Object.assign(new Error(probeError), { code: 1 }));
+          } else {
+            cb(null, { stdout: "", stderr: "" });
+          }
+        }
+      );
+      execFileMock.mockClear();
+      const result = await iosImpl.handler(
+        {},
+        params({ action: "grant", permission: "location" }),
+        iosDevice
+      );
+      expect(result.applied, probeError).toEqual(["location"]);
+      const ranPrivacy = execFileMock.mock.calls.some((c) => (c[1] as string[])[1] === "privacy");
+      expect(ranPrivacy, probeError).toBe(true);
+    }
+  });
+
+  it("both definitive missing-app probe shapes reject the location grant", async () => {
+    // get_app_container's two real missing-app shapes stay definitive verdicts.
+    for (const probeError of ["No such file or directory", "com.example.app is not installed"]) {
+      execFileMock.mockImplementation(
+        (
+          _cmd: string,
+          args: string[],
+          _opts: unknown,
+          cb: (err: unknown, out?: unknown) => void
+        ) => {
+          if (args[0] === "simctl" && args[1] === "get_app_container") {
+            cb(Object.assign(new Error(probeError), { code: 1 }));
+          } else {
+            cb(null, { stdout: "", stderr: "" });
+          }
+        }
+      );
+      execFileMock.mockClear();
+      await expect(
+        iosImpl.handler({}, params({ action: "grant", permission: "location" }), iosDevice)
+      ).rejects.toThrow(/the app is not installed/);
+    }
+  });
 });
 
 describe("settings-permissions Android branch", () => {
@@ -895,5 +957,31 @@ describe("settings-permissions dispatch wiring (through tool.execute)", () => {
     expect(cmd).toBe("sim-remote");
     expect((args as string[]).slice(0, 2)).toEqual(["simctl", "privacy"]);
     expect(mockAdbShell).not.toHaveBeenCalled();
+  });
+
+  it("`grant location` on a `remote:` udid skips the install probe (sim-remote has no app-container verb)", async () => {
+    // The remote backend omits `isInstalled`, so the location pre-grant guard is
+    // skipped there by design — a pre-install grant reports success while
+    // recording nothing, which the SKILL/tool description scope to local sims.
+    // Pin the skip so a future remote install probe (or a guard change that
+    // starts requiring one) shows up as a deliberate contract change here.
+    execFileSucceeds();
+    const result = await settingsPermissionsTool.execute(
+      {},
+      {
+        udid: `remote:${IOS_UDID}`,
+        action: "grant",
+        permission: "location",
+        bundleId: "com.example.app",
+      }
+    );
+    expect(result.applied).toEqual(["location"]);
+    const probed = execFileMock.mock.calls.some((c) =>
+      (c[1] as string[]).includes("get_app_container")
+    );
+    expect(probed).toBe(false);
+    const [cmd, args] = execFileMock.mock.calls[0]!;
+    expect(cmd).toBe("sim-remote");
+    expect((args as string[]).slice(0, 2)).toEqual(["simctl", "privacy"]);
   });
 });

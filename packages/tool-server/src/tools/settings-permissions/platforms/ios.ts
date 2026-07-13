@@ -103,15 +103,17 @@ const localBackend: IosPrivacyBackend = {
       return true;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      // `get_app_container` needs a booted device: on a shutdown/booting sim it
-      // fails with "Unable to lookup in current state: Shutdown" for installed
-      // AND missing apps, so that error is NOT a "not installed" verdict —
-      // return undefined so the guard is skipped and the privacy call surfaces
-      // the boot hint instead of misdirecting the agent to reinstall the app.
-      if (/current state:/i.test(detail)) return undefined;
-      // Any other non-zero exit on a usable device means the app is absent
-      // ("No such file or directory" / "... is not installed").
-      return false;
+      // A definitive "not installed" verdict only for the shapes
+      // `get_app_container` actually emits for a missing app ("No such file or
+      // directory" / "... is not installed"). Every other failure is the probe
+      // failing to answer, not the app being absent — a shutdown/booting sim
+      // ("Unable to lookup in current state: Shutdown", which fails for
+      // installed AND missing apps alike), a stale/deleted UDID ("Invalid
+      // device"), a killed probe at its timeout — so return undefined: the
+      // guard is skipped and the privacy call surfaces the real cause (e.g.
+      // the boot hint) instead of misdirecting the agent to install the app.
+      if (/no such file or directory|is not installed/i.test(detail)) return false;
+      return undefined;
     }
   },
 };

@@ -220,8 +220,10 @@ export const androidImpl: PlatformImpl<
         //     is absent from android11/android12-release's PackageManagerShell-
         //     Command and an unknown pm subcommand exits non-zero — so coupling
         //     reset to it would make every reset on API < 33 falsely report
-        //     failure. (On API 29-32 this means reset can't clear a user-fixed
-        //     "don't ask again" state, only the grant; that ceiling is inherent
+        //     failure. (On API 23-32 this means reset can't clear a user-fixed
+        //     "don't ask again" state, only the grant — USER_FIXED exists since
+        //     API 23, where the "Don't ask again" checkbox sets it; API 30 only
+        //     made it automatic after the second deny. That ceiling is inherent
         //     to the platform, not something the tool can work around.)
         //   - and it cannot undo the revoke, so a flag-clear failure on a newer
         //     device still leaves the permission revoked, not "pm-rejected".

@@ -31,9 +31,12 @@ export interface SettingsPermissionsResult {
   bundleId: string;
   /**
    * The platform-level identifiers the action was actually applied to: the
-   * `simctl privacy` service on iOS, the `android.permission.*` names on
-   * Android. Lets the caller see exactly what changed (one abstract
-   * permission can fan out to several Android runtime permissions).
+   * `simctl privacy` service(s) on iOS, the `android.permission.*` names on
+   * Android. Lets the caller see exactly what changed — one abstract
+   * permission can fan out to several concrete ones on either platform
+   * (fine/coarse location and per-media reads on Android; `photos` +
+   * best-effort `photos-add` on iOS, where a secondary service the runtime
+   * doesn't model is simply absent from this list rather than an error).
    */
   applied: string[];
   /**
