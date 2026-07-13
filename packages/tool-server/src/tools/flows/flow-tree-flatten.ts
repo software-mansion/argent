@@ -93,8 +93,7 @@ function includesWordsCI(haystack: string, needle: string): boolean {
   const h = haystack.toLowerCase();
   const n = needle.toLowerCase();
   if (!n) return false;
-  const isWordChar = (c: string | undefined): boolean =>
-    c !== undefined && /[\p{L}\p{N}]/u.test(c);
+  const isWordChar = (c: string | undefined): boolean => c !== undefined && /[\p{L}\p{N}]/u.test(c);
   for (let at = h.indexOf(n); at !== -1; at = h.indexOf(n, at + 1)) {
     if (!isWordChar(h[at - 1]) && !isWordChar(h[at + n.length])) return true;
   }

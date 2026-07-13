@@ -126,7 +126,9 @@ describe("run cancellation mid-directive", () => {
       reads++;
       if (reads >= 2) controller.abort();
       return {
-        tree: screen([n({ label: "Checkout", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+        tree: screen([
+          n({ label: "Checkout", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } }),
+        ]),
         source: "native-devtools",
       };
     };
@@ -154,7 +156,9 @@ describe("run cancellation mid-directive", () => {
       reads++;
       if (reads >= 1) controller.abort();
       return {
-        tree: screen([n({ label: "Checkout", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+        tree: screen([
+          n({ label: "Checkout", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } }),
+        ]),
         source: "native-devtools",
       };
     };
