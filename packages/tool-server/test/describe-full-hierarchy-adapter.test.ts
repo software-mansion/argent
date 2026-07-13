@@ -79,6 +79,26 @@ describe("describe full-hierarchy adapter", () => {
     expect(tree.children).toHaveLength(3);
   });
 
+  it("keeps unlabelled controls that are selectable by role", () => {
+    const raw = payload();
+    raw.windows[0]!.children[0]!.children.push({
+      className: "UIButton",
+      windowFrame: { x: 240, y: 440, width: 100, height: 44 },
+      children: [],
+    });
+    raw.windows[0]!.children[0]!.children.push({
+      className: "UISlider",
+      windowFrame: { x: 40, y: 520, width: 320, height: 44 },
+      children: [],
+    });
+
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+    expect(findAll(tree, { role: "AXButton" })).toHaveLength(1);
+    expect(findAll(tree, { role: "AXAdjustable" })).toHaveLength(1);
+    // The anonymous RCTView already in the fixture remains pruned.
+    expect(tree.children).toHaveLength(5);
+  });
+
   it("drops hidden / transparent subtrees", () => {
     const raw = payload();
     raw.windows[0]!.children[0]!.children[0] = {

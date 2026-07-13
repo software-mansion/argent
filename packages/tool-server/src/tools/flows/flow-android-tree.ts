@@ -3,6 +3,8 @@ import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/an
 import {
   clipBoundsToScreen,
   deriveUiAutomatorRole,
+  isNoisyUiAutomatorClass,
+  isUiAutomatorLayoutContainer,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
 } from "../describe/platforms/android/uiautomator-parser";
@@ -93,12 +95,13 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
 /**
  * Project a uiautomator XML node for the shared flatten (see
  * `flow-tree-flatten`). A view is emitted as a leaf when it carries a
- * `resource-id` (React Native `testID`) or a label — or holds input focus,
- * which the type directive's focus wait reads — and has an on-screen frame;
- * system chrome is skipped; an identified node — or a password field — shields
- * its text so hoisting scopes to the nearest identified ancestor. A password
- * field never contributes its secret: its own text is the `[password]`
- * placeholder and its raw `text` is never read into the leaf value.
+ * `resource-id` (React Native `testID`), a label, or a specific semantic role —
+ * or holds input focus, which the type directive's focus wait reads — and has
+ * an on-screen frame; system chrome is skipped; an identified node — or a
+ * password field — shields its text so hoisting scopes to the nearest
+ * identified ancestor. A password field never contributes its secret: its own
+ * text is the `[password]` placeholder and its raw `text` is never read into
+ * the leaf value.
  */
 function projectAndroidNode(
   node: ParsedXmlNode,
@@ -106,9 +109,10 @@ function projectAndroidNode(
   screenH: number
 ): FlatNode<ParsedXmlNode> {
   const attrs = node.attrs;
-  // System chrome (status bar / nav bar / SystemUI) is noise for a flow and can
-  // introduce false matches (a system "Back"); drop the node and its subtree.
-  const skip = isSystemChrome(attrs);
+  // System chrome can introduce false matches (a system "Back"), while SVG
+  // implementation nodes can add dozens of meaningless leaves per icon. Drop
+  // both kinds of noise with their subtrees, matching the shared parser.
+  const skip = isSystemChrome(attrs) || isNoisyUiAutomatorClass(attrs.class ?? "");
 
   const identifier = (attrs["resource-id"] ?? "").trim();
   const isPassword = attrs.password === "true";
@@ -116,6 +120,12 @@ function projectAndroidNode(
   const label = isPassword ? "[password]" : labelOf(attrs);
   const rawText = (attrs.text ?? "").trim();
   const hasValue = !isPassword && Boolean(rawText) && rawText !== label;
+  const className = attrs.class ?? "";
+  const role = deriveUiAutomatorRole(className);
+  // Known layout containers are passthroughs. Every other concrete class is a
+  // role target, including controls whose role is the class-name fallback
+  // (SeekBar, Spinner, ProgressBar, and app-specific widgets).
+  const hasSemanticRole = !isUiAutomatorLayoutContainer(className);
 
   // The node's own visible text mirrors what `nodeText` reads off the leaf
   // (label plus a distinct text value) — never the secret behind a password.
@@ -123,16 +133,16 @@ function projectAndroidNode(
 
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
-  // Keep any view a selector could address — a resource-id (RN testID) or a
-  // label — plus the focused view, which the type directive's focus wait needs
-  // even when it carries neither (an anonymous EditText). Pure layout
-  // scaffolding is dropped — but its children are still walked, so a testID
-  // nested under an unlabelled container survives.
-  if (!skip && (identifier || label || isFocused)) {
+  // Keep any view a selector could address — a resource-id (RN testID), label,
+  // or concrete semantic role — plus the focused view, which the type
+  // directive's focus wait needs even when it carries neither (an anonymous
+  // EditText). Pure layout scaffolding is dropped — but its children are still
+  // walked, so a testID nested under an unlabelled container survives.
+  if (!skip && (identifier || label || hasSemanticRole || isFocused)) {
     const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
-      leaf = { role: deriveUiAutomatorRole(attrs.class ?? ""), frame, children: [] };
+      leaf = { role, frame, children: [] };
       if (label) leaf.label = label;
       if (identifier) leaf.identifier = identifier;
       if (hasValue) leaf.value = rawText;
@@ -165,9 +175,10 @@ function projectAndroidNode(
 /**
  * Flatten a full-hierarchy `uiautomator`-schema XML dump into the
  * flat-leaves-under-one-root shape the other describe adapters emit, keeping
- * only views with a `resource-id`/label and an on-screen frame. Layout
- * scaffolding is dropped while its labelled/identified descendants are
- * preserved — the same trade the iOS full-hierarchy adapter makes.
+ * only views with a `resource-id`, label, or specific semantic role and an
+ * on-screen frame. Layout scaffolding is dropped while its selectable
+ * descendants are preserved — the same trade the iOS full-hierarchy adapter
+ * makes.
  */
 export function adaptFullAndroidHierarchyToDescribeResult(
   xml: string,

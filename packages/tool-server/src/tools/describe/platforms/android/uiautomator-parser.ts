@@ -174,6 +174,11 @@ const NOISY_CLASSES = new Set([
   "com.horcrux.svg.SvgView",
 ]);
 
+/** Whether a raw class is decorative implementation detail to drop with its subtree. */
+export function isNoisyUiAutomatorClass(className: string): boolean {
+  return NOISY_CLASSES.has(className);
+}
+
 const SYSTEM_PACKAGES = new Set([
   // Status bar / nav bar / quick settings — these exist on every dump but
   // rarely matter for app-level navigation. Note we deliberately do NOT drop
@@ -199,6 +204,11 @@ const LAYOUT_CONTAINERS = new Set([
   // no widget mapping; treat it as a scaffold and walk through.
   "android.view.View",
 ]);
+
+/** Whether a raw class is hierarchy scaffolding rather than a role target. */
+export function isUiAutomatorLayoutContainer(className: string): boolean {
+  return !className || LAYOUT_CONTAINERS.has(className);
+}
 
 const SCROLL_CLASSES = new Set([
   "android.widget.ScrollView",

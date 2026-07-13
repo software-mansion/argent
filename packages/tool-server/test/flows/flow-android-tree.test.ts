@@ -70,6 +70,27 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(findAll(tree, { identifier: "offscreen-row" })).toHaveLength(0);
   });
 
+  it("keeps unlabelled mapped and fallback controls selectable by role", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.Button" package="com.acme.app" bounds="[40,200][400,280]" />
+    <node index="1" class="android.widget.SeekBar" package="com.acme.app" bounds="[40,300][1040,380]" />
+    <node index="2" class="android.view.View" package="com.acme.app" bounds="[40,400][400,480]" />
+    <node index="3" class="com.horcrux.svg.PathView" package="com.acme.app" bounds="[40,500][400,580]">
+      <node index="0" class="android.widget.Button" package="com.acme.app" bounds="[40,500][400,580]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+
+    expect(findAll(tree, { role: "Button" })).toHaveLength(1);
+    expect(findAll(tree, { role: "SeekBar" })).toHaveLength(1);
+    expect(findAll(tree, { role: "PathView" })).toHaveLength(0);
+    // Neither layout scaffolding nor the noisy SVG subtree is retained.
+    expect(tree.children).toHaveLength(2);
+  });
+
   it("never leaks a password field's text as its value", () => {
     const tree = adaptFullAndroidHierarchyToDescribeResult(RN_XML, SCREEN_W, SCREEN_H);
     const pw = findAll(tree, { identifier: "password" });

@@ -105,6 +105,7 @@ function roleFromClassName(cn: string | undefined): string {
   if (/(TextField|TextView|SearchField)/i.test(cn)) return "AXTextField";
   if (/(Label|Text)/i.test(cn)) return "AXStaticText";
   if (/Image/i.test(cn)) return "AXImage";
+  if (/(Slider|Stepper|Switch|ProgressView)/i.test(cn)) return "AXAdjustable";
   if (/(ScrollView|TableView|CollectionView)/i.test(cn)) return "AXScrollArea";
   return "AXGroup";
 }
@@ -128,11 +129,12 @@ function normalizeFrame(rect: RawRect, screenW: number, screenH: number): Descri
 
 /**
  * Project a UIView node for the shared flatten (see `flow-tree-flatten`). A view
- * is emitted as a leaf when it carries an `identifier` (React Native `testID`)
- * or a `label` — or is the first responder, which the type directive's focus
- * wait reads — and has an on-screen frame; hidden/transparent subtrees are
- * skipped; an identified node shields its text so hoisting scopes to the nearest
- * identified ancestor. Its own text is just its label.
+ * is emitted as a leaf when it carries an `identifier` (React Native `testID`),
+ * a `label`, or a specific semantic role — or is the first responder, which the
+ * type directive's focus wait reads — and has an on-screen frame;
+ * hidden/transparent subtrees are skipped; an identified node shields its text
+ * so hoisting scopes to the nearest identified ancestor. Its own text is just
+ * its label.
  */
 function projectIosNode(
   node: RawViewNode,
@@ -141,15 +143,16 @@ function projectIosNode(
 ): FlatNode<RawViewNode> {
   // Skip an invisible subtree entirely — its descendants are off-screen too.
   const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
+  const role = roleFromClassName(node.className);
 
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
-  if (!skip && (node.identifier || node.label || node.firstResponder)) {
+  if (!skip && (node.identifier || node.label || role !== "AXGroup" || node.firstResponder)) {
     const rect = node.windowFrame ?? node.frame;
     frame = rect ? normalizeFrame(rect, screenW, screenH) : null;
     if (frame) {
       leaf = {
-        role: roleFromClassName(node.className),
+        role,
         frame,
         children: [],
         label: node.label,
@@ -174,10 +177,11 @@ function projectIosNode(
 
 /**
  * Flatten a `getFullHierarchy` payload into the flat-leaves-under-one-root shape
- * the other describe adapters emit, keeping only views with an `identifier` or
- * `label` and an on-screen frame. Pure layout containers are dropped, which
- * keeps the tree comparable in size to the accessibility tree while preserving
- * the children an `accessible` ancestor would otherwise have hidden.
+ * the other describe adapters emit, keeping only views with an `identifier`,
+ * `label`, or specific semantic role and an on-screen frame. Pure layout
+ * containers are dropped, which keeps the tree comparable in size to the
+ * accessibility tree while preserving the children an `accessible` ancestor
+ * would otherwise have hidden.
  */
 export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
   const windows =
