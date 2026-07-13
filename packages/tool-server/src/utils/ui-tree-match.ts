@@ -204,8 +204,10 @@ export function evaluateCondition(
  *
  * The optional `include` predicate restricts the fingerprint to a subset of
  * nodes (children of an excluded node are still walked) — e.g. the flow
- * runner's end-of-scroll check fingerprints only the scroll container's region
- * so an animating node elsewhere on screen never reads as scroll progress.
+ * runner's end-of-scroll check fingerprints only the scrolled region (the
+ * `within` container, or the scroll containers under the gesture anchor) so an
+ * animating node outside that region can't keep the fingerprint changing and
+ * mask the end of the scroll.
  */
 export function treeFingerprint(
   root: DescribeNode,

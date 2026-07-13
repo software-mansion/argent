@@ -10,6 +10,7 @@ import {
   findAll,
   evaluateCondition,
   firstInReadingOrder,
+  frameContains,
   isVisible,
   assertText,
   treeFingerprint,
@@ -283,6 +284,48 @@ function framesOverlap(a: DescribeFrame, b: DescribeFrame): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+/**
+ * Is this node a scroll container? Android's uiautomator dump flags one
+ * directly (`scrollable`); the iOS full-hierarchy adapter carries no such flag
+ * but maps UIScrollView/UITableView/UICollectionView class names to the
+ * AXScrollArea role, which the role test catches. The Chromium DOM walker sets
+ * `scrollable` on overflow scrollers too, but the flow adapter
+ * (`projectChromiumNode`) only emits leaves that are otherwise addressable
+ * (identifier/label/value/clickable/focused) — an ANONYMOUS overflow scroller
+ * never reaches the flow tree, so on Chromium only addressable scrollers are
+ * detected here and the caller falls back to the whole screen otherwise.
+ */
+function isScrollContainer(node: DescribeNode): boolean {
+  return node.scrollable === true || /scroll/i.test(node.role);
+}
+
+/**
+ * Frames of every visible scroll container whose frame contains the swipe
+ * anchor. The OS routes a scroll gesture to a scroller hit-tested at the
+ * anchor, so the container that will actually move is always among these. ALL
+ * of them are returned rather than just the innermost: the innermost may not
+ * scroll along the requested axis at all (a horizontal carousel under a
+ * vertical swipe hands the gesture to an ancestor), and an end-of-scroll
+ * fingerprint scoped to it alone would misread the outer scroller's real
+ * progress as "stuck". Empty when the tree surfaces no scroll container at the
+ * anchor (e.g. a page-level scroller the source doesn't emit as a node).
+ */
+function anchorScrollFrames(tree: DescribeNode, anchor: { x: number; y: number }): DescribeFrame[] {
+  const frames: DescribeFrame[] = [];
+  const walk = (node: DescribeNode): void => {
+    if (
+      isScrollContainer(node) &&
+      isVisible(node) &&
+      frameContains(node.frame, anchor.x, anchor.y)
+    ) {
+      frames.push(node.frame);
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(tree);
+  return frames;
+}
+
 function collectFocused(node: DescribeNode, acc: DescribeNode[]): DescribeNode[] {
   if (node.focused) acc.push(node);
   for (const child of node.children) collectFocused(child, acc);
@@ -401,13 +444,14 @@ async function scrollIncrement(
  * then — if it isn't fully in view — does one momentum-free increment. Stopping
  * only once the target has cleared the entry edge (not on the first sliver) is
  * what keeps a following `tap`/`snapshot` off a half-clipped element. If a
- * round's settled tree — fingerprinted within the clip region only — is
- * identical to the previous round's, the container has hit its end (or the
- * anchor scrolls nothing): the target is then as visible as it will ever be,
- * so it's accepted wherever it landed — the LAST item sits flush against the
- * far edge and can never clear it, and a genuinely stuck partial can't be
- * improved either. A target already fully on screen returns immediately (no
- * scroll).
+ * round's settled tree — fingerprinted within the scrolled region only (the
+ * `within` container, or the scroll containers under the gesture anchor when
+ * none is named) — is identical to the previous round's, the container has hit
+ * its end (or the anchor scrolls nothing): the target is then as visible as it
+ * will ever be, so it's accepted wherever it landed — the LAST item sits flush
+ * against the far edge and can never clear it, and a genuinely stuck partial
+ * can't be improved either. A target already fully on screen returns
+ * immediately (no scroll).
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -433,14 +477,24 @@ async function scrollToVisible(
     const frame = flowSelectorToFrame(tree, target);
     if (frame && axisFullyInside(frame, direction, region)) return { frame };
 
-    // Fingerprint only the region's content: a continuously-animating node
-    // elsewhere on screen (a spinner, a ticking clock) would keep a whole-tree
-    // fingerprint changing on every read, so a container that stopped moving
-    // would never read as "end of scroll" and the loop would burn all its
-    // iterations. Text stays in the fingerprint for nodes inside the region —
-    // a snapping list recycles identical frames with new content, so structure
-    // alone would misread real progress as a stuck scroll.
-    const fp = treeFingerprint(tree, (node) => framesOverlap(node.frame, region));
+    // Fingerprint only the scrolled content: a continuously-animating node
+    // outside it (a spinner, a ticking clock) would keep a wider fingerprint
+    // changing on every read, so a container that stopped moving would never
+    // read as "end of scroll" and the loop would burn all its iterations. The
+    // scope is the `within` container's region when one is named; otherwise the
+    // gesture anchors at the screen centre and the OS routes it to a scroller
+    // hit-tested there, so the scope is every visible scroll container under
+    // that anchor (their union — not the innermost; see anchorScrollFrames).
+    // Only when the tree surfaces no scroll container at the anchor does the
+    // scope stay the whole screen — a screen-level animator can then still mask
+    // end-of-scroll, and the loop falls back to the iteration cap. Text stays
+    // in the fingerprint for in-scope nodes — a snapping list recycles
+    // identical frames with new content, so structure alone would misread real
+    // progress as a stuck scroll — which also means an animating node INSIDE
+    // the scrolled content remains a known limitation.
+    const scope = within ? [region] : anchorScrollFrames(tree, getDescribeTapPoint(region));
+    if (scope.length === 0) scope.push(FULL_SCREEN);
+    const fp = treeFingerprint(tree, (node) => scope.some((r) => framesOverlap(node.frame, r)));
     if (prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
       if (frame) return { frame };

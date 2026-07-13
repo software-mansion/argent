@@ -349,6 +349,103 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
+  it("finds a flush last item without `within` despite a screen-level ticking clock", async () => {
+    // The no-`within` counterpart of the ticker test above: the fingerprint
+    // must not scope to the whole screen just because no container was named.
+    // The gesture anchors at the screen centre, so the scope is the scroll
+    // container hit-tested there — the clock above it can tick freely without
+    // masking end-of-scroll. The target sits flush against the screen bottom on
+    // every read (the last item at max scroll), so the axis check can never
+    // clear its entry edge and only end-of-scroll detection can accept it; a
+    // whole-screen fingerprint would never repeat and the loop would burn all
+    // MAX_SCROLL_ITERATIONS before failing "not found" on a visible element.
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      return screen([
+        // Ticks every other read: each settle sees a stable pair, but no two
+        // settled trees share the clock's label (a ~1Hz clock, effectively).
+        n({
+          label: `12:0${Math.floor(reads / 2)}`,
+          frame: { x: 0.4, y: 0.02, width: 0.2, height: 0.05 },
+        }),
+        // The scroll container under the anchor (0.5, 0.5) — flat-leaf shape,
+        // like the flow tree adapters emit (rows are siblings, not children).
+        n({ role: "AXScrollArea", frame: { x: 0, y: 0.1, width: 1, height: 0.9 } }),
+        n({ label: "Bottom row", frame: { x: 0.1, y: 0.9, width: 0.8, height: 0.1 } }),
+      ]);
+    };
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("clocked-last-item", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Bottom row" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "clocked-last-item", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    // One increment attempted, then the scoped no-progress check accepted it.
+    expect(swipes).toHaveLength(1);
+  });
+
+  it("keeps scrolling when only an outer scroller progresses past a static inner scrollable at the anchor", async () => {
+    // A horizontal carousel sits exactly under the swipe anchor but doesn't
+    // move for a vertical scroll — the gesture lands in the outer scroller. The
+    // no-`within` fingerprint scopes to ALL scroll containers under the anchor,
+    // so the outer scroller's real progress is seen; scoping to the innermost
+    // alone would fingerprint only the static carousel and misread round two as
+    // end-of-scroll, failing on a reachable target.
+    let scrolled = 0;
+    currentTree = () => {
+      const rows =
+        scrolled >= 2
+          ? [n({ label: "Order #99", frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.1 } })]
+          : [
+              n({
+                label: `Row ${scrolled + 3}`,
+                frame: { x: 0.1, y: 0.7, width: 0.8, height: 0.1 },
+              }),
+            ];
+      return screen([
+        n({ role: "AXScrollArea", frame: { x: 0, y: 0.1, width: 1, height: 0.9 } }),
+        n({
+          role: "AXScrollArea",
+          identifier: "carousel",
+          frame: { x: 0.2, y: 0.45, width: 0.6, height: 0.1 },
+        }),
+        n({ label: "Card A", frame: { x: 0.25, y: 0.47, width: 0.1, height: 0.06 } }),
+        ...rows,
+      ]);
+    };
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled++;
+    });
+
+    await writeFlow("nested-scrollers", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #99" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "nested-scrollers", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    // Two increments of real progress — neither misread as end-of-scroll.
+    expect(swipes).toHaveLength(2);
+  });
+
   it("fails with a no-progress reason when scrolling reveals nothing new", async () => {
     // The tree never changes, so the second settled read equals the first.
     currentTree = () =>
