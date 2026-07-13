@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -143,6 +143,114 @@ describe("prepareFileInputs", () => {
       unknown
     >;
     expect(out.p).toEqual({ [FILE_INPUT_MARKER]: true, path: ghost });
+  });
+});
+
+describe("prepareFileInputs — tar-upload kind", () => {
+  const specs: FileInputSpec[] = [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }];
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("tars and uploads a local directory when routed to a remote server", async () => {
+    const appDir = path.join(tmpDir, "MyApp.app");
+    await fs.mkdir(appDir);
+    await fs.writeFile(path.join(appDir, "Info.plist"), "<plist/>");
+
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ uploadId: "upload-123" }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = (await prepareFileInputs(
+      specs,
+      { appPath: appDir },
+      { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.appPath!.uploadId).toBe("upload-123");
+    expect(out.appPath!.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(out.appPath!.size).toBeTypeOf("number");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://sim.example/upload",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("tars and uploads a local file (e.g. an .apk) when routed to a remote server", async () => {
+    const apk = path.join(tmpDir, "app.apk");
+    await fs.writeFile(apk, "apk-bytes");
+
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ uploadId: "upload-apk" }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = (await prepareFileInputs(
+      specs,
+      { appPath: apk },
+      { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.appPath!.uploadId).toBe("upload-apk");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("propagates an upload failure", async () => {
+    const appDir = path.join(tmpDir, "MyApp.app");
+    await fs.mkdir(appDir);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 500, statusText: "Boom" }))
+    );
+
+    await expect(
+      prepareFileInputs(
+        specs,
+        { appPath: appDir },
+        { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
+      )
+    ).rejects.toThrow(/failed/i);
+  });
+
+  it("skips upload and sends a path-only wrapper when the path is not local", async () => {
+    // A path that exists only on the remote host (e.g. pre-uploaded to the VM).
+    const remotePath = path.join(tmpDir, "not", "on", "this", "machine", "MyApp.app");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = (await prepareFileInputs(
+      specs,
+      { appPath: remotePath },
+      { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.appPath).toEqual({ [FILE_INPUT_MARKER]: true, path: remotePath });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not upload for a co-located session (no upload endpoint)", async () => {
+    const appDir = path.join(tmpDir, "MyApp.app");
+    await fs.mkdir(appDir);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = (await prepareFileInputs(
+      specs,
+      { appPath: appDir },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.appPath).toMatchObject({
+      [FILE_INPUT_MARKER]: true,
+      path: appDir,
+      size: expect.any(Number),
+      mtimeMs: expect.any(Number),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

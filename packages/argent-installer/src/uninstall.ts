@@ -3,8 +3,7 @@ import pc from "picocolors";
 import { parse as parseYaml } from "yaml";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
-import { init as telemetryInit, track, forget as telemetryForget } from "@argent/telemetry";
+import { init as telemetryInit, track, resetLocalTelemetryState } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
@@ -15,15 +14,26 @@ import {
 import {
   AGENTS_DIR,
   detectPackageManager,
+  detectProjectPackageManager,
   formatShellCommand,
+  getGloballyInstalledPackageRoot,
   globalUninstallCommand,
+  localUninstallCommand,
+  isDeclaredLocally,
   isGloballyInstalled,
+  probeLocalInstall,
+  resolveInstallMode,
+  removeInstallRecord,
   resolveProjectRoot,
   RULES_DIR,
   SKILLS_DIR,
+  type InstallMode,
+  type ShellCommand,
 } from "./utils.js";
+import { execShellCommandSync } from "./shell.js";
+import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { PACKAGE_NAME } from "./constants.js";
-import { killToolServer } from "@argent/tools-client";
+import { killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 
 type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
@@ -323,6 +333,9 @@ export async function uninstall(args: string[]): Promise<void> {
   track("installation:cli_uninstall_start", {});
 
   let telemetryFinalized = false;
+  // Resolved inside the try once the project root is known; reported on the
+  // terminal event so the uninstall funnel is split by install mode.
+  let installMode: InstallMode = "global";
   const finalizeUninstallTelemetry = async (
     hasPrunedContent: boolean,
     hasUninstalledPackage: boolean,
@@ -334,6 +347,7 @@ export async function uninstall(args: string[]): Promise<void> {
       track("installation:cli_uninstall_complete", {
         has_pruned_content: hasPrunedContent,
         has_uninstalled_package: hasUninstalledPackage,
+        install_mode: installMode,
         ...(failureSignal ?? {}),
       });
     });
@@ -343,6 +357,7 @@ export async function uninstall(args: string[]): Promise<void> {
   let shouldPrune = nonInteractive;
   let hasPrunedContent = false;
   let hasUninstalledPackage = false;
+  let hasUninstalledGlobalPackage = false;
 
   try {
     p.intro(pc.bgRed(pc.white(" argent uninstall ")));
@@ -363,6 +378,71 @@ export async function uninstall(args: string[]): Promise<void> {
     }
 
     const projectRoot = resolveProjectRoot(process.cwd());
+    installMode = resolveInstallMode(projectRoot);
+
+    // ── Choose which install(s) to remove ───────────────────────────────────────
+    // Decided up front so an invalid flag or cancelled coexistence prompt aborts
+    // before anything is mutated. Package removal is scoped to the target(s);
+    // config/content cleanup follows a narrowed target too (see scopesToClean
+    // below) and is otherwise workspace-wide as before.
+    const uninstallLocalProbe = probeLocalInstall(projectRoot);
+    const globalPresent = isGloballyInstalled();
+    const localPresent = installMode === "local" && uninstallLocalProbe.installed;
+    const targetFlags = parseTargetFlags(args);
+    // Default to the install that is actually PRESENT: a local-mode record whose
+    // devDependency isn't materialized (fresh clone) must not shadow a present
+    // global install. When both coexist non-interactively, only the local devDep
+    // is removed (unlike `update -y`, which acts on both): removal is destructive
+    // and the global install is shared with other projects, so nuking it needs
+    // an explicit --global.
+    const defaultUninstallTarget: InstallMode = localPresent
+      ? "local"
+      : globalPresent
+        ? "global"
+        : installMode;
+    const targetDecision = decideInstallTargets({
+      globalPresent,
+      localPresent,
+      defaultTarget: defaultUninstallTarget,
+      flags: targetFlags,
+      nonInteractive,
+      nonInteractiveBothDefault: ["local"],
+    });
+
+    let removeTargets: InstallMode[] = [];
+    // A --global/--local flag or the coexistence multiselect IS the confirmation,
+    // so it suppresses the per-install confirm below; a lone auto-selected install
+    // still gets the usual prompt (global stays default-off).
+    let removePreconfirmed = targetFlags.global || targetFlags.local;
+    if (targetDecision.kind === "prompt") {
+      const picked = await promptInstallTargets("remove");
+      if (picked === "cancel") {
+        await finalizeUninstallTelemetry(false, false);
+        p.cancel("Uninstall cancelled.");
+        process.exit(0);
+      }
+      removeTargets = picked;
+      removePreconfirmed = true;
+    } else {
+      removeTargets = targetDecision.targets;
+    }
+
+    // Which config scopes the entry/allowlist/content removal may touch: clean
+    // everything EXCEPT the scopes that keep a RETAINED install wired up. A kept
+    // global install keeps its global-scope entries (and, in global mode, its
+    // project-scope entries too — those run the bare `argent` command); a
+    // local-mode project keeps its project-scope entries (committed team files)
+    // unless the local install itself is being removed. With nothing retained
+    // this cleans both scopes — the historical workspace-wide behavior.
+    const scopesToClean = new Set<"local" | "global">(["local", "global"]);
+    if (globalPresent && !removeTargets.includes("global")) {
+      scopesToClean.delete("global");
+      if (installMode === "global") scopesToClean.delete("local");
+    }
+    if (installMode === "local" && !removeTargets.includes("local")) {
+      scopesToClean.delete("local");
+    }
+
     const results: string[] = [];
 
     // ── Remove MCP entries ──────────────────────────────────────────────────────
@@ -370,8 +450,12 @@ export async function uninstall(args: string[]): Promise<void> {
     p.log.step(pc.bold("Removing MCP server entries..."));
 
     for (const adapter of ALL_ADAPTERS) {
-      for (const pathFn of [() => adapter.projectPath(projectRoot), () => adapter.globalPath()]) {
-        const configPath = pathFn();
+      const scopedPaths: Array<["local" | "global", string | null]> = [
+        ["local", adapter.projectPath(projectRoot)],
+        ["global", adapter.globalPath()],
+      ];
+      for (const [scope, configPath] of scopedPaths) {
+        if (!scopesToClean.has(scope)) continue;
         if (!configPath) continue;
         try {
           const removed = adapter.remove(configPath);
@@ -389,6 +473,7 @@ export async function uninstall(args: string[]): Promise<void> {
     for (const adapter of ALL_ADAPTERS) {
       if (!adapter.removeAllowlist) continue;
       for (const s of ["local", "global"] as const) {
+        if (!scopesToClean.has(s)) continue;
         try {
           adapter.removeAllowlist(projectRoot, s);
           results.push(`${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`);
@@ -421,8 +506,21 @@ export async function uninstall(args: string[]): Promise<void> {
 
     if (shouldPrune) {
       const pruneResults: string[] = [];
-      const localTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "local");
-      const globalTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "global");
+      // Content pruning follows the same scoping as the entry removal above: an
+      // explicit single-target uninstall leaves the kept install's scope alone.
+      const emptyTargets = {
+        skillTargets: [],
+        ruleTargets: [],
+        agentTargets: [],
+        codexConfigTargets: [],
+        skillsLockTargets: [],
+      };
+      const localTargets = scopesToClean.has("local")
+        ? getManagedContentTargets(ALL_ADAPTERS, projectRoot, "local")
+        : emptyTargets;
+      const globalTargets = scopesToClean.has("global")
+        ? getManagedContentTargets(ALL_ADAPTERS, projectRoot, "global")
+        : emptyTargets;
 
       const bundledSkillNames = getBundledSkillNames(SKILLS_DIR);
       pruneResults.push(
@@ -492,6 +590,19 @@ export async function uninstall(args: string[]): Promise<void> {
         }
       }
 
+      // Remove the committed local-mode marker (.argent/install.json) — but not
+      // on a --global-only uninstall of a local-mode project, where the record
+      // must keep steering update/uninstall at the retained devDependency.
+      if (scopesToClean.has("local")) {
+        try {
+          if (removeInstallRecord(projectRoot)) {
+            pruneResults.push(`${pc.green("+")} Removed .argent/install.json`);
+          }
+        } catch (err) {
+          pruneResults.push(`${pc.red("x")} Could not remove .argent/install.json: ${err}`);
+        }
+      }
+
       if (pruneResults.length > 0) {
         p.note(pruneResults.join("\n"), "Pruned Argent Content");
       } else {
@@ -502,68 +613,137 @@ export async function uninstall(args: string[]): Promise<void> {
       p.log.info(pc.dim("Kept Argent-owned skills, rules, and agents."));
     }
 
-    // ── Uninstall the global package ────────────────────────────────────────────
+    // ── Uninstall the package(s) ─────────────────────────────────────────────────
+    // Scoped to the target(s) chosen above: a local-mode uninstall never touches
+    // the shared GLOBAL install unless explicitly asked (--global flag or the
+    // coexistence prompt). Tool-server teardown is likewise scoped to each
+    // install's own dir — the OTHER install's server may be serving another
+    // editor session and must be left alone.
 
-    const globallyInstalled = isGloballyInstalled();
-    let shouldUninstallPackage = nonInteractive && globallyInstalled;
+    interface RemovableInstall {
+      kind: "local" | "global";
+      cmd: ShellCommand;
+      cwd?: string;
+      prompt: string;
+      // Interactive default when auto-selected: a local devDep in this project is
+      // likely meant to go; a shared global install defaults off (prior behavior).
+      defaultRemove: boolean;
+      // Install dir the package manager is about to delete — the tool-server
+      // teardown scope. Null when unresolvable (Yarn PnP), which skips the kill.
+      installDir: string | null;
+    }
 
-    // In --yes mode we only remove a global install we can actually see on PATH,
-    // mirroring the interactive flow (which prompts only when detected) and
-    // avoiding a spurious `uninstall -g` error for a package that isn't there.
-    // The probe is PATH-based, so surface the skip in case a global install
-    // lives under a toolchain not on this shell's PATH (nvm/pnpm/etc.).
-    if (nonInteractive && !globallyInstalled) {
+    const buildRemovable = (kind: InstallMode): RemovableInstall | null => {
+      if (kind === "local") {
+        // PnP-aware probe: a Yarn PnP project has no node_modules but the local
+        // devDependency is still there to remove.
+        if (!uninstallLocalProbe.installed) return null;
+        // Resolvable is not enough: a hoisted transitive dep or workspace symlink
+        // with no .argent record and no manifest declaration is not this
+        // project's install (install-record.ts's intent rule); removing it would
+        // rewrite a manifest/lockfile the user never opted into and prune a copy
+        // other packages depend on.
+        if (installMode !== "local" && !isDeclaredLocally(projectRoot)) {
+          p.log.info(
+            pc.dim(
+              `${PACKAGE_NAME} is resolvable from this project but not declared in its ` +
+                `package.json — skipping the local package removal.`
+            )
+          );
+          return null;
+        }
+        return {
+          kind: "local",
+          cmd: localUninstallCommand(detectProjectPackageManager(projectRoot), PACKAGE_NAME),
+          cwd: projectRoot,
+          prompt: `Remove the local ${PACKAGE_NAME} devDependency from this project?`,
+          defaultRemove: true,
+          installDir: uninstallLocalProbe.packageDir,
+        };
+      }
+      if (!globalPresent) return null;
+      return {
+        kind: "global",
+        cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
+        prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
+        defaultRemove: false,
+        installDir: getGloballyInstalledPackageRoot(),
+      };
+    };
+
+    const removables = removeTargets
+      .map((t) => buildRemovable(t))
+      .filter((r): r is RemovableInstall => r !== null);
+
+    if (removables.length === 0) {
+      // The probe is PATH/node_modules based, so an install under a different
+      // toolchain (or the other mode) is intentionally left untouched.
       p.log.info(
         pc.dim(
-          `Skipped global package removal: ${PACKAGE_NAME} was not detected on PATH. ` +
-            `If it is installed under a different toolchain, remove it manually.`
+          `Skipped package removal: no matching ${PACKAGE_NAME} install detected. ` +
+            `If it is installed elsewhere, remove it manually.`
         )
       );
     }
 
-    if (!nonInteractive && globallyInstalled) {
-      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-      const uninstallPkg = await p.confirm({
-        message: `Uninstall the global ${PACKAGE_NAME} package?`,
-        initialValue: false,
-      });
-
-      if (!p.isCancel(uninstallPkg)) {
-        shouldUninstallPackage = uninstallPkg as boolean;
+    for (const removable of removables) {
+      let shouldRemove = nonInteractive || removePreconfirmed;
+      if (!nonInteractive && !removePreconfirmed) {
+        p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+        const choice = await p.confirm({
+          message: removable.prompt,
+          initialValue: removable.defaultRemove,
+        });
+        shouldRemove = p.isCancel(choice) ? false : (choice as boolean);
       }
-    }
-
-    if (shouldUninstallPackage) {
-      const pm = detectPackageManager();
-      const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
-      p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
+      if (!shouldRemove) continue;
 
       try {
-        await killToolServer();
+        if (removable.installDir) await killToolServerForInstallDir(removable.installDir);
       } catch (err) {
         p.log.error(`Could not stop the running tool server: ${err}`);
-        await finalizeUninstallTelemetry(hasPrunedContent, false, UNINSTALL_TOOLSERVER_STOP_FAILED);
+        await finalizeUninstallTelemetry(
+          hasPrunedContent,
+          hasUninstalledPackage,
+          UNINSTALL_TOOLSERVER_STOP_FAILED
+        );
         throw err;
       }
 
+      p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
-        execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
-        p.log.success("Package uninstalled.");
+        execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
+        p.log.success(`Removed ${removable.kind} package.`);
         hasUninstalledPackage = true;
+        if (removable.kind === "global") hasUninstalledGlobalPackage = true;
+
+        // The committed mode marker must go with the install even when content
+        // pruning was declined, or a stale mode:"local" record would keep
+        // `update`/`uninstall` targeting a devDependency that no longer exists.
+        if (removable.kind === "local" && removeInstallRecord(projectRoot)) {
+          p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
+        }
       } catch (err) {
-        p.log.error(`Uninstall failed: ${err}`);
-        await finalizeUninstallTelemetry(hasPrunedContent, false, UNINSTALL_PACKAGE_ACTION_FAILED);
+        p.log.error(`${removable.kind} uninstall failed: ${err}`);
+        await finalizeUninstallTelemetry(
+          hasPrunedContent,
+          hasUninstalledPackage,
+          UNINSTALL_PACKAGE_ACTION_FAILED
+        );
         return;
       }
     }
 
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
-    if (hasUninstalledPackage) {
+    // Reset the machine-wide local telemetry state when the GLOBAL package was
+    // removed, or when a removal left NO global install behind. NOT on a
+    // local-only removal that keeps a global install — clearing state out from
+    // under an installation the user kept would be wrong.
+    if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isGloballyInstalled())) {
       try {
-        await telemetryForget({ disableConsent: false });
+        await resetLocalTelemetryState();
       } catch {
-        /* swallow — uninstall must succeed even if forget fails */
+        /* swallow — uninstall must succeed even if the reset fails */
       }
     }
 

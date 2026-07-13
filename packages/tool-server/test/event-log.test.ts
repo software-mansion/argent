@@ -1,0 +1,130 @@
+import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Registry } from "@argent/registry";
+import { attachRegistryEventLogger, createToolServerEventLog } from "../src/event-log";
+
+function eventLogPath(): string {
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "argent-events-")), "events.jsonl");
+}
+
+function readEvents(filePath: string): Array<Record<string, unknown>> {
+  return fs
+    .readFileSync(filePath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+describe("createToolServerEventLog", () => {
+  it("records structured events as JSONL", async () => {
+    const filePath = eventLogPath();
+    const eventLog = createToolServerEventLog({ filePath });
+
+    eventLog.info({
+      type: "tool_server.started",
+      msg: "Tool server started on http://127.0.0.1:3001.",
+      origin: "http://127.0.0.1:3001",
+      host: "127.0.0.1",
+      port: 3001,
+    });
+    await eventLog.dispose();
+
+    expect(readEvents(filePath)).toEqual([
+      expect.objectContaining({
+        time: expect.any(String),
+        msg: "Tool server started on http://127.0.0.1:3001.",
+        type: "tool_server.started",
+        origin: "http://127.0.0.1:3001",
+        host: "127.0.0.1",
+        port: 3001,
+        name: "argent-tool-server",
+        hostname: expect.any(String),
+        pid: process.pid,
+        level: 30,
+        v: 0,
+      }),
+    ]);
+  });
+
+  it("starts a fresh event log file", async () => {
+    const filePath = eventLogPath();
+    fs.writeFileSync(filePath, "stale\n");
+
+    const eventLog = createToolServerEventLog({ filePath });
+    eventLog.info({ type: "tool_server.started", msg: "Tool server started." });
+    await eventLog.dispose();
+
+    expect(fs.readFileSync(filePath, "utf8")).not.toContain("stale");
+    expect(readEvents(filePath)).toHaveLength(1);
+  });
+});
+
+describe("attachRegistryEventLogger", () => {
+  it("records registry lifecycle events into the tool-server event log", async () => {
+    const registry = new Registry();
+    const filePath = eventLogPath();
+    const eventLog = createToolServerEventLog({ filePath });
+    attachRegistryEventLogger(registry, eventLog);
+
+    registry.events.emit("toolInvoked", "screenshot", "call-1", "Capturing screenshot.");
+    registry.events.emit("toolCompleted", "screenshot", "call-1", 12.34, "Captured screenshot.");
+    await eventLog.dispose();
+
+    expect(readEvents(filePath)).toEqual([
+      expect.objectContaining({
+        time: expect.any(String),
+        msg: "Capturing screenshot.",
+        level: 30,
+        type: "tool.invoked",
+        toolId: "screenshot",
+        toolInvocationId: "call-1",
+      }),
+      expect.objectContaining({
+        time: expect.any(String),
+        msg: "Captured screenshot.",
+        level: 30,
+        type: "tool.completed",
+        toolId: "screenshot",
+        toolInvocationId: "call-1",
+        durationMs: 12.34,
+      }),
+    ]);
+  });
+
+  it("serializes failed tool errors with nested causes", async () => {
+    const registry = new Registry();
+    const filePath = eventLogPath();
+    const eventLog = createToolServerEventLog({ filePath });
+    attachRegistryEventLogger(registry, eventLog);
+
+    const cause = new Error("socket closed");
+    registry.events.emit(
+      "toolFailed",
+      "screenshot",
+      "call-2",
+      new Error("evaluate failed", { cause }),
+      undefined,
+      "Failed to capture screenshot."
+    );
+    await eventLog.dispose();
+
+    const [event] = readEvents(filePath);
+    expect(event).toMatchObject({
+      msg: "Failed to capture screenshot.",
+      level: 50,
+      type: "tool.failed",
+      toolId: "screenshot",
+      toolInvocationId: "call-2",
+      failureSignal: {
+        error_code: "REGISTRY_TOOL_FAILURE_UNCLASSIFIED",
+        failure_stage: "registry_tool_failed_event",
+        failure_area: "registry",
+        error_kind: "unknown",
+      },
+    });
+    expect(JSON.stringify(event)).not.toContain("evaluate failed");
+    expect(JSON.stringify(event)).not.toContain("socket closed");
+  });
+});

@@ -12,7 +12,9 @@
  *   mirroring the artifact materializer's gate on the client side.
  * - remote client: `kind: "file"` content is materialized into a temp file;
  *   `kind: "directory"` fails with remote-mode guidance (a tree can't ride in
- *   a tool call); `kind: "probe"` passes through and only reports presence.
+ *   a tool call); `kind: "tar-upload"` is extracted from a streamed tar when
+ *   `uploadId` is set (always, even if the path also exists on this host);
+ *   `kind: "probe"` passes through and only reports presence.
  *
  * Plain string args (older clients, direct invocations) pass through untouched,
  * which is what keeps both halves of the version-skew matrix on today's
@@ -23,6 +25,7 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import bytesUtil from "bytes";
+import { safeExtractTarGz } from "@argent/archive";
 import {
   isFileInputWire,
   type FileInputSpec,
@@ -42,6 +45,15 @@ const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
 /** Typed so the HTTP layer can map it to a 422 instead of a generic 500. */
 export class FileInputError extends Error {}
 
+/** Resolved tar-upload entry, keyed by uploadId. */
+export interface UploadEntry {
+  tarPath: string;
+  /** SHA-256 hex digest of the tarball bytes, computed while receiving POST /upload. */
+  sha256: string;
+}
+
+export type UploadLookup = (uploadId: string) => UploadEntry | undefined;
+
 export interface ResolveFileInputsResult {
   /** The request body with every wrapper replaced by a plain path string. */
   args: Record<string, unknown>;
@@ -60,18 +72,29 @@ export interface ResolveFileInputsResult {
 /**
  * True when the wrapper's path is usable on THIS host. `directory` only needs
  * to exist as a directory and `probe` to exist at all (size/mtime are
- * meaningless there); a `file` must match the client-recorded stat so a stale
- * or unrelated file at the same path — or a remote host that merely mirrors
- * the directory layout — falls through to the uploaded content instead of
- * being read by accident. A same-stat match on a genuinely different machine
- * means a synced checkout, where reading the server's identical copy is the
- * intended outcome.
+ * meaningless there); `file` and `tar-upload` must match the client-recorded
+ * stat so a stale or unrelated file at the same path falls through to the
+ * upload path instead of being read by accident.
  */
 async function probeHostPath(wire: FileInputWire, kind: FileInputSpec["kind"]): Promise<boolean> {
   try {
     const st = await stat(wire.path);
     if (kind === "directory") return st.isDirectory();
     if (kind === "probe") return true;
+    if (kind === "tar-upload") {
+      if (st.isDirectory()) {
+        if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) {
+          return false;
+        }
+        return true;
+      }
+      if (!st.isFile()) return false;
+      if (wire.size != null && st.size !== wire.size) return false;
+      if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) {
+        return false;
+      }
+      return true;
+    }
     if (!st.isFile()) return false;
     if (wire.size != null && st.size !== wire.size) return false;
     if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) return false;
@@ -115,10 +138,57 @@ async function materializeUpload(wire: FileInputWire): Promise<{ filePath: strin
   return { filePath, dir };
 }
 
+async function extractTarUpload(
+  wire: FileInputWire,
+  uploadId: string,
+  meta: ResolvedFileInput,
+  tempDirs: string[],
+  lookupUpload: UploadLookup | undefined
+): Promise<{ value: string; meta: ResolvedFileInput }> {
+  const entry = lookupUpload?.(uploadId);
+  if (!entry) {
+    throw new FileInputError(
+      `Upload "${wire.uploadId}" was not found on the tool-server — it may have expired. ` +
+        `Re-run the tool to upload the path again.`
+    );
+  }
+  // The HTTP layer already removed this entry from the upload registry, so the
+  // sweeper and dispose() can no longer reclaim entry.tarPath — remove it on
+  // every exit from here, including the hash-check failures below.
+  try {
+    if (!wire.contentHash) {
+      throw new FileInputError(
+        `Upload for "${wire.path}" is missing a content hash — update argent to a version ` +
+          `that supports tar uploads for remote sessions.`
+      );
+    }
+    if (entry.sha256 !== wire.contentHash) {
+      throw new FileInputError(
+        `Upload content hash mismatch for "${wire.path}" — the tarball may have been ` +
+          `corrupted in transit. Re-run the tool to upload again.`
+      );
+    }
+    const extractDir = await mkdtemp(
+      join(tmpdir(), `argent-tar-upload-${entry.sha256.slice(0, 16)}-`)
+    );
+    tempDirs.push(extractDir);
+    const uploaded = await safeExtractTarGz(entry.tarPath, extractDir, basename(wire.path));
+    return { value: uploaded, meta: { ...meta, viaUpload: true } };
+  } catch (err) {
+    if (err instanceof FileInputError) throw err;
+    throw new FileInputError(
+      `Could not extract the uploaded archive for "${wire.path}": ${err instanceof Error ? err.message : String(err)}`
+    );
+  } finally {
+    await rm(entry.tarPath, { force: true }).catch(() => {});
+  }
+}
+
 async function resolveOne(
   spec: FileInputSpec,
   wire: FileInputWire,
-  tempDirs: string[]
+  tempDirs: string[],
+  lookupUpload: UploadLookup | undefined
 ): Promise<{ value: string; meta: ResolvedFileInput }> {
   const meta: ResolvedFileInput = {
     clientPath: wire.path,
@@ -126,7 +196,24 @@ async function resolveOne(
     viaUpload: false,
   };
 
-  if (spec.kind === "probe" || meta.presentOnHost) {
+  if (spec.kind === "probe") {
+    return { value: wire.path, meta };
+  }
+
+  if (spec.kind === "tar-upload") {
+    if (wire.uploadId) {
+      return extractTarUpload(wire, wire.uploadId, meta, tempDirs, lookupUpload);
+    }
+    if (meta.presentOnHost) {
+      return { value: wire.path, meta };
+    }
+    throw new FileInputError(
+      `Path "${wire.path}" does not exist on the tool-server host and no upload was provided. ` +
+        `Update argent to a version that supports uploads for remote sessions.`
+    );
+  }
+
+  if (meta.presentOnHost) {
     return { value: wire.path, meta };
   }
 
@@ -170,7 +257,8 @@ async function resolveOne(
  */
 export async function resolveFileInputs(
   def: Pick<ToolDefinition<unknown, unknown>, "fileInputs">,
-  body: unknown
+  body: unknown,
+  lookupUpload?: UploadLookup
 ): Promise<ResolveFileInputsResult> {
   const tempDirs: string[] = [];
   const cleanup = async () => {
@@ -191,7 +279,7 @@ export async function resolveFileInputs(
     for (const spec of specs) {
       const value = args[spec.target];
       if (!isFileInputWire(value)) continue;
-      const { value: path, meta } = await resolveOne(spec, value, tempDirs);
+      const { value: path, meta } = await resolveOne(spec, value, tempDirs, lookupUpload);
       args[spec.target] = path;
       resolved = { ...(resolved ?? {}), [spec.target]: meta };
     }

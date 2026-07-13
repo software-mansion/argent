@@ -16,13 +16,16 @@
  * visible to the browser polling `/preview/variants`, and a selection POSTed by
  * the browser immediately unblocks the parked tool call.
  *
- * Rounds: a "round" is one propose→await→submit cycle. After a completed
- * selection is consumed by `await_user_selection`, the next `propose_variant`
- * transparently opens a fresh round so the workflow is repeatable within a
- * single long-lived tool-server process.
+ * Rounds: a "round" is one propose→await→submit cycle. Once a round is
+ * completed (the user submitted), the next `propose_variant` transparently
+ * opens a fresh round — whether or not that completed outcome was already
+ * consumed by `await_user_selection` — so the workflow is repeatable within a
+ * single long-lived tool-server process. A selection submitted with no await
+ * parked is preserved across that roll and delivered on the next await.
  */
 
 import { TypedEventEmitter } from "@argent/registry";
+import { classifyDeviceForTelemetry, type TelemetryPlatform } from "./telemetry-platform";
 
 /** How the preview UI locates the live on-screen element for a proposal. */
 export interface VariantMatch {
@@ -108,6 +111,15 @@ export type AwaitOutcome =
       annotations: ElementAnnotation[];
       globalComment?: string;
       completedAt: number;
+      /**
+       * True when this completed outcome was delivered from the undelivered-
+       * outcome queue AND more work is already waiting — either another queued
+       * outcome, or a fresh round of live proposals that was rolled while this
+       * one waited. The agent must call `await_user_selection` again (this
+       * outcome alone does not mean the workflow is finished). Absent/false on a
+       * normal single-round completion, so the common case is unaffected.
+       */
+      morePending?: boolean;
     }
   | {
       status: "pending";
@@ -152,6 +164,64 @@ export interface StoreSnapshot {
   lensAgentChoice: string | null;
 }
 
+/**
+ * Privacy-safe aggregate shape of one finished round, carried by the
+ * `roundCompleted` store event so the tool-server's composition layer can emit
+ * it as `lens:round_completed` telemetry WITHOUT the store depending on the
+ * telemetry package. Only counts/booleans/durations — never element names,
+ * comment text, variant code, file paths, or device identifiers. Structurally
+ * assignable to `LensRoundCompletedProps` in @argent/telemetry. The relay in
+ * index.ts passes this as a VARIABLE, so `track()`'s excess-property check does
+ * NOT fire on it — a field ADDED here without extending the telemetry props (and
+ * `sanitize()`) would compile and be silently dropped downstream. index.ts adds
+ * an explicit bidirectional key-set drift guard (`assertSameKeys`) that turns
+ * that added/removed/renamed field into a compile error in either direction.
+ */
+export interface RoundCompletedStats {
+  round: number;
+  element_count: number;
+  variant_count: number;
+  annotation_count: number;
+  element_comment_count: number;
+  skipped_comment_count: number;
+  has_global_comment: boolean;
+  /** The human opened the element-comment inspector at least once this round. */
+  inspector_used: boolean;
+  /** The human clicked "Show them" to reveal off-screen choices this round. */
+  offscreen_revealed: boolean;
+  is_cli_session: boolean;
+  had_parked_await: boolean;
+  round_duration_ms: number;
+  platform?: TelemetryPlatform;
+}
+
+/**
+ * Privacy-safe aggregate of a round that was DISCARDED before the human
+ * submitted, carried by the `roundAbandoned` store event (the drop-off half of
+ * the funnel). Same privacy contract and telemetry-decoupling rationale as
+ * `RoundCompletedStats`; structurally assignable to `LensRoundAbandonedProps`.
+ */
+export interface RoundAbandonedStats {
+  round: number;
+  element_count: number;
+  variant_count: number;
+  had_parked_await: boolean;
+  is_cli_session: boolean;
+  platform?: TelemetryPlatform;
+}
+
+/**
+ * Privacy-safe aggregate carried by the `cliSessionStarted` store event — fired
+ * once per `argent lens` invocation (the CLI session-begin transition). The
+ * tool-server relays it as `lens:cli_session_started` so invocation totals and
+ * unique users are countable (the generic tool:* path counts per-tool-call and
+ * `lens:preview_opened` counts per-round, so neither can). Same privacy contract
+ * as the other stats; structurally assignable to `LensCliSessionStartedProps`.
+ */
+export interface CliSessionStartedStats {
+  agent_choice_count: number;
+}
+
 type StoreEvents = {
   /** Emitted whenever proposals change (UI may live-refresh). */
   changed: () => void;
@@ -165,11 +235,38 @@ type StoreEvents = {
   /** Emitted after a successful `submitSelection` — the round is done. */
   selectionSubmitted: () => void;
   /**
+   * Emitted once when a round is FIRST finalized (not on a resubmit of the same
+   * round), carrying the privacy-safe aggregate `RoundCompletedStats`. The
+   * tool-server relays it as `lens:round_completed` telemetry; kept separate
+   * from `selectionSubmitted` (which fires on every submit, incl. resubmits) so
+   * the human-decision metric is counted exactly once per round.
+   */
+  roundCompleted: (stats: RoundCompletedStats) => void;
+  /**
+   * Emitted once when a round that had staged proposals is discarded before the
+   * human submitted (`reset()` on a non-completed, non-empty round). The
+   * tool-server relays it as `lens:round_abandoned` telemetry — the drop-off
+   * signal `roundCompleted` can't provide. Never fires for the happy-path roll
+   * (that reset runs only when the round was completed).
+   */
+  roundAbandoned: (stats: RoundAbandonedStats) => void;
+  /**
    * Emitted when a CLI-driven Lens session is begun or ended (`argent lens`).
    * The tool-server's window manager listens: begin ⇒ open the window now, end
    * ⇒ close it. Carries the new active state so listeners need not re-snapshot.
    */
   cliSessionChanged: (active: boolean) => void;
+  /**
+   * Emitted once per `argent lens` invocation — on EVERY begin (`active=true`),
+   * including a re-begin while the store is still marked active because a prior
+   * session's clean end never landed (its `argent lens` was killed); never on an
+   * end. Counting only clean begin *transitions* would under-count that killed-
+   * predecessor case, the exact metric this event exists for. The tool-server
+   * relays it as `lens:cli_session_started` telemetry; kept separate from
+   * `cliSessionChanged` (which drives the window and fires only on a real
+   * begin/end transition) so the per-invocation metric is counted once per run.
+   */
+  cliSessionStarted: (stats: CliSessionStartedStats) => void;
 };
 
 /** A parked `await_user_selection` call, bound to the round it is waiting on. */
@@ -186,6 +283,30 @@ interface Waiter {
  * everything ingested here is capped to bound memory regardless of caller —
  * the same cap annotations already used. */
 const MAX_COMMENT_LENGTH = 2_000;
+
+/**
+ * Max number of undelivered completed outcomes retained in `pendingOutcomes`.
+ * The submit route is unauthenticated, so a caller that proposes-and-submits
+ * repeatedly without ever calling `await_user_selection` could otherwise grow
+ * this queue without limit (each entry retains the full selections/annotations
+ * arrays). Bounding it keeps the same "bound memory regardless of caller"
+ * guarantee as `MAX_COMMENT_LENGTH`; the cap is far above any real flow, which
+ * drains the queue via an await long before a couple of entries accumulate.
+ */
+const MAX_PENDING_OUTCOMES = 32;
+
+/**
+ * Max stored length for an annotation's matcher value, and max number of
+ * annotations retained per submit. `MAX_PENDING_OUTCOMES` bounds the COUNT of
+ * queued outcomes but not the SIZE of each, and an annotation's `match.value`
+ * (unlike its comment) was otherwise ingested uncapped and in unbounded number
+ * from the unauthenticated submit route — so a single queued outcome could grow
+ * without limit, defeating the "bound memory regardless of caller" guarantee.
+ * These caps keep each retained outcome bounded. Generous vs any real flow,
+ * where a human pins a handful of short-matcher comments.
+ */
+const MAX_MATCH_VALUE_LENGTH = 200;
+const MAX_ANNOTATIONS = 200;
 
 function slug(s: string): string {
   return s
@@ -246,9 +367,47 @@ export class VariantProposalStore {
   private waitersList: Waiter[] = [];
   /** Frozen result of the current round once the user submits. */
   private lastOutcome: Extract<AwaitOutcome, { status: "completed" }> | null = null;
+  /**
+   * Completed outcomes that finished with no `await_user_selection` parked to
+   * receive them directly (submitSelection's "no waiter" branch), queued in
+   * completion order. `autoRollIfCompleted` rolls into a fresh round on the
+   * very next `propose_variant` regardless of whether the outcome was ever
+   * retrieved — so this queue, unlike `lastOutcome`/`completed`/`consumed`
+   * (which describe only the CURRENT round), survives `reset()` and is
+   * drained first by `awaitSelection`, oldest first. Without it, a human's
+   * already-submitted selection is destroyed the moment the next
+   * `propose_variant` call rolls the round out from under it.
+   */
+  private pendingOutcomes: Array<Extract<AwaitOutcome, { status: "completed" }>> = [];
 
   /** Begin a fresh round, discarding the previous one's proposals/selections. */
   reset(): void {
+    // Drop-off telemetry: a round with staged proposals that reaches reset()
+    // WITHOUT having been submitted is an abandonment. Emit BEFORE clearing
+    // state, and only for this case — a completed round reaching reset() is the
+    // happy-path roll (autoRollIfCompleted runs only when completed), not a loss.
+    // proposals.length is 0 after a reset, so re-entering reset() for the same
+    // round can't double count. All aggregate — no names/text/raw ids.
+    //
+    // Which real callers land here with a staged, non-completed round:
+    //   - a CLI session boundary: `argent lens` exiting mid-review, or a leftover
+    //     round swept when a new session begins (setCliSession → reset());
+    //   - a superseded round: a second caller proposes/resets while an earlier
+    //     round's await is still parked;
+    //   - server shutdown with a round still staged (flushAbandonedRound()).
+    // NOT covered: a bare-MCP walk-away where the human just closes the preview
+    // window and the process keeps running — nothing routes that through reset(),
+    // so it is not counted here (the honest limit of this signal).
+    if (!this.completed && this.proposals.length > 0) {
+      this.events.emit("roundAbandoned", {
+        round: this.round,
+        element_count: this.proposals.length,
+        variant_count: this.proposals.reduce((n, p) => n + p.variants.length, 0),
+        had_parked_await: this.waitersList.some((w) => !w.settled),
+        is_cli_session: this.cliSession,
+        platform: this.device ? classifyDeviceForTelemetry(this.device) : undefined,
+      });
+    }
     // Any await still parked on the round being discarded must not hang
     // forever — resolve it so the agent gets a definitive answer and can
     // re-propose. (Reachable when a second caller proposes/resets while an
@@ -275,6 +434,23 @@ export class VariantProposalStore {
     this.variantSeq = 0;
     this.lastOutcome = null;
     this.events.emit("changed");
+  }
+
+  /**
+   * Emit the drop-off signal for a round still staged (proposals present, not
+   * completed) at process shutdown — "the server died mid-review". The
+   * tool-server calls this on its shutdown path, before the final telemetry
+   * drain, so a round the human never got to submit is counted as an abandonment
+   * instead of vanishing into the unattributable opens-minus-completions
+   * residue. Routes through reset() — the single abandonment choke point, guarded
+   * so a completed or empty round is a no-op — which also settles any await still
+   * parked on the dying round rather than letting it hang. Returns whether an
+   * abandonment was emitted (for the caller's logging / tests).
+   */
+  flushAbandonedRound(): boolean {
+    if (this.completed || this.proposals.length === 0) return false;
+    this.reset();
+    return true;
   }
 
   /** Look up a stored variant (used to resolve a preview-image path safely). */
@@ -316,10 +492,19 @@ export class VariantProposalStore {
     }
   }
 
-  private autoRollIfConsumed(): void {
-    // A completed round that has already been handed to the agent is closed —
-    // the next proposal starts a clean round automatically.
-    if (this.completed && this.consumed) this.reset();
+  private autoRollIfCompleted(): void {
+    // A completed round is closed — the next proposal starts a clean round
+    // automatically. This rolls whether or not the outcome was already
+    // consumed: a round can be `completed && !consumed` when the user submits
+    // with no await parked. Staging a new element onto such a round would
+    // append it after the frozen `lastOutcome`, so the next await would return
+    // the pre-submit outcome and silently drop the new element. `reset()`
+    // itself doesn't lose the unconsumed outcome — `submitSelection` already
+    // queued it in `pendingOutcomes`, which `reset()` deliberately leaves
+    // untouched — so rolling here is safe: it guarantees a post-completed
+    // proposal is presented AND the earlier outcome is still delivered on the
+    // next await.
+    if (this.completed) this.reset();
   }
 
   proposeVariant(input: {
@@ -342,7 +527,7 @@ export class VariantProposalStore {
     variantCount: number;
     totalElements: number;
   } {
-    this.autoRollIfConsumed();
+    this.autoRollIfCompleted();
 
     // Remember which device these variants are for, so the window streams it
     // directly. Last non-empty value wins; usually set once on the first call.
@@ -414,22 +599,66 @@ export class VariantProposalStore {
    */
   setCliSession(active: boolean, agents: Array<{ id: string; name: string }> = []): void {
     const transitioned = this.cliSession !== active;
-    // A CLI session must start from a clean round when there is leftover round
-    // state to clear. Without this, a completed round left over from a prior
-    // (possibly non-CLI) flow — e.g. an await_user_selection that timed out
-    // (waiter removed, `consumed` still false) and was then submitted, leaving
-    // completed=true/consumed=false — or an unsubmitted round with staged
-    // proposals would be APPENDED to by the session's first propose_variant
-    // (autoRollIfConsumed only resets on completed && consumed) instead of
-    // opening a fresh one. Reset only when such state exists so a clean start
-    // isn't needlessly bumped past round 1. (reset() does not clear cliSession /
-    // device / owned-devices, so it's safe to call here.)
-    if (transitioned && active && (this.completed || this.proposals.length > 0)) this.reset();
+    // A CLI session boundary — every begin, and any end transition — must start
+    // the next flow from a clean round when there is leftover round state.
+    //
+    // On BEGIN: `autoRollIfCompleted` (run by propose_variant) only rolls a
+    // *completed* round, so an unsubmitted round with staged proposals would
+    // otherwise be APPENDED to by the session's first propose_variant instead of
+    // opening a fresh one. A completed round left over from a prior (possibly
+    // non-CLI) flow — e.g. an await_user_selection that timed out (waiter
+    // removed, `consumed` still false) and was then submitted, leaving
+    // completed=true/consumed=false — is rolled here too so the session starts
+    // clean.
+    //
+    // The BEGIN sweep runs on EVERY begin (`active`), not only a clean
+    // transition: a begin that arrives while the store is STILL marked active —
+    // a prior session whose clean end never landed because its `argent lens` was
+    // SIGKILLed (no `active:false` POST, and the server has no dead-session
+    // detection) — is not a transition but IS a fresh invocation. Without
+    // sweeping it, the dead session's staged, unsubmitted round would neither be
+    // counted as abandoned nor cleared: it would bleed into this invocation's
+    // first round (inflating its round_completed counts) and, until the next real
+    // transition, mislabel MCP-driven rounds as `is_cli_session:true`. Sweeping
+    // here discards it (counted as an abandonment, is_cli_session:true — the dead
+    // round WAS a CLI round, since `this.cliSession` is still the old value).
+    //
+    // On END: a proposal staged during the session but never submitted (the
+    // human closed the window / the `argent lens` process exited mid-review)
+    // would otherwise persist as a live, uncompleted round. A subsequent NON-CLI
+    // propose_variant (no autoRoll — the round isn't completed) would append to
+    // it, so the dead session's element would bleed into that unrelated round's
+    // delivered outcome. Rolling on end discards the abandoned session round.
+    //
+    // Reset only when such state exists so a clean start isn't needlessly bumped
+    // past round 1. (reset() does not clear cliSession / device / owned-devices,
+    // so it's safe to call here.)
+    if (active || transitioned) {
+      if (this.completed || this.proposals.length > 0) this.reset();
+      // A session boundary is a genuine fresh start: also drop any queued-but-
+      // undelivered outcome from a prior (possibly non-CLI) flow so it can't
+      // leak across the boundary into the next flow's first await. reset()
+      // deliberately PRESERVES pendingOutcomes for the propose→roll case, but
+      // that preservation should not cross a session boundary. (No outcome is
+      // ever queued DURING a CLI session — submits take the cliSession branch —
+      // so on end this clear is a defensive no-op in every reachable state.)
+      this.pendingOutcomes = [];
+    }
     this.cliSession = active;
     this.lensAgents = active ? agents.map((a) => ({ ...a })) : [];
     this.lensAgentChoice = null;
     this.lensAgentRemember = false;
     if (transitioned) this.events.emit("cliSessionChanged", active);
+    // Count every `argent lens` invocation. Each invocation POSTs
+    // /preview/cli-session {active:true} exactly once, so one emit per begin ==
+    // one per invocation. Guarding on `transitioned` would MISS a begin that
+    // arrives while the store is still marked active because a prior session's
+    // clean end never landed (e.g. that `argent lens` was killed) — an
+    // under-count of the exact metric this event exists for. An end is
+    // active=false, so it never emits. Privacy-safe: just the picker size.
+    if (active) {
+      this.events.emit("cliSessionStarted", { agent_choice_count: this.lensAgents.length });
+    }
     this.events.emit("changed");
   }
 
@@ -502,16 +731,55 @@ export class VariantProposalStore {
     selections: SubmittedSelection[];
     globalComment?: string;
     annotations?: ElementAnnotation[];
+    /**
+     * Round the UI built this submit against. The submit route is unauthenticated
+     * and carries no session, so a submit posted from a tab whose round has since
+     * rolled (the human submitted round N, the agent auto-rolled to N+1, and a
+     * second stale click landed) must NOT be honored against the current round —
+     * with all its selections filtered out as non-current, it would otherwise
+     * pass the proposals-staged check and mint a phantom `lens:round_completed`
+     * for a round the human never reviewed. Best-effort: an older UI omits it and
+     * the guard is skipped. See the stale-round check below.
+     */
+    round?: number;
+    /**
+     * UI usage signals for this round (privacy-safe booleans only), forwarded to
+     * `lens:round_completed` telemetry. Both are best-effort — an older UI omits
+     * them and they read as `false`, never affecting the delivered outcome.
+     */
+    inspectorUsed?: boolean;
+    offscreenRevealed?: boolean;
   }): {
     ok: true;
     round: number;
     resolved: number;
+    /** True when the submit was rejected as stale (its round had already rolled). */
+    stale?: boolean;
   } {
+    // Reject a stale cross-round submit up front, before any state mutation or
+    // telemetry: if the UI told us which round it built this against and that
+    // round has already rolled, the human's click was for a round that no longer
+    // exists. Honoring it here would (a) freeze/complete the CURRENT round with a
+    // submit its human never made and (b) emit a phantom `lens:round_completed`
+    // (wearing the previous round's carried-over usage flags), the exact funnel
+    // corruption this guard exists to prevent. The real review of the current
+    // round is still pending; the tab's next /variants poll will resync it.
+    if (typeof input.round === "number" && input.round !== this.round) {
+      return { ok: true, round: this.round, resolved: 0, stale: true };
+    }
     const cleanAnnotations = (input.annotations ?? [])
       .filter((a) => a && typeof a.comment === "string" && a.comment.trim())
+      // Bound the count (the submit route is unauthenticated) before mapping, so
+      // a runaway caller can't blow up a single retained outcome.
+      .slice(0, MAX_ANNOTATIONS)
       .map((a) => ({
         target: String(a.target ?? "").slice(0, 200) || "(element)",
-        match: a.match,
+        // Cap the matcher value too — it is caller-supplied and, unlike the
+        // comment, was previously ingested uncapped.
+        match: {
+          by: a.match?.by ?? "text",
+          value: String(a.match?.value ?? "").slice(0, MAX_MATCH_VALUE_LENGTH),
+        },
         comment: a.comment.trim().slice(0, MAX_COMMENT_LENGTH),
       }));
     // A round with neither proposals nor any inspector comment has nothing to
@@ -519,17 +787,44 @@ export class VariantProposalStore {
     if (this.proposals.length === 0 && cleanAnnotations.length === 0) {
       throw new Error("Nothing to submit — no proposals and no comments.");
     }
-    // Cap each selection's comment on ingestion (the route is unauthenticated),
-    // mirroring the annotation-comment cap above.
+    // Bound `this.submitted` regardless of caller (the route is unauthenticated),
+    // mirroring the annotation caps above: keep only selections for real
+    // proposals, at most ONE per element, and cap the caller-supplied variantId.
+    // `buildOutcome` reads the FIRST match per proposal, so a later duplicate is
+    // dead weight — deduping to the first is behavior-preserving while collapsing
+    // a flood of duplicate selections (all passing `.some` for one real element)
+    // from unbounded down to `proposals.length`. The comment is capped as before.
+    const seenElementIds = new Set<string>();
     this.submitted = input.selections
       .filter((s) => this.proposals.some((p) => p.id === s.elementId))
-      .map((s) =>
-        s.comment === undefined ? s : { ...s, comment: s.comment.slice(0, MAX_COMMENT_LENGTH) }
-      );
+      .filter((s) => {
+        if (seenElementIds.has(s.elementId)) return false;
+        seenElementIds.add(s.elementId);
+        return true;
+      })
+      .map((s) => {
+        const capped =
+          s.comment === undefined ? s : { ...s, comment: s.comment.slice(0, MAX_COMMENT_LENGTH) };
+        // variantId is caller-supplied and, unlike a real id (a short slug), was
+        // otherwise retained uncapped. A value longer than any real variant id
+        // can never resolve anyway, so clamping it is behavior-preserving.
+        return capped.variantId == null
+          ? capped
+          : { ...capped, variantId: capped.variantId.slice(0, MAX_MATCH_VALUE_LENGTH) };
+      });
     this.submittedAnnotations = cleanAnnotations;
     this.globalComment = (input.globalComment ?? "").trim().slice(0, MAX_COMMENT_LENGTH);
+    // The submit route is unauthenticated and the preview UI re-enables its
+    // Complete button, so the SAME round can be submitted more than once. A
+    // repeat submit must update the frozen outcome in place, never manufacture
+    // a second deliverable. `wasResubmit` distinguishes a first completion from
+    // a repeat; a repeat that was ALREADY delivered (`consumed`) must stay
+    // consumed — reopening it would both strand a later await (parks forever
+    // for a submit that already happened) and let the queue below resurrect the
+    // outcome as a phantom second completion.
+    const wasResubmit = this.completed;
     this.completed = true;
-    this.consumed = false;
+    if (!wasResubmit) this.consumed = false;
     // Freeze the outcome once so every parked waiter (and any later fast-path
     // await) sees the exact same selections, regardless of subsequent rounds.
     this.lastOutcome = this.buildOutcome();
@@ -540,20 +835,74 @@ export class VariantProposalStore {
     const round = this.round;
     const toSettle = this.waitersList.filter((w) => !w.settled && w.round === round);
     this.waitersList = this.waitersList.filter((w) => w.round !== round || w.settled);
-    if (toSettle.length > 0) this.consumed = true;
-    // In a CLI Lens session no await_user_selection consumes the round — the
-    // `argent lens` watcher reads the frozen outcome over HTTP and types it into
-    // the agent terminal. Mark the round consumed here too, so the agent's next
-    // propose_variant opens a FRESH round (the preview UI keys "new round" off
-    // the round number, and getLastOutcome stops returning a stale outcome)
-    // rather than appending to this already-submitted one.
-    if (this.cliSession) this.consumed = true;
-    for (const w of toSettle) {
-      w.settled = true;
-      w.settle(this.lastOutcome);
+    if (toSettle.length > 0) {
+      this.consumed = true;
+      for (const w of toSettle) {
+        w.settled = true;
+        w.settle(this.lastOutcome);
+      }
+    } else if (this.cliSession) {
+      // In a CLI Lens session no await_user_selection consumes the round — the
+      // `argent lens` watcher reads the frozen outcome over HTTP and types it
+      // into the agent terminal. Mark the round consumed here too, so the
+      // agent's next propose_variant opens a FRESH round (the preview UI keys
+      // "new round" off the round number, and getLastOutcome stops returning a
+      // stale outcome) rather than appending to this already-submitted one.
+      // No outcome is queued: the CLI watcher already read it over HTTP, and
+      // nothing drains `pendingOutcomes` in a CLI session (no await is parked).
+      this.consumed = true;
+    } else if (!this.consumed) {
+      // No waiter was parked to receive this outcome directly. Queue it so a
+      // later await_user_selection still gets it, even across an intervening
+      // propose_variant that rolls the round (see `pendingOutcomes`' doc).
+      // Dedup by round: a repeat submit of this same round REPLACES its queued
+      // copy rather than enqueuing a phantom duplicate a second await would
+      // deliver. (`consumed` is true here only for an already-delivered round,
+      // whose outcome must not be re-queued.)
+      this.pendingOutcomes = this.pendingOutcomes.filter((o) => o.round !== round);
+      this.pendingOutcomes.push(this.lastOutcome);
+      // Bound the queue so a caller repeatedly submitting without ever awaiting
+      // cannot grow it without limit (the route is unauthenticated). This path
+      // adds at most one entry per submit (the dedup filter above removes at
+      // most one first), so a single oldest-drop restores the cap. Drop the
+      // oldest — the agent is furthest behind on it — mirroring the
+      // MAX_COMMENT_LENGTH "bound memory regardless of caller" guarantee.
+      if (this.pendingOutcomes.length > MAX_PENDING_OUTCOMES) {
+        this.pendingOutcomes.shift();
+      }
     }
     this.events.emit("changed");
     this.events.emit("selectionSubmitted");
+    // Count the human decision exactly once per round: a resubmit updates the
+    // same frozen outcome in place (the submit route is unauthenticated and the
+    // UI re-enables its button), so `!wasResubmit` guards against double-counting.
+    // Everything here is a privacy-safe aggregate derived from the just-frozen
+    // outcome and the still-intact proposals (reset happens later, on the next
+    // propose/roll), so no element names, comment text, or paths ever leave.
+    const outcome = this.lastOutcome;
+    if (!wasResubmit && outcome) {
+      const firstCreatedAt =
+        this.proposals.length > 0
+          ? Math.min(...this.proposals.map((p) => p.createdAt))
+          : outcome.completedAt;
+      this.events.emit("roundCompleted", {
+        round: outcome.round,
+        element_count: this.proposals.length,
+        variant_count: this.proposals.reduce((n, p) => n + p.variants.length, 0),
+        annotation_count: outcome.annotations.length,
+        element_comment_count: outcome.selections.filter((s) => s.comment).length,
+        skipped_comment_count: outcome.selections.filter(
+          (s) => s.chosenVariant == null && s.comment
+        ).length,
+        has_global_comment: Boolean(outcome.globalComment),
+        inspector_used: Boolean(input.inspectorUsed),
+        offscreen_revealed: Boolean(input.offscreenRevealed),
+        is_cli_session: this.cliSession,
+        had_parked_await: toSettle.length > 0,
+        round_duration_ms: Math.max(0, outcome.completedAt - firstCreatedAt),
+        platform: this.device ? classifyDeviceForTelemetry(this.device) : undefined,
+      });
+    }
     return { ok: true, round, resolved: this.submitted.length };
   }
 
@@ -617,6 +966,40 @@ export class VariantProposalStore {
    * round is superseded), so concurrent / re-entrant awaits never strand.
    */
   awaitSelection(opts: { signal?: AbortSignal; timeoutMs: number }): Promise<AwaitOutcome> {
+    // Honor an already-aborted signal before touching any state. The caller has
+    // disconnected, so there is no one to receive a resolved value — and, most
+    // importantly, the `pendingOutcomes` fast-path below MUTATES state (it
+    // `shift()`s a queued outcome). Draining it for a dead caller would destroy
+    // a human's already-submitted selection, the exact loss `pendingOutcomes`
+    // exists to prevent. Reject with the same AbortError the parked path uses so
+    // callers handle both the pre-aborted and mid-park cases identically.
+    if (opts.signal?.aborted) {
+      const err = new Error("await_user_selection aborted (client disconnected)");
+      err.name = "AbortError";
+      return Promise.reject(err);
+    }
+
+    // Deliver the OLDEST undelivered outcome first, even if propose_variant
+    // has since rolled the store into a fresh round for new elements — this
+    // outcome is real, already-decided-by-the-human data and must never be
+    // silently lost to a later roll. See `pendingOutcomes`' doc comment.
+    if (this.pendingOutcomes.length > 0) {
+      const outcome = this.pendingOutcomes.shift()!;
+      // If no roll has happened since (the outcome belongs to the still-current
+      // round), mark it consumed too — otherwise a second bare await, with
+      // nothing left to settle it, would park until timeout and misreport
+      // "not completed yet" for a round that's already done.
+      if (outcome.round === this.round) this.consumed = true;
+      // Signal the agent to await again when this drain leaves more to see: a
+      // further queued outcome, or a freshly-rolled round of live proposals
+      // that superseded this one. Without it the agent, told to apply-and-stop
+      // on a `completed` result, would strand that later round unpresented.
+      const morePending =
+        this.pendingOutcomes.length > 0 ||
+        (outcome.round !== this.round && this.proposals.length > 0);
+      return Promise.resolve(morePending ? { ...outcome, morePending: true } : outcome);
+    }
+
     // A completed round whose result the agent already consumed is closed.
     // Don't re-park (that would block forever); tell the agent to propose anew.
     if (this.completed && this.consumed) {
@@ -626,13 +1009,6 @@ export class VariantProposalStore {
           "The previous selection round was already returned. Call propose_variant to stage " +
           "new variants before awaiting again.",
       });
-    }
-
-    // Submitted but no waiter was parked to receive it → hand back the frozen
-    // outcome and close the round.
-    if (this.completed && !this.consumed) {
-      this.consumed = true;
-      return Promise.resolve(this.lastOutcome ?? this.buildOutcome());
     }
 
     if (this.proposals.length === 0) {
@@ -695,10 +1071,13 @@ export class VariantProposalStore {
       this.events.emit("changed");
       this.events.emit("awaitParked");
 
-      if (opts.signal) {
-        if (opts.signal.aborted) return onAbort();
-        opts.signal.addEventListener("abort", onAbort, { once: true });
-      }
+      // A signal already aborted on entry was rejected at the top of
+      // awaitSelection. It cannot reach this line aborted except via a
+      // synchronous abort() from a listener on the emits just above — which no
+      // store listener does (a real client-disconnect abort is async I/O and
+      // cannot preempt this synchronous run) — so registering the future-abort
+      // listener is sufficient; the old pre-registration re-check was dead.
+      if (opts.signal) opts.signal.addEventListener("abort", onAbort, { once: true });
     });
   }
 }

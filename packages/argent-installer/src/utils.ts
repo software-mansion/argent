@@ -4,7 +4,7 @@ import * as dns from "node:dns";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
 import semver from "semver";
-import { PACKAGE_NAME, NPM_REGISTRY, MCP_BINARY_NAME } from "./constants.js";
+import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { Document, parseDocument } from "yaml";
 import {
@@ -13,28 +13,55 @@ import {
   parse as parseJsonc,
   type JSONPath,
 } from "jsonc-parser";
+import { resolvePackageRoot } from "./package-root.js";
+
+// ── Re-exports ────────────────────────────────────────────────────────────────
+// The package-manager / topology / preflight / install-record helpers moved into
+// focused modules. They are re-exported here so existing import sites
+// (`./utils.js`) keep resolving unchanged.
+export {
+  formatShellCommand,
+  detectPackageManager,
+  detectProjectPackageManager,
+  globalInstallCommand,
+  globalUninstallCommand,
+  localInstallCommand,
+  localUninstallCommand,
+  projectInstallCommand,
+} from "./package-manager.js";
+export type { PackageManager, ShellCommand } from "./package-manager.js";
+export { hasProjectPackageJson, isYarnPnp } from "./preflight.js";
+export {
+  isTempRunnerPath,
+  isGloballyInstalled,
+  getGloballyInstalledVersion,
+  getGloballyInstalledPackageRoot,
+  isDeclaredLocally,
+  isLocallyInstalled,
+  getLocallyInstalledVersion,
+  readLocalPackageVersionUncached,
+  getLocalArgentBinRelPath,
+  probeLocalInstall,
+} from "./topology.js";
+export type { LocalInstallProbe } from "./topology.js";
+export {
+  getInstallRecordPath,
+  readInstallRecord,
+  writeInstallRecord,
+  removeInstallRecord,
+  resolveInstallMode,
+  resolveInstallModeFromFlags,
+  InstallModeFlagError,
+} from "./install-record.js";
+export type { InstallMode, InstallRecord } from "./install-record.js";
+export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
+export type { TargetFlags, DecideTargetsContext, TargetDecision } from "./install-targets.js";
 
 // ── Package root resolution ───────────────────────────────────────────────────
-// At runtime this module ships in two shapes:
-//   - tsc-compiled in the monorepo: packages/argent-installer/dist/utils.js
-//   - bundled into the published package: <pkg>/dist/installer.mjs
-// Walking up to the nearest package.json works for both layouts and any
-// future repacking, instead of hard-coding a "two levels up" assumption.
-
-/**
- * Given a starting dirname, walk up until the first directory containing a
- * package.json. Falls back to the starting directory if none found. Exported
- * so it can be tested against simulated directory structures.
- */
-export function resolvePackageRoot(dirname: string): string {
-  let current = path.resolve(dirname);
-  while (true) {
-    if (fs.existsSync(path.join(current, "package.json"))) return current;
-    const parent = path.dirname(current);
-    if (parent === current) return path.resolve(dirname);
-    current = parent;
-  }
-}
+// resolvePackageRoot lives in the leaf package-root.ts module (topology.ts
+// needs it too, and importing it from this barrel — which re-exports topology —
+// was an ESM cycle). Re-exported here so existing import sites keep resolving.
+export { resolvePackageRoot };
 
 export const PACKAGE_ROOT = resolvePackageRoot(import.meta.dirname);
 
@@ -211,10 +238,12 @@ export function writeJson(filePath: string, data: unknown): void {
 }
 
 // ── JSONC helpers ────────────────────────────────────────────────────────────
-// Comment-preserving edits for editor settings files that are JSONC (Zed).
-// Unlike the JSON.parse → mutate → JSON.stringify path used elsewhere, these
-// helpers operate on the source string via jsonc-parser's modify(), so user
-// comments, trailing commas, blank lines, and key ordering all survive.
+// Comment-preserving edits for the editor config files that are JSONC (Zed,
+// Cursor, VS Code, Kiro, ...) — and, since JSONC is a superset of JSON, the
+// shared write path for the strict-JSON adapters too. Unlike the
+// JSON.parse → mutate → JSON.stringify path, these helpers operate on the
+// source string via jsonc-parser's modify(), so user comments, trailing
+// commas, blank lines, and key ordering all survive.
 
 // jsonc-parser's modify() needs a formatting hint for newly-inserted keys.
 // Zed's bundled defaults use 2-space indentation; matching that keeps writes
@@ -226,13 +255,16 @@ function setJsoncIn(text: string, jsonPath: JSONPath, value: unknown): string {
   return applyJsoncEdits(text, edits);
 }
 
-function readJsoncFileRaw(filePath: string): { text: string; hadBom: boolean } {
-  if (!fs.existsSync(filePath)) return { text: "{}", hadBom: false };
+function readJsoncFileRaw(filePath: string): { text: string; hadBom: boolean; wasEmpty: boolean } {
+  if (!fs.existsSync(filePath)) return { text: "{}", hadBom: false, wasEmpty: true };
   let text = fs.readFileSync(filePath, "utf8");
   const hadBom = text.charCodeAt(0) === 0xfeff;
   if (hadBom) text = text.slice(1);
-  if (text.trim() === "") text = "{}";
-  return { text, hadBom };
+  // A whitespace-only file has no real content whose formatting we'd preserve —
+  // it is substituted with "{}" and synthesized fresh, like a non-existent file.
+  const wasEmpty = text.trim() === "";
+  if (wasEmpty) text = "{}";
+  return { text, hadBom, wasEmpty };
 }
 
 function getAtJsoncPath(value: unknown, jsonPath: JSONPath): unknown {
@@ -266,9 +298,10 @@ function rmEmptyDir(dirPath: string): void {
 
 /**
  * Read a JSON-with-Comments file (line + block comments + trailing commas).
- * Used by callers that need to inspect Zed's settings.json without the
- * `JSON.parse` failure on user-authored comments. For mutations go through
- * {@link editJsoncFile} instead — it preserves comments on write.
+ * Used across the MCP-config adapters to inspect editor config files that may
+ * be JSONC (Zed, Cursor, VS Code, Kiro, ...) without `JSON.parse` failing on a
+ * user-authored comment. For mutations go through {@link editJsoncFile}
+ * instead — it preserves comments on write.
  */
 export function readJsonc(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
@@ -289,15 +322,17 @@ export function readJsonc(filePath: string): Record<string, unknown> {
  *
  * Pass `undefined` as `value` to delete the key. Empty ancestor objects are
  * pruned, and if the document collapses to `{}` the file (and an empty
- * parent directory) is removed — mirroring the JSON `writeJsonOrRemove`
- * semantics used elsewhere.
+ * parent directory) is removed.
  *
- * Use this for editor settings files that are JSONC (Zed). For pure JSON
- * configs go through {@link writeJson} instead — JSONC.modify is overhead
- * when there are no comments to preserve.
+ * This is the shared write path for every MCP-config adapter — including the
+ * strict-JSON ones (Claude's `.mcp.json`, Windsurf, Gemini). JSONC is a
+ * superset of JSON, so routing them here is safe and keeps every argent entry
+ * on one comment- and foreign-server-preserving path. {@link writeJson}
+ * remains for whole-document rewrites that must never delete the file (e.g.
+ * `~/.claude.json`, which holds the user's OAuth state).
  */
 export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unknown): void {
-  const { text: initial, hadBom } = readJsoncFileRaw(filePath);
+  const { text: initial, hadBom, wasEmpty } = readJsoncFileRaw(filePath);
   let text = setJsoncIn(initial, jsonPath, value);
 
   if (value === undefined) {
@@ -317,7 +352,14 @@ export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unkno
   }
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, (hadBom ? "﻿" : "") + text);
+  // A synthesized document — a fresh file, or an existing file that was empty /
+  // whitespace-only and so had no real content to preserve — gets a trailing
+  // newline, matching writeJson/TOML (POSIX text-file convention, avoids a git
+  // "\ No newline at end of file"). An existing file with real content keeps its
+  // own EOL/formatting untouched — setJsoncIn edits in place — so we never
+  // rewrite its trailing byte.
+  const out = wasEmpty && !text.endsWith("\n") ? text + "\n" : text;
+  fs.writeFileSync(filePath, (hadBom ? "﻿" : "") + out);
 }
 
 // ── Directory helpers ─────────────────────────────────────────────────────────
@@ -351,37 +393,6 @@ export function getInstalledVersion(): string | null {
   }
 }
 
-/**
- * Read the version of the globally-installed argent package — distinct from
- * {@link getInstalledVersion}, which reads the package.json this code is
- * currently executing from. When invoked via `npx @swmansion/argent`, the
- * npx cache is always at the latest published version, so reading
- * PACKAGE_ROOT/package.json masks an outdated global install and lets the
- * update check report "already on the latest" incorrectly. This helper
- * resolves the global binary via `which -a` / `where`, follows symlinks to
- * the actual entrypoint, and walks up to the owning package.json instead.
- *
- * Returns null when argent is not permanently installed on PATH, or when
- * the global package layout cannot be resolved (e.g., Windows wrapper
- * scripts that aren't symlinks). Callers should treat null as "could not
- * determine" — preferable to silently using the running package's version,
- * which is the bug this guards against.
- */
-export function getGloballyInstalledVersion(): string | null {
-  const binaryPath = getGlobalBinaryPath();
-  if (!binaryPath) return null;
-  try {
-    const realPath = fs.realpathSync(binaryPath);
-    const pkgRoot = resolvePackageRoot(path.dirname(realPath));
-    const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8")) as {
-      version?: string;
-    };
-    return pkg.version ?? null;
-  } catch {
-    return null;
-  }
-}
-
 const PROBE_TIMEOUT_MS = 3_000;
 
 export function getLatestVersion(): string {
@@ -398,55 +409,6 @@ export function getLatestVersion(): string {
 export function isNewerVersion(candidate: string, current: string): boolean {
   if (!semver.valid(candidate) || !semver.valid(current)) return false;
   return semver.gt(candidate, current);
-}
-
-// Path segments used by temp package runners (npx, pnpm dlx, bunx, yarn dlx).
-// When invoked via one of these, the runner prepends its cache .bin/ dir to PATH,
-// so `which argent` succeeds even though argent is not permanently installed globally.
-const TEMP_RUNNER_MARKERS = [
-  "_npx",
-  "/dlx-",
-  "\\dlx-",
-  "bun/install/cache",
-  ".bun\\install\\cache",
-];
-
-export function isTempRunnerPath(binaryPath: string): boolean {
-  return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
-}
-
-/**
- * Resolve the path of the globally-installed argent binary, ignoring
- * temp-runner caches (npx / pnpm dlx / bunx / yarn dlx). On Windows `where`
- * returns every match, on Unix `which -a` does — we inspect each line so a
- * concurrent npx invocation does not mask a real global install. Returns
- * null when argent is not permanently installed on PATH.
- */
-function getGlobalBinaryPath(): string | null {
-  try {
-    const cmd = process.platform === "win32" ? "where" : "which -a";
-    const output = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return (
-      output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .find((line) => !isTempRunnerPath(line)) ?? null
-    );
-  } catch {
-    return null;
-  }
-}
-
-/**
- * True iff argent is permanently installed on the user's PATH (not just being
- * executed transiently from an npx / dlx / bunx cache).
- */
-export function isGloballyInstalled(): boolean {
-  return getGlobalBinaryPath() !== null;
 }
 
 // Every `npx` call is `npm exec`, which evaluates the host project's
@@ -489,52 +451,4 @@ export async function isOnline(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
       resolve(!err);
     });
   });
-}
-
-// ── Package manager detection ─────────────────────────────────────────────────
-
-export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
-
-export interface ShellCommand {
-  bin: string;
-  args: string[];
-}
-
-export function formatShellCommand(cmd: ShellCommand): string {
-  const parts = [cmd.bin, ...cmd.args.map((a) => (a.includes(" ") ? `"${a}"` : a))];
-  return parts.join(" ");
-}
-
-export function detectPackageManager(): PackageManager {
-  const agent = process.env.npm_config_user_agent ?? "";
-  if (agent.startsWith("yarn")) return "yarn";
-  if (agent.startsWith("pnpm")) return "pnpm";
-  if (agent.startsWith("bun")) return "bun";
-  return "npm";
-}
-
-export function globalInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
-  switch (pm) {
-    case "yarn":
-      return { bin: "yarn", args: ["global", "add", pkg] };
-    case "pnpm":
-      return { bin: "pnpm", args: ["add", "-g", pkg] };
-    case "bun":
-      return { bin: "bun", args: ["add", "-g", pkg] };
-    default:
-      return { bin: "npm", args: ["install", "-g", pkg] };
-  }
-}
-
-export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
-  switch (pm) {
-    case "yarn":
-      return { bin: "yarn", args: ["global", "remove", pkg] };
-    case "pnpm":
-      return { bin: "pnpm", args: ["remove", "-g", pkg] };
-    case "bun":
-      return { bin: "bun", args: ["remove", "-g", pkg] };
-    default:
-      return { bin: "npm", args: ["uninstall", "-g", pkg] };
-  }
 }

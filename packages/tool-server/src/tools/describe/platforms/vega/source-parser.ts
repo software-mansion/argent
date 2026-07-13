@@ -5,7 +5,8 @@ import type { DescribeFrame, DescribeNode } from "../../contract";
  * Parse the Vega automation toolkit's `getPageSource` XML into the shared
  * `DescribeNode` tree (normalized [0,1] frames). `<traits>` subtrees are metadata
  * and dropped; a node's label is its direct `<text>` child; only role-bearing /
- * interactive nodes are kept (bare `<child>` wrappers are flattened — see `convert`).
+ * interactive / authored-testID nodes are kept (bare `<child>` wrappers are
+ * flattened — see `convert`).
  */
 
 interface VegaXmlNode {
@@ -96,21 +97,50 @@ function isInteractive(attrs: Record<string, string>): boolean {
   return isTrue(attrs, "focusable") || isTrue(attrs, "selectable") || isTrue(attrs, "clickable");
 }
 
-// A node earns a line in the tree when it carries semantic meaning: an explicit
-// `role`, interactivity, or its own text. Bare structural `<child>` wrappers
-// (full-screen containers with none of these) are flattened away.
-function isMeaningful(node: VegaXmlNode): boolean {
-  return Boolean(node.attrs.role) || isInteractive(node.attrs) || node.text.length > 0;
+// The toolkit stamps EVERY node with an auto-generated numeric `test_id`; only
+// a non-numeric one is an authored RN `testID`. The distinction matters for
+// flattening: auto ids must not make a bare wrapper meaningful (they'd disable
+// flattening entirely), but an authored testID is a deliberate selector target
+// — e.g. a plain container View a flow asserts on — so it earns a node even
+// with no role/interactivity/text. The flow adapter (`flow-vega-tree`) leans on
+// the same split for text hoisting: only an authored testID shields.
+export function isAuthoredVegaTestId(testId: string | undefined): boolean {
+  return Boolean(testId && !/^\d+$/.test(testId));
 }
 
-/** Pull the label for a node from its direct `<text>` element children. */
-function labelOf(node: VegaXmlNode): string {
+function hasAuthoredTestId(attrs: Record<string, string>): boolean {
+  return isAuthoredVegaTestId(attrs.test_id);
+}
+
+// A node's own text: its inline text plus the text of its direct `<text>`
+// *element* children. The native RN UIToolkit tags text nodes with `role="text"`
+// and puts the string inline, but the Chromium toolkit inside a `WebView` emits
+// text as bare `<child>` wrappers whose string sits in a nested `<text>` element
+// (no role). Reading only inline `node.text` therefore made every WebView text
+// node look empty — so the whole web DOM (grid tiles, headings, labels) was
+// judged unmeaningful and flattened away (argent#474). Both meaningfulness and
+// the label are derived from this same notion so they can't drift apart.
+function ownText(node: VegaXmlNode): string {
   const parts: string[] = [];
   if (node.text) parts.push(node.text);
   for (const c of node.children) {
     if (c.tag === "text" && c.text) parts.push(c.text);
   }
   return parts.join(" ").trim();
+}
+
+// A node earns a line in the tree when it carries semantic meaning: an explicit
+// `role`, interactivity, its own text, or an authored testID. Bare structural
+// `<child>` wrappers (full-screen containers with none of these) are flattened
+// away. Takes the node's already-computed own text (which is also its label) so
+// `convert` computes `ownText` once per node instead of here and again for the label.
+function isMeaningful(node: VegaXmlNode, ownTextValue: string): boolean {
+  return (
+    Boolean(node.attrs.role) ||
+    isInteractive(node.attrs) ||
+    ownTextValue.length > 0 ||
+    hasAuthoredTestId(node.attrs)
+  );
 }
 
 function normalizeFrame(
@@ -140,6 +170,40 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(n, hi));
 }
 
+// A plain text span: a leaf that carries only a label. The Chromium a11y tree
+// behind a `WebView` aggregates an element's accessible name onto the container
+// *and* keeps the per-span text elements underneath it, so these leaves show up
+// as children of a node that already states their combined text. A span counts
+// only when it adds nothing else: default `view` role, no identifier, no
+// interactivity or focus/selection state, and no descendants of its own —
+// anything structural (a role, a test_id, a focusable/selected span) is not one.
+function isPlainTextSpan(n: DescribeNode): boolean {
+  return (
+    n.role === "view" &&
+    n.label !== undefined &&
+    n.children.length === 0 &&
+    n.identifier === undefined &&
+    !n.clickable &&
+    !n.focused &&
+    !n.selected
+  );
+}
+
+// Whether `children` are exactly the duplicated sub-spans of `label`: every
+// child is a plain text span and their in-order labels, concatenated with no
+// separator, reconstruct the parent's aggregated label. Chromium joins inline
+// sub-spans with no separator ("10" + "Tile 10" -> "10Tile 10"), so an exact
+// reconstruction identifies the duplication precisely — unlike substring
+// containment, which would wrongly swallow a distinct "Play" under "Playlist"
+// (a substring but not a sub-span), or a distinct "Tile 1" under "Tile 10". A
+// real list whose container name joins rows with spaces ("Home Settings About")
+// never reconstructs from its rows ("Home" + "Settings" + ...), so genuine,
+// separately-navigable rows are kept with their individual frames.
+function childrenReconstructLabel(children: DescribeNode[], label: string): boolean {
+  if (children.length === 0 || !children.every(isPlainTextSpan)) return false;
+  return children.map((c) => c.label).join("") === label;
+}
+
 /**
  * Convert a parsed XML node into the DescribeNodes that should appear where it
  * sits: `[node]` when it's meaningful, or its flattened meaningful descendants
@@ -153,15 +217,25 @@ function convert(node: VegaXmlNode, screenW: number, screenH: number): DescribeN
     childNodes.push(...convert(c, screenW, screenH));
   }
 
-  if (!isMeaningful(node)) return childNodes;
+  // `ownText` is a node's inline text plus its direct `<text>` element children;
+  // it doubles as the node's label. Compute it once and reuse it for both the
+  // meaningfulness gate and the label below.
+  const label = ownText(node);
+  if (!isMeaningful(node, label)) return childNodes;
 
   const attrs = node.attrs;
+  // Absorb the WebView a11y tree's duplicated sub-spans: when this node's own
+  // aggregated label is exactly reconstructed by its plain-text-span children,
+  // those children are the label's pieces (not distinct elements), so drop them
+  // and keep the node as a single clean leaf (see `childrenReconstructLabel`).
+  // Anything that isn't a perfect reconstruction is left untouched.
+  const keptChildren = label && childrenReconstructLabel(childNodes, label) ? [] : childNodes;
+
   const out: DescribeNode = {
     role: attrs.role || "view",
     frame: normalizeFrame(attrs, screenW, screenH),
-    children: childNodes,
+    children: keptChildren,
   };
-  const label = labelOf(node);
   if (label) out.label = label;
   if (attrs.test_id) out.identifier = attrs.test_id;
   if (isInteractive(attrs)) out.clickable = true;

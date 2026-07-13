@@ -39,7 +39,7 @@ afterEach(async () => {
       /* already dead */
     }
   }
-  await launcher.clearToolsServerState();
+  await launcher.clearToolsServerState(FAKE_BUNDLE);
 });
 
 async function trackedSpawn(
@@ -93,10 +93,10 @@ describe("killToolServer — full lifecycle", () => {
 
     expect(launcher.isToolsServerProcessAlive(pid)).toBe(true);
 
-    await launcher.killToolServer();
+    await launcher.killToolServer(FAKE_BUNDLE);
 
     expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
-    expect(await launcher.readToolsServerState()).toBeNull();
+    expect(await launcher.readToolsServerState(FAKE_BUNDLE)).toBeNull();
   });
 
   it(
@@ -120,11 +120,11 @@ describe("killToolServer — full lifecycle", () => {
       }
 
       const start = Date.now();
-      await launcher.killToolServer();
+      await launcher.killToolServer(FAKE_BUNDLE);
       const elapsed = Date.now() - start;
 
       expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
-      expect(await launcher.readToolsServerState()).toBeNull();
+      expect(await launcher.readToolsServerState(FAKE_BUNDLE)).toBeNull();
       // SIGTERM grace is 6s; SIGKILL must arrive after that. Loose upper
       // bound prevents flaky failures on slow CI hosts.
       expect(elapsed).toBeGreaterThanOrEqual(5_500);
@@ -147,22 +147,22 @@ describe("killToolServer — full lifecycle", () => {
       host: "127.0.0.1",
     });
 
-    await launcher.killToolServer();
-    expect(await launcher.readToolsServerState()).toBeNull();
+    await launcher.killToolServer(FAKE_BUNDLE);
+    expect(await launcher.readToolsServerState(FAKE_BUNDLE)).toBeNull();
   });
 });
 
 describe("ensureToolsServer", () => {
   it("reuses the already-running server reported by the state file", async () => {
     const first = await launcher.ensureToolsServer(fakePaths());
-    spawnedPids.push((await launcher.readToolsServerState())!.pid);
+    spawnedPids.push((await launcher.readToolsServerState(FAKE_BUNDLE))!.pid);
 
     const second = await launcher.ensureToolsServer(fakePaths());
 
     // ensureToolsServer returns a fresh handle each call; on reuse the url +
     // token are derived from the same state file, so compare by value.
     expect(second).toEqual(first);
-    const state = await launcher.readToolsServerState();
+    const state = await launcher.readToolsServerState(FAKE_BUNDLE);
     expect(state?.pid).toBe(spawnedPids[0]);
   });
 
@@ -176,7 +176,7 @@ describe("ensureToolsServer", () => {
     });
 
     const handle = await launcher.ensureToolsServer(fakePaths());
-    const fresh = await launcher.readToolsServerState();
+    const fresh = await launcher.readToolsServerState(FAKE_BUNDLE);
     expect(fresh).not.toBeNull();
     expect(fresh!.pid).not.toBe(2_147_483_646);
     expect(launcher.isToolsServerProcessAlive(fresh!.pid)).toBe(true);

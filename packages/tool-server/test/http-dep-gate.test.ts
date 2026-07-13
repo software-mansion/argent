@@ -25,6 +25,7 @@ import {
   __resetDepCacheForTests,
   ensureDep,
 } from "../src/utils/check-deps";
+import { InvalidToolInputError } from "../src/utils/capability";
 
 function stubProbe(missing: readonly string[]): void {
   execFileMock.mockImplementation(
@@ -171,6 +172,35 @@ describe("http dependency gate", () => {
     expect(res.body.error).toMatch(/android-platform-tools/);
   });
 
+  it("maps an InvalidToolInputError thrown from execute to 400, not 500", async () => {
+    // A tool rejecting its (well-typed) arguments — e.g. a newline / non-ASCII
+    // char in Android `keyboard` text, an unknown named key — is a client input
+    // error, not an internal fault. It reaches the dispatcher wrapped in
+    // ToolExecutionError, so the mapping must walk the cause chain.
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "picky-input",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      async execute() {
+        throw new InvalidToolInputError("that argument can't be carried out on this device");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app).post("/tools/picky-input").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("that argument can't be carried out on this device");
+    // An InvalidToolInputError thrown FROM execute() is recorded once, by the
+    // registry's failure listener (the error carries its own signal out of
+    // execute) — the HTTP layer must NOT also record it, or the failure
+    // double-counts. `emitHttpFailure` fires only on pre-execute HTTP-layer
+    // faults (zod / capability / device-resolution / dep-preflight), never on
+    // this execute-catch 400 path.
+    expect(recordFailure).not.toHaveBeenCalled();
+  });
+
   it("does not call the dep probe for tools without a `requires` declaration", async () => {
     stubProbe([]);
     const registry = new Registry();
@@ -186,6 +216,33 @@ describe("http dependency gate", () => {
     const res = await request(app).post("/tools/no-deps").send({});
     expect(res.status).toBe(200);
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers 424 over 400 when a dependency error is nested under an InvalidToolInputError", async () => {
+    // Pins the ordering invariant documented at the dispatcher's
+    // InvalidToolInputError → 400 check (http.ts): `findDependencyMissing`
+    // scans the WHOLE cause chain first, so for a chain carrying both classes
+    // the 424 wins. Reordering the two checks — or a throw site nesting a
+    // DependencyMissingError under an InvalidToolInputError — flips this test
+    // instead of silently flipping the status code.
+    stubProbe([]);
+    const registry = new Registry();
+    registry.registerTool({
+      id: "dual-class-error",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      async execute() {
+        const err = new InvalidToolInputError(
+          "that argument needs a missing dependency"
+        ) as InvalidToolInputError & { cause?: unknown };
+        err.cause = new DependencyMissingError(["adb"], "install adb please");
+        throw err;
+      },
+    });
+    const { app } = createHttpApp(registry);
+    const res = await request(app).post("/tools/dual-class-error").send({});
+    expect(res.status).toBe(424);
+    expect(res.body.error).toBe("install adb please");
   });
 
   it("still returns 424 when the DependencyMissingError is buried two levels deep in the cause chain", async () => {

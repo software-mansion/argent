@@ -1,4 +1,5 @@
 export { run, type RunCommandOptions } from "./run.js";
+export { flow, type FlowCommandOptions } from "./flow.js";
 export { tools, type ToolsCommandOptions } from "./tools.js";
 export { server } from "./server.js";
 export { lens, type LensCommandOptions } from "./lens.js";

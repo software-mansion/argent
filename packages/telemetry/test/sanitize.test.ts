@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "@argent/registry";
 import { sanitize, ALLOWED } from "../src/sanitize.js";
-import { EVENT_NAMES } from "../src/events.js";
+import { EVENT_NAMES, PLATFORMS } from "../src/events.js";
 
 describe("sanitize", () => {
   describe("event allowlist", () => {
@@ -44,6 +44,20 @@ describe("sanitize", () => {
       expect(sanitize("tool:invoke", { tool: "list-devices", platform: "unknown" })).toEqual({
         tool: "list-devices",
       });
+    });
+
+    it("accepts every telemetry platform, including the TV variants", () => {
+      // The TV variants (`tvos`, `android-tv`) are telemetry-only refinements of
+      // `ios` / `android`; the sanitizer must let them through so the split
+      // survives to PostHog.
+      for (const platform of PLATFORMS) {
+        expect(sanitize("tool:invoke", { tool: "describe", platform })).toEqual({
+          tool: "describe",
+          platform,
+        });
+      }
+      expect(PLATFORMS).toContain("tvos");
+      expect(PLATFORMS).toContain("android-tv");
     });
 
     it("drops the legacy `from_tar` decision (developer-only path is off the books)", () => {
@@ -483,6 +497,62 @@ describe("sanitize", () => {
         error_message: "password=hunter2",
       });
       expect(out).toEqual({ tool: "x", platform: "ios", duration_ms: 1 });
+    });
+  });
+
+  describe("lens telemetry events", () => {
+    it("keeps the round_completed usage flags and drops leaked content", () => {
+      const out = sanitize("lens:round_completed", {
+        round: 2,
+        element_count: 3,
+        variant_count: 5,
+        annotation_count: 1,
+        element_comment_count: 2,
+        skipped_comment_count: 1,
+        has_global_comment: true,
+        inspector_used: true,
+        offscreen_revealed: false,
+        is_cli_session: true,
+        had_parked_await: false,
+        round_duration_ms: 1234,
+        platform: "ios",
+        // Content that must never survive:
+        element_name: "Checkout button",
+        comment_text: "make it pop",
+      });
+      expect(out).toEqual({
+        round: 2,
+        element_count: 3,
+        variant_count: 5,
+        annotation_count: 1,
+        element_comment_count: 2,
+        skipped_comment_count: 1,
+        has_global_comment: true,
+        inspector_used: true,
+        offscreen_revealed: false,
+        is_cli_session: true,
+        had_parked_await: false,
+        round_duration_ms: 1234,
+        platform: "ios",
+      });
+    });
+
+    it("drops a non-boolean inspector_used / offscreen_revealed", () => {
+      const out = sanitize("lens:round_completed", {
+        round: 1,
+        inspector_used: "yes",
+        offscreen_revealed: 1,
+      });
+      // The bool validator rejects non-booleans, so both keys are removed.
+      expect(out).toEqual({ round: 1 });
+    });
+
+    it("keeps agent_choice_count on cli_session_started and drops extras", () => {
+      const out = sanitize("lens:cli_session_started", {
+        agent_choice_count: 2,
+        agent_names: ["claude", "cursor"], // must be dropped
+      });
+      expect(out).toEqual({ agent_choice_count: 2 });
     });
   });
 

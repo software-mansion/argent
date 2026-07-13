@@ -17,6 +17,7 @@
  */
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { adbShell, shellQuote } from "./adb";
+import { InvalidToolInputError } from "./capability";
 import { emulatorSerial } from "./vega-automation";
 
 // TV-remote button → Linux input KEY_ name accepted by `inputd-cli button_press`.
@@ -159,10 +160,22 @@ export async function injectVegaButtons(buttons: RemoteButton[]): Promise<void> 
 
 /** Press a single named key (keyboard tool `key` vocabulary). */
 export async function injectVegaNamedKey(name: string): Promise<void> {
-  const code = NAMED_KEYCODES[name.toLowerCase()];
+  const lower = name.toLowerCase();
+  // Own-property check: a prototype key like "constructor" would otherwise pass
+  // the falsy guard with a garbage value and reach inputd as a broken
+  // button_press instead of rejecting as an unknown key.
+  const code = Object.hasOwn(NAMED_KEYCODES, lower) ? NAMED_KEYCODES[lower] : undefined;
   if (!code) {
-    throw new Error(
-      `Unknown Vega key "${name}". Supported: ${Object.keys(NAMED_KEYCODES).join(", ")}`
+    // Well-typed but unusable input (`key` is a free string) — a caller mistake
+    // mapped to 400 (matching the Android path, uniform across backends),
+    // keeping the KEYBOARD_KEY_UNSUPPORTED telemetry code (#420).
+    throw new InvalidToolInputError(
+      `Unknown Vega key "${name}". Supported: ${Object.keys(NAMED_KEYCODES).join(", ")}`,
+      {
+        error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+        failure_stage: "vega_named_key",
+        error_kind: "unsupported",
+      }
     );
   }
   await injectViaInputd([`button_press ${code}`]);
@@ -171,9 +184,14 @@ export async function injectVegaNamedKey(name: string): Promise<void> {
 /** Type text into the focused field via `inputd-cli send_text`. */
 export async function injectVegaText(text: string): Promise<void> {
   // send_text reads the rest of the line, so an embedded newline would truncate
-  // it; reject newlines rather than silently dropping the tail.
+  // it; reject newlines rather than silently dropping the tail. A caller input
+  // error (→400), matching the Android path, not an internal fault (→500).
   if (/[\n\r]/.test(text)) {
-    throw new Error("Vega keyboard text must not contain newlines");
+    throw new InvalidToolInputError("Vega keyboard text must not contain newlines", {
+      error_code: FAILURE_CODES.VEGA_TEXT_INVALID,
+      failure_stage: "vega_text_newline",
+      error_kind: "validation",
+    });
   }
   await injectViaInputd([`send_text ${shellQuote(text)}`]);
 }

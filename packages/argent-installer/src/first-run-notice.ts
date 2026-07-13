@@ -16,7 +16,7 @@ import {
 const TELEMETRY_OPT_IN_COMMAND = "argent telemetry enable";
 
 /**
- * Print the anonymous-telemetry notice, once per installation. Shared by
+ * Print the telemetry notice, once per installation. Shared by
  * `argent update` and the non-interactive `argent init` path so both surfaces
  * render the same informational message; the marker is cleared on uninstall so
  * reinstalls show it again. The opt-out command is highlighted in cyan to match
@@ -102,7 +102,7 @@ export async function resolveTelemetryConsent(opts: {
   );
 
   const choice = await p.select({
-    message: "Enable anonymous telemetry?",
+    message: "Enable telemetry?",
     options: [
       { value: "enabled" as const, label: "Enabled", hint: "recommended" },
       { value: "disabled" as const, label: "Disabled" },

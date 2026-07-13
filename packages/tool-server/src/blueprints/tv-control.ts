@@ -10,7 +10,7 @@ import {
 } from "@argent/registry";
 import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
-import { listIosSimulators } from "../utils/ios-devices";
+import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
 import { UnsupportedOperationError } from "../utils/capability";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
@@ -234,6 +234,12 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         `${TV_CONTROL_NAMESPACE}: no available simulator with udid '${udid}'. Run list-devices to find a booted Apple TV.`
       );
     }
+    // Warm the synchronous runtime-kind cache the telemetry hot path reads. Without
+    // this, a tv-remote-only Apple TV session never touches describe/screenshot/
+    // streaming and so stays attributed to the coarse `ios` platform — whereas the
+    // Android TV factory warms its cache via getAndroidRuntimeKind. Warming here
+    // makes the two TV platforms symmetric (refined from the call after the first).
+    cacheSimulatorRuntimeKind(udid, match.runtimeKind);
     if (match.runtimeKind !== "tv") {
       // Wrong device class (an iPhone shape-classifies as iOS and reaches here).
       // UnsupportedOperationError so http.ts maps it to 400, not 500 — a 500

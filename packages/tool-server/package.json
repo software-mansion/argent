@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/tool-server",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Framework-agnostic tool registry for iOS simulator and Android emulator control",
   "main": "dist/index.js",
   "scripts": {
@@ -13,6 +13,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@argent/archive": "file:../archive",
     "@argent/configuration-core": "file:../configuration-core",
     "@argent/native-devtools-android": "file:../native-devtools-android",
     "@argent/native-devtools-ios": "file:../native-devtools-ios",
@@ -25,6 +26,7 @@
     "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
     "@moq/lite": "^0.2.4",
     "@moq/net": "^0.1.1",
+    "bunyan": "^1.8.15",
     "bytes": "^3.1.2",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -42,6 +44,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@types/bunyan": "^1.8.11",
     "@types/bytes": "^3.1.5",
     "@types/express": "^5.0.6",
     "@types/ini": "^4.1.1",

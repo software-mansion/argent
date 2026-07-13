@@ -9,7 +9,7 @@ import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recordi
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
-import { createRunFlowTool } from "../../src/tools/flows/flow-run";
+import { createRunFlowTool, resolveFlowFilePath } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import {
   clearActiveFlow,
@@ -33,6 +33,16 @@ function remoteCtx(): ToolContext {
     artifacts: new ArtifactStore(),
     fileInputs: {
       project_root: { clientPath: CLIENT_ROOT, presentOnHost: false, viaUpload: false },
+    },
+  };
+}
+
+/** The ctx the boundary produces after materializing the client's uploaded flow YAML. */
+function uploadCtx(): ToolContext {
+  return {
+    artifacts: new ArtifactStore(),
+    fileInputs: {
+      flow_file: { clientPath: CLIENT_FLOW_PATH, presentOnHost: false, viaUpload: true },
     },
   };
 }
@@ -130,11 +140,17 @@ describe("flow replay with a boundary-resolved flow_file", () => {
       const runFlow = createRunFlowTool(createMockRegistry());
       const result = await runFlow.execute(
         {},
-        { name: "remote-flow", project_root: CLIENT_ROOT, flow_file: uploaded }
+        {
+          name: "remote-flow",
+          project_root: CLIENT_ROOT,
+          flow_file: uploaded,
+          device: "00000000-0000-0000-0000-0000000000ab",
+        },
+        uploadCtx()
       );
       expect(result).toMatchObject({
         flow: "remote-flow",
-        steps: [{ kind: "echo", message: "from upload" }],
+        steps: [{ kind: "echo", status: "pass", message: "from upload" }],
       });
     } finally {
       await fs.rm(uploaded, { force: true });
@@ -150,11 +166,70 @@ describe("flow replay with a boundary-resolved flow_file", () => {
     try {
       const result = await flowReadPrerequisiteTool.execute(
         {},
-        { name: "remote-flow", project_root: CLIENT_ROOT, flow_file: uploaded }
+        { name: "remote-flow", project_root: CLIENT_ROOT, flow_file: uploaded },
+        uploadCtx()
       );
       expect(result.executionPrerequisite).toBe("Device unlocked");
     } finally {
       await fs.rm(uploaded, { force: true });
     }
+  });
+});
+
+describe("flow_file containment", () => {
+  const params = (flow_file: string) => ({
+    name: "remote-flow",
+    project_root: CLIENT_ROOT,
+    flow_file,
+  });
+
+  it("accepts the exact ${project_root}/.argent/flows/${name}.yaml path", () => {
+    expect(resolveFlowFilePath(params(CLIENT_FLOW_PATH))).toBe(CLIENT_FLOW_PATH);
+  });
+
+  it("accepts a boundary-materialized upload wherever the server put it", () => {
+    const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "remote-flow.yaml");
+    expect(
+      resolveFlowFilePath(params(uploaded), {
+        clientPath: CLIENT_FLOW_PATH,
+        presentOnHost: false,
+        viaUpload: true,
+      })
+    ).toBe(uploaded);
+  });
+
+  it("rejects a relative flow_file", () => {
+    expect(() => resolveFlowFilePath(params(".argent/flows/remote-flow.yaml"))).toThrow(
+      "Invalid flow_file"
+    );
+  });
+
+  it('rejects ".." traversal even when it resolves back to the flows dir', () => {
+    // Raw concatenation — path.join would collapse the ".." before the check.
+    const sneaky = `${CLIENT_ROOT}/.argent/flows/../flows/remote-flow.yaml`;
+    expect(() => resolveFlowFilePath(params(sneaky))).toThrow("Invalid flow_file");
+  });
+
+  it("rejects an absolute path outside the project's flows dir", () => {
+    expect(() => resolveFlowFilePath(params("/etc/anything.yaml"))).toThrow("Invalid flow_file");
+    // A different flow's file under the right dir is not this flow's path either.
+    expect(() =>
+      resolveFlowFilePath(params(path.join(CLIENT_ROOT, ".argent", "flows", "other.yaml")))
+    ).toThrow("Invalid flow_file");
+  });
+
+  it("flow-execute refuses an out-of-project flow_file without reading it", async () => {
+    const runFlow = createRunFlowTool(createMockRegistry());
+    await expect(
+      runFlow.execute(
+        {},
+        {
+          name: "remote-flow",
+          project_root: CLIENT_ROOT,
+          flow_file: "/etc/anything.yaml",
+          device: "00000000-0000-0000-0000-0000000000ab",
+        }
+      )
+    ).rejects.toThrow("Invalid flow_file");
   });
 });

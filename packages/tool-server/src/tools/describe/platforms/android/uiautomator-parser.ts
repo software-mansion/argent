@@ -174,6 +174,11 @@ const NOISY_CLASSES = new Set([
   "com.horcrux.svg.SvgView",
 ]);
 
+/** Whether a raw class is decorative implementation detail to drop with its subtree. */
+export function isNoisyUiAutomatorClass(className: string): boolean {
+  return NOISY_CLASSES.has(className);
+}
+
 const SYSTEM_PACKAGES = new Set([
   // Status bar / nav bar / quick settings — these exist on every dump but
   // rarely matter for app-level navigation. Note we deliberately do NOT drop
@@ -200,12 +205,28 @@ const LAYOUT_CONTAINERS = new Set([
   "android.view.View",
 ]);
 
+/** Whether a raw class is hierarchy scaffolding rather than a role target. */
+export function isUiAutomatorLayoutContainer(className: string): boolean {
+  return !className || LAYOUT_CONTAINERS.has(className);
+}
+
 const SCROLL_CLASSES = new Set([
   "android.widget.ScrollView",
   "android.widget.HorizontalScrollView",
   "androidx.recyclerview.widget.RecyclerView",
   "android.widget.ListView",
 ]);
+
+/**
+ * Whether a node scrolls its content — a known scroll class, or anything the
+ * framework marks `scrollable` (RN's ScrollView dumps as a scrollable
+ * ViewGroup). Such a node's bounds become the clip window for the scroll-clip
+ * prune. Shared with the flow tree adapter (`flow-android-tree`) so both trees
+ * agree on which containers clip.
+ */
+export function isUiAutomatorScrollable(attrs: Record<string, string>): boolean {
+  return SCROLL_CLASSES.has(attrs.class ?? "") || attrIsTrue(attrs, "scrollable");
+}
 
 const WEBVIEW_CLASSES = new Set(["android.webkit.WebView", "android.webkit.WebViewChromium"]);
 
@@ -291,7 +312,16 @@ function rectsEqual(a: PixelRect, b: PixelRect): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
-function rectFullyOutside(kid: PixelRect, clip: PixelRect): boolean {
+/**
+ * Whether a rect lies entirely outside a clip window — the scroll-clip test
+ * `pruneSubtree` applies to drop views a scrolling container has scrolled out
+ * of its viewport. Exported for the flow tree adapters (`flow-tree-flatten`),
+ * which must agree with the agent-facing describe on what "scrolled out" means.
+ */
+export function rectFullyOutside(
+  kid: { x: number; y: number; w: number; h: number },
+  clip: { x: number; y: number; w: number; h: number }
+): boolean {
   return (
     kid.x + kid.w <= clip.x ||
     kid.x >= clip.x + clip.w ||
@@ -313,6 +343,17 @@ function descendantText(parsed: ParsedXmlNode, maxChars = 120): string {
   const stack: ParsedXmlNode[] = [parsed];
   while (stack.length > 0) {
     const x = stack.pop()!;
+    // A password field's `text` is the secret. Never mine it — or its subtree —
+    // into a borrowed container label; this walk reads the raw XML and would
+    // otherwise bypass the "[password]" redaction the rest of the parser
+    // applies to a password node's own label. Substitute the redacted marker.
+    if (attrIsTrue(x.attrs, "password")) {
+      if (!seen.has("[password]")) {
+        seen.add("[password]");
+        parts.push("[password]");
+      }
+      continue;
+    }
     for (const k of ["text", "content-desc"] as const) {
       const v = (x.attrs[k] ?? "").trim();
       if (v && !seen.has(v)) {
@@ -389,9 +430,8 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
     if (!top.visited) {
       top.visited = true;
       const attrs = top.parsed.attrs;
-      const cls = attrs.class ?? "";
       const myBounds = parseUiAutomatorBounds(attrs.bounds ?? "");
-      const isScroll = SCROLL_CLASSES.has(cls) || attrIsTrue(attrs, "scrollable");
+      const isScroll = isUiAutomatorScrollable(attrs);
       // Children inherit either MY bounds (if I'm a scroll) or whatever clip
       // I was handed. They'll filter their own kids against this rect.
       const childClip = isScroll && myBounds ? myBounds : top.scrollClip;
@@ -451,6 +491,15 @@ function computeNodeOutput(
   const interactive = isInteractive(attrs);
   let label = labelOf(attrs);
 
+  // Password fields: keep the ref but never leak the value. Redact HERE, at the
+  // point the label is derived, not just before `makeUiNode` — the collapse
+  // sites below copy this node's `label` onto a surviving child and return
+  // early, so a late redaction would be bypassed and the secret would ride out
+  // on the collapsed tap target. Redacting at the source covers every path.
+  if (attrIsTrue(attrs, "password")) {
+    label = "[password]";
+  }
+
   // Decorative ImageView (no clickable, no label) — drop, pass through any
   // surviving descendants. Most decorative images have zero kept children
   // and the entire branch evaporates.
@@ -486,6 +535,14 @@ function computeNodeOutput(
   if (interactive && bounds && keptChildren.length === 1) {
     const c = keptChildren[0]!;
     if (c.clickable && c.pixelBounds && rectsEqual(c.pixelBounds, bounds)) {
+      // The inner node is usually the more specific one, so prefer its own
+      // label/identifier. But the accessibility label can live ONLY on the
+      // outer wrapper (an RN `Pressable accessibilityLabel` wrapping a bare
+      // clickable native view) — fall back to the wrapper's values so the
+      // collapsed tap target isn't left anonymous instead of dropping them.
+      if (!c.label && label) c.label = label;
+      const rid = attrs["resource-id"];
+      if (!c.identifier && rid) c.identifier = rid;
       return [c];
     }
   }
@@ -504,11 +561,6 @@ function computeNodeOutput(
           !c.clickable
         )
     );
-  }
-
-  // Password fields: keep the ref but never leak the value.
-  if (attrIsTrue(attrs, "password")) {
-    label = "[password]";
   }
 
   const node = makeUiNode(attrs, deriveUiAutomatorRole(cls), bounds, label, keptChildren);
@@ -568,12 +620,17 @@ function finalizeUiNode(
       height: sh > 0 ? clipped.h / sh : 0,
     };
   } else {
-    // No bounds: drop empty wrappers, pass through single-child wrappers, and
-    // synthesise a union frame for 2+ children. Replacing the whole subtree
-    // with `null` silently dropped every child on Compose hierarchies that
-    // emit bounds-less group containers — preserved here for that case.
+    // No bounds: drop empty wrappers, pass through single-child scaffold
+    // wrappers, and synthesise a union frame for 2+ children. Replacing the
+    // whole subtree with `null` silently dropped every child on Compose
+    // hierarchies that emit bounds-less group containers — preserved here for
+    // that case. A single-child wrapper that carries its OWN label/identifier
+    // (e.g. a bounds-less Compose group container with a content-desc) must NOT
+    // be flattened into its child: doing so discards that accessibility label.
+    // Keep it as a node whose frame is the union of its (here, sole) child so
+    // neither the wrapper's nor the child's label is dropped.
     if (children.length === 0) return null;
-    if (children.length === 1) return children[0]!;
+    if (children.length === 1 && !n.label && !n.identifier) return children[0]!;
     const x1 = Math.min(...children.map((c) => c.frame.x));
     const y1 = Math.min(...children.map((c) => c.frame.y));
     const x2 = Math.max(...children.map((c) => c.frame.x + c.frame.width));

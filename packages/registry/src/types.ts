@@ -2,6 +2,7 @@ import { TypedEventEmitter } from "./event-emitter";
 import { z } from "zod";
 import type { ArtifactStore } from "./artifacts";
 import type { FileInputSpec, ResolvedFileInput } from "./file-inputs";
+import type { FailureSignal } from "./errors";
 
 // ── Service Types ──
 
@@ -52,6 +53,21 @@ export interface ServiceBlueprint<T = unknown, C = unknown> {
     context: C,
     options?: Record<string, unknown>
   ): Promise<ServiceInstance<T>>;
+  /**
+   * Optional: decide whether an error thrown by a tool that used this service's
+   * instance means the instance is dead and should be torn down + re-created.
+   *
+   * When a tool fails, the registry asks each of that tool's resolved services
+   * this question; any that answer `true` are disposed and the tool is retried
+   * once against freshly-resolved instances. This is how a cached instance whose
+   * underlying process is still alive but no longer serving (e.g. a simulator
+   * that was un-booted, so its simulator-server stopped listening) self-heals
+   * instead of returning the same connection error on every subsequent call.
+   *
+   * Keep this conservative: only return `true` for errors that prove the request
+   * never took effect (so retrying can't double-apply a side effect).
+   */
+  recoverable?(error: unknown): boolean;
 }
 
 /**
@@ -102,6 +118,15 @@ export interface InvokeToolOptions {
    * reads nor validates the recorded metadata.
    */
   recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;
+  /**
+   * Fire-and-forget progress events emitted by a long-running tool while it
+   * executes (e.g. flow-execute streaming one report per completed step). Set
+   * by transports that can deliver increments — the HTTP layer's NDJSON mode —
+   * and absent when the caller can only consume a final result. Tools must
+   * treat it as optional and never behave differently based on its presence;
+   * the final return value remains the complete, authoritative result.
+   */
+  emitProgress?: (event: unknown) => void;
 }
 
 /**
@@ -198,6 +223,15 @@ export type ToolDependency = "adb" | "xcrun" | "emulator" | "sim-remote" | "vega
 
 export interface ToolDefinition<TParams = void, TResult = unknown> {
   id: string;
+  interaction?: {
+    startedMsg?: (context: { params: TParams }) => string;
+    completedMsg?: (context: { params: TParams; result: TResult }) => string;
+    failedMsg?: (context: {
+      params: TParams;
+      error: unknown;
+      failureSignal: FailureSignal;
+    }) => string;
+  };
   description?: string;
   /** Zod schema for tool input; used for runtime validation. When provided, inputSchema is auto-derived at registration time. */
   zodSchema?: z.ZodObject<any>;
@@ -281,7 +315,18 @@ export type RegistryEvents = {
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
-  toolInvoked: (toolId: string, toolInvocationId: string) => void;
-  toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number) => void;
-  toolFailed: (toolId: string, toolInvocationId: string, error: Error, durationMs?: number) => void;
+  toolInvoked: (toolId: string, toolInvocationId: string, msg: string) => void;
+  toolCompleted: (
+    toolId: string,
+    toolInvocationId: string,
+    durationMs: number,
+    msg: string
+  ) => void;
+  toolFailed: (
+    toolId: string,
+    toolInvocationId: string,
+    error: Error,
+    durationMs: number | undefined,
+    msg: string
+  ) => void;
 };

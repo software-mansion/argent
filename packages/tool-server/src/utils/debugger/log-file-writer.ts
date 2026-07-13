@@ -119,8 +119,13 @@ export class LogFileWriter {
 
     // Collapse newlines in message for flat format
     const flatMessage = entry.message.replace(/\n/g, " ");
-    const levelDisplay =
-      LEVEL_DISPLAY[entry.level] ?? entry.level.toUpperCase().padEnd(5).slice(0, 5);
+    // Pad to 5 for column alignment but NEVER truncate: the level must round-trip
+    // exactly through parseFlatLine for levels of any length. CDP emits levels
+    // longer than 5 chars (e.g. "warning" from console.warn, "assert" from
+    // console.assert); slicing to 5 would persist "warni"/"asser" and break
+    // readFiltered({ level: "warning" }). LINE_RE captures the level as \S+, so a
+    // non-truncated, whitespace-free level survives the write→read round-trip.
+    const levelDisplay = LEVEL_DISPLAY[entry.level] ?? entry.level.toUpperCase().padEnd(5);
     const line = `[L:${entry.id}] ${entry.timestamp} ${levelDisplay} ${source} | ${flatMessage}\n`;
 
     if (this.ready && this.fd !== null) {

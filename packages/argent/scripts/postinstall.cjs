@@ -8,20 +8,66 @@ const os = require("os");
 const fs = require("fs");
 const path = require("path");
 
-// Always kill any running tool-server so the new binary takes effect on next use.
-const stateFile = path.join(os.homedir(), ".argent", "tool-server.json");
+// Kill the running tool-server so the freshly-installed binary takes effect on
+// next use — but ONLY when the tracked server belongs to THIS package's bundle.
+// A repo-local devDependency install of argent must not tear down a tool-server
+// spawned by a *different* install (another project's local copy, or the global
+// binary) that an unrelated editor session is actively using.
+//
+// State records are per-install files (tool-server-<hash>.json) plus the legacy
+// single-slot tool-server.json written by older versions — scan them all rather
+// than reproducing the launcher's hash.
+const stateDir = path.join(os.homedir(), ".argent");
+const ownBundlePath = path.resolve(__dirname, "..", "dist", "tool-server.cjs");
+
+function sameBundle(recorded) {
+  if (!recorded) return false;
+  if (path.resolve(recorded) === ownBundlePath) return true;
+  // Tolerate symlinked install layouts (npm global prefix, pnpm store) where the
+  // recorded path and our __dirname resolve to the same real file.
+  try {
+    return fs.realpathSync(recorded) === fs.realpathSync(ownBundlePath);
+  } catch {
+    return false;
+  }
+}
+
+function shouldKill(recorded) {
+  if (!recorded) return false;
+  if (sameBundle(recorded)) return true;
+  // A recorded bundle whose file is GONE can never serve again: pnpm/yarn
+  // global layouts keep the package in a version-pinned dir, so an upgrade
+  // replaces the dir instead of rewriting it in place and sameBundle never
+  // matches. No live install's server can be running from a nonexistent
+  // path, so retiring it is safe for every other session.
+  try {
+    fs.accessSync(recorded);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 try {
-  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  if (state && state.pid) {
+  for (const name of fs.readdirSync(stateDir)) {
+    if (!/^tool-server(-[0-9a-f]{12})?\.json$/.test(name)) continue;
+    const stateFile = path.join(stateDir, name);
     try {
-      process.kill(state.pid, "SIGTERM");
+      const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+      if (state && state.pid && shouldKill(state.bundlePath)) {
+        try {
+          process.kill(state.pid, "SIGTERM");
+        } catch {
+          /* process already gone — nothing to kill */
+        }
+        fs.unlinkSync(stateFile);
+      }
     } catch {
-      /* process already gone — nothing to kill */
+      /* unreadable record — leave it alone */
     }
   }
-  fs.unlinkSync(stateFile);
 } catch {
-  /* no state file or unreadable — nothing to clean up */
+  /* no state dir — nothing to clean up */
 }
 
 // node-pty (optional dep, used by `argent lens`'s agent PTY proxy) ships its

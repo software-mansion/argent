@@ -1,6 +1,6 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
-import type { FileInputSpec, ToolDefinition } from "@argent/registry";
+import type { FileInputSpec, ToolContext, ToolDefinition } from "@argent/registry";
 import { parseFlow } from "./flow-utils";
 import { resolveFlowFilePath } from "./flow-run";
 
@@ -36,8 +36,8 @@ Fails if the flow file does not exist in the .argent/flows/ directory.`,
   zodSchema,
   fileInputs,
   services: () => ({}),
-  async execute(_services, params) {
-    const filePath = resolveFlowFilePath(params);
+  async execute(_services, params, ctx?: ToolContext) {
+    const filePath = resolveFlowFilePath(params, ctx?.fileInputs?.flow_file);
     const fileContent = await fs.readFile(filePath, "utf8");
     const flow = parseFlow(fileContent);
 

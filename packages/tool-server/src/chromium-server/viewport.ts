@@ -1,5 +1,16 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { ViewportSize } from "./types";
+
+// Convention: a malformed/absent payload from an uncontrolled source (the
+// renderer's main world) is `unknown` — we can't validate output we don't own.
+// `validation` is reserved for checks against a schema we control (cf. the
+// android profiler metadata sidecar).
+const VIEWPORT_FAILURE = {
+  error_code: FAILURE_CODES.CHROMIUM_VIEWPORT_READ_FAILED,
+  failure_area: "tool_server",
+  error_kind: "unknown",
+} as const;
 
 /**
  * Read window.innerWidth/Height/devicePixelRatio from the renderer's main
@@ -14,22 +25,25 @@ export async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
   })) as { result?: { value?: string } };
   const raw = out.result?.value;
   if (typeof raw !== "string") {
-    throw new Error(
-      "Chromium CDP: Runtime.evaluate for viewport returned no value. The renderer may be navigating or its main world is detached."
+    throw new FailureError(
+      "Chromium CDP: Runtime.evaluate for viewport returned no value. The renderer may be navigating or its main world is detached.",
+      { ...VIEWPORT_FAILURE, failure_stage: "chromium_viewport_read" }
     );
   }
   let parsed: { w: number; h: number; dpr: number };
   try {
     parsed = JSON.parse(raw) as { w: number; h: number; dpr: number };
   } catch (err) {
-    throw new Error(
+    throw new FailureError(
       `Chromium CDP: viewport payload was not JSON: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err }
+      { ...VIEWPORT_FAILURE, failure_stage: "chromium_viewport_parse" },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   }
   if (!parsed.w || !parsed.h) {
-    throw new Error(
-      `Chromium CDP: viewport reported zero dimensions (w=${parsed.w}, h=${parsed.h}). The BrowserWindow may be hidden.`
+    throw new FailureError(
+      `Chromium CDP: viewport reported zero dimensions (w=${parsed.w}, h=${parsed.h}). The BrowserWindow may be hidden.`,
+      { ...VIEWPORT_FAILURE, failure_stage: "chromium_viewport_dimensions" }
     );
   }
   return { width: parsed.w, height: parsed.h, devicePixelRatio: parsed.dpr || 1 };

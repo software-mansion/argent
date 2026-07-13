@@ -164,6 +164,156 @@ describe("formatDescribeTree (vega-automation → nested)", () => {
   });
 });
 
+// argent#474: a `WebView` embeds a nested `<app toolkitName="Chromium">` whose
+// text lives in `<text>` *element* children (no `role`), unlike the native RN
+// UIToolkit which tags text nodes `role="text"`. describe used to read only
+// inline text, so the whole web DOM was judged unmeaningful and flattened away —
+// the WebView collapsed to a single opaque node. These lock in the traversal.
+describe("parseVegaPageSource — WebView (Chromium sub-app) traversal", () => {
+  const WEBVIEW_FIXTURE = readFileSync(
+    join(__dirname, "fixtures", "vega-webview-grid.xml"),
+    "utf8"
+  );
+  const tree = parseVegaPageSource(WEBVIEW_FIXTURE);
+  const labels = flatten(tree)
+    .map((n) => n.label)
+    .filter((l): l is string => Boolean(l));
+
+  it("surfaces every WebView grid tile (not one opaque WebView node)", () => {
+    // Exact labels, not substring: "Tile 1" is a substring of "Tile 10"/"Tile 11"
+    // etc., so a `.includes("Tile 1")` check would pass even if tile 1 were
+    // missing. Each collapsed tile leaf is labelled `${i}Tile ${i}` (e.g.
+    // "10Tile 10"), so assert exact membership.
+    for (let i = 1; i <= 12; i++) {
+      expect(labels).toContain(`${i}Tile ${i}`);
+    }
+  });
+
+  it("keeps the focused WebView root, the header role node, and its text", () => {
+    const root = byLabel(tree, "Argent WebView Grid");
+    expect(root).toBeDefined();
+    expect(root!.focused).toBe(true);
+    // The Chromium <header> survives as a role-bearing node...
+    expect(flatten(tree).some((n) => n.role === "header")).toBe(true);
+    // ...with its status text surfaced underneath it.
+    expect(labels).toContain("Selected:");
+  });
+
+  it("normalizes WebView DOM frames against the 1920x1080 window", () => {
+    // Tile 1 container: <child x=51 y=173 width=453 height=281>
+    const tile1 = flatten(tree).find((n) => n.label === "1Tile 1")!;
+    expect(tile1).toBeDefined();
+    expect(tile1.frame.x).toBeCloseTo(51 / 1920, 3);
+    expect(tile1.frame.y).toBeCloseTo(173 / 1080, 3);
+    expect(tile1.frame.width).toBeCloseTo(453 / 1920, 3);
+  });
+
+  it("collapses the Chromium a11y tree's duplicated sub-spans", () => {
+    // A tile container aggregates its text ("1Tile 1") and *also* nests the same
+    // text as child spans ("1", "Tile 1"). The aggregate node is kept; the
+    // redundant spans are absorbed so the tile is a single clean leaf.
+    const tile1 = flatten(tree).find((n) => n.label === "1Tile 1")!;
+    expect(tile1.children).toHaveLength(0);
+  });
+
+  it("keeps a distinct child span whose text is only a substring of the parent label", () => {
+    // Regression: the collapse must not use raw substring containment. A "Play"
+    // control nested in a "Playlist" container is a distinct element — "Play" is
+    // a substring of "Playlist" but is NOT a sub-span that reconstructs it, so it
+    // must survive. Only an exact sub-span reconstruction collapses.
+    const xml =
+      '<?xml version="1.0"?><root id="1"><app appName="com.x">' +
+      '<window x="0" y="0" width="1920" height="1080">' +
+      '<child x="0" y="0" width="300" height="80"><text>Playlist</text>' +
+      '<child x="10" y="10" width="80" height="60"><text>Play</text></child>' +
+      "</child></window></app></root>";
+    const parsed = parseVegaPageSource(xml);
+    const labels = flatten(parsed)
+      .map((n) => n.label)
+      .filter(Boolean);
+    expect(labels).toContain("Play"); // must NOT be swallowed by "Playlist"
+    expect(labels).toContain("Playlist");
+  });
+
+  it("collapses a tile's exact sub-spans into one leaf", () => {
+    // The intended collapse: a tile aggregates "10Tile 10" and nests the exact
+    // pieces "10" + "Tile 10" (no separator) — those reconstruct the aggregate,
+    // so they are absorbed and the tile is a single clean leaf.
+    const xml =
+      '<?xml version="1.0"?><root id="1"><app appName="com.x">' +
+      '<window x="0" y="0" width="1920" height="1080">' +
+      '<child x="0" y="0" width="200" height="80"><text>10Tile 10</text>' +
+      '<child x="0" y="0" width="40" height="80"><text>10</text></child>' +
+      '<child x="40" y="0" width="160" height="80"><text>Tile 10</text></child>' +
+      "</child></window></app></root>";
+    const t10 = flatten(parseVegaPageSource(xml)).find((n) => n.label === "10Tile 10")!;
+    expect(t10).toBeDefined();
+    expect(t10.children).toHaveLength(0);
+  });
+
+  it("keeps distinct list rows that only aggregate on the container (separator survives)", () => {
+    // A menu container whose accessible name joins its rows with spaces
+    // ("Home Settings About") must NOT collapse the rows: "Home"+"Settings"+
+    // "About" = "HomeSettingsAbout" != the spaced aggregate, so each row (with
+    // its own distinct frame) is a real D-pad target and survives.
+    const xml =
+      '<?xml version="1.0"?><root id="1"><app appName="com.x">' +
+      '<window x="0" y="0" width="1920" height="1080">' +
+      '<child x="0" y="0" width="300" height="300"><text>Home Settings About</text>' +
+      '<child x="0" y="0" width="300" height="100"><text>Home</text></child>' +
+      '<child x="0" y="100" width="300" height="100"><text>Settings</text></child>' +
+      '<child x="0" y="200" width="300" height="100"><text>About</text></child>' +
+      "</child></window></app></root>";
+    const parsed = parseVegaPageSource(xml);
+    const labels = flatten(parsed)
+      .map((n) => n.label)
+      .filter(Boolean);
+    for (const row of ["Home", "Settings", "About"]) {
+      expect(labels).toContain(row);
+    }
+    // Their distinct y-frames are preserved (three separate rows).
+    const ys = ["Home", "Settings", "About"].map(
+      (r) => flatten(parsed).find((n) => n.label === r)!.frame.y
+    );
+    expect(new Set(ys).size).toBe(3);
+  });
+
+  it("keeps all children of a labelless structural container", () => {
+    // The collapse only runs for a node with its own aggregated label; a
+    // structural wrapper with no own text must pass every child through
+    // untouched (the `role="header"` node in the real fixture relies on this).
+    const xml =
+      '<?xml version="1.0"?><root id="1"><app appName="com.x">' +
+      '<window x="0" y="0" width="1920" height="1080">' +
+      '<child x="0" y="0" width="300" height="200" role="header">' +
+      '<child x="0" y="0" width="150" height="80"><text>Left</text></child>' +
+      '<child x="150" y="0" width="150" height="80"><text>Right</text></child>' +
+      "</child></window></app></root>";
+    const parsed = parseVegaPageSource(xml);
+    const header = flatten(parsed).find((n) => n.role === "header")!;
+    expect(header.label).toBeUndefined();
+    expect(header.children).toHaveLength(2);
+  });
+
+  it("does not drop a same-text span that is structural or interactive", () => {
+    // A child whose text is contained in the parent's label is still kept when it
+    // carries its own identity (a role / test_id / focus), so real controls that
+    // happen to echo their container's text are never collapsed away.
+    const xml =
+      '<?xml version="1.0"?><root id="1"><app appName="com.x">' +
+      '<window x="0" y="0" width="1920" height="1080">' +
+      '<child x="0" y="0" width="200" height="80">' +
+      "<text>Play now</text>" +
+      '<child x="0" y="0" width="200" height="80" role="button" focusable="true" test_id="5">' +
+      "<text>Play</text></child>" +
+      "</child></window></app></root>";
+    const parsed = parseVegaPageSource(xml);
+    const play = flatten(parsed).find((n) => n.role === "button" && n.label === "Play");
+    expect(play).toBeDefined();
+    expect(play!.clickable).toBe(true);
+  });
+});
+
 describe("parseVegaPageSource — robustness", () => {
   it("returns an empty Screen for structural-only / empty input", () => {
     const empty = parseVegaPageSource('<?xml version="1.0"?><root id="1"></root>');

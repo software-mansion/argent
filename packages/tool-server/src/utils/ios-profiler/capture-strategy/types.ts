@@ -1,7 +1,7 @@
 // Capture-strategy abstraction for the iOS native profiler.
 //
 // Why this exists: Apple's `xctrace record --device <sim>` path deadlocks during
-// the recording-start handshake on Xcode 26.4–27.0 (a host-side xctrace
+// the recording-start handshake on Xcode 26.4 and later (a host-side xctrace
 // regression — the in-sim DTServiceHub waits forever for a "recording-started"
 // reply the regressed xctrace never sends). The capture never starts, so there
 // is no data to recover. The hang-free fallback is to profile the HOST with

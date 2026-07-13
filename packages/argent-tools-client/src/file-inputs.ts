@@ -19,15 +19,19 @@
  * tool-server cannot direct writes anywhere else on the client machine.
  */
 
-import { mkdir, stat, writeFile } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
+
+import { createTarGzFile } from "@argent/archive";
 
 /** Must match the tool-server's wire contract (`@argent/registry` file-inputs.ts). */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
 export const CLIENT_FILE_MARKER = "__argentClientFile" as const;
 
-export type FileInputKind = "file" | "directory" | "probe";
+export type FileInputKind = "file" | "directory" | "probe" | "tar-upload";
 
 /** One declared file-boundary arg, as advertised by `GET /tools`. */
 export interface FileInputSpec {
@@ -45,6 +49,9 @@ export interface FileInputWire {
   content?: string;
   /** Why readable content was deliberately not inlined ("size-limit" = over MAX_CONTENT_BYTES). */
   contentOmitted?: "size-limit";
+  uploadId?: string;
+  /** SHA-256 hex digest of the streamed tarball, for server-side integrity check. */
+  contentHash?: string;
 }
 
 export interface ClientFileDirective {
@@ -69,6 +76,12 @@ export interface PrepareFileInputsOptions {
    * the wrapper path-only for the co-located fast path.
    */
   includeContent: boolean;
+  /**
+   * When set, `kind: "tar-upload"` inputs are tarballed and streamed to
+   * `POST <url>/upload` before the tool call. Only populated when routed to a
+   * remote tool-server; absent for co-located sessions (server reads in place).
+   */
+  uploadEndpoint?: { url: string; token: string };
 }
 
 /**
@@ -87,6 +100,45 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
     return v;
   });
   return missing ? null : out;
+}
+
+async function tarball(sourcePath: string): Promise<string> {
+  const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
+  await createTarGzFile(sourcePath, tarPath);
+  return tarPath;
+}
+
+function sha256File(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    createReadStream(filePath)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("end", () => resolve(hash.digest("hex")))
+      .on("error", reject);
+  });
+}
+
+async function uploadTar(
+  tarPath: string,
+  endpoint: { url: string; token: string }
+): Promise<string> {
+  // `duplex: "half"` is required to stream a Node Readable request body via
+  // undici's fetch, but it isn't in the DOM RequestInit type yet.
+  const init: RequestInit & { duplex: "half" } = {
+    method: "POST",
+    headers: {
+      "content-type": "application/gzip",
+      ...(endpoint.token ? { Authorization: `Bearer ${endpoint.token}` } : {}),
+    },
+    body: createReadStream(tarPath) as unknown as BodyInit,
+    duplex: "half",
+  };
+  const res = await fetch(`${endpoint.url}/upload`, init);
+  if (!res.ok) {
+    throw new Error(`Upload to ${endpoint.url}/upload failed: ${res.status} ${res.statusText}`);
+  }
+  const json = (await res.json()) as { uploadId: string };
+  return json.uploadId;
 }
 
 /**
@@ -136,6 +188,29 @@ export async function prepareFileInputs(
       } catch {
         // Unreadable here — send the path-only wrapper; the server may still
         // find it on its own filesystem, and otherwise errors precisely.
+      }
+    }
+
+    if (spec.kind === "tar-upload") {
+      const st = await stat(filePath).catch(() => null);
+      if (st) {
+        wire.size = st.size;
+        wire.mtimeMs = st.mtimeMs;
+      }
+
+      if (opts.uploadEndpoint && st) {
+        let tarPath: string | null = null;
+        try {
+          // stderr (not stdout — MCP uses stdout) so a slow upload isn't silent.
+          process.stderr.write(
+            `Uploading ${path.basename(filePath)} to the remote tool-server...\n`
+          );
+          tarPath = await tarball(filePath);
+          wire.contentHash = await sha256File(tarPath);
+          wire.uploadId = await uploadTar(tarPath, opts.uploadEndpoint);
+        } finally {
+          if (tarPath) await rm(tarPath, { force: true }).catch(() => {});
+        }
       }
     }
 
