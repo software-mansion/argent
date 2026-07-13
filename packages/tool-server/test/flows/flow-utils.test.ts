@@ -586,6 +586,103 @@ describe("parseFlow", () => {
     expect(parseFlow(yaml).steps).toEqual(steps);
   });
 
+  // Flows are hand-authored YAML, so a misspelled option key must fail at
+  // parse time — silently dropping it would apply the default instead and
+  // surface later as a misleading runtime failure (wrong scroll direction,
+  // lost submit opt-out, lost timeout, lost snapshot tolerance).
+  describe("unknown option keys are rejected at parse time", () => {
+    it("rejects a misspelled scroll-to direction key with a suggestion", () => {
+      expect(() =>
+        parseFlow("steps:\n  - scroll-to: { target: Order-1234, directon: up }\n")
+      ).toThrow(/scroll-to has unknown key `directon` \(did you mean `direction`\?\)/);
+    });
+
+    it("rejects a misspelled type.submit key with a suggestion", () => {
+      expect(() =>
+        parseFlow('steps:\n  - type: { into: email, text: "a@b.com", sumbit: false }\n')
+      ).toThrow(/type has unknown key `sumbit` \(did you mean `submit`\?\)/);
+    });
+
+    it("rejects a misspelled await.timeout key with a suggestion", () => {
+      expect(() => parseFlow("steps:\n  - await: { visible: Account, timeut: 10000 }\n")).toThrow(
+        /await has unknown key `timeut` \(did you mean `timeout`\?\)/
+      );
+    });
+
+    it("rejects a misspelled snapshot.maxMismatch key with a suggestion", () => {
+      expect(() => parseFlow("steps:\n  - snapshot: { name: home, maxMissmatch: 1.5 }\n")).toThrow(
+        /snapshot has unknown key `maxMissmatch` \(did you mean `maxMismatch`\?\)/
+      );
+    });
+
+    it("rejects an unknown key on a selector map", () => {
+      expect(() => parseFlow("steps:\n  - tap: { text: Save, roel: button }\n")).toThrow(
+        /tap has unknown key `roel` \(did you mean `role`\?\)/
+      );
+      expect(() => parseFlow("steps:\n  - await: { visible: { txt: Save } }\n")).toThrow(
+        /await.visible: selector has unknown key `txt` \(did you mean `text`\?\)/
+      );
+      expect(() =>
+        parseFlow("steps:\n  - scroll-to: { target: { text: Row }, within: { identfier: list } }\n")
+      ).toThrow(
+        /scroll-to.within: selector has unknown key `identfier` \(did you mean `identifier`\?\)/
+      );
+    });
+
+    it("rejects an unknown key without a suggestion when nothing is close", () => {
+      expect(() => parseFlow("steps:\n  - scroll-to: { target: Row, sideways: true }\n")).toThrow(
+        /scroll-to has unknown key `sideways` — allowed keys: target, direction, within/
+      );
+    });
+
+    it("rejects an unknown key in an await/assert text body", () => {
+      expect(() =>
+        parseFlow('steps:\n  - assert: { text: { in: counter, contians: "Taps: 0" } }\n')
+      ).toThrow(/assert.text has unknown key `contians` \(did you mean `contains`\?\)/);
+    });
+
+    it("rejects a stray key on a coordinate tap", () => {
+      expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, why: 0.6 }\n")).toThrow(
+        /tap has unknown key `why`/
+      );
+    });
+
+    it("rejects an unknown key in a launch map and its chromium value", () => {
+      expect(() => parseFlow("steps:\n  - launch: { amdroid: com.acme.app }\n")).toThrow(
+        /launch has unknown key `amdroid` \(did you mean `android`\?\)/
+      );
+      expect(() =>
+        parseFlow("steps:\n  - launch: { chromium: { path: ./app, arg: [--e2e] } }\n")
+      ).toThrow(/launch.chromium has unknown key `arg` \(did you mean `args`\?\)/);
+    });
+
+    it("rejects a step-level sibling key (options belong inside the directive value)", () => {
+      expect(() =>
+        parseFlow("steps:\n  - await: { visible: Account }\n    timeout: 5000\n")
+      ).toThrow(
+        /a `await` step has unknown key `timeout` — step options go inside the `await:` value/
+      );
+    });
+
+    it("rejects a step carrying two directive keys", () => {
+      expect(() => parseFlow("steps:\n  - echo: hi\n    tap: Save\n")).toThrow(
+        /a step takes exactly one directive key, found `echo`, `tap`/
+      );
+    });
+
+    it("suggests the directive key for a misspelled step kind", () => {
+      expect(() => parseFlow("steps:\n  - snapshoot: home\n")).toThrow(
+        /unrecognized step kind \(did you mean `snapshot`\?\)/
+      );
+    });
+
+    it("rejects an unknown top-level flow file key", () => {
+      expect(() =>
+        parseFlow("executionPrerequisit: Settings open\nsteps:\n  - echo: hi\n")
+      ).toThrow(/unknown key `executionPrerequisit` \(did you mean `executionPrerequisite`\?\)/);
+    });
+  });
+
   it("roundtrips: serialize then parse", () => {
     const flow: FlowFile = {
       executionPrerequisite: "App freshly loaded on home screen",

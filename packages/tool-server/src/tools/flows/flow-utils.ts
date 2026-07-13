@@ -513,6 +513,76 @@ function badEntry(raw: unknown, detail: string): never {
   });
 }
 
+// Optimal-string-alignment distance: Levenshtein plus adjacent transposition
+// (`roel` → `role` counts 1, not 2 — the dominant typo class). Inputs are
+// option keys, so the simple row-based table is fine.
+function editDistance(a: string, b: string): number {
+  let prevPrev = new Array<number>(b.length + 1);
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  let curr = new Array<number>(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let d = Math.min(curr[j - 1]! + 1, prev[j]! + 1, prev[j - 1]! + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        d = Math.min(d, prevPrev[j - 2]! + 1);
+      }
+      curr[j] = d;
+    }
+    [prevPrev, prev, curr] = [prev, curr, prevPrev];
+  }
+  return prev[b.length]!;
+}
+
+/** The allowed key an unknown key most plausibly misspells, or null. */
+function closestKey(key: string, allowed: readonly string[]): string | null {
+  let best: string | null = null;
+  let bestDistance = Infinity;
+  for (const candidate of allowed) {
+    const d = editDistance(key.toLowerCase(), candidate.toLowerCase());
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = candidate;
+    }
+  }
+  // Only suggest a typo-sized distance — `z` is not a misspelling of `id`.
+  return best !== null && bestDistance <= Math.max(1, Math.floor(best.length / 3)) ? best : null;
+}
+
+function describeUnknownKeys(unknown: string[], allowed: readonly string[]): string {
+  const listed = unknown.map((k) => {
+    const hint = closestKey(k, allowed);
+    return hint ? `\`${k}\` (did you mean \`${hint}\`?)` : `\`${k}\``;
+  });
+  return `unknown key${unknown.length > 1 ? "s" : ""} ${listed.join(", ")}`;
+}
+
+/**
+ * Reject keys outside `allowed` in a directive body / selector map. Flows are
+ * hand-authored YAML with no extensible bodies, so an unrecognized key is a
+ * typo — dropping it silently would apply the default instead (`directon: up`
+ * scrolling down) and surface later as a misleading runtime failure rather
+ * than a parse error.
+ */
+function rejectUnknownKeys(
+  raw: unknown,
+  body: Record<string, unknown>,
+  allowed: readonly string[],
+  where: string
+): void {
+  const unknown = Object.keys(body).filter((k) => !allowed.includes(k));
+  if (unknown.length === 0) return;
+  badEntry(
+    raw,
+    `${where} has ${describeUnknownKeys(unknown, allowed)} — allowed keys: ${allowed.join(", ")}`
+  );
+}
+
+// Keys a selector map accepts: the schema fields plus the YAML `id` spelling
+// (`identifier` stays accepted as its parse-only alias).
+const SELECTOR_KEYS: readonly string[] = ["text", "id", "identifier", "role"];
+
 function parseSelector(raw: unknown, where: string): FlowSelector {
   // Bare-string sugar: a string is shorthand for a text selector, marked
   // `loose` so the flow runner tries the identifier locator first and falls
@@ -522,6 +592,11 @@ function parseSelector(raw: unknown, where: string): FlowSelector {
     const r = selectorSchema.safeParse({ text: raw });
     if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
     return { ...r.data, loose: true };
+  }
+  // The shared selectorSchema strips unknown keys, so a misspelled field
+  // (`roel: button`) would silently vanish — reject it here instead.
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    rejectUnknownKeys(raw, raw as Record<string, unknown>, SELECTOR_KEYS, `${where}: selector`);
   }
   // Map form: `id` is the YAML spelling of the internal `identifier` field —
   // rewrite it before schema validation. `identifier` still parses as an alias
@@ -595,6 +670,16 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
     timeout = b.timeout as number;
   }
 
+  // `await` takes the condition key plus `timeout`; `assert` the condition key
+  // only (an explicit assert timeout was already rejected above with the
+  // pointed message). Anything else — `timeut`, a stray option — is a typo.
+  rejectUnknownKeys(
+    { [kind]: b },
+    b,
+    kind === "await" ? [...WAIT_CONDITIONS, "timeout"] : WAIT_CONDITIONS,
+    kind
+  );
+
   // `text` locates an element (`in`) and checks its rendered content against
   // exactly one of `contains` (substring) or `equals` (exact text).
   if (condition === "text") {
@@ -603,6 +688,9 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
       badEntry({ [kind]: b }, `${kind} text needs { in: <selector>, contains|equals: <string> }`);
     }
     const tb = t as Record<string, unknown>;
+    if (!Array.isArray(tb)) {
+      rejectUnknownKeys({ [kind]: b }, tb, ["in", "contains", "equals"], `${kind}.text`);
+    }
     const hasContains = "contains" in tb;
     const hasEquals = "equals" in tb;
     if (hasContains === hasEquals) {
@@ -638,6 +726,7 @@ function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
   if (typeof raw === "string" && raw.length > 0) return raw;
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const b = raw as Record<string, unknown>;
+    rejectUnknownKeys({ launch: { chromium: raw } }, b, ["path", "args"], "launch.chromium");
     if (typeof b.path !== "string" || b.path.length === 0) return null;
     if (b.args === undefined) return { path: b.path };
     if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
@@ -651,8 +740,11 @@ function parseLaunch(raw: unknown): Launch {
   if (typeof raw === "string" && raw.length > 0) return raw;
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const b = raw as Record<string, unknown>;
+    // Name a misspelled platform key (`amdroid:`) instead of falling through
+    // to the generic shape error below.
+    rejectUnknownKeys({ launch: raw }, b, LAUNCH_MAP_KEYS, "launch");
     const keys = Object.keys(b);
-    if (keys.length > 0 && keys.every((k) => (LAUNCH_MAP_KEYS as readonly string[]).includes(k))) {
+    if (keys.length > 0) {
       const out: {
         native?: string;
         ios?: string;
@@ -687,7 +779,53 @@ function parseLaunch(raw: unknown): Launch {
   );
 }
 
+// The directive key that names each step kind. Order mirrors fromYamlStep's
+// dispatch; used to reject a step carrying zero, several, or misspelled ones.
+const STEP_DIRECTIVE_KEYS: readonly string[] = [
+  "echo",
+  "launch",
+  "run",
+  "tool",
+  "tap",
+  "type",
+  "await",
+  "assert",
+  "wait",
+  "scroll-to",
+  "snapshot",
+];
+
 function fromYamlStep(raw: YamlStep): FlowStep {
+  const entry = raw as Record<string, unknown>;
+  const kinds = STEP_DIRECTIVE_KEYS.filter((k) => k in entry);
+  if (kinds.length === 0) {
+    const hint = Object.keys(entry)
+      .map((k) => closestKey(k, STEP_DIRECTIVE_KEYS))
+      .find((h) => h !== null);
+    badEntry(raw, `unrecognized step kind${hint ? ` (did you mean \`${hint}\`?)` : ""}`);
+  }
+  if (kinds.length > 1) {
+    badEntry(
+      raw,
+      `a step takes exactly one directive key, found ${kinds.map((k) => `\`${k}\``).join(", ")}`
+    );
+  }
+  // Only a `tool` step carries sibling keys (`args`, `delayMs`); every
+  // directive step is a single-key mapping — its options live INSIDE the
+  // value, so a sibling key is a mis-nested or misspelled option.
+  const kind = kinds[0]!;
+  const siblings = kind === "tool" ? ["tool", "args", "delayMs"] : [kind];
+  const extras = Object.keys(entry).filter((k) => !siblings.includes(k));
+  if (extras.length > 0) {
+    badEntry(
+      raw,
+      `a \`${kind}\` step has ${describeUnknownKeys(extras, siblings)}` +
+        (kind === "tool"
+          ? " — a tool step takes only `tool`, `args`, `delayMs`"
+          : ` — step options go inside the \`${kind}:\` value, not beside it`)
+    );
+  }
+
   if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
   if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
   if ("run" in raw) return { kind: "run", flow: String(raw.run) };
@@ -695,6 +833,11 @@ function fromYamlStep(raw: YamlStep): FlowStep {
   if ("tap" in raw) {
     const body = (raw as { tap: unknown }).tap;
     const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    // A misspelled selector field or coordinate would silently fall through
+    // (a stripped key, or a selector parse where a point was meant).
+    if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+      rejectUnknownKeys(raw, obj, [...SELECTOR_KEYS, "x", "y"], "tap");
+    }
     // A tap targets either an element (selector) or a raw point (x/y) — a body
     // mixing both is ambiguous (which wins?) and rejected rather than silently
     // resolved one way.
@@ -718,6 +861,8 @@ function fromYamlStep(raw: YamlStep): FlowStep {
   if ("type" in raw) {
     const body = (raw as { type: { into?: unknown; text?: unknown; submit?: unknown } }).type;
     if (!body || typeof body !== "object") badEntry(raw, "type needs { into, text }");
+    // A misspelled `sumbit` would silently drop the submit opt-out.
+    rejectUnknownKeys(raw, body as Record<string, unknown>, ["into", "text", "submit"], "type");
     if (typeof body.text !== "string" || body.text.length === 0) {
       badEntry(raw, "type needs a non-empty text");
     }
@@ -764,6 +909,11 @@ function fromYamlStep(raw: YamlStep): FlowStep {
       badEntry(raw, "scroll-to needs a target selector or { target, direction?, within? }");
     }
     const b = body as Record<string, unknown>;
+    // A misspelled `directon` would silently fall back to the default and
+    // scroll the opposite way.
+    if (!Array.isArray(b)) {
+      rejectUnknownKeys(raw, b, ["target", "direction", "within"], "scroll-to");
+    }
     if (
       b.direction !== undefined &&
       (typeof b.direction !== "string" ||
@@ -782,6 +932,10 @@ function fromYamlStep(raw: YamlStep): FlowStep {
 
   if ("snapshot" in raw) {
     const body = (raw as { snapshot: unknown }).snapshot;
+    // A misspelled `maxMissmatch` would silently drop the tolerance.
+    if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+      rejectUnknownKeys(raw, body as Record<string, unknown>, ["name", "maxMismatch"], "snapshot");
+    }
     // Bare-string sugar: `snapshot: home` ≡ `snapshot: { name: home }`.
     const b =
       typeof body === "string"
@@ -878,6 +1032,23 @@ export function parseFlow(content: string): FlowFile {
       failure_area: "tool_server",
       error_kind: "validation",
     });
+  }
+
+  // Same strictness as step bodies: the file has exactly two top-level keys,
+  // so a misspelled `executionPrerequisite` must not silently become "".
+  const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
+  const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
+  if (unknownTop.length > 0) {
+    throw new FailureError(
+      `Invalid flow file: ${describeUnknownKeys(unknownTop, topKeys)} — ` +
+        `allowed top-level keys: ${topKeys.join(", ")}`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
 
   const steps = parsed.steps.map((raw) => {

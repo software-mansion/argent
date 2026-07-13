@@ -259,9 +259,11 @@ describe("flow validation", () => {
   });
 
   it("rejects a launch step with an invalid body", () => {
+    // An unrecognized platform key is named (strict unknown-key rejection)…
     expect(() => parseFlow("steps:\n  - launch: { web: foo }\n")).toThrow(
-      /launch needs an app id/i
+      /launch has unknown key `web`/
     );
+    // …while a non-map, non-string body still gets the shape error.
     expect(() => parseFlow("steps:\n  - launch: 42\n")).toThrow(/launch needs an app id/i);
   });
 });
