@@ -405,13 +405,15 @@ export function start(): void {
           /* swallow */
         }
       });
-      // Surface bind failures (EADDRINUSE / EACCES on privileged ports) as a
-      // clean exit instead of routing through uncaughtException → crashShutdown.
-      server.on("error", async (err: NodeJS.ErrnoException) => {
-        const code = err.code ? `${err.code}: ` : "";
-        process.stderr.write(
-          `[tool-server] Failed to bind ${HOST}:${PORT} — ${code}${err.message}\n`
-        );
+      // A bind failure (EADDRINUSE from a stale server still holding the port,
+      // EACCES on a privileged port) is the socket half of the startup
+      // restart-loop population this diagnostics work exists to surface. Route it
+      // through crashShutdown so `err.code` is captured as error_syscall on a
+      // reason:"crash" stop instead of exiting silently with no telemetry at all.
+      // `listening` is still false here (the listen callback never ran), so the
+      // crash is correctly phased as "startup"; crashShutdown handles teardown,
+      // telemetry drain, and exit.
+      server.on("error", (err: NodeJS.ErrnoException) => {
         eventLog?.error({
           type: "tool_server.bind_failed",
           msg: `Tool server failed to bind ${HOST}:${PORT}.`,
@@ -421,15 +423,21 @@ export function start(): void {
             error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
             failure_stage: "toolserver_bind",
             failure_area: "tool_server",
-            error_kind: "unknown",
+            error_kind: "crash",
           },
         });
-        try {
-          await eventLog?.dispose();
-        } catch (err) {
-          process.stderr.write(`[tool-server] event log dispose failed: ${String(err)}\n`);
-        }
-        process.exit(1);
+        const code = err.code ? `${err.code}: ` : "";
+        crashShutdown(
+          `Failed to bind ${HOST}:${PORT}`,
+          `${code}${err.message}`,
+          {
+            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+            failure_stage: "toolserver_bind",
+            failure_area: "tool_server",
+            error_kind: "crash",
+          },
+          err
+        );
       });
       // Bolt the per-Chromium-device WebSocket upgrade handler onto the live
       // server. Must happen AFTER `listen()` so the http.Server instance
@@ -452,6 +460,16 @@ export function start(): void {
           },
         });
         shutdownReason = "crash";
+        // The readiness gate rejected before the HTTP listener bound, so this is
+        // definitionally a startup crash — attach the anonymous diagnostics from
+        // `err` (phase + name/fingerprint) so it clusters instead of collapsing
+        // back into the opaque bucket. Best-effort — a diagnostics failure must
+        // never stop the crash from being reported, so fall back to phase-only.
+        try {
+          shutdownCrashDiagnostics = describeCrash(err, "startup");
+        } catch {
+          shutdownCrashDiagnostics = { crash_phase: "startup" };
+        }
         await shutdown?.(1);
       })();
     });
