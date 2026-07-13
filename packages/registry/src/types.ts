@@ -118,6 +118,15 @@ export interface InvokeToolOptions {
    * reads nor validates the recorded metadata.
    */
   recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;
+  /**
+   * Fire-and-forget progress events emitted by a long-running tool while it
+   * executes (e.g. flow-execute streaming one report per completed step). Set
+   * by transports that can deliver increments — the HTTP layer's NDJSON mode —
+   * and absent when the caller can only consume a final result. Tools must
+   * treat it as optional and never behave differently based on its presence;
+   * the final return value remains the complete, authoritative result.
+   */
+  emitProgress?: (event: unknown) => void;
 }
 
 /**

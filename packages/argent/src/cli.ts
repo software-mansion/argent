@@ -87,6 +87,7 @@ Commands:
   remove      ${installerHelpEntry("remove")}
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
+  flow        Run a saved flow (use \`argent flow --help\` for options)
   server      Manage the shared tool-server (start / status / stop / logs)
   lens        Open Argent Lens bound to a fresh coding-agent session (macOS)
   link        Route client requests to a remote tool-server
@@ -146,6 +147,8 @@ async function main(): Promise<void> {
       return (await loadCli()).tools(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "run":
       return (await loadCli()).run(rest, { paths: BUNDLED_RUNTIME_PATHS });
+    case "flow":
+      return (await loadCli()).flow(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "server":
       return (await loadCli()).server(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "lens":

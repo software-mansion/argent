@@ -5,7 +5,8 @@ import type { DescribeFrame, DescribeNode } from "../../contract";
  * Parse the Vega automation toolkit's `getPageSource` XML into the shared
  * `DescribeNode` tree (normalized [0,1] frames). `<traits>` subtrees are metadata
  * and dropped; a node's label is its direct `<text>` child; only role-bearing /
- * interactive nodes are kept (bare `<child>` wrappers are flattened — see `convert`).
+ * interactive / authored-testID nodes are kept (bare `<child>` wrappers are
+ * flattened — see `convert`).
  */
 
 interface VegaXmlNode {
@@ -96,6 +97,21 @@ function isInteractive(attrs: Record<string, string>): boolean {
   return isTrue(attrs, "focusable") || isTrue(attrs, "selectable") || isTrue(attrs, "clickable");
 }
 
+// The toolkit stamps EVERY node with an auto-generated numeric `test_id`; only
+// a non-numeric one is an authored RN `testID`. The distinction matters for
+// flattening: auto ids must not make a bare wrapper meaningful (they'd disable
+// flattening entirely), but an authored testID is a deliberate selector target
+// — e.g. a plain container View a flow asserts on — so it earns a node even
+// with no role/interactivity/text. The flow adapter (`flow-vega-tree`) leans on
+// the same split for text hoisting: only an authored testID shields.
+export function isAuthoredVegaTestId(testId: string | undefined): boolean {
+  return Boolean(testId && !/^\d+$/.test(testId));
+}
+
+function hasAuthoredTestId(attrs: Record<string, string>): boolean {
+  return isAuthoredVegaTestId(attrs.test_id);
+}
+
 // A node's own text: its inline text plus the text of its direct `<text>`
 // *element* children. The native RN UIToolkit tags text nodes with `role="text"`
 // and puts the string inline, but the Chromium toolkit inside a `WebView` emits
@@ -114,12 +130,17 @@ function ownText(node: VegaXmlNode): string {
 }
 
 // A node earns a line in the tree when it carries semantic meaning: an explicit
-// `role`, interactivity, or its own text. Bare structural `<child>` wrappers
-// (full-screen containers with none of these) are flattened away. Takes the
-// node's already-computed own text (which is also its label) so `convert`
-// computes `ownText` once per node instead of here and again for the label.
+// `role`, interactivity, its own text, or an authored testID. Bare structural
+// `<child>` wrappers (full-screen containers with none of these) are flattened
+// away. Takes the node's already-computed own text (which is also its label) so
+// `convert` computes `ownText` once per node instead of here and again for the label.
 function isMeaningful(node: VegaXmlNode, ownTextValue: string): boolean {
-  return Boolean(node.attrs.role) || isInteractive(node.attrs) || ownTextValue.length > 0;
+  return (
+    Boolean(node.attrs.role) ||
+    isInteractive(node.attrs) ||
+    ownTextValue.length > 0 ||
+    hasAuthoredTestId(node.attrs)
+  );
 }
 
 function normalizeFrame(
