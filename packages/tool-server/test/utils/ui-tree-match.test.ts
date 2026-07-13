@@ -195,6 +195,52 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("text", "Total 42", matches, "equals")).toBe(true);
   });
 
+  it("evaluateCondition `text` treats hoisted subtree text as additive to the node's own text", () => {
+    // A flow-tree container labelled "Save" wrapping a "Saved successfully"
+    // child carries subtreeText "Save Saved successfully". `equals: "Save"` —
+    // satisfied by the element's own label on a plain describe tree — must not
+    // fail because the hoist stamped a compound string; and the hoisted text
+    // still adds passing cases the label alone would miss.
+    const tree = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          label: "Save",
+          identifier: "save-button",
+          subtreeText: "Save Saved successfully",
+          frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.1 },
+        }),
+      ],
+    });
+    const matches = findAll(tree, { identifier: "save-button" });
+    expect(evaluateCondition("text", "Save", matches, "equals")).toBe(true);
+    expect(evaluateCondition("text", "Save Saved successfully", matches, "equals")).toBe(true);
+    expect(evaluateCondition("text", "successfully", matches, "contains")).toBe(true);
+    expect(evaluateCondition("text", "Saved", matches, "equals")).toBe(false);
+  });
+
+  it("evaluateCondition `text` still reads a value the hoist does not carry", () => {
+    // The iOS adapter hoists labels only, so a value-bearing control whose
+    // children stamped a subtreeText must not lose its value from the check.
+    const tree = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          label: "Volume",
+          value: "50%",
+          subtreeText: "Volume Max",
+          frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.1 },
+        }),
+      ],
+    });
+    const matches = findAll(tree, { text: "Volume" });
+    expect(evaluateCondition("text", "50%", matches, "contains")).toBe(true);
+    expect(evaluateCondition("text", "Volume 50%", matches, "equals")).toBe(true);
+    expect(evaluateCondition("text", "Max", matches, "contains")).toBe(true);
+  });
+
   it("evaluateCondition `text` falls back to all matches when none is visible", () => {
     const tree = node({
       role: "AXGroup",

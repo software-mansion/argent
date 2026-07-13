@@ -61,13 +61,15 @@ export function nodeText(node: DescribeNode): string {
   return [node.label, node.value].filter(Boolean).join(" ");
 }
 
-// Text used to evaluate a `text` condition. Prefers `subtreeText` — the text
-// hoisted from descendants by the flow adapters — so a `text` check against a
-// testID container reads the text it visibly wraps (e.g. a counter whose number
-// is a child node), not the container's own (empty) label. Falls back to the
-// node's own text when no descendant text was hoisted (every non-flow tree, and
-// any leaf that already carries its own text). Selector matching stays on
-// `nodeText` so `tap`/`{ text }` targeting is unaffected.
+// Text used to evaluate a `text` condition (and quoted in its failure
+// messages). Prefers `subtreeText` — the text hoisted from descendants by the
+// flow adapters — so a `text` check against a testID container reads the text
+// it visibly wraps (e.g. a counter whose number is a child node), not the
+// container's own (empty) label. Falls back to the node's own text when no
+// descendant text was hoisted (every non-flow tree, and any leaf that already
+// carries its own text). `evaluateCondition` additionally accepts a match on
+// the node's own text — hoisting is additive, see the comment there. Selector
+// matching stays on `nodeText` so `tap`/`{ text }` targeting is unaffected.
 export function assertText(node: DescribeNode): string {
   return node.subtreeText ?? nodeText(node);
 }
@@ -179,10 +181,16 @@ export function evaluateCondition(
       return !matches.some(isVisible);
     case "text": {
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+      if (first === undefined || expectedText === undefined) return false;
+      // Hoisted subtree text is ADDITIVE evidence, never a replacement: a
+      // check the element's own label/value satisfies on a plain describe
+      // tree (`equals: "Save"` on a container labelled "Save" that wraps a
+      // "Saved successfully" child) must not start failing because the flow
+      // adapters stamped a compound `subtreeText` ("Save Saved successfully")
+      // onto the node — so the expected text may match either.
       return (
-        first !== undefined &&
-        expectedText !== undefined &&
-        textMatches(assertText(first), expectedText, textMatch)
+        textMatches(assertText(first), expectedText, textMatch) ||
+        textMatches(nodeText(first), expectedText, textMatch)
       );
     }
     default:

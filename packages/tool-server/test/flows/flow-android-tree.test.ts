@@ -167,9 +167,10 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(evaluateCondition("text", "50%", volume)).toBe(true);
   });
 
-  // Partial overlap: a container labelled "Submit" over a child rendering
-  // "Submit now" hoists the child's fuller text once, not "Submit Submit now".
-  it("drops an own label the child text already contains", () => {
+  // Word-boundary overlap: a container labelled "Submit" over a child
+  // rendering "Submit now" hoists the child's fuller text once, not
+  // "Submit Submit now" — the child already renders "Submit" as a whole word.
+  it("drops an own label the child text already renders as whole words", () => {
     const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
   <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
@@ -183,8 +184,97 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
 
     expect(assertText(submit[0]!)).toBe("Submit now");
     expect(evaluateCondition("text", "Submit now", submit, "equals")).toBe(true);
-    expect(evaluateCondition("text", "Submit", submit, "equals")).toBe(false);
+    // The element's own label IS exactly "Submit", so an `equals` assert
+    // against it passes via the node's own text — hoisting is additive and
+    // must not fail a check the label itself satisfies.
+    expect(evaluateCondition("text", "Submit", submit, "equals")).toBe(true);
     expect(evaluateCondition("text", "Submit", submit, "contains")).toBe(true);
+    // Text the element nowhere shows still fails exactly.
+    expect(evaluateCondition("text", "Submit later", submit, "equals")).toBe(false);
+  });
+
+  // The dedup is word-boundary, NOT substring: a container labelled "Save"
+  // over a child reading "Saved successfully" shows BOTH texts — "Save" only
+  // appears inside the word "Saved", so it must stay in the hoist, and the
+  // reviewer-facing acceptance `assert { equals: "Save" }` against the
+  // container must pass.
+  it("keeps an own label that only appears inside a descendant word", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" resource-id="save-button" content-desc="Save" package="com.acme.app" bounds="[40,1700][1040,1800]">
+      <node index="0" class="android.widget.TextView" text="Saved successfully" package="com.acme.app" bounds="[240,1730][840,1770]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const save = findAll(tree, { identifier: "save-button" });
+
+    // The label survives in the hoist alongside the child text...
+    expect(save[0]!.subtreeText).toBe("Save Saved successfully");
+    // ...and the assert reads the label exactly, not "Saved successfully".
+    expect(evaluateCondition("text", "Save", save, "equals")).toBe(true);
+    expect(evaluateCondition("text", "Saved successfully", save, "contains")).toBe(true);
+  });
+
+  // Ordinary prefix pairs — Setting/Settings, Comment/Comments, Load/Loading,
+  // Item/Items — are the same shape: the label is a substring of the child
+  // text but not a word of it, so it is kept.
+  it("keeps a prefix own label distinct from its pluralized child text", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" resource-id="comment-tab" content-desc="Comment" package="com.acme.app" bounds="[40,400][1040,500]">
+      <node index="0" class="android.widget.TextView" text="Comments" package="com.acme.app" bounds="[440,420][640,480]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const tab = findAll(tree, { identifier: "comment-tab" });
+
+    expect(tab[0]!.subtreeText).toBe("Comment Comments");
+    expect(evaluateCondition("text", "Comment", tab, "equals")).toBe(true);
+  });
+
+  // Multi-child joins dedup against the JOINED child text: a label one child
+  // renders among several is not repeated...
+  it("dedups the own label against the joined text of several children", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" resource-id="save-row" content-desc="Save" package="com.acme.app" bounds="[40,400][1040,500]">
+      <node index="0" class="android.widget.TextView" text="Save" package="com.acme.app" bounds="[140,420][340,480]" />
+      <node index="1" class="android.widget.TextView" text="icon" package="com.acme.app" bounds="[440,420][640,480]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const row = findAll(tree, { identifier: "save-row" });
+
+    // Not "Save Save icon" — the first child already renders the label.
+    expect(row[0]!.subtreeText).toBe("Save icon");
+    expect(evaluateCondition("text", "Save", row, "equals")).toBe(true);
+  });
+
+  // ...and a label the children spell out together is not repeated either.
+  it("dedups an own label its children's joined text spells out", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" resource-id="save-changes" content-desc="Save changes" package="com.acme.app" bounds="[40,400][1040,500]">
+      <node index="0" class="android.widget.TextView" text="Save" package="com.acme.app" bounds="[140,420][340,480]" />
+      <node index="1" class="android.widget.TextView" text="changes" package="com.acme.app" bounds="[440,420][740,480]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const row = findAll(tree, { identifier: "save-changes" });
+
+    // The joined child text equals the own label, so nothing is stamped and
+    // the assert reads the node's own "Save changes" — no duplication.
+    expect(row[0]!.subtreeText).toBeUndefined();
+    expect(assertText(row[0]!)).toBe("Save changes");
+    expect(evaluateCondition("text", "Save changes", row, "equals")).toBe(true);
   });
 
   // Visibility: text hoists only from on-screen nodes. A row dumped with

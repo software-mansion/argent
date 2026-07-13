@@ -222,6 +222,44 @@ describe("describe full-hierarchy adapter", () => {
     expect(evaluateCondition("text", "Submit", submit, "equals")).toBe(true);
   });
 
+  // The dedup is word-boundary, NOT substring: an accessibilityLabel "Save"
+  // over a `<Text>Saved successfully</Text>` shows both texts — "Save" only
+  // appears inside the word "Saved" — so the label stays in the hoist and an
+  // `equals: "Save"` assert against the container passes.
+  it("keeps an own label that only appears inside a descendant word", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTView",
+              identifier: "save-button",
+              label: "Save",
+              windowFrame: { x: 24, y: 304, width: 200, height: 48 },
+              children: [
+                {
+                  className: "RCTTextView",
+                  label: "Saved successfully",
+                  windowFrame: { x: 40, y: 316, width: 168, height: 24 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+    const save = findAll(tree, { identifier: "save-button" });
+
+    expect(save[0]!.subtreeText).toBe("Save Saved successfully");
+    expect(evaluateCondition("text", "Save", save, "equals")).toBe(true);
+    expect(evaluateCondition("text", "Saved successfully", save, "contains")).toBe(true);
+  });
+
   // The classic contains-vs-equals split: a counter reading "10" satisfies a
   // `contains: "1"` substring but not an `equals: "1"` exact match.
   it("distinguishes contains from equals on the hoisted text", () => {

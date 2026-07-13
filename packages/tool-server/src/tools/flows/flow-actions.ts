@@ -13,6 +13,7 @@ import {
   frameContains,
   isVisible,
   assertText,
+  nodeText,
   treeFingerprint,
   type Selector,
   type WaitCondition,
@@ -746,10 +747,15 @@ function assertReason(
         : `could not confirm the element is hidden — it was visible earlier, but the last UI reads returned an empty tree`;
     case "text": {
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+      if (!first) return `no element matched selector ${sel}`;
       const wanted = textMatch === "equals" ? "equal" : "contain";
-      return first
-        ? `element matched ${sel} but its text was "${assertText(first)}" (wanted to ${wanted} "${expectedText}")`
-        : `no element matched selector ${sel}`;
+      // The check accepts the element's own label/value as well as its hoisted
+      // subtree text (see evaluateCondition), so when they differ quote both —
+      // the author may have been asserting against either.
+      const shown = assertText(first);
+      const own = nodeText(first);
+      const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
+      return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted} "${expectedText}")`;
     }
     default:
       return `assertion failed for selector ${sel}`;

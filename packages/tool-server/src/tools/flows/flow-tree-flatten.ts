@@ -1,5 +1,4 @@
 import type { DescribeNode } from "../describe/contract";
-import { includesCI } from "../../utils/ui-tree-match";
 // Generic rect math, defined next to its reference use (the describe path's
 // scroll-clip prune) so the two trees can never drift on what "scrolled out
 // of a container's viewport" means.
@@ -82,13 +81,33 @@ function intersectClip(rect: ClipRect, clip: ClipRect | null): ClipRect {
   return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
 }
 
+// Word-boundary variant of a case-insensitive `includes`, for the own-label
+// dedup in `flattenHoisting`: does `haystack` contain `needle` as whole words?
+// A bare substring test would also drop an own label that merely appears
+// INSIDE a descendant word — "Save" inside "Saved successfully", "Setting"
+// inside "Settings" — even though the screen shows both texts, silently losing
+// the label from the hoist. Word characters are Unicode letters and digits:
+// "Submit" is word-contained in "Submit now" and "Submit!" but not in
+// "Submitted".
+function includesWordsCI(haystack: string, needle: string): boolean {
+  const h = haystack.toLowerCase();
+  const n = needle.toLowerCase();
+  if (!n) return false;
+  const isWordChar = (c: string | undefined): boolean =>
+    c !== undefined && /[\p{L}\p{N}]/u.test(c);
+  for (let at = h.indexOf(n); at !== -1; at = h.indexOf(n, at + 1)) {
+    if (!isWordChar(h[at - 1]) && !isWordChar(h[at + n.length])) return true;
+  }
+  return false;
+}
+
 /**
  * Flatten `node`'s subtree into `out`, hoisting descendant text onto container
  * leaves. Post-order: a node's children contribute their text first, then the
  * node's own text plus that child text becomes its `subtreeText` — the own text
- * is dropped when the child text already contains it (a label the child also
- * renders), and the result is stamped only when it adds something over the
- * node's own text (so a plain leaf gets none).
+ * is dropped when the child text already contains it as whole words (a label
+ * the child also renders), and the result is stamped only when it adds
+ * something over the node's own text (so a plain leaf gets none).
  * Returns the text this node contributes to its parent: `""` when it shields.
  *
  * `scrollClip` is the viewport of the node's nearest scrollable ancestor (in
@@ -146,12 +165,17 @@ export function flattenHoisting<T>(
   // testID button labelled "Submit" over a `<Text>Submit</Text>`): prepending
   // the own label unconditionally would hoist "Submit Submit", failing an
   // `equals` assert against exactly what the screen shows. Drop the own label
-  // when the joined descendant text already contains it (case-insensitive,
-  // mirroring the matcher's `contains` semantics); an additive label
-  // ("Volume" over "50%") is still preserved.
+  // when the joined descendant text already contains it as whole words
+  // (case-insensitive) — the exact duplicate, a fuller child rendering
+  // ("Submit" over "Submit now"), and a multi-child join ("Save" over
+  // "Save" + "icon" → "Save icon"). Deliberately NOT a bare substring test: a
+  // label that only appears inside a descendant word ("Save" over "Saved
+  // successfully", "Setting" over "Settings") is information the child does
+  // not render and must be kept, like the plainly additive label ("Volume"
+  // over "50%").
   const descendantText = childText.join(" ");
   const subtree =
-    view.ownText && !includesCI(descendantText, view.ownText)
+    view.ownText && !includesWordsCI(descendantText, view.ownText)
       ? [view.ownText, descendantText].filter(Boolean).join(" ")
       : descendantText || view.ownText;
   if (view.leaf) {
