@@ -300,6 +300,206 @@ describe("describe full-hierarchy adapter", () => {
     expect(evaluateCondition("text", "Row 50", feed)).toBe(false);
   });
 
+  // Scroll-clip prune: a row scrolled out of a mid-screen UIScrollView's
+  // window sits below the scroller's fold with an on-screen windowFrame. The
+  // AX describe path never reports it, so the flow tree must exclude it too —
+  // node, tap point, and hoisted text — or `assert { hidden }` falsely fails
+  // and a tap resolves outside the visible scroller.
+  it("excludes a label scrolled out of a mid-screen UIScrollView", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTScrollView",
+              identifier: "feed",
+              windowFrame: { x: 0, y: 300, width: 400, height: 200 },
+              children: [
+                {
+                  // The content view spans past the viewport — a direct child
+                  // of the scroller that must survive its partial overlap.
+                  className: "RCTScrollContentView",
+                  windowFrame: { x: 0, y: 300, width: 400, height: 800 },
+                  children: [
+                    {
+                      className: "RCTTextView",
+                      label: "Row 1",
+                      windowFrame: { x: 0, y: 320, width: 400, height: 40 },
+                      children: [],
+                    },
+                    {
+                      // Below the 500pt fold, inside the 800pt screen.
+                      className: "RCTTextView",
+                      label: "Row 9",
+                      windowFrame: { x: 0, y: 560, width: 400, height: 40 },
+                      children: [],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    expect(findAll(tree, { text: "Row 1" })).toHaveLength(1);
+    const clipped = findAll(tree, { text: "Row 9" });
+    expect(clipped).toHaveLength(0);
+    expect(evaluateCondition("hidden", undefined, clipped)).toBe(true);
+    expect(evaluateCondition("visible", undefined, clipped)).toBe(false);
+    expect(selectorToFrame(tree, { text: "Row 9" })).toBeUndefined();
+
+    // The clipped row's text is NOT hoisted onto the scroller.
+    const feed = findAll(tree, { identifier: "feed" });
+    expect(feed[0]!.subtreeText).toBe("Row 1");
+    expect(evaluateCondition("text", "Row 9", feed)).toBe(false);
+  });
+
+  // Partial overlap keeps the node with its full (screen-clipped-only) frame,
+  // mirroring the Android describe path's partial-overlap handling.
+  it("keeps a label partially inside the scroll window", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTScrollView",
+              identifier: "feed",
+              windowFrame: { x: 0, y: 300, width: 400, height: 200 },
+              children: [
+                {
+                  className: "RCTTextView",
+                  label: "Row 5",
+                  // Straddles the 500pt fold: 480–520.
+                  windowFrame: { x: 0, y: 480, width: 400, height: 40 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    const partial = findAll(tree, { text: "Row 5" })[0]!;
+    expect(partial).toBeDefined();
+    expect(partial.frame.y).toBeCloseTo(480 / 800, 5);
+    expect(partial.frame.height).toBeCloseTo(40 / 800, 5);
+  });
+
+  // Only scrollable ancestors clip: a badge hanging outside its plain parent
+  // (a notification dot on a card) must not be pruned.
+  it("keeps a badge overflowing a non-scrollable parent", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTView",
+              identifier: "card",
+              windowFrame: { x: 40, y: 300, width: 320, height: 100 },
+              children: [
+                {
+                  className: "RCTView",
+                  identifier: "badge",
+                  label: "3 unread",
+                  // Entirely outside the card's frame, on screen.
+                  windowFrame: { x: 340, y: 270, width: 40, height: 24 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    const badge = findAll(tree, { identifier: "badge" });
+    expect(badge).toHaveLength(1);
+    expect(badge[0]!.frame.y).toBeCloseTo(270 / 800, 5);
+  });
+
+  // Nested scroll clips COMPOSE (intersect) rather than replace: a
+  // content-sized UICollectionView straddles the outer RCTScrollView's fold.
+  // Its own window frame must not re-admit cells the outer viewport has
+  // clipped — a cell inside the collection's rect but below the outer fold is
+  // invisible and must be dropped.
+  it("drops a cell below the outer fold inside a content-sized inner scroller", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTScrollView",
+              identifier: "page",
+              // Outer viewport y[200,500].
+              windowFrame: { x: 0, y: 200, width: 400, height: 300 },
+              children: [
+                {
+                  className: "RCTScrollContentView",
+                  windowFrame: { x: 0, y: 200, width: 400, height: 1200 },
+                  children: [
+                    {
+                      // Content-sized: extends to y=1100, past the 500pt fold.
+                      className: "UICollectionView",
+                      identifier: "grid",
+                      windowFrame: { x: 0, y: 200, width: 400, height: 900 },
+                      children: [
+                        {
+                          className: "RCTTextView",
+                          label: "Cell 1",
+                          windowFrame: { x: 0, y: 220, width: 400, height: 40 },
+                          children: [],
+                        },
+                        {
+                          // Inside the grid's rect and the 800pt screen, but
+                          // below the outer scroller's 500pt fold.
+                          className: "RCTTextView",
+                          label: "Cell 9",
+                          windowFrame: { x: 0, y: 560, width: 400, height: 40 },
+                          children: [],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    // The in-viewport cell resolves; the straddling grid survives its partial
+    // overlap.
+    expect(findAll(tree, { text: "Cell 1" })).toHaveLength(1);
+    expect(findAll(tree, { identifier: "grid" })).toHaveLength(1);
+    const below = findAll(tree, { text: "Cell 9" });
+    expect(below).toHaveLength(0);
+    expect(evaluateCondition("hidden", undefined, below)).toBe(true);
+    expect(evaluateCondition("visible", undefined, below)).toBe(false);
+    expect(selectorToFrame(tree, { text: "Cell 9" })).toBeUndefined();
+    // ...and the clipped cell's text is not hoisted onto the grid.
+    expect(findAll(tree, { identifier: "grid" })[0]!.subtreeText).toBe("Cell 1");
+  });
+
   // Scoping: text belongs to its NEAREST identified ancestor. A self-identified
   // descendant claims its own text, so an outer container does not swallow it —
   // otherwise a screen-root testID would match any text anywhere beneath it.

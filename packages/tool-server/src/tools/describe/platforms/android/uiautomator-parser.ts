@@ -217,6 +217,17 @@ const SCROLL_CLASSES = new Set([
   "android.widget.ListView",
 ]);
 
+/**
+ * Whether a node scrolls its content — a known scroll class, or anything the
+ * framework marks `scrollable` (RN's ScrollView dumps as a scrollable
+ * ViewGroup). Such a node's bounds become the clip window for the scroll-clip
+ * prune. Shared with the flow tree adapter (`flow-android-tree`) so both trees
+ * agree on which containers clip.
+ */
+export function isUiAutomatorScrollable(attrs: Record<string, string>): boolean {
+  return SCROLL_CLASSES.has(attrs.class ?? "") || attrIsTrue(attrs, "scrollable");
+}
+
 const WEBVIEW_CLASSES = new Set(["android.webkit.WebView", "android.webkit.WebViewChromium"]);
 
 interface PixelRect {
@@ -301,7 +312,16 @@ function rectsEqual(a: PixelRect, b: PixelRect): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
-function rectFullyOutside(kid: PixelRect, clip: PixelRect): boolean {
+/**
+ * Whether a rect lies entirely outside a clip window — the scroll-clip test
+ * `pruneSubtree` applies to drop views a scrolling container has scrolled out
+ * of its viewport. Exported for the flow tree adapters (`flow-tree-flatten`),
+ * which must agree with the agent-facing describe on what "scrolled out" means.
+ */
+export function rectFullyOutside(
+  kid: { x: number; y: number; w: number; h: number },
+  clip: { x: number; y: number; w: number; h: number }
+): boolean {
   return (
     kid.x + kid.w <= clip.x ||
     kid.x >= clip.x + clip.w ||
@@ -410,9 +430,8 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
     if (!top.visited) {
       top.visited = true;
       const attrs = top.parsed.attrs;
-      const cls = attrs.class ?? "";
       const myBounds = parseUiAutomatorBounds(attrs.bounds ?? "");
-      const isScroll = SCROLL_CLASSES.has(cls) || attrIsTrue(attrs, "scrollable");
+      const isScroll = isUiAutomatorScrollable(attrs);
       // Children inherit either MY bounds (if I'm a scroll) or whatever clip
       // I was handed. They'll filter their own kids against this rect.
       const childClip = isScroll && myBounds ? myBounds : top.scrollClip;

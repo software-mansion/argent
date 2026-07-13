@@ -145,11 +145,22 @@ function projectIosNode(
   const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
   const role = roleFromClassName(node.className);
 
+  // Scroll-clip inputs (see `flattenHoisting`): a UIScrollView's window frame
+  // clips its subtree, so a row it has scrolled out of its viewport — still
+  // inside the device screen — is dropped, matching the AX describe path,
+  // which never reports scroll-clipped elements. Window-space only: `frame`
+  // is parent-local, so falling back to it (as the leaf frame may) would
+  // compare rects across coordinate spaces and mis-prune; without a
+  // `windowFrame` the node is simply never scroll-pruned and, if a scroller,
+  // imposes no clip.
+  const win = node.windowFrame;
+  const rect = win ? { x: win.x, y: win.y, w: win.width, h: win.height } : null;
+
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
   if (!skip && (node.identifier || node.label || role !== "AXGroup" || node.firstResponder)) {
-    const rect = node.windowFrame ?? node.frame;
-    frame = rect ? normalizeFrame(rect, screenW, screenH) : null;
+    const leafRect = node.windowFrame ?? node.frame;
+    frame = leafRect ? normalizeFrame(leafRect, screenW, screenH) : null;
     if (frame) {
       leaf = {
         role,
@@ -172,6 +183,8 @@ function projectIosNode(
     ownText: frame ? (node.label ?? "") : "",
     leaf,
     shield: Boolean(node.identifier),
+    rect,
+    scrolls: role === "AXScrollArea",
   };
 }
 

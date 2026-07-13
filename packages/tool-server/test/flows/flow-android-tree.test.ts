@@ -237,4 +237,143 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(focused).toHaveLength(1);
     expect(focused[0]!.frame.y).toBeCloseTo(400 / 1920, 5);
   });
+
+  // Scroll-clip prune, mirroring the describe path (`pruneSubtree` →
+  // `rectFullyOutside`): a row scrolled out of a mid-screen RecyclerView's
+  // viewport is still in the dump with on-screen bounds — it must be dropped,
+  // or `assert { hidden }` falsely fails, `visible` falsely passes, and a
+  // tap resolves below the scroller's fold.
+  it("drops a row scrolled out of a mid-screen RecyclerView viewport", () => {
+    // Viewport y[1000,1400]; row-7 sits at y[1500,1620] — outside the viewport
+    // yet inside the 1920px screen.
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="androidx.recyclerview.widget.RecyclerView" resource-id="list" scrollable="true" package="com.acme.app" bounds="[0,1000][1080,1400]">
+      <node index="0" class="android.view.ViewGroup" resource-id="row-2" package="com.acme.app" bounds="[0,1080][1080,1200]">
+        <node index="0" class="android.widget.TextView" text="Row 2" package="com.acme.app" bounds="[0,1100][1080,1180]" />
+      </node>
+      <node index="1" class="android.view.ViewGroup" resource-id="row-7" package="com.acme.app" bounds="[0,1500][1080,1620]">
+        <node index="0" class="android.widget.TextView" text="Row 7" package="com.acme.app" bounds="[0,1520][1080,1600]" />
+      </node>
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+
+    // The in-viewport row resolves; the scrolled-out one is gone entirely —
+    // node, testID, and text.
+    expect(findAll(tree, { identifier: "row-2" })).toHaveLength(1);
+    const clipped = findAll(tree, { identifier: "row-7" });
+    expect(clipped).toHaveLength(0);
+    expect(JSON.stringify(tree)).not.toContain("Row 7");
+    expect(evaluateCondition("hidden", undefined, clipped)).toBe(true);
+    expect(evaluateCondition("visible", undefined, clipped)).toBe(false);
+    // No tap point resolves below the 1400px fold — by id or by text.
+    expect(selectorToFrame(tree, { identifier: "row-7" })).toBeUndefined();
+    expect(selectorToFrame(tree, { text: "Row 7" })).toBeUndefined();
+    // Parity: the agent-facing describe drops the same row.
+    expect(JSON.stringify(parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H))).not.toContain("Row 7");
+  });
+
+  // Partial overlap keeps the node with its screen-clipped frame, exactly like
+  // the describe path (which prunes only rects FULLY outside the window).
+  it("keeps a row partially inside the scroll viewport", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="androidx.recyclerview.widget.RecyclerView" resource-id="list" scrollable="true" package="com.acme.app" bounds="[0,1000][1080,1400]">
+      <node index="0" class="android.view.ViewGroup" resource-id="row-edge" package="com.acme.app" bounds="[0,1300][1080,1500]">
+        <node index="0" class="android.widget.TextView" text="Row 5" package="com.acme.app" bounds="[0,1320][1080,1380]" />
+      </node>
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+
+    const [edge] = findAll(tree, { identifier: "row-edge" });
+    expect(edge).toBeDefined();
+    // The frame stays the full bounds clipped to the screen only — not to the
+    // scroll window — matching the describe path's partial-overlap handling.
+    expect(edge!.frame.y).toBeCloseTo(1300 / 1920, 5);
+    expect(edge!.frame.height).toBeCloseTo(200 / 1920, 5);
+    expect(edge!.subtreeText).toBe("Row 5");
+  });
+
+  // Only scrollable ancestors clip: a badge hanging outside its plain parent
+  // (a notification dot, an overlay) must not be pruned.
+  it("keeps a badge overflowing a non-scrollable parent", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" resource-id="card" package="com.acme.app" bounds="[200,600][880,760]">
+      <node index="0" class="android.view.ViewGroup" resource-id="badge" content-desc="3 unread" package="com.acme.app" bounds="[840,560][940,640]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+
+    const [badge] = findAll(tree, { identifier: "badge" });
+    expect(badge).toBeDefined();
+    expect(badge!.frame.y).toBeCloseTo(560 / 1920, 5);
+  });
+
+  // Nested scrolls: the inner scroller's window narrows the clip for its
+  // subtree (intersecting with the outer one), so a chip scrolled out of the
+  // inner window is dropped even though it sits inside the outer one.
+  it("clips against the nearest scrollable ancestor's window", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.ScrollView" resource-id="page" package="com.acme.app" bounds="[0,0][1080,1920]">
+      <node index="0" class="android.view.ViewGroup" package="com.acme.app" bounds="[0,0][1080,1920]">
+        <node index="0" class="android.widget.HorizontalScrollView" resource-id="chips" package="com.acme.app" bounds="[0,500][540,700]">
+          <node index="0" class="android.view.ViewGroup" resource-id="chip-in" content-desc="Alpha" package="com.acme.app" bounds="[40,520][300,680]" />
+          <node index="1" class="android.view.ViewGroup" resource-id="chip-out" content-desc="Zeta" package="com.acme.app" bounds="[600,520][860,680]" />
+        </node>
+      </node>
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+
+    expect(findAll(tree, { identifier: "chip-in" })).toHaveLength(1);
+    // chip-out is inside the outer scroller's window (and the screen) but
+    // fully right of the chip row's 540px edge → dropped.
+    expect(findAll(tree, { identifier: "chip-out" })).toHaveLength(0);
+    expect(selectorToFrame(tree, { text: "Zeta" })).toBeUndefined();
+  });
+
+  // Nested scroll clips COMPOSE (intersect) rather than replace: an embedded,
+  // content-sized RecyclerView (nestedScrollingEnabled=false — dumped with
+  // scrollable="false" but matched as a scroller by class) straddles the outer
+  // NestedScrollView's fold. Its own rect must not re-admit rows the outer
+  // viewport has clipped — a row inside the inner rect but below the outer
+  // fold is invisible and must be dropped.
+  it("drops a row below the outer fold inside a content-sized inner scroller", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="androidx.core.widget.NestedScrollView" resource-id="page" scrollable="true" package="com.acme.app" bounds="[0,200][1080,1000]">
+      <node index="0" class="androidx.recyclerview.widget.RecyclerView" resource-id="embedded" scrollable="false" package="com.acme.app" bounds="[0,200][1080,2800]">
+        <node index="0" class="android.view.ViewGroup" resource-id="item-1" content-desc="Item 1" package="com.acme.app" bounds="[0,240][1080,360]" />
+        <node index="1" class="android.view.ViewGroup" resource-id="item-8" content-desc="Item 8" package="com.acme.app" bounds="[0,1100][1080,1220]" />
+      </node>
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+
+    // In-viewport row resolves; the straddling scroller itself survives its
+    // partial overlap.
+    expect(findAll(tree, { identifier: "item-1" })).toHaveLength(1);
+    expect(findAll(tree, { identifier: "embedded" })).toHaveLength(1);
+    // item-8 is on screen and inside the RecyclerView's content-sized rect,
+    // but below the NestedScrollView's 1000px fold → dropped.
+    const below = findAll(tree, { identifier: "item-8" });
+    expect(below).toHaveLength(0);
+    expect(evaluateCondition("hidden", undefined, below)).toBe(true);
+    expect(evaluateCondition("visible", undefined, below)).toBe(false);
+    expect(selectorToFrame(tree, { text: "Item 8" })).toBeUndefined();
+  });
 });

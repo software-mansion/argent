@@ -5,6 +5,7 @@ import {
   deriveUiAutomatorRole,
   isNoisyUiAutomatorClass,
   isUiAutomatorLayoutContainer,
+  isUiAutomatorScrollable,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
 } from "../describe/platforms/android/uiautomator-parser";
@@ -30,7 +31,10 @@ import {
  *
  * This module parses the same dump without that trim: it flattens the
  * hierarchy keeping **every** view with a `resource-id` (RN `testID`) or a
- * label — exactly the shape `flow-ios-tree.ts` produces on iOS. Throws when
+ * label — exactly the shape `flow-ios-tree.ts` produces on iOS. The trim's
+ * scroll-clip prune IS preserved (see `flattenHoisting`): a view a scrolling
+ * ancestor has scrolled out of its window is dropped here too, so the flow
+ * tree agrees with the agent-facing `describe` on what is visible. Throws when
  * the helper is unavailable rather than letting the caller degrade to the
  * trimmed uiautomator tree — see `fetchFlowTree` for why a silent fallback
  * would flip flow outcomes.
@@ -131,6 +135,10 @@ function projectAndroidNode(
   // (label plus a distinct text value) — never the secret behind a password.
   const ownText = [label, hasValue ? rawText : ""].filter(Boolean).join(" ");
 
+  // Raw pixel bounds — unclipped, exactly as `pruneSubtree` compares them —
+  // feed the flatten's scroll-clip prune for every node, leaf-eligible or not.
+  const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
+
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
   // Keep any view a selector could address — a resource-id (RN testID), label,
@@ -139,7 +147,6 @@ function projectAndroidNode(
   // EditText). Pure layout scaffolding is dropped — but its children are still
   // walked, so a testID nested under an unlabelled container survives.
   if (!skip && (identifier || label || hasSemanticRole || isFocused)) {
-    const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
       leaf = { role, frame, children: [] };
@@ -169,6 +176,11 @@ function projectAndroidNode(
     // A password node shields its placeholder text like any identified node —
     // even if it somehow lacks an id — so the secret can never bubble upward.
     shield: Boolean(identifier) || isPassword,
+    // Scroll-clip inputs (see `flattenHoisting`): a scrolling container's raw
+    // bounds clip its subtree, so a row it has scrolled out of view — still
+    // on the device screen — is dropped, matching the describe path's prune.
+    rect,
+    scrolls: isUiAutomatorScrollable(attrs),
   };
 }
 
