@@ -66,6 +66,25 @@ afterEach(async () => {
 });
 
 describe("run cancellation mid-directive", () => {
+  it("fails the verdict when an already-aborted run only contains echo narration", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    currentFetch = () => ({ tree: screen([]), source: "native-devtools" });
+
+    await writeFlow("cancelled-echo", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "never narrated" }],
+    });
+
+    const result = await run("cancelled-echo", mockRegistry([]), controller.signal);
+
+    expect(result.steps).toMatchObject([{ kind: "echo", status: "skip", reason: "run aborted" }]);
+    // Echo remains excluded from displayed counters, but cancellation still
+    // makes the run incomplete rather than a zero-step pass.
+    expect(result.skipped).toBe(0);
+    expect(result.ok).toBe(false);
+  });
+
   it("reports a tap cancelled during its auto-wait as a skip, not an offscreen failure", async () => {
     const controller = new AbortController();
     // The target never appears; the run is cancelled on the third tree read
@@ -92,6 +111,7 @@ describe("run cancellation mid-directive", () => {
     // "no visible element matched … add a scroll-to step" hint.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
     expect(calls).not.toContain("gesture-tap");
   });
 
@@ -189,6 +209,7 @@ describe("run cancellation mid-launch", () => {
     // tree-source gate were cut short, so the launch verified nothing.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
     expect(calls).toContain("restart-app");
   });
 

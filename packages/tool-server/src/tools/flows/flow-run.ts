@@ -587,7 +587,9 @@ function summarize(
   let failed = 0;
   let skipped = 0;
   let errored = 0;
+  let hasSkippedReport = false;
   for (const s of steps) {
+    hasSkippedReport ||= s.status === "skip";
     // Echo is narration, not a test step — counting it would let the summary
     // disagree with the renderers' step numbering (which skips echo too).
     if (s.kind === "echo") continue;
@@ -600,7 +602,11 @@ function summarize(
     flow: flowName,
     device: deviceId,
     executionPrerequisite,
-    ok: failed === 0 && errored === 0,
+    // A skip is never a successful omission: the runner only emits skips after
+    // a hard stop or cancellation. The former already has a fail/error report;
+    // the latter may contain skips alone, so include them in the verdict or an
+    // aborted run would be reported as PASS.
+    ok: failed === 0 && errored === 0 && !hasSkippedReport,
     passed,
     failed,
     skipped,
