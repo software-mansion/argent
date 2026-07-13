@@ -127,41 +127,46 @@ function clamp01(v: number): number {
 const EDGE_EPS = 0.005;
 
 /**
- * Is `frame` fully within `clip` along the scroll axis, with its *entry* edge
- * cleared of the clip boundary by a margin? Every describe adapter clips a
- * partly-scrolled element's frame to the viewport (iOS/Chromium clamp their
- * rects to [0,1]; Android uiautomator reports bounds already clipped to the
- * scroll container), so such an element sits exactly flush against the edge it
- * is being revealed from — a row entering from the bottom has `y+h == clip.bottom`.
- * "Flush against the entry edge" is therefore the universal clipped signal.
- * Requiring the entry edge strictly inside (by `EDGE_EPS`), with the opposite
- * edge still within the clip, means the whole element has cleared the fold. The
- * entry edge is set by the scroll direction: `down` reveals from the bottom,
- * `up` from the top, etc.
+ * Is `frame` as visible as it can get within `clip` along the scroll axis?
+ * True in either of two shapes:
+ *
+ * 1. Fully within the clip, with its *entry* edge cleared of the clip boundary
+ *    by a margin. Every describe adapter clips a partly-scrolled element's
+ *    frame to the viewport (iOS/Chromium clamp their rects to [0,1]; Android
+ *    uiautomator reports bounds already clipped to the scroll container), so
+ *    such an element sits exactly flush against the edge it is being revealed
+ *    from — a row entering from the bottom has `y+h == clip.bottom`. "Flush
+ *    against the entry edge" is therefore the universal clipped signal.
+ *    Requiring the entry edge strictly inside (by `EDGE_EPS`), with the
+ *    opposite edge still within the clip, means the whole element has cleared
+ *    the fold. The entry edge is set by the scroll direction: `down` reveals
+ *    from the bottom, `up` from the top, etc.
+ * 2. Spanning the whole clip along the axis (both clip edges covered, with
+ *    `EDGE_EPS` slack). A target as tall/wide as the clip — or larger — can
+ *    never fit both edges inside it, so shape 1 is arithmetically
+ *    unsatisfiable for it; once it covers the clip, no scroll can reveal more
+ *    of it, so it is accepted where it stands. Without this, a full-screen
+ *    target would scroll (and could burn every iteration when an in-region
+ *    animation defeats the end-of-scroll fingerprint) despite being on screen
+ *    the whole time.
  */
 function axisFullyInside(
   frame: DescribeFrame,
   direction: ScrollDirection,
   clip: DescribeFrame
 ): boolean {
-  const top = clip.y;
-  const bottom = clip.y + clip.height;
-  const left = clip.x;
-  const right = clip.x + clip.width;
-  const fTop = frame.y;
-  const fBottom = frame.y + frame.height;
-  const fLeft = frame.x;
-  const fRight = frame.x + frame.width;
-  switch (direction) {
-    case "down": // entered from the bottom edge
-      return fBottom <= bottom - EDGE_EPS && fTop >= top - EDGE_EPS;
-    case "up": // entered from the top edge
-      return fTop >= top + EDGE_EPS && fBottom <= bottom + EDGE_EPS;
-    case "right": // entered from the right edge
-      return fRight <= right - EDGE_EPS && fLeft >= left - EDGE_EPS;
-    case "left": // entered from the left edge
-      return fLeft >= left + EDGE_EPS && fRight <= right + EDGE_EPS;
-  }
+  const vertical = direction === "down" || direction === "up";
+  const clipStart = vertical ? clip.y : clip.x;
+  const clipEnd = clipStart + (vertical ? clip.height : clip.width);
+  const fStart = vertical ? frame.y : frame.x;
+  const fEnd = fStart + (vertical ? frame.height : frame.width);
+  // Shape 2: the target covers the whole clip window along the axis.
+  if (fStart <= clipStart + EDGE_EPS && fEnd >= clipEnd - EDGE_EPS) return true;
+  // Shape 1: both edges inside, entry edge (per direction) cleared by EDGE_EPS.
+  // `down`/`right` reveal from the end edge; `up`/`left` from the start edge.
+  return direction === "down" || direction === "right"
+    ? fEnd <= clipEnd - EDGE_EPS && fStart >= clipStart - EDGE_EPS
+    : fStart >= clipStart + EDGE_EPS && fEnd <= clipEnd + EDGE_EPS;
 }
 
 // `assert` is a correctness check, not an open-ended wait — but UI updates after
@@ -439,11 +444,13 @@ async function scrollIncrement(
 }
 
 /**
- * Scroll until `target` is fully within the scroll viewport along the scroll
- * axis, returning its frame. Each round settles the tree, checks the target,
- * then — if it isn't fully in view — does one momentum-free increment. Stopping
- * only once the target has cleared the entry edge (not on the first sliver) is
- * what keeps a following `tap`/`snapshot` off a half-clipped element. If a
+ * Scroll until `target` is as visible as it can get within the scroll viewport
+ * along the scroll axis — fully inside it, or (for a target as tall/wide as the
+ * viewport or larger) spanning it — returning its frame. Each round settles the
+ * tree, checks the target, then — if it isn't fully in view — does one
+ * momentum-free increment. Stopping only once the target has cleared the entry
+ * edge (not on the first sliver) is what keeps a following `tap`/`snapshot`
+ * off a half-clipped element. If a
  * round's settled tree — fingerprinted within the scrolled region only (the
  * `within` container, or the scroll containers under the gesture anchor when
  * none is named) — is identical to the previous round's, the container has hit

@@ -139,6 +139,134 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(0);
   });
 
+  it("accepts a full-screen target immediately, despite a ticking in-region label", async () => {
+    // A target as tall as the screen can never fit both edges strictly inside
+    // the clip — its extent equals the clip's — so full containment is
+    // arithmetically unsatisfiable and only the spanning shape can accept it.
+    // The ticking label defeats the end-of-scroll fingerprint fallback (no two
+    // settled trees match), proving the zero-swipe acceptance comes from the
+    // axis check itself; without the spanning shape this conjunction would
+    // burn all MAX_SCROLL_ITERATIONS on a target visible the whole time.
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      return screen([
+        n({ label: "Order form", frame: { x: 0, y: 0, width: 1, height: 1 } }),
+        // Ticks every other read: each settle sees a stable pair, but no two
+        // settled trees share the ticker's label (a ~1Hz clock, effectively).
+        n({
+          label: `elapsed ${Math.floor(reads / 2)}s`,
+          frame: { x: 0.1, y: 0.05, width: 0.3, height: 0.05 },
+        }),
+      ]);
+    };
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("fullscreen", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order form" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "fullscreen", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+  });
+
+  it("scrolls a target taller than its `within` clip until it spans the clip, then accepts", async () => {
+    // A 0.4-tall card inside a 0.3-tall pane can never fit both edges inside
+    // the clip. It must still be scrolled TOWARD: absent → partially entered
+    // (covering neither clip edge — not accepted yet) → spanning the whole
+    // pane, at which point no further scroll can reveal more of it.
+    const pane = () => n({ identifier: "pane", frame: { x: 0, y: 0.3, width: 1, height: 0.3 } });
+    let scrolled = 0;
+    currentTree = () => {
+      const card =
+        scrolled >= 2
+          ? [n({ label: "Tall card", frame: { x: 0.1, y: 0.25, width: 0.8, height: 0.4 } })] // spans 0.3..0.6
+          : scrolled === 1
+            ? [n({ label: "Tall card", frame: { x: 0.1, y: 0.55, width: 0.8, height: 0.4 } })] // entered, not spanning
+            : []; // still off-screen
+      return screen([pane(), ...card]);
+    };
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled++;
+    });
+
+    await writeFlow("tall-card", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Tall card" },
+          direction: "down",
+          within: { identifier: "pane" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "tall-card", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    // Two increments: one to bring it on, one more until it spans the pane.
+    expect(swipes).toHaveLength(2);
+  });
+
+  it("still scrolls a smaller-than-clip target that is only half inside the clip", async () => {
+    // Regression guard for the spanning acceptance: a small row hanging out of
+    // the pane's bottom covers neither clip edge and isn't fully contained
+    // either — it must still be scrolled until fully inside, so a following
+    // tap doesn't land on a clipped sliver.
+    const pane = () => n({ identifier: "pane", frame: { x: 0, y: 0.3, width: 1, height: 0.3 } });
+    let scrolled = false;
+    currentTree = () =>
+      screen([
+        pane(),
+        scrolled
+          ? n({ label: "Row 5", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })
+          : // bottom half outside the pane (0.55..0.65 vs clip bottom 0.6)
+            n({ label: "Row 5", frame: { x: 0.1, y: 0.55, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+
+    await writeFlow("half-visible", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 5" },
+          direction: "down",
+          within: { identifier: "pane" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "half-visible", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+  });
+
   it("keeps scrolling a target flush at the viewport edge until it clears the fold", async () => {
     // Every adapter clips a partly-scrolled element's frame to the viewport, so a
     // half-revealed row sits flush against the entry edge (bottom, here) — its
