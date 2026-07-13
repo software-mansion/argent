@@ -51,8 +51,44 @@ import {
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
+  localInstallCommand,
+  localUninstallCommand,
+  detectProjectPackageManager,
+  hasProjectPackageJson,
+  isYarnPnp,
+  isLocallyInstalled,
+  getLocallyInstalledVersion,
+  getLocalArgentBinRelPath,
+  probeLocalInstall,
+  isDeclaredLocally,
+  getInstallRecordPath,
+  readInstallRecord,
+  writeInstallRecord,
+  removeInstallRecord,
+  resolveInstallMode,
+  resolveInstallModeFromFlags,
+  InstallModeFlagError,
 } from "../src/utils.js";
-import { NPM_REGISTRY } from "../src/constants.js";
+import { NPM_REGISTRY, PACKAGE_NAME } from "../src/constants.js";
+
+// Stage a fake project-local @swmansion/argent install under `root`, returning
+// the bin entry's project-relative POSIX path.
+function stageLocalArgent(
+  root: string,
+  opts: { version?: string; bin?: unknown; withBinFile?: boolean } = {}
+): string {
+  const pkgDir = path.join(root, "node_modules", PACKAGE_NAME);
+  fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+  const bin = opts.bin ?? { "argent": "dist/cli.js", "argent-simulator-server": "bin/x.cjs" };
+  fs.writeFileSync(
+    path.join(pkgDir, "package.json"),
+    JSON.stringify({ name: PACKAGE_NAME, version: opts.version ?? "1.2.3", bin })
+  );
+  if (opts.withBinFile !== false) {
+    fs.writeFileSync(path.join(pkgDir, "dist", "cli.js"), "#!/usr/bin/env node\n");
+  }
+  return `node_modules/${PACKAGE_NAME}/dist/cli.js`;
+}
 
 let tmpDir: string;
 
@@ -565,5 +601,346 @@ describe("isSkillsCliAvailable", () => {
     const opts = execSyncMock.mock.calls[0]![1] as { timeout?: number } | undefined;
     expect(typeof opts?.timeout).toBe("number");
     expect(opts!.timeout!).toBeGreaterThan(0);
+  });
+});
+
+// ── localInstallCommand / localUninstallCommand ──────────────────────────────
+
+describe("localInstallCommand", () => {
+  it("uses --save-dev for npm", () => {
+    expect(localInstallCommand("npm", "pkg")).toEqual({
+      bin: "npm",
+      args: ["install", "--save-dev", "pkg"],
+    });
+  });
+  it("uses add --dev for yarn", () => {
+    expect(localInstallCommand("yarn", "pkg")).toEqual({
+      bin: "yarn",
+      args: ["add", "--dev", "pkg"],
+    });
+  });
+  it("uses add -D for pnpm", () => {
+    expect(localInstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["add", "-D", "pkg"] });
+  });
+  it("uses add -d for bun", () => {
+    expect(localInstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["add", "-d", "pkg"] });
+  });
+});
+
+describe("localUninstallCommand", () => {
+  it("uses uninstall (project) for npm — not -g", () => {
+    expect(localUninstallCommand("npm", "pkg")).toEqual({ bin: "npm", args: ["uninstall", "pkg"] });
+  });
+  it("uses remove for yarn/pnpm/bun without -g", () => {
+    expect(localUninstallCommand("yarn", "pkg")).toEqual({ bin: "yarn", args: ["remove", "pkg"] });
+    expect(localUninstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["remove", "pkg"] });
+    expect(localUninstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["remove", "pkg"] });
+  });
+});
+
+// ── detectProjectPackageManager ──────────────────────────────────────────────
+
+describe("detectProjectPackageManager", () => {
+  it("detects pnpm from pnpm-lock.yaml", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("detects yarn from yarn.lock", () => {
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("yarn");
+  });
+  it("detects bun from bun.lockb", () => {
+    fs.writeFileSync(path.join(tmpDir, "bun.lockb"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("bun");
+  });
+  it("detects npm from package-lock.json", () => {
+    fs.writeFileSync(path.join(tmpDir, "package-lock.json"), "{}");
+    expect(detectProjectPackageManager(tmpDir)).toBe("npm");
+  });
+  it("pnpm wins over yarn when both lockfiles exist", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("falls back to a valid PM when no lockfile is present", () => {
+    expect(["npm", "yarn", "pnpm", "bun"]).toContain(detectProjectPackageManager(tmpDir));
+  });
+  it("honors the corepack packageManager field over lockfiles", () => {
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ packageManager: "pnpm@9.1.0" })
+    );
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("walks up to a workspace-root lockfile (monorepo sub-package)", () => {
+    // pnpm/yarn workspaces keep the single lockfile at the monorepo root.
+    fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
+    const sub = path.join(tmpDir, "packages", "app");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "package.json"), "{}");
+    expect(detectProjectPackageManager(sub)).toBe("pnpm");
+  });
+  it("stops the upward walk at a repo boundary (.git)", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
+    const repo = path.join(tmpDir, "other-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    // The sibling repo has no lockfile of its own; the outer pnpm lockfile
+    // must NOT bleed through the .git boundary.
+    expect(["npm", "yarn", "bun"]).toContain(detectProjectPackageManager(repo));
+  });
+});
+
+// ── Local install detection ──────────────────────────────────────────────────
+
+describe("hasProjectPackageJson", () => {
+  it("is false without and true with a package.json", () => {
+    expect(hasProjectPackageJson(tmpDir)).toBe(false);
+    fs.writeFileSync(path.join(tmpDir, "package.json"), "{}");
+    expect(hasProjectPackageJson(tmpDir)).toBe(true);
+  });
+});
+
+describe("isYarnPnp", () => {
+  it("detects .pnp.cjs and .pnp.loader.mjs", () => {
+    expect(isYarnPnp(tmpDir)).toBe(false);
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    expect(isYarnPnp(tmpDir)).toBe(true);
+    fs.rmSync(path.join(tmpDir, ".pnp.cjs"));
+    fs.writeFileSync(path.join(tmpDir, ".pnp.loader.mjs"), "");
+    expect(isYarnPnp(tmpDir)).toBe(true);
+  });
+});
+
+describe("isLocallyInstalled / getLocallyInstalledVersion", () => {
+  it("is false / null when not installed", () => {
+    expect(isLocallyInstalled(tmpDir)).toBe(false);
+    expect(getLocallyInstalledVersion(tmpDir)).toBeNull();
+  });
+  it("is true and reads version from node_modules package.json", () => {
+    stageLocalArgent(tmpDir, { version: "9.9.9" });
+    expect(isLocallyInstalled(tmpDir)).toBe(true);
+    expect(getLocallyInstalledVersion(tmpDir)).toBe("9.9.9");
+  });
+});
+
+describe("getLocalArgentBinRelPath", () => {
+  it("returns null when not installed", () => {
+    expect(getLocalArgentBinRelPath(tmpDir)).toBeNull();
+  });
+  it("derives the bin path from the package.json bin map", () => {
+    const rel = stageLocalArgent(tmpDir);
+    expect(getLocalArgentBinRelPath(tmpDir)).toBe(rel);
+    expect(getLocalArgentBinRelPath(tmpDir)).toBe(`node_modules/${PACKAGE_NAME}/dist/cli.js`);
+  });
+  it("supports a string bin field", () => {
+    stageLocalArgent(tmpDir, { bin: "dist/cli.js" });
+    expect(getLocalArgentBinRelPath(tmpDir)).toBe(`node_modules/${PACKAGE_NAME}/dist/cli.js`);
+  });
+  it("returns null when the resolved bin file is missing on disk", () => {
+    stageLocalArgent(tmpDir, { withBinFile: false });
+    expect(getLocalArgentBinRelPath(tmpDir)).toBeNull();
+  });
+  it("uses forward slashes (committable / cross-platform)", () => {
+    stageLocalArgent(tmpDir);
+    expect(getLocalArgentBinRelPath(tmpDir)).not.toContain("\\");
+  });
+  it.skipIf(process.platform === "win32")(
+    "commits the stable node_modules path, not the pnpm version-pinned store dir",
+    () => {
+      // pnpm layout: node_modules/<pkg> symlinks into a version-suffixed .pnpm
+      // store dir, and module resolution returns that realpath. Committing it
+      // would bake the version into the MCP command; the stable symlink path wins.
+      const storeDir = path.join(
+        tmpDir,
+        "node_modules",
+        ".pnpm",
+        "@swmansion+argent@0.13.0",
+        "node_modules",
+        PACKAGE_NAME
+      );
+      fs.mkdirSync(path.join(storeDir, "dist"), { recursive: true });
+      fs.writeFileSync(
+        path.join(storeDir, "package.json"),
+        JSON.stringify({ name: PACKAGE_NAME, version: "0.13.0", bin: { argent: "dist/cli.js" } })
+      );
+      fs.writeFileSync(path.join(storeDir, "dist", "cli.js"), "#!/usr/bin/env node\n");
+      const linkPath = path.join(tmpDir, "node_modules", PACKAGE_NAME);
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      fs.symlinkSync(storeDir, linkPath);
+
+      const rel = getLocalArgentBinRelPath(tmpDir);
+      expect(rel).toBe(`node_modules/${PACKAGE_NAME}/dist/cli.js`);
+      expect(rel).not.toContain(".pnpm");
+      expect(rel).not.toContain("0.13.0");
+    }
+  );
+});
+
+describe("probeLocalInstall / isDeclaredLocally", () => {
+  it("resolves a hoisted install from a sub-package (workspace layout)", () => {
+    // The package lives in the workspace-root node_modules; the project root
+    // is a sub-package. A hardcoded <root>/node_modules probe misses this.
+    stageLocalArgent(tmpDir, { version: "3.2.1" });
+    const sub = path.join(tmpDir, "packages", "app");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "package.json"), "{}");
+    const probe = probeLocalInstall(sub);
+    expect(probe.installed).toBe(true);
+    expect(probe.version).toBe("3.2.1");
+    expect(probe.packageDir).toBeTruthy();
+  });
+  it("treats a declared dep under Yarn PnP as installed (no node_modules)", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devDependencies: { [PACKAGE_NAME]: "1.4.0" } })
+    );
+    const probe = probeLocalInstall(tmpDir);
+    expect(probe.installed).toBe(true);
+    expect(probe.version).toBe("1.4.0"); // exact specifier doubles as the version
+    expect(probe.packageDir).toBeNull();
+  });
+  it("PnP with a range specifier is installed but version-unknown", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devDependencies: { [PACKAGE_NAME]: "^1.4.0" } })
+    );
+    const probe = probeLocalInstall(tmpDir);
+    expect(probe.installed).toBe(true);
+    expect(probe.version).toBeNull();
+  });
+  it("PnP without a declaration is not installed", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    fs.writeFileSync(path.join(tmpDir, "package.json"), "{}");
+    expect(probeLocalInstall(tmpDir).installed).toBe(false);
+  });
+  it("isDeclaredLocally reads dependencies and devDependencies", () => {
+    expect(isDeclaredLocally(tmpDir)).toBe(false);
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ dependencies: { [PACKAGE_NAME]: "*" } })
+    );
+    expect(isDeclaredLocally(tmpDir)).toBe(true);
+  });
+});
+
+// ── Install-mode record (.argent/install.json) ───────────────────────────────
+
+describe("install record", () => {
+  it("getInstallRecordPath points at <root>/.argent/install.json", () => {
+    expect(getInstallRecordPath(tmpDir)).toBe(path.join(tmpDir, ".argent", "install.json"));
+  });
+  it("write then read round-trips", () => {
+    writeInstallRecord(tmpDir, { mode: "local", package: PACKAGE_NAME, writtenBy: "1.0.0" });
+    expect(readInstallRecord(tmpDir)).toEqual({
+      mode: "local",
+      package: PACKAGE_NAME,
+      writtenBy: "1.0.0",
+    });
+  });
+  it("read returns null on a missing or malformed file", () => {
+    expect(readInstallRecord(tmpDir)).toBeNull();
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(getInstallRecordPath(tmpDir), "{ not json");
+    expect(readInstallRecord(tmpDir)).toBeNull();
+  });
+  it("read rejects an unknown mode value", () => {
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(getInstallRecordPath(tmpDir), JSON.stringify({ mode: "bogus" }));
+    expect(readInstallRecord(tmpDir)).toBeNull();
+  });
+  it("removeInstallRecord deletes the file and prunes an emptied .argent dir", () => {
+    writeInstallRecord(tmpDir, { mode: "local", package: PACKAGE_NAME });
+    expect(removeInstallRecord(tmpDir)).toBe(true);
+    expect(fs.existsSync(getInstallRecordPath(tmpDir))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".argent"))).toBe(false);
+    expect(removeInstallRecord(tmpDir)).toBe(false);
+  });
+  it("removeInstallRecord keeps .argent when other files remain (e.g. flags.json)", () => {
+    writeInstallRecord(tmpDir, { mode: "local", package: PACKAGE_NAME });
+    fs.writeFileSync(path.join(tmpDir, ".argent", "flags.json"), "{}");
+    expect(removeInstallRecord(tmpDir)).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, ".argent"))).toBe(true);
+  });
+});
+
+describe("resolveInstallMode", () => {
+  const declareLocalArgent = (root: string) =>
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "host", devDependencies: { [PACKAGE_NAME]: "^1.2.3" } })
+    );
+  it("defaults to global with no record and no local install", () => {
+    expect(resolveInstallMode(tmpDir)).toBe("global");
+  });
+  it("does NOT infer local from mere node_modules presence (hoisted / transitive copy)", () => {
+    // A copy that merely exists in node_modules is not intent — acting on it
+    // would rewrite a manifest the user never opted into.
+    stageLocalArgent(tmpDir);
+    expect(resolveInstallMode(tmpDir)).toBe("global");
+  });
+  it("infers local from a dependency the project manifest declares (no record)", () => {
+    stageLocalArgent(tmpDir);
+    declareLocalArgent(tmpDir);
+    expect(resolveInstallMode(tmpDir)).toBe("local");
+  });
+  it("the committed record wins over inference", () => {
+    writeInstallRecord(tmpDir, { mode: "local", package: PACKAGE_NAME });
+    expect(resolveInstallMode(tmpDir)).toBe("local");
+    writeInstallRecord(tmpDir, { mode: "global", package: PACKAGE_NAME });
+    stageLocalArgent(tmpDir);
+    expect(resolveInstallMode(tmpDir)).toBe("global");
+  });
+});
+
+// ── resolveInstallModeFromFlags ──────────────────────────────────────────────
+
+describe("resolveInstallModeFromFlags", () => {
+  it("returns local for --local (even with --yes)", () => {
+    expect(resolveInstallModeFromFlags({ local: true, global: false, nonInteractive: true })).toBe(
+      "local"
+    );
+  });
+  it("returns global for --global", () => {
+    expect(resolveInstallModeFromFlags({ local: false, global: true, nonInteractive: false })).toBe(
+      "global"
+    );
+  });
+  it("non-interactive with no flag defaults to global", () => {
+    expect(resolveInstallModeFromFlags({ local: false, global: false, nonInteractive: true })).toBe(
+      "global"
+    );
+  });
+  it("non-interactive honors a committed local record (no silent revert to global)", () => {
+    expect(
+      resolveInstallModeFromFlags({
+        local: false,
+        global: false,
+        nonInteractive: true,
+        recordedMode: "local",
+      })
+    ).toBe("local");
+  });
+  it("an explicit --global still overrides a committed local record", () => {
+    expect(
+      resolveInstallModeFromFlags({
+        local: false,
+        global: true,
+        nonInteractive: true,
+        recordedMode: "local",
+      })
+    ).toBe("global");
+  });
+  it("returns null (prompt) when interactive with no flag", () => {
+    expect(
+      resolveInstallModeFromFlags({ local: false, global: false, nonInteractive: false })
+    ).toBeNull();
+  });
+  it("throws on conflicting --local and --global", () => {
+    expect(() =>
+      resolveInstallModeFromFlags({ local: true, global: true, nonInteractive: false })
+    ).toThrow(InstallModeFlagError);
   });
 });

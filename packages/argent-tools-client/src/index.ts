@@ -1,6 +1,9 @@
 export {
   ensureToolsServer,
   killToolServer,
+  killToolServerForInstallDir,
+  readAllToolsServerStates,
+  stateFileForBundle,
   buildToolsServerEnv,
   spawnToolsServer,
   findFreePort,

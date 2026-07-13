@@ -64,9 +64,15 @@ Usage: argent <command> [options]
 Commands:
   mcp         Start the MCP stdio server (used by editors)
   init        Initialize argent in the current workspace (MCP server + skills)
+              (--global [default] installs on PATH; --local commits a
+              devDependency setup the whole team gets on \`npm install\`)
   install     Alias for init
   update      Check for updates and refresh configuration
+              (acts on the present install — both when a global install and a
+              project devDependency coexist; --global/--local select explicitly)
   uninstall   Remove argent configuration from the workspace
+              (--global/--local choose which install — package and its
+              configs — is removed)
   remove      Alias for uninstall
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
@@ -77,7 +83,7 @@ Commands:
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
-  telemetry   Manage anonymous opt-out telemetry (status / enable / disable)
+  telemetry   Manage opt-out telemetry (status / enable / disable)
 
 Options:
   --help, -h     Show this help message
