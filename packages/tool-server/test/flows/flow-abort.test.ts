@@ -115,6 +115,122 @@ describe("run cancellation mid-directive", () => {
     expect(calls).not.toContain("gesture-tap");
   });
 
+  it("dispatches no tap when the run is cancelled during the settle-completing tree read", async () => {
+    const controller = new AbortController();
+    // The target is visible and the tree is stable, so read 2 is the read that
+    // completes the settle (two identical fingerprints). The abort lands inside
+    // that read — settleTree must NOT hand the tree back to waitForFrame, or the
+    // tap would be dispatched post-cancellation and recorded as a pass.
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      if (reads >= 2) controller.abort();
+      return {
+        tree: screen([n({ label: "Checkout", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-tap-settle", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Checkout", loose: true } }],
+    });
+
+    const result = await run("cancelled-tap-settle", mockRegistry(calls), controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
+    expect(calls).not.toContain("gesture-tap");
+  });
+
+  it("dispatches no tap when the run is cancelled one read before the settle completes", async () => {
+    // Control for the settle-completing case above: aborting during the FIRST
+    // read (not yet a fingerprint match) already skipped correctly — keep it so.
+    const controller = new AbortController();
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      if (reads >= 1) controller.abort();
+      return {
+        tree: screen([n({ label: "Checkout", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-tap-first-read", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Checkout", loose: true } }],
+    });
+
+    const result = await run("cancelled-tap-first-read", mockRegistry(calls), controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(calls).not.toContain("gesture-tap");
+  });
+
+  it("dispatches no scroll increment when the run is cancelled during a mid-scroll settle read", async () => {
+    const controller = new AbortController();
+    // The target never appears and the tree is stable — after read 2 settles,
+    // scroll-to would dispatch its first swipe increment. The abort lands inside
+    // that settle-completing read, so no gesture may follow it.
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      if (reads >= 2) controller.abort();
+      return {
+        tree: screen([n({ label: "Row 1", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-scroll-settle", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const result = await run("cancelled-scroll-settle", mockRegistry(calls), controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["scroll-to:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(calls).not.toContain("gesture-swipe");
+    expect(calls).not.toContain("gesture-scroll");
+  });
+
+  it("dispatches no focus tap when a type step is cancelled during the settle-completing read", async () => {
+    const controller = new AbortController();
+    // Same timing as the tap case, but for `type`: the leak would be the focus
+    // tap (the keyboard dispatches are separately guarded already).
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      if (reads >= 2) controller.abort();
+      return {
+        tree: screen([
+          n({ identifier: "email", frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.06 } }),
+        ]),
+        source: "native-devtools",
+      };
+    };
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-type-settle", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = await run("cancelled-type-settle", mockRegistry(calls), controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(calls).not.toContain("gesture-tap");
+    expect(calls).not.toContain("keyboard");
+  });
+
   it("injects no keyboard input when the run is cancelled during the focus wait", async () => {
     const controller = new AbortController();
     // Reads 1-2 are the pre-tap settle (field resolves immediately); read 3 is

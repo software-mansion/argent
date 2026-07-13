@@ -240,15 +240,25 @@ export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefin
   let lastError: Error | undefined;
   for (;;) {
     if (env.signal?.aborted) return undefined;
+    let tree: DescribeNode | undefined;
     try {
-      const { tree } = await fetchFlowTree(env.registry, env.device);
+      ({ tree } = await fetchFlowTree(env.registry, env.device));
+    } catch (err) {
+      // transient describe failure mid-navigation — retry until the deadline
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+    // The abort can land while the read above is in flight (e.g. the HTTP
+    // client disconnecting mid-flow trips the run's AbortController). Without
+    // this re-check the two-identical-reads return below — or the deadline's
+    // best-effort tree — would hand the caller a settled tree to act on, and a
+    // gesture would still be dispatched after cancellation with the step
+    // recorded as a pass instead of the uniform aborted skip.
+    if (env.signal?.aborted) return undefined;
+    if (tree !== undefined) {
       const fp = treeFingerprint(tree);
       if (prevFp !== undefined && fp === prevFp) return tree;
       prevFp = fp;
       prevTree = tree;
-    } catch (err) {
-      // transient describe failure mid-navigation — retry until the deadline
-      lastError = err instanceof Error ? err : new Error(String(err));
     }
     if (Date.now() >= deadline) {
       if (prevTree === undefined && lastError !== undefined) throw lastError;
