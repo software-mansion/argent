@@ -287,6 +287,32 @@ export function resolveArtifactDisplayPaths(report: FlowReport): void {
   }
 }
 
+/**
+ * Flush stdout/stderr, then exit with `code`.
+ *
+ * `console.log` is synchronous only when stdout is a file or a TTY. On a pipe
+ * — every CI capture (`argent flow run … --json | jq`, `$(…)`, `| tee`) —
+ * writes are asynchronous, and a bare `process.exit()` right after printing a
+ * large report tears the process down with everything beyond the OS pipe
+ * buffer (~64KB) still queued inside Node, truncating a big `--json` report
+ * mid-string. Stream writes complete in FIFO order, so waiting on a
+ * zero-length sentinel write guarantees every previously queued chunk has
+ * reached the fd first.
+ *
+ * This cannot hang: it waits only on the std streams' own write queues (a
+ * stalled pipe reader would block `console.log` the same way), never on other
+ * open handles (tool-server sockets, timers) — and a destroyed/EPIPE'd stream
+ * still invokes its write callback, so the exit always fires.
+ */
+export function exitAfterFlush(
+  code: number,
+  streams: NodeJS.WritableStream[] = [process.stdout, process.stderr]
+): Promise<never> {
+  return Promise.all(
+    streams.map((s) => new Promise<void>((resolve) => s.write("", () => resolve())))
+  ).then(() => process.exit(code));
+}
+
 export function renderReport(report: FlowReport): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}" on ${report.device}`);
@@ -342,7 +368,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
 
   if (sub !== "run") {
     console.error(`Unknown flow subcommand "${sub}". Run \`argent flow --help\`.`);
-    process.exit(2);
+    return exitAfterFlush(2);
   }
 
   // Checked before parseRunArgs so --help wins even when it trails a
@@ -360,14 +386,14 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     if (err instanceof FlagParseException) {
       console.error(`Error: ${err.message}\n`);
       printHelp();
-      process.exit(2);
+      return exitAfterFlush(2);
     }
     throw err;
   }
   if (!args.name) {
     console.error("argent flow run <name> requires a flow name.");
     printHelp();
-    process.exit(2);
+    return exitAfterFlush(2);
   }
   const flowName = args.name;
 
@@ -416,12 +442,12 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     report = resp.data as FlowReport;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    return exitAfterFlush(1);
   }
 
   if (!report || !("steps" in report)) {
     console.error(`"${flowName}" did not produce a run report.`);
-    process.exit(2);
+    return exitAfterFlush(2);
   }
 
   // Durable diff output: copy failed-snapshot images out of the tool-server's
@@ -451,5 +477,5 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     console.log(renderReport(report));
   }
 
-  process.exit(report.ok ? 0 : 1);
+  return exitAfterFlush(report.ok ? 0 : 1);
 }

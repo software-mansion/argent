@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flow, parseRunArgs } from "../src/flow.js";
+import { Writable } from "node:stream";
+import { exitAfterFlush, flow, parseRunArgs } from "../src/flow.js";
 import { FlagParseException } from "../src/flag-parser.js";
 
 const toolsClientMock = vi.hoisted(() => ({
@@ -502,5 +503,52 @@ describe("argent flow run", () => {
     await flow(["run", "checkout", "--device", "SIM-1", "-h"], opts);
     expect(logs.join("\n")).toContain("Usage: argent flow");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("exitAfterFlush", () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit:${code}`);
+    }) as typeof process.exit);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+  });
+
+  it("exits only after every queued write has drained (piped stdout is async)", async () => {
+    // Model a pipe with a slow reader: each chunk sits in the stream's queue
+    // until _write's deferred callback fires — exactly the state a >64KB
+    // `--json` report is in when the old bare process.exit() truncated it.
+    const flushed: string[] = [];
+    let exitedEarly = false;
+    const slow = new Writable({
+      highWaterMark: 1,
+      write(chunk: Buffer, _enc, cb) {
+        setTimeout(() => {
+          if (exitSpy.mock.calls.length > 0) exitedEarly = true;
+          flushed.push(chunk.toString());
+          cb();
+        }, 5);
+      },
+    });
+    slow.write("a".repeat(64 * 1024));
+    slow.write("b".repeat(64 * 1024));
+
+    await expect(exitAfterFlush(1, [slow])).rejects.toThrow("process.exit:1");
+
+    expect(exitedEarly).toBe(false);
+    expect(flushed.join("")).toContain("a".repeat(64 * 1024));
+    expect(flushed.join("")).toContain("b".repeat(64 * 1024));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("preserves the exit code with nothing queued", async () => {
+    const idle = new Writable({ write: (_c, _e, cb) => cb() });
+    await expect(exitAfterFlush(2, [idle])).rejects.toThrow("process.exit:2");
+    expect(exitSpy).toHaveBeenCalledWith(2);
   });
 });
