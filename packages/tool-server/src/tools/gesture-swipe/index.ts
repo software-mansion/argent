@@ -26,7 +26,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Momentum-free swipe: decelerate into the end point (ease-out) so the OS reads ~0 release velocity and applies no fling. The content lands where the finger stops, making the scroll distance deterministic. Use for scroll-to-element loops; default false (a natural flinging swipe)."
+      "Momentum-free swipe: decelerate into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use for scroll-to-element loops; default false (a natural flinging swipe)."
     ),
 });
 
