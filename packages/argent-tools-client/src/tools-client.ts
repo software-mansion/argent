@@ -19,6 +19,16 @@ export interface ToolInvocationResult {
   note?: string;
 }
 
+export interface CallToolOptions {
+  /**
+   * Receive live progress events while the tool runs. Setting this asks the
+   * server for an NDJSON stream (`Accept: application/x-ndjson`); a server
+   * that predates streaming ignores the header and replies with plain JSON,
+   * in which case no events fire and the call behaves exactly as before.
+   */
+  onProgress?: (event: unknown) => void;
+}
+
 /**
  * The CLI and MCP server each instantiate a client bound to the bundled paths
  * known by the published package. Keeping it as a factory avoids a hidden
@@ -27,7 +37,7 @@ export interface ToolInvocationResult {
 export interface ToolsClient {
   fetchTools(): Promise<ToolMeta[]>;
   fetchTool(name: string): Promise<ToolMeta | null>;
-  callTool(name: string, args: unknown): Promise<ToolInvocationResult>;
+  callTool(name: string, args: unknown, opts?: CallToolOptions): Promise<ToolInvocationResult>;
   /** Returns the tool-server base URL + auth token, spawning if needed. */
   baseUrl(): Promise<ToolsServerHandle>;
 }
@@ -39,6 +49,62 @@ export interface CreateToolsClientOptions {
 
 function authHeaders(token: string | undefined): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/**
+ * Read an NDJSON tool-invocation stream: each `progress` line fires the
+ * callback as it arrives, the terminal `result` line becomes the return value,
+ * and a terminal `error` line throws — mirroring the buffered path's contract.
+ * A stream that ends with no terminal line means the connection died mid-run.
+ */
+async function consumeToolStream(
+  body: ReadableStream<Uint8Array>,
+  onProgress: (event: unknown) => void
+): Promise<ToolInvocationResult> {
+  let final: { data?: unknown; note?: string } | undefined;
+  const handleLine = (line: string): void => {
+    if (!line.trim()) return;
+    const msg = JSON.parse(line) as {
+      event?: string;
+      data?: unknown;
+      note?: string;
+      error?: string;
+    };
+    if (msg.event === "progress") onProgress(msg.data);
+    else if (msg.event === "result") final = { data: msg.data, note: msg.note };
+    else if (msg.event === "error") throw new Error(msg.error ?? "tool invocation failed");
+  };
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      let newline: number;
+      while ((newline = buffered.indexOf("\n")) !== -1) {
+        const line = buffered.slice(0, newline);
+        buffered = buffered.slice(newline + 1);
+        handleLine(line);
+      }
+    }
+    buffered += decoder.decode();
+    if (buffered.trim()) handleLine(buffered);
+  } catch (err) {
+    // Terminal `error` line or a mid-stream parse/read failure: drop the rest
+    // of the stream (the server has ended it anyway) and surface the error.
+    void reader.cancel().catch(() => {});
+    throw err;
+  }
+
+  if (!final) {
+    throw new Error("tool stream ended without a result — connection lost mid-run?");
+  }
+  // File boundary, inbound: same directive handling as the buffered path.
+  const { result: data } = await applyClientFileDirectives(final.data);
+  return { data, note: final.note };
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
@@ -78,7 +144,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     return tools.find((t) => t.name === name) ?? null;
   }
 
-  async function callTool(name: string, args: unknown): Promise<ToolInvocationResult> {
+  async function callTool(
+    name: string,
+    args: unknown,
+    opts?: CallToolOptions
+  ): Promise<ToolInvocationResult> {
     const { url, token } = await baseUrl();
 
     // File boundary, outbound: wrap declared file-path args so the server can
@@ -98,9 +168,21 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
 
     const res = await fetch(`${url}/tools/${encodeURIComponent(name)}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders(token) },
+      headers: {
+        "Content-Type": "application/json",
+        ...(opts?.onProgress ? { Accept: "application/x-ndjson" } : {}),
+        ...authHeaders(token),
+      },
       body: JSON.stringify(finalArgs ?? {}),
     });
+    // The server only streams when the request asked for it AND every
+    // pre-invoke gate passed (validation errors stay plain JSON with their
+    // status codes); a pre-streaming server ignores the Accept header
+    // entirely. Content-Type is therefore the authoritative mode signal.
+    const contentType = res.headers.get("content-type") ?? "";
+    if (opts?.onProgress && res.ok && res.body && contentType.includes("application/x-ndjson")) {
+      return consumeToolStream(res.body, opts.onProgress);
+    }
     const json = (await res.json().catch(() => ({}))) as {
       data?: unknown;
       error?: string;

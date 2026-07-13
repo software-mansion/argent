@@ -536,6 +536,17 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // are declared in @swmansion/argent's dependencies so npm installs them
 // alongside the package; keep them external so the bundle resolves them from
 // node_modules/ at runtime.
+//
+// `dtrace-provider` MUST stay external. It is an OPTIONAL dependency of bunyan
+// (the tool-server event-log logger). bunyan loads it defensively as
+// `require('dtrace-provider' + '')` wrapped in try/catch — the `+ ''` is a
+// deliberate trick to hide the module from bundlers, and a failed require just
+// disables the (unused) DTrace USDT probes. esbuild constant-folds that string
+// back to a literal, defeating the trick, and then chokes on dtrace-provider's
+// own dynamic native binding require (`require('./src/build/'+build+'/…')`).
+// Keeping it external restores bunyan's intent: the published package never
+// declares dtrace-provider, so the runtime require misses and bunyan's
+// try/catch nulls it out — no DTrace probes, no functional impact.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -547,6 +558,7 @@ buildBundle({
     "electron",
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
+    "dtrace-provider",
   ],
 });
 

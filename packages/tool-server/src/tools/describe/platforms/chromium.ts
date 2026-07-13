@@ -41,13 +41,27 @@ const DESCRIBE_FAILURE = {
  *    (~50MB). Cap depth at 60 purely to bound recursion: modern React DOMs
  *    (React Native Web, navigator/provider stacks) routinely nest 25+ levels
  *    before reaching leaf text, so a shallower cap silently clips real content.
+ *    Callers with a bigger appetite (the flow tree keeps more than the
+ *    agent-facing describe, like Android's FLOW_MAX_NODES) can raise both via
+ *    `limits`.
  */
-// Exported for test/describe-chromium-script.test.ts, which evals it against a mock
-// DOM to lock in the visibility/pruning rules (the script runs in the renderer, so
-// the rest of the suite can only mock its CDP response).
-export const DESCRIBE_DOM_SCRIPT = `(() => {
-  const MAX_DEPTH = 60;
-  const MAX_NODES = 5000;
+export interface ChromiumWalkLimits {
+  maxDepth: number;
+  maxNodes: number;
+}
+
+const DEFAULT_WALK_LIMITS: ChromiumWalkLimits = { maxDepth: 60, maxNodes: 5000 };
+
+// Interpolated into the in-page script: force a plain positive integer literal
+// so no caller can ever smuggle text (or a cap-disabling NaN) into the
+// renderer. Non-finite input falls back to the default.
+function intForScript(value: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
+}
+
+const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `(() => {
+  const MAX_DEPTH = ${intForScript(maxDepth, DEFAULT_WALK_LIMITS.maxDepth)};
+  const MAX_NODES = ${intForScript(maxNodes, DEFAULT_WALK_LIMITS.maxNodes)};
   let nodeBudget = MAX_NODES;
   let truncated = false;
   const w = window.innerWidth;
@@ -84,6 +98,15 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   const getAttr = Element.prototype.getAttribute;
   const hasAttr = Element.prototype.hasAttribute;
   const getBCR = Element.prototype.getBoundingClientRect;
+  // Document's named getter is [LegacyOverrideBuiltIns] (like a form's): a
+  // <form name="activeElement"> shadows document.activeElement, so both focus
+  // reads go through prototype accessors. The typeof guard covers the test
+  // harness's mock DOM, which defines no Document constructor — protoGetter's
+  // direct-read fallback then degrades focus reporting instead of throwing.
+  const docProto = typeof Document === "undefined" ? {} : Document.prototype;
+  const getOwnerDocument = protoGetter(Node.prototype, "ownerDocument");
+  const getActiveElement = protoGetter(docProto, "activeElement");
+  const getDocBody = protoGetter(docProto, "body");
 
   function nodeRole(el) {
     const r = getAttr.call(el, "role");
@@ -110,7 +133,10 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     }
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       if (el.placeholder) return el.placeholder.slice(0, 200);
-      if (el.value) return el.value.slice(0, 200);
+      // Never fall through to a password input's value: with no aria label or
+      // placeholder (a floating/uncontrolled-label pattern) the typed secret
+      // would become the node's label and reach every describe consumer.
+      if (el.value && !isPassword(el)) return el.value.slice(0, 200);
     }
     if (el instanceof HTMLImageElement && el.alt) return el.alt.slice(0, 200);
     // getAttribute, not el.title: a <form> with a control named "title" clobbers the
@@ -167,8 +193,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     return el instanceof HTMLInputElement && el.type === "password";
   }
 
-  function isScrollable(el) {
-    const style = window.getComputedStyle(el);
+  function isScrollable(el, style) {
     const oy = style.overflowY;
     const ox = style.overflowX;
     if (oy === "auto" || oy === "scroll" || ox === "auto" || ox === "scroll") {
@@ -401,8 +426,12 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
       selfFrame = frame(el);
     }
 
-    // Prune structural wrappers with no info that just add a layer.
-    // Keep them if they're roots/clickable/named/identified/have text.
+    const scrollable = isScrollable(el, style);
+    // Prune structural wrappers with no info that just add a layer. Keep them
+    // if they're roots/clickable/named/identified/have text — or scroll their
+    // content: an RN-web ScrollView renders as exactly this shape (a scroller
+    // div wrapping a single content-container div), and pruning it would drop
+    // the node scroll gestures and flow 'within' selectors anchor to.
     if (
       depth > 0 &&
       childResults.length === 1 &&
@@ -410,6 +439,7 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
       !name &&
       !text &&
       !id &&
+      !scrollable &&
       role === "div"
     ) {
       return childResults[0];
@@ -426,7 +456,25 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
     if (isDisabled(el)) node.disabled = true;
     if (isChecked(el)) node.checked = true;
     if (isPassword(el)) node.password = true;
-    if (isScrollable(el)) node.scrollable = true;
+    if (scrollable) node.scrollable = true;
+    // Input focus: el is its document's activeElement. Deliberately emitted to
+    // EVERY describe consumer (the agent-facing tool as much as the flow type
+    // directive's focus wait) — where the caret is is useful targeting info.
+    // The body is excluded — it's the default holder when nothing is focused,
+    // and its screen-spanning frame would satisfy any overlap check. A host
+    // <iframe>/<frame> is excluded too: it is the outer document's
+    // activeElement whenever focus merely sits inside its subdocument, and the
+    // inner element (that document's own activeElement, checked per-document)
+    // is the one that carries the flag — flagging both would double-report.
+    if (!invisibleSelf) {
+      const tag = getTagName.call(el);
+      if (tag !== "IFRAME" && tag !== "FRAME") {
+        const doc = getOwnerDocument.call(el);
+        if (doc && getActiveElement.call(doc) === el && getDocBody.call(doc) !== el) {
+          node.focused = true;
+        }
+      }
+    }
     return node;
   }
 
@@ -438,12 +486,21 @@ export const DESCRIBE_DOM_SCRIPT = `(() => {
   return JSON.stringify({ tree: root, truncated });
 })()`;
 
-export async function describeChromium(api: ChromiumCdpApi): Promise<DescribeTreeData> {
+// The default-limits build, exported for test/describe-chromium-script.test.ts,
+// which evals it against a mock DOM to lock in the visibility/pruning rules (the
+// script runs in the renderer, so the rest of the suite can only mock its CDP
+// response).
+export const DESCRIBE_DOM_SCRIPT = buildDescribeDomScript(DEFAULT_WALK_LIMITS);
+
+export async function describeChromium(
+  api: ChromiumCdpApi,
+  limits: ChromiumWalkLimits = DEFAULT_WALK_LIMITS
+): Promise<DescribeTreeData> {
   // Make sure the cached viewport is fresh — the script normalizes frames by
   // the live window dimensions, so any rescroll between calls is reflected.
   await api.refreshViewport();
   const raw = (await api.cdp.send("Runtime.evaluate", {
-    expression: DESCRIBE_DOM_SCRIPT,
+    expression: buildDescribeDomScript(limits),
     returnByValue: true,
   })) as {
     result?: { value?: string };

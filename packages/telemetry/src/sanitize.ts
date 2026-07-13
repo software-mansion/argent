@@ -251,6 +251,39 @@ export const ALLOWED: ValidatorMap = {
     crash_fingerprint: CRASH_FINGERPRINT,
     crash_phase: CRASH_PHASE,
   },
+  "lens:preview_opened": {
+    round: COUNT,
+    element_count: COUNT,
+    variant_count: COUNT,
+    is_cli_session: bool,
+    platform: PLATFORM,
+  },
+  "lens:round_completed": {
+    round: COUNT,
+    element_count: COUNT,
+    variant_count: COUNT,
+    annotation_count: COUNT,
+    element_comment_count: COUNT,
+    skipped_comment_count: COUNT,
+    has_global_comment: bool,
+    inspector_used: bool,
+    offscreen_revealed: bool,
+    is_cli_session: bool,
+    had_parked_await: bool,
+    round_duration_ms: DURATION_MS,
+    platform: PLATFORM,
+  },
+  "lens:round_abandoned": {
+    round: COUNT,
+    element_count: COUNT,
+    variant_count: COUNT,
+    had_parked_await: bool,
+    is_cli_session: bool,
+    platform: PLATFORM,
+  },
+  "lens:cli_session_started": {
+    agent_choice_count: COUNT,
+  },
 };
 
 /** Strip keys and values that are not allowed for this event. */

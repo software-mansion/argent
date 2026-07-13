@@ -1,9 +1,45 @@
 import { z } from "zod";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * A hidden window (minimized, fully occluded, or on another workspace) halts
+ * the renderer's input pipeline: each wheel dispatch would stall until the CDP
+ * call times out, and a chunked scroll dispatches dozens of them. Probe
+ * `document.visibilityState` and refuse up front with a fix the caller can act
+ * on. Only an explicit "hidden" refuses — a failed or empty read proves
+ * nothing, and the scroll itself will surface a real transport error.
+ */
+async function assertWindowVisible(chromium: ChromiumCdpApi): Promise<void> {
+  let raw: { result?: { value?: unknown } };
+  try {
+    raw = (await chromium.cdp.send("Runtime.evaluate", {
+      expression: "document.visibilityState",
+      returnByValue: true,
+    })) as { result?: { value?: unknown } };
+  } catch {
+    // A rejected evaluate (most plausibly the JS execution context being torn
+    // down mid-navigation) proves nothing about visibility — and the wheel
+    // dispatch needs no JS context — so proceed; a genuine transport failure
+    // surfaces on the scroll itself.
+    return;
+  }
+  if (raw.result?.value === "hidden") {
+    throw new FailureError(
+      "Cannot scroll: the Chromium window is hidden (minimized or fully occluded), so the renderer will not process input events. Bring the window to the foreground and retry.",
+      {
+        error_code: FAILURE_CODES.CHROMIUM_INPUT_INVALID,
+        failure_stage: "chromium_scroll_window_hidden",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+}
 
 const zodSchema = z
   .object({
@@ -70,6 +106,7 @@ Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is no
   async execute(services, params) {
     const timestampMs = Date.now();
     const chromium = services.chromium as ChromiumCdpApi;
+    await assertWindowVisible(chromium);
     const vp = chromium.getViewport();
     const totalDx = (params.deltaX ?? 0) * vp.width;
     const totalDy = (params.deltaY ?? 0) * vp.height;

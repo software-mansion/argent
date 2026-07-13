@@ -238,11 +238,17 @@ describe("bootElectronApp — spawn error handling", () => {
       });
 
       // After successful boot, both boot-time listeners MUST be detached.
+      // Exactly one 'exit' listener remains: the kill-registry cleanup hook
+      // installed for killChromiumByPort. It only evicts the retained handle —
+      // it can't reject anything, which the unhandled-rejection count below
+      // proves when we emit 'exit'.
       expect(child.listenerCount("error")).toBe(0);
-      expect(child.listenerCount("exit")).toBe(0);
+      expect(child.listenerCount("exit")).toBe(1);
 
       // Simulate the user closing the Electron window — normal exit code 0.
+      // The once() cleanup listener runs (evicting the handle) and detaches.
       child.emit("exit", 0, null);
+      expect(child.listenerCount("exit")).toBe(0);
 
       // And simulate a late stray `'error'` event from the OS layer.
       const err = new Error("late ECONNRESET") as NodeJS.ErrnoException;

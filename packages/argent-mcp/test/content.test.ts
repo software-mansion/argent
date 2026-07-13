@@ -304,7 +304,7 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] Hello" });
   });
 
-  it("renders tool error steps", async () => {
+  it("renders legacy tool error steps (status-less)", async () => {
     const input: FlowExecuteResult = {
       flow: "f",
       steps: [{ kind: "tool", tool: "gesture-tap", error: "connection lost" }],
@@ -313,8 +313,187 @@ describe("flowRunToMcpContent", () => {
 
     expect(blocks[1]).toEqual({
       type: "text",
-      text: "[1] gesture-tap ERROR: connection lost",
+      text: "[1] gesture-tap — connection lost",
     });
+  });
+
+  it("renders the new report shape: status glyphs, reasons, directive kinds, and summary", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      device: "SIM",
+      ok: false,
+      passed: 2,
+      failed: 1,
+      errored: 0,
+      skipped: 1,
+      steps: [
+        { index: 0, kind: "tap", status: "pass" },
+        { index: 1, kind: "assert", status: "pass" },
+        { index: 2, kind: "snapshot", status: "fail", reason: "diff 3.10% > 0.5% (home)" },
+        { index: 3, kind: "echo", status: "skip", message: "done" },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+    const texts = blocks
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text);
+
+    expect(texts[0]).toBe('Running flow "checkout" on SIM (4 steps)');
+    expect(texts[1]).toBe("[1] ✓ tap");
+    expect(texts[2]).toBe("[2] ✓ assert");
+    expect(texts[3]).toBe("[3] ✗ snapshot — diff 3.10% > 0.5% (home)");
+    expect(texts[4]).toBe("[4] · done");
+    expect(texts[texts.length - 1]).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
+    // No invalid (text: undefined) blocks even though directive steps carry no result.
+    expect(blocks.every((b) => b.type !== "text" || typeof b.text === "string")).toBe(true);
+  });
+
+  it("surfaces a legacy passed step's warning on its status line (older tool-servers adopted missing baselines)", async () => {
+    const input: FlowExecuteResult = {
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "pass",
+          reason: "baseline created (home__ios-390x844.png)",
+          warning: 'no baseline existed for "home" — nothing was compared',
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    expect(blocks[1]).toEqual({
+      type: "text",
+      text: '[1] ✓ snapshot — baseline created (home__ios-390x844.png) ⚠ no baseline existed for "home" — nothing was compared',
+    });
+  });
+
+  it("materializes only the diff and inlines it on failure", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x02];
+    const fetchImpl = vi.fn(fetchReturning(pngBytes));
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 3.10% > 0.5% (home)",
+          artifacts: {
+            baseline: artifactHandle("b1", "home-baseline.png", "image/png"),
+            current: artifactHandle("c1", "home-current.png", "image/png"),
+            diff: artifactHandle("d1", "home-diff.png", "image/png"),
+          },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const artifactText = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("baseline:")
+    );
+    expect(artifactText?.text).toContain("home-baseline.png");
+    expect(artifactText?.text).toContain("home-current.png");
+    expect(artifactText?.text).toMatch(/diff: .*home-diff\.png/);
+
+    // Exactly one inline image — the diff, not the full-res baseline/current.
+    const images = blocks.filter((b) => b.type === "image");
+    expect(images).toHaveLength(1);
+    expect(images[0]).toMatchObject({ data: Buffer.from(pngBytes).toString("base64") });
+
+    // And exactly one download: baseline/current are referenced by name only,
+    // never pulled over the wire just to print their paths.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("/artifacts/d1");
+  });
+
+  it("lists snapshot artifact paths without fetching anything when the step passed", async () => {
+    const fetchImpl = vi.fn(fetchReturning([...PNG_SIGNATURE, 0x03]));
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "pass",
+          reason: "diff 0.00% ≤ 0.5% (home)",
+          artifacts: {
+            baseline: artifactHandle("b1", "home-baseline.png", "image/png"),
+            current: artifactHandle("c1", "home-current.png", "image/png"),
+          },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(blocks.find((b) => b.type === "image")).toBeUndefined();
+    const artifactText = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("baseline:")
+    );
+    expect(artifactText?.text).toContain("home-baseline.png");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("falls back to artifact host paths when no materialize context is given", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 3.10% > 0.5% (home)",
+          artifacts: {
+            baseline: {
+              ...artifactHandle("b1", "base.png", "image/png"),
+              hostPath: "/srv/base.png",
+            },
+            diff: { ...artifactHandle("d1", "diff.png", "image/png"), hostPath: "/srv/diff.png" },
+          },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    expect(blocks.find((b) => b.type === "image")).toBeUndefined();
+    const artifactText = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("baseline:")
+    );
+    expect(artifactText?.text).toContain("baseline: /srv/base.png");
+    expect(artifactText?.text).toContain("diff: /srv/diff.png");
+  });
+
+  it("renders legacy string[] artifacts as plain path lines", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 3.10% > 0.5% (home)",
+          artifacts: ["/srv/baseline.png", "/srv/current.png"] as unknown as Record<
+            string,
+            unknown
+          >,
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    const artifactText = blocks.find(
+      (b): b is { type: "text"; text: string } =>
+        b.type === "text" && b.text.includes("/srv/baseline.png")
+    );
+    expect(artifactText).toBeDefined();
+    expect(blocks.find((b) => b.type === "image")).toBeUndefined();
   });
 
   it("renders tool success as JSON text", async () => {
