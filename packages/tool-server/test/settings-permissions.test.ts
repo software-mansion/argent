@@ -775,6 +775,24 @@ describe("settings-permissions Android branch", () => {
     await rejection.not.toThrow(/every mapped runtime permission was rejected/);
   });
 
+  it("an adb daemon-leg failure mid-fan-out propagates as transport, not a `skipped` entry", async () => {
+    // The adb client↔daemon leg (server restarting / daemon down) fails with
+    // shapes `isTerminalAdbError` doesn't match — `Connection reset by peer`,
+    // `cannot connect to daemon`. They still mean the pm call never ran, so the
+    // handler must propagate them, not fold the lost permission into `skipped`
+    // under a success result (which would report a revoke that never happened).
+    adbDefaults((cmd) => {
+      if (cmd.includes("READ_MEDIA_VIDEO"))
+        throw new Error("adb: protocol fault (couldn't read status): Connection reset by peer");
+      return undefined;
+    });
+    const rejection = expect(
+      androidImpl.handler({}, params({ action: "deny", permission: "photos" }), androidDevice)
+    ).rejects;
+    await rejection.toThrow(/Connection reset by peer/);
+    await rejection.not.toThrow(/every mapped runtime permission was rejected/);
+  });
+
   it("a timed-out pm call propagates the classified FailureError with its telemetry intact", async () => {
     // adbShell classifies a killed/timed-out call as a FailureError with
     // error_kind "timeout" + subprocess metadata. A wedged device must keep that

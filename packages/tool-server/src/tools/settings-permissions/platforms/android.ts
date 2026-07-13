@@ -85,9 +85,31 @@ interface PmResult {
 // adbShell already classifies (2) into a FailureError with error_kind +
 // subprocess metadata, so we detect it and let that error propagate intact
 // rather than folding it into the per-permission failure shape.
+//
+// `isTerminalAdbError` covers the device-state shapes (unauthorized / offline /
+// not found / no devices), but the adb client↔daemon leg fails without matching
+// them: `adb: protocol fault (couldn't read status): Connection reset by peer`
+// (the shared adb server restarting mid-command, e.g. a version-mismatched
+// client killing and relaunching it) and `adb: cannot connect to daemon at
+// ...: Connection refused` (the daemon down). Both mean the pm call never ran,
+// so — like a dead device — they must propagate, not fold into a per-permission
+// "pm rejected" result (which would report a deny/grant that never executed as
+// success). These are matched here rather than in `isTerminalAdbError` because
+// that predicate also gates `waitForBootCompleted`, where a reconnecting daemon
+// mid-boot is a transient it deliberately swallows and retries.
+const ADB_DAEMON_TRANSPORT_PATTERNS: RegExp[] = [
+  /connection reset by peer/i,
+  /cannot connect to daemon/i,
+  /protocol fault/i,
+];
+
 function isTransportFailure(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return isTerminalAdbError(message) || getFailureSignal(err)?.error_kind === "timeout";
+  return (
+    isTerminalAdbError(message) ||
+    ADB_DAEMON_TRANSPORT_PATTERNS.some((pattern) => pattern.test(message)) ||
+    getFailureSignal(err)?.error_kind === "timeout"
+  );
 }
 
 // pm errors arrive as a Java exception followed by a dozen `at com.android...`
