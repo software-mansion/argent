@@ -65,6 +65,6 @@ Once that same Debug build + Metro setup is in place, the JS-runtime tools work 
 
 Vega's React Native forks RN 0.72 and serves the legacy Hermes inspector, so three things differ from iOS / Android:
 
-- `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` tools are **not supported** — they need `Runtime.addBinding`, which this Hermes acknowledges but never implements. Use `describe` for on-screen structure.
+- `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools are **not supported**. Component-tree and inspect-element are hard-blocked: they need `Runtime.addBinding`, which this Hermes acknowledges but never installs. The rest are simply unverified on the legacy inspector. Use `describe` for on-screen structure; with both component tools gated off, component `file:line` tracing has no path on Vega.
 - `debugger-status` reports `isNewDebugger: false`.
-- `projectRoot` is empty (RN 0.72's Metro sends no project-root header), so component `file:line` source mapping is unavailable.
+- `projectRoot` is empty (RN 0.72's Metro sends no project-root header), so lookups that resolve paths against the project root return no location.

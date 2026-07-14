@@ -36,11 +36,21 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
  * no per-tool transport plumbing is needed here.
  *
  * Vega is deliberately absent even though the plain debugger-* tools do work
- * there (see DEBUGGER_TOOL_CAPABILITY). These tools deliver their payload over
- * `Runtime.addBinding` / `Runtime.bindingCalled`, and RN 0.72's Hermes ACKs
- * `Runtime.addBinding` without implementing it — the binding is never installed
- * and no `bindingCalled` ever fires, so they would hang until timeout. Gating
- * them out turns that into an immediate, explicit "not supported" instead.
+ * there (see DEBUGGER_TOOL_CAPABILITY), for two different reasons:
+ *
+ *   - `debugger-component-tree` and `debugger-inspect-element` deliver their
+ *     payload over `Runtime.addBinding` / `Runtime.bindingCalled` (they are the
+ *     only two callers of `cdp.evaluateWithBinding`). RN 0.72's Hermes ACKs
+ *     `Runtime.addBinding` and never installs the binding — verified on a live
+ *     VVD: after connect, `typeof __argent_callback` is still "undefined" — so
+ *     no `bindingCalled` ever fires and they would hang until timeout.
+ *   - `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools do
+ *     NOT use the binding (they ride `Runtime.evaluate`, `Page.reload` and the
+ *     CDP `Profiler` domain). They are simply unverified against the legacy
+ *     inspector and stay out of scope here rather than shipping untested.
+ *
+ * Either way, gating them out turns a hang or an unknown into an immediate,
+ * explicit "not supported".
  */
 export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true, device: true },

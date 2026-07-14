@@ -7,7 +7,7 @@ description: Debug a JS runtime via CDP using argent debugger tools. Primary pat
 
 For **React Native (iOS / Android)**: requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status`.
 
-For **Vega (Fire TV)**: requires a **Debug `.vpkg`** (a Release build never attaches) and **Metro reachable from the device** (`vega device start-port-forwarding --port 8081 --forward false`). Verify via `debugger-status`. `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` tools are unavailable there — see the `argent-tv-interact` skill.
+For **Vega (Fire TV)**: requires a **Debug `.vpkg`** (a Release build never attaches) and **Metro reachable from the device** (`vega device start-port-forwarding --port 8081 --forward false`). Verify via `debugger-status`. `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools are unavailable there — see the `argent-tv-interact` skill.
 
 For **Chromium (CDP)**: requires a Chromium/CDP app already available — an Electron app booted via `boot-device` with `electronAppPath`, or any Chromium browser exposing a CDP port (auto-discovered by `list-devices` on `9222` / `ARGENT_CHROMIUM_PORTS`). The debugger re-uses the page CDP session — `port` is ignored, `device_id` is the `chromium-cdp-<port>` value from `list-devices` / `boot-device`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry`, `view-network-logs`, and `view-network-request-details` work on Chromium (the latter two read the browser's native CDP Network recording for the active tab instead of the Metro-injected `fetch` interceptor); `debugger-component-tree`, `debugger-reload-metro`, `debugger-inspect-element`, and the `react-profiler-*` / `profiler-*` tools are RN-only and reject Chromium at the capability gate with `Tool 'X' is not supported on chromium app`.
 
@@ -23,16 +23,16 @@ adb -s <serial> reverse tcp:8081 tcp:8081
 
 ## 2. Tool Overview
 
-All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID or Android serial, a.k.a. `logicalDeviceId` — the CDP-reported id that matches the device). Always make sure you target the correct app on the correct device.
+All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, Android serial, or Vega serial — a.k.a. `logicalDeviceId`, the CDP-reported id that matches the device). Vega's legacy inspector reports no `logicalDeviceId`, so there keep passing the serial. Always make sure you target the correct app on the correct device.
 
 One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`, or an iOS simulator alongside an Android emulator with `adb reverse` set up). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 
 ### Connect & diagnostics
 
-| Tool               | Purpose                                                                                                                                                                                                                                                                                            |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-connect` | Connect to the JS runtime's CDP (Metro on iOS / Android; the page CDP session on Chromium). Returns port, projectRoot (empty on Chromium), deviceName, appName, `logicalDeviceId`, isNewDebugger, connected. The returned `logicalDeviceId` is the `device_id` for every subsequent debugger call. |
-| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady (no-op on Chromium). **Use to diagnose.**                                                                                                                                                                                             |
+| Tool               | Purpose                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-connect` | Connect to the JS runtime's CDP (Metro on iOS / Android / Vega; the page CDP session on Chromium). Returns port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, `logicalDeviceId` (absent on Vega), isNewDebugger, connected. When a `logicalDeviceId` comes back, use it as the `device_id` for every subsequent debugger call. |
+| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady (no-op on Chromium). **Use to diagnose.**                                                                                                                                                                                                                                                                 |
 
 ### Reload & recovery
 
