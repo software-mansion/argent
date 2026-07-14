@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { DescribeNode } from "../../src/tools/describe/contract";
 import {
   nodeAtPoint,
@@ -7,7 +7,10 @@ import {
   evaluateCondition,
   findAll,
   identifierMatches,
+  matchNode,
+  textMatches,
   treeFingerprint,
+  uiTreeMatchInternals,
 } from "../../src/utils/ui-tree-match";
 
 function node(partial: Partial<DescribeNode> & { frame: DescribeNode["frame"] }): DescribeNode {
@@ -174,6 +177,147 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("text", "Login", matches)).toBe(true);
     expect(evaluateCondition("text", "Logout", matches)).toBe(false);
     expect(evaluateCondition("exists", undefined, findAll(root, { text: "Nope" }))).toBe(false);
+  });
+
+  it("does not regex-match absent or empty text, even when the pattern can match empty", () => {
+    const optionalSaved = "(Saved)?";
+
+    expect(textMatches(undefined, optionalSaved, "matches")).toBe(false);
+    expect(textMatches("", optionalSaved, "matches")).toBe(false);
+    expect(textMatches("Saved", optionalSaved, "matches")).toBe(true);
+  });
+
+  it("regex text conditions retain non-empty own and hoisted text as additive evidence", () => {
+    const ownOnly = node({
+      label: "Saved",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+    const hoistedOnly = node({
+      identifier: "status",
+      subtreeText: "Saved successfully",
+      frame: { x: 0.1, y: 0.2, width: 0.5, height: 0.05 },
+    });
+    const ownAndHoisted = node({
+      label: "Save",
+      identifier: "save-button",
+      subtreeText: "Saved successfully",
+      frame: { x: 0.1, y: 0.3, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^Saved$", [ownOnly], "matches")).toBe(true);
+    expect(evaluateCondition("text", "^Saved successfully$", [hoistedOnly], "matches")).toBe(true);
+    expect(evaluateCondition("text", "^Save$", [ownAndHoisted], "matches")).toBe(true);
+    expect(evaluateCondition("text", "^Saved successfully$", [ownAndHoisted], "matches")).toBe(
+      true
+    );
+  });
+
+  it("only tests an empty-matching selector regex against non-empty label/value fields", () => {
+    const absentText = node({
+      identifier: "absent-text",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+    const explicitEmptyText = node({
+      identifier: "explicit-empty-text",
+      label: "",
+      value: "",
+      frame: { x: 0.1, y: 0.2, width: 0.5, height: 0.05 },
+    });
+    const labelOnly = node({
+      identifier: "label-only",
+      label: "Label",
+      value: "",
+      frame: { x: 0.1, y: 0.3, width: 0.5, height: 0.05 },
+    });
+    const valueOnly = node({
+      identifier: "value-only",
+      label: "",
+      value: "Value",
+      frame: { x: 0.1, y: 0.4, width: 0.5, height: 0.05 },
+    });
+    const tree = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [absentText, explicitEmptyText, labelOnly, valueOnly],
+    });
+
+    // `^` can produce a zero-length match for every string, including "".
+    // Empty and absent fields are not text haystacks, while a non-empty field
+    // remains eligible even when its sibling field is explicitly empty.
+    const matches = findAll(tree, { textMatches: "^" });
+
+    expect(matches).toEqual([labelOnly, valueOnly]);
+  });
+
+  it("compiles a selector regex once per tree walk and once per direct node match", () => {
+    const nested = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          label: "Order #1",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 },
+          children: [
+            node({
+              label: "Order #2",
+              frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.1 },
+            }),
+          ],
+        }),
+        node({
+          label: "Order #3",
+          frame: { x: 0.1, y: 0.3, width: 0.8, height: 0.1 },
+        }),
+      ],
+    });
+    const selector = { textMatches: "^Order #\\d+$" };
+    const createRegExp = vi.spyOn(uiTreeMatchInternals, "createRegExp");
+
+    try {
+      expect(findAll(nested, selector)).toHaveLength(3);
+      expect(createRegExp).toHaveBeenCalledOnce();
+      expect(createRegExp).toHaveBeenLastCalledWith(selector.textMatches);
+
+      createRegExp.mockClear();
+      expect(matchNode(nested.children[0]!, selector)).toBe(true);
+      expect(createRegExp).toHaveBeenCalledOnce();
+      expect(createRegExp).toHaveBeenLastCalledWith(selector.textMatches);
+    } finally {
+      createRegExp.mockRestore();
+    }
+  });
+
+  it("compiles the search and full-consumption regexes once each per ranking pass", () => {
+    const pattern = "Order #\\d+";
+    const ranked = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          label: "Order #1 Archive",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+        }),
+        node({
+          label: "Order #1",
+          frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.05 },
+        }),
+        node({
+          value: "Order #2",
+          frame: { x: 0.4, y: 0.6, width: 0.2, height: 0.05 },
+        }),
+      ],
+    });
+    const createRegExp = vi.spyOn(uiTreeMatchInternals, "createRegExp");
+
+    try {
+      expect(selectorToFrame(ranked, { textMatches: pattern })).toMatchObject({ y: 0.4 });
+      expect(createRegExp.mock.calls.map(([source]) => source)).toEqual([
+        pattern,
+        `^(?:${pattern})$`,
+      ]);
+    } finally {
+      createRegExp.mockRestore();
+    }
   });
 
   it("evaluateCondition `text` prefers the visible match over a zero-area shadow", () => {

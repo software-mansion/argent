@@ -74,10 +74,19 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
           return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
         case "await":
         case "assert": {
-          const tail =
-            step.condition === "text"
-              ? `text ${selectorLabel(step.selector)} == "${step.expectedText ?? ""}"`
-              : `${step.condition} ${selectorLabel(step.selector)}`;
+          let tail: string;
+          if (step.condition !== "text") {
+            tail = `${step.condition} ${selectorLabel(step.selector)}`;
+          } else {
+            const selector = selectorLabel(step.selector);
+            const expected = step.expectedText ?? "";
+            tail =
+              step.textMatch === "matches"
+                ? `text ${selector} matches /${expected}/`
+                : step.textMatch === "equals"
+                  ? `text ${selector} == ${JSON.stringify(expected)}`
+                  : `text ${selector} contains ${JSON.stringify(expected)}`;
+          }
           return `${n}. ${step.kind}: ${tail}`;
         }
         case "wait":

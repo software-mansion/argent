@@ -14,6 +14,7 @@ import {
   appIdForPlatform,
   assertSafeFlowName,
   chromiumLaunchSpec,
+  describeTextExpectation,
   getFlowPath,
   isE2eFlow,
   parseFlow,
@@ -628,6 +629,7 @@ function pushReport(state: ExecState, report: StepReport): void {
 function selectorLabel(sel: FlowSelector): string {
   const parts: string[] = [];
   if (sel.text !== undefined) parts.push(`"${sel.text}"`);
+  if (sel.textMatches !== undefined) parts.push(`/${sel.textMatches}/`);
   if (sel.identifier) parts.push(`id=${sel.identifier}`);
   if (sel.role) parts.push(`role=${sel.role}`);
   return parts.join(" ");
@@ -648,7 +650,7 @@ function stepTarget(step: FlowStep): string | undefined {
       // A text condition checks expectedText against the element the selector
       // locates; the other conditions are about the selector itself.
       if (step.condition === "text") {
-        return `${sel} ${step.textMatch ?? "contains"} "${step.expectedText ?? ""}"`;
+        return `${sel} ${describeTextExpectation(step.expectedText, step.textMatch)}`;
       }
       return `${step.condition} ${sel}`;
     }
