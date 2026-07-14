@@ -268,7 +268,7 @@ describe("parseFlow", () => {
   it("rejects text sugar with both contains and equals", () => {
     expect(() =>
       parseFlow("steps:\n  - assert: { text: { in: counter, contains: a, equals: b } }\n")
-    ).toThrow(/exactly one of `contains` or `equals`/);
+    ).toThrow(/exactly one of `contains`, `equals`, or `matches`/);
   });
 
   it("rejects the explicit { condition, selector, expectedText } form (sugar only)", () => {
@@ -293,7 +293,7 @@ describe("parseFlow", () => {
 
   it("rejects text sugar with neither contains nor equals", () => {
     expect(() => parseFlow("steps:\n  - assert: { text: { in: counter } }\n")).toThrow(
-      /exactly one of `contains` or `equals`/
+      /exactly one of `contains`, `equals`, or `matches`/
     );
   });
 

@@ -308,8 +308,20 @@ export function chromiumLaunchSpec(
  * for identifier/role locators. The map form spells the internal `identifier`
  * field `id`; `identifier` is accepted on parse as an alias (so existing flow
  * files keep working) but serialization always emits `id`.
+ *
+ * In any selector slot, `text` may also be a regex matcher map —
+ * `{ text: { matches: '<pattern>' } }` — matched against each node's own
+ * label/value (internal `textMatches`; see the `Selector` type). It follows
+ * the same doctrine as the `text` condition's `matches`: unanchored,
+ * case-sensitive, validated at parse. In action ranking a pattern that
+ * consumes a node's whole label/value counts as an exact match.
  */
-type YamlSelector = string | (Omit<Selector, "identifier"> & { id?: string });
+type YamlSelector =
+  | string
+  | (Omit<Selector, "identifier" | "text" | "textMatches"> & {
+      id?: string;
+      text?: string | { matches: string };
+    });
 
 /** A tap targets an element (selector, possibly a bare string) or a raw point. */
 type TapBody = YamlSelector | { x: number; y: number };
@@ -318,8 +330,10 @@ type TapBody = YamlSelector | { x: number; y: number };
  * The condition of an `await`/`assert` step. The condition is the key, not a
  * separate `condition:` field:
  *   - `{ visible: "Account" }`            ← exists/visible/hidden take a selector
+ *   - `{ visible: { text: { matches: '^x: \d+$' } } }`  ← regex text selector
  *   - `{ text: { in: "Taps:", contains: "Taps: 0" } }`  ← substring check
  *   - `{ text: { in: "Taps:", equals: "Taps: 0" } }`    ← exact-text check
+ *   - `{ text: { in: "total", matches: 'Total: \$\d+' } }` ← regex check
  * Only `await` takes an optional `timeout` sibling key (milliseconds):
  *   - `{ visible: "Account", timeout: 10000 }`
  * An `assert` carrying one is rejected at parse — an assert is an immediate
@@ -330,7 +344,8 @@ type YamlWaitCondition =
   | { visible: YamlSelector }
   | { hidden: YamlSelector }
   | { text: { in: YamlSelector; contains: string } }
-  | { text: { in: YamlSelector; equals: string } };
+  | { text: { in: YamlSelector; equals: string } }
+  | { text: { in: YamlSelector; matches: string } };
 
 /** `scroll-to` body: a bare target (scrolls down), or a map with options. */
 type YamlScrollBody =
@@ -377,9 +392,13 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   ) {
     return sel.text;
   }
-  // YAML spells the identifier field `id` (parseSelector maps it back).
-  const { loose: _loose, identifier, ...rest } = sel;
-  return identifier === undefined ? { ...rest } : { ...rest, id: identifier };
+  // YAML spells the identifier field `id` (parseSelector maps it back), and
+  // the internal `textMatches` field spells `text: { matches }`.
+  const { loose: _loose, identifier, textMatches, ...rest } = sel;
+  const out: Exclude<YamlSelector, string> = { ...rest };
+  if (textMatches !== undefined) out.text = { matches: textMatches };
+  if (identifier !== undefined) out.id = identifier;
+  return out;
 }
 
 /**
@@ -391,8 +410,11 @@ export function describeSelector(s: FlowSelector): string {
     Object.entries(s)
       .filter(([k]) => k !== "loose")
       // `identifier` is spelled `id` in flow YAML — print the spelling the flow
-      // file uses so the message reads like the step it refers to.
-      .map(([k, v]) => `${k === "identifier" ? "id" : k}="${v}"`)
+      // file uses so the message reads like the step it refers to. A regex
+      // matcher prints in /slashes/ so it can't be misread as a literal.
+      .map(([k, v]) =>
+        k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
+      )
       .join(" ")
   );
 }
@@ -421,7 +443,9 @@ function waitToYaml(
       body =
         textMatch === "equals"
           ? { text: { in: sel, equals: expectedText ?? "" } }
-          : { text: { in: sel, contains: expectedText ?? "" } };
+          : textMatch === "matches"
+            ? { text: { in: sel, matches: expectedText ?? "" } }
+            : { text: { in: sel, contains: expectedText ?? "" } };
       break;
   }
   if (timeoutMs !== undefined) body.timeout = timeoutMs;
@@ -609,6 +633,50 @@ function parseSelector(raw: unknown, where: string): FlowSelector {
     }
     normalized = { ...rest, identifier: id };
   }
+  // Regex text matcher: `text: { matches: '<pattern>' }`. Split off before
+  // schema validation (the schema's `text` is a plain string) and validate
+  // the pattern here, deviceless — same guarantee as the `text` condition's
+  // `matches`. The remaining fields (`id`/`role`) AND-combine as usual.
+  if (normalized !== null && typeof normalized === "object") {
+    const { text, ...rest } = normalized as { text?: unknown } & Record<string, unknown>;
+    if (text !== null && typeof text === "object") {
+      const keys = Object.keys(text);
+      const pattern = (text as Record<string, unknown>).matches;
+      if (keys.length !== 1 || keys[0] !== "matches") {
+        badEntry(
+          raw,
+          `${where}: a text matcher takes exactly { matches: '<regex>' } — for a substring, use the plain-string form (text: "…")`
+        );
+      }
+      if (typeof pattern !== "string" || pattern.length === 0) {
+        badEntry(raw, `${where}: text matcher needs a non-empty \`matches\` pattern`);
+      }
+      try {
+        new RegExp(pattern);
+      } catch (err) {
+        badEntry(
+          raw,
+          `${where}: text \`matches\` is not a valid regular expression: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      const out: FlowSelector = { textMatches: pattern };
+      // Mirror the schema's field checks by hand: the schema's at-least-one-of
+      // refine can't see textMatches, so a matcher-only map would fail it.
+      const fields = rest as { identifier?: unknown; role?: unknown };
+      for (const key of ["identifier", "role"] as const) {
+        const v = fields[key];
+        if (v === undefined) continue;
+        if (typeof v !== "string" || v.length === 0) {
+          badEntry(
+            raw,
+            `${where}: selector \`${key === "identifier" ? "id" : key}\` needs a non-empty string`
+          );
+        }
+        out[key] = v;
+      }
+      return out;
+    }
+  }
   const r = selectorSchema.safeParse(normalized);
   if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
   return r.data;
@@ -630,9 +698,11 @@ type WaitFields = {
  * Parse the body of an `await`/`assert` step into its condition + selector +
  * optional expected text. The condition is the key and its value is the
  * selector (`{ visible: "Home" }`, `{ text: { in, contains } }`). The `text`
- * check takes exactly one of `contains` (substring) or `equals` (exact text).
- * `await` additionally accepts an optional `timeout` sibling key (milliseconds);
- * an `assert` carrying one is rejected rather than silently ignored.
+ * check takes exactly one of `contains` (substring), `equals` (exact text), or
+ * `matches` (JS regex, validated here so a bad pattern fails at parse, not
+ * mid-run). `await` additionally accepts an optional `timeout` sibling key
+ * (milliseconds); an `assert` carrying one is rejected rather than silently
+ * ignored.
  */
 function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   if (raw === null || typeof raw !== "object") {
@@ -681,25 +751,44 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   );
 
   // `text` locates an element (`in`) and checks its rendered content against
-  // exactly one of `contains` (substring) or `equals` (exact text).
+  // exactly one of `contains` (substring), `equals` (exact text), or
+  // `matches` (regex).
   if (condition === "text") {
     const t = b.text;
     if (t === null || typeof t !== "object") {
-      badEntry({ [kind]: b }, `${kind} text needs { in: <selector>, contains|equals: <string> }`);
+      badEntry(
+        { [kind]: b },
+        `${kind} text needs { in: <selector>, contains|equals|matches: <string> }`
+      );
     }
     const tb = t as Record<string, unknown>;
     if (!Array.isArray(tb)) {
-      rejectUnknownKeys({ [kind]: b }, tb, ["in", "contains", "equals"], `${kind}.text`);
+      rejectUnknownKeys({ [kind]: b }, tb, ["in", "contains", "equals", "matches"], `${kind}.text`);
     }
-    const hasContains = "contains" in tb;
-    const hasEquals = "equals" in tb;
-    if (hasContains === hasEquals) {
-      badEntry({ [kind]: b }, `${kind} text needs exactly one of \`contains\` or \`equals\``);
+    const present = (["contains", "equals", "matches"] as const).filter((m) => m in tb);
+    if (present.length !== 1) {
+      badEntry(
+        { [kind]: b },
+        `${kind} text needs exactly one of \`contains\`, \`equals\`, or \`matches\``
+      );
     }
-    const textMatch: TextMatchMode = hasEquals ? "equals" : "contains";
-    const expected = hasEquals ? tb.equals : tb.contains;
+    const textMatch: TextMatchMode = present[0]!;
+    const expected = tb[textMatch];
     if (typeof expected !== "string" || expected.length === 0) {
       badEntry({ [kind]: b }, `${kind} text needs a non-empty \`${textMatch}\``);
+    }
+    if (textMatch === "matches") {
+      // Fail a bad pattern here, deviceless, not mid-run. The pattern reaches
+      // the runtime verbatim, so RegExp construction there can never throw on
+      // a flow's behalf.
+      try {
+        new RegExp(expected);
+      } catch (err) {
+        badEntry(
+          { [kind]: b },
+          `${kind} text \`matches\` is not a valid regular expression: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     }
     return {
       condition: "text",

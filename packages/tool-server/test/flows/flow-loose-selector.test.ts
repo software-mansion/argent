@@ -147,7 +147,7 @@ describe("loose (bare-string) selector resolution", () => {
     const result = (await run("strict")) as FlowRunResult & { taps: TapCall[] };
     expect(result.steps[0].status).toBe("fail");
     expect(result.taps).toHaveLength(0);
-  }, 10000); // an unresolved tap auto-waits its full timeout before failing
+  }); // slow by design: an unresolved tap auto-waits its full budget before failing
 
   it("await resolves a bare string against an identifier (testID), like every other directive", async () => {
     // The element is exposed only via testID — a text-only await would time out.

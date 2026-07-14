@@ -628,6 +628,7 @@ function pushReport(state: ExecState, report: StepReport): void {
 function selectorLabel(sel: FlowSelector): string {
   const parts: string[] = [];
   if (sel.text !== undefined) parts.push(`"${sel.text}"`);
+  if (sel.textMatches !== undefined) parts.push(`/${sel.textMatches}/`);
   if (sel.identifier) parts.push(`id=${sel.identifier}`);
   if (sel.role) parts.push(`role=${sel.role}`);
   return parts.join(" ");

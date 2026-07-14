@@ -44,7 +44,21 @@ export const selectorSchema = z
     message: "selector needs at least one of text, identifier, or role",
   });
 
-export type Selector = z.infer<typeof selectorSchema>;
+export type Selector = z.infer<typeof selectorSchema> & {
+  /**
+   * Flow-only regex text locator (`{ text: { matches: '<pattern>' } }` in flow
+   * YAML): a JS regular expression tested — unanchored and case-sensitive,
+   * the same doctrine as the `text` condition's `matches` — against the
+   * node's OWN label/value, deliberately not the hoisted `subtreeText`:
+   * subtree matching would make every unshielded ancestor of a text leaf
+   * match too, degrading the exact-beats-substring ranking actions rely on.
+   * Aggregate checks stay the `text` condition's job (`{ in, matches }`).
+   * A type-level extension, not a schema field, so the `await-ui-element`
+   * tool surface doesn't grow (the same boundary `TextMatchMode.matches`
+   * draws below).
+   */
+  textMatches?: string;
+};
 
 export type WaitCondition = "exists" | "visible" | "hidden" | "text";
 
@@ -52,8 +66,14 @@ export type WaitCondition = "exists" | "visible" | "hidden" | "text";
 // string: `contains` (default) is a case-insensitive substring; `equals` is a
 // case-insensitive full-string match (so "1" no longer satisfies "10"). Both
 // are offered so a caller can assert "shows this somewhere" or "shows exactly
-// this" interchangeably.
-export type TextMatchMode = "contains" | "equals";
+// this" interchangeably. `matches` treats the expected string as a JS regular
+// expression tested unanchored against the text (the `contains` analog —
+// anchor with ^…$ for the `equals` analog) for dynamic content that neither
+// literal mode can pin (counters, prices, dates). Unlike the literal modes it
+// is CASE-SENSITIVE — a regex carries its semantics in the pattern, and
+// forcing `i` would betray `\d{2}`-style precision. Flow directives only; the
+// await-ui-element tool's schema deliberately stays contains/equals.
+export type TextMatchMode = "contains" | "equals" | "matches";
 
 // ── Tree matching ──────────────────────────────────────────────────────────
 
@@ -101,12 +121,24 @@ export function textMatches(
   expected: string,
   mode: TextMatchMode
 ): boolean {
+  // The pattern was validated at flow parse time, so construction here cannot
+  // throw on a flow's behalf. Per-poll construction is fine: V8 compiles
+  // lazily and the poll cadence is 300ms.
+  if (mode === "matches") return new RegExp(expected).test(actual ?? "");
   return mode === "equals" ? equalsCI(actual, expected) : includesCI(actual, expected);
 }
 
 export function matchNode(node: DescribeNode, selector: Selector): boolean {
   if (selector.text !== undefined) {
     if (!includesCI(node.label, selector.text) && !includesCI(node.value, selector.text)) {
+      return false;
+    }
+  }
+  if (selector.textMatches !== undefined) {
+    // Validated at flow parse time, so construction cannot throw here;
+    // per-poll construction is fine — see textMatches() below.
+    const re = new RegExp(selector.textMatches);
+    if (!re.test(node.label ?? "") && !re.test(node.value ?? "")) {
       return false;
     }
   }
@@ -268,13 +300,30 @@ export function nodeAtPoint(
   return best;
 }
 
+// Does the pattern consume the WHOLE string? The regex analog of an exact
+// text match, for ranking: `^Order #\d+$`-style full hits on a leaf must beat
+// a container whose aggregated label merely contains the same text. Wrapping
+// in `^(?:…)$` is safe for any valid pattern (non-capturing, so backreference
+// numbering is unchanged; inner `^`/`$` stay valid).
+function regexConsumesAll(pattern: string, s: string | undefined): boolean {
+  return s !== undefined && new RegExp(`^(?:${pattern})$`).test(s);
+}
+
 // How many of the selector's provided fields this node matches exactly
-// (case-insensitive equality) rather than merely as a substring.
+// (case-insensitive equality; full-string consumption for a regex) rather
+// than merely as a substring / partial hit.
 function exactFieldCount(node: DescribeNode, selector: Selector): number {
   let count = 0;
   if (
     selector.text !== undefined &&
     (equalsCI(node.label, selector.text) || equalsCI(node.value, selector.text))
+  ) {
+    count++;
+  }
+  if (
+    selector.textMatches !== undefined &&
+    (regexConsumesAll(selector.textMatches, node.label) ||
+      regexConsumesAll(selector.textMatches, node.value))
   ) {
     count++;
   }
