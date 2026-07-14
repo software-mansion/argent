@@ -11,14 +11,15 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
 
+  // Resolve the named key before typing anything so an unknown name fails
+  // fast instead of after the text has already been typed.
+  let named: (typeof CHROMIUM_NAMED_KEYS)[string] | undefined;
   if (params.key) {
     const lower = params.key.toLowerCase();
     // Own-property check: a prototype key like "constructor" would otherwise
     // pass the falsy guard with a garbage value and dispatch a broken CDP key
     // event instead of rejecting as an unknown key.
-    const named = Object.hasOwn(CHROMIUM_NAMED_KEYS, lower)
-      ? CHROMIUM_NAMED_KEYS[lower]
-      : undefined;
+    named = Object.hasOwn(CHROMIUM_NAMED_KEYS, lower) ? CHROMIUM_NAMED_KEYS[lower] : undefined;
     if (!named) {
       // Well-typed but unusable input (`key` is a free string) — a caller
       // mistake mapped to 400 (matching the Android path, uniform across
@@ -32,20 +33,6 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
         }
       );
     }
-    await api.dispatchKeyEvent({
-      type: "keyDown",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    await sleep(delay);
-    await api.dispatchKeyEvent({
-      type: "keyUp",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    keysPressed++;
   }
 
   if (params.text) {
@@ -78,6 +65,25 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
       keysPressed++;
       await sleep(delay);
     }
+  }
+
+  // Key after text: a combined call means "type, then submit" (text +
+  // key:"enter"). Pressing the key first submits the still-empty field.
+  if (named) {
+    await api.dispatchKeyEvent({
+      type: "keyDown",
+      key: named.key,
+      code: named.code,
+      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+    });
+    await sleep(delay);
+    await api.dispatchKeyEvent({
+      type: "keyUp",
+      key: named.key,
+      code: named.code,
+      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+    });
+    keysPressed++;
   }
 
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };
