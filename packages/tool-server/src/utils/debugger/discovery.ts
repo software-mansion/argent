@@ -37,18 +37,13 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
     );
   }
 
+  // Optional: only source-map / file:line resolution needs it, and that degrades
+  // cleanly to "" (SourceMapsRegistry and the source resolver both fall back to
+  // returning no location). Metro shipped with React Native 0.72 — which is what
+  // Vega/Kepler forks — never sends this header, and hard-failing there would
+  // take down evaluate, console logs and the network inspector, none of which
+  // touch source maps.
   const projectRoot = statusRes.headers.get("X-React-Native-Project-Root") ?? "";
-  if (!projectRoot) {
-    throw new FailureError(
-      `Metro at port ${port} did not return X-React-Native-Project-Root header`,
-      {
-        error_code: FAILURE_CODES.DEBUGGER_METRO_PROJECT_ROOT_MISSING,
-        failure_stage: "debugger_discover_metro_project_root",
-        failure_area: "tool_server",
-        error_kind: "network",
-      }
-    );
-  }
 
   const listRes = await fetch(`http://localhost:${port}/json/list`);
   const targets = (await listRes.json()) as CDPTarget[];

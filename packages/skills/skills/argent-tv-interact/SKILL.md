@@ -58,3 +58,13 @@ Needs a Debug build + Metro running. argent only _connects_ to Metro — start M
 
 - **Apple TV / Android TV:** use the dev-build deep-links above; `npm start` for Metro.
 - **Vega:** build/install a Debug `.vpkg` (`vega device install-app -p <path>`), `npm start`, `vega device start-port-forwarding --port 8081 --forward false`, then `vega device launch-app -a <appId>`. Confirm `http://localhost:8081/json/list` shows a `Hermes React Native` target; `.tsx` edits then hot-reload.
+
+## Debugging the JS runtime (Vega)
+
+Once that same Debug build + Metro setup is in place, the JS-runtime tools work on a Vega VVD: `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry` (console logs), `view-network-logs`, and `view-network-request-details`. See the `argent-metro-debugger` skill.
+
+Vega's React Native forks RN 0.72 and serves the legacy Hermes inspector, so three things differ from iOS / Android:
+
+- `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` tools are **not supported** — they need `Runtime.addBinding`, which this Hermes acknowledges but never implements. Use `describe` for on-screen structure.
+- `debugger-status` reports `isNewDebugger: false`.
+- `projectRoot` is empty (RN 0.72's Metro sends no project-root header), so component `file:line` source mapping is unavailable.

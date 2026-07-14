@@ -10,6 +10,10 @@ import { parse as parseStackTrace } from "stacktrace-parser";
 const ALLOWED_SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
 
 function isInsideProject(absFile: string, projectRoot: string): boolean {
+  // No project root (Metro did not report one) means containment cannot be
+  // established, so fail closed rather than resolving against `path.resolve("")`
+  // — which is the tool-server's cwd, not the app's.
+  if (!projectRoot) return false;
   const resolvedRoot = path.resolve(projectRoot);
   const resolvedFile = path.resolve(absFile);
   const rel = path.relative(resolvedRoot, resolvedFile);

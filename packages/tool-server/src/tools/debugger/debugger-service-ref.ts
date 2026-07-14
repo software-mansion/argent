@@ -6,12 +6,22 @@ import { chromiumJsRuntimeDebuggerRef } from "../../blueprints/chromium-js-runti
  * Capability matrix shared by every debugger-* tool that has been ported to
  * Chromium CDP. iOS + Android continue to go through Metro; Chromium goes
  * direct via the page CDP session that boot-device already opened.
+ *
+ * Vega (Fire TV) also goes through Metro: its React Native is a fork of RN
+ * 0.72, whose Hermes serves the legacy inspector-proxy — `/json/list` exposes a
+ * `Hermes React Native` target that speaks Runtime + Debugger. Everything in
+ * this matrix needs only `Runtime.evaluate`, which that target supports. Note
+ * the network inspector rides `Runtime.evaluate` too (it monkey-patches
+ * `fetch`, it does not use the CDP `Network` domain), so it needs nothing from
+ * the post-0.73 debugger stack. Requires a Debug `.vpkg` + Metro reachable from
+ * the device — see the argent-tv-interact skill.
  */
 export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
 };
 
 /**
@@ -24,6 +34,13 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
  * Metro through a sim-remote reverse tunnel established lazily in the
  * JsRuntimeDebugger blueprint (every Metro-backed tool funnels through it), so
  * no per-tool transport plumbing is needed here.
+ *
+ * Vega is deliberately absent even though the plain debugger-* tools do work
+ * there (see DEBUGGER_TOOL_CAPABILITY). These tools deliver their payload over
+ * `Runtime.addBinding` / `Runtime.bindingCalled`, and RN 0.72's Hermes ACKs
+ * `Runtime.addBinding` without implementing it — the binding is never installed
+ * and no `bindingCalled` ever fires, so they would hang until timeout. Gating
+ * them out turns that into an immediate, explicit "not supported" instead.
  */
 export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true, device: true },
