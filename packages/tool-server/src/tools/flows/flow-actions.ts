@@ -62,7 +62,7 @@ export const ABORTED_OUTCOME: DirectiveOutcome = {
 /** The selector-acting steps {@link runDirective} handles. */
 export type DirectiveStep = Extract<
   FlowStep,
-  { kind: "tap" | "type" | "await" | "assert" | "scroll-to" }
+  { kind: "tap" | "long-press" | "type" | "await" | "assert" | "scroll-to" }
 >;
 
 /** Dispatch a tool with the run's resolved device id bound into its args. */
@@ -538,14 +538,17 @@ function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
 }
 
-/** Execute one selector-acting directive (`tap` / `type` / `await` / `assert` / `scroll-to`). */
+/** Execute one selector-acting directive (`tap` / `long-press` / `type` / `await` / `assert` / `scroll-to`). */
 export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
   // Vega is remote-driven — there is no touch input, so the touch directives
   // can never act on it. Fail upfront with authoring guidance instead of a
   // low-level gesture dispatch error after the selector resolves.
   if (
     env.device.platform === "vega" &&
-    (step.kind === "tap" || step.kind === "type" || step.kind === "scroll-to")
+    (step.kind === "tap" ||
+      step.kind === "long-press" ||
+      step.kind === "type" ||
+      step.kind === "scroll-to")
   ) {
     return {
       ok: false,
@@ -555,6 +558,8 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
   switch (step.kind) {
     case "tap":
       return runTap(env, step);
+    case "long-press":
+      return runLongPress(env, step);
     case "type":
       return runType(env, step);
     case "await":
@@ -592,6 +597,54 @@ async function runTap(
     return { ok: false, reason: "tap needs a selector or x/y coordinates" };
   }
   await invokeOnDevice(env, "gesture-tap", point);
+  return { ok: true };
+}
+
+/**
+ * Long-press defaults comfortably past both platforms' recognizers — iOS
+ * UILongPressGestureRecognizer's 500ms minimum and Android's ~400ms
+ * long-press timeout (RN's Pressable uses 500ms) — without dragging every
+ * step out.
+ */
+const DEFAULT_LONG_PRESS_MS = 800;
+
+/**
+ * Press-and-hold on an element: resolve the selector (same settle + auto-wait
+ * as tap), then hold at the frame centre for `duration` ms. Touch platforms
+ * dispatch ONE `gesture-custom` train (Down, then Up delayed by the duration)
+ * so the hold length is exact; Chromium has no touch, so the closest honest
+ * mapping is a mouse press-hold-release (`gesture-drag` with from == to) —
+ * apps implementing pointer-based long-press respond, anything else sees a
+ * slow click. A desktop context menu is a *right*-click, deliberately not
+ * aliased here.
+ */
+async function runLongPress(
+  env: ActionEnv,
+  step: { selector: FlowSelector; duration?: number }
+): Promise<DirectiveOutcome> {
+  const frame = await waitForFrame(env, step.selector);
+  if (frame === "aborted") return ABORTED_OUTCOME;
+  if (!frame) {
+    return { ok: false, reason: offscreenHint(step.selector) };
+  }
+  const point = getDescribeTapPoint(frame);
+  const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
+  if (env.device.platform === "chromium") {
+    await invokeOnDevice(env, "gesture-drag", {
+      fromX: point.x,
+      fromY: point.y,
+      toX: point.x,
+      toY: point.y,
+      durationMs: duration,
+    });
+  } else {
+    await invokeOnDevice(env, "gesture-custom", {
+      events: [
+        { type: "Down", x: point.x, y: point.y, delayMs: 0 },
+        { type: "Up", x: point.x, y: point.y, delayMs: duration },
+      ],
+    });
+  }
   return { ok: true };
 }
 

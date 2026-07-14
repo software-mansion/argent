@@ -20,17 +20,18 @@ Both run via `argent flow run <name>` — a fragment simply runs against whateve
 
 Beyond raw `tool:` steps and `echo:`, flows support declarative directives interpreted by the runner (they are **not** agent-callable tools). **Every directive hard-stops the flow on failure**; later steps are reported `skip`.
 
-| Directive   | YAML                                                                                                     | Meaning                                                                 |
-| ----------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `launch`    | `- launch: com.acme.app` or `- launch: { ios: …, android: … }`                                           | start the app from scratch (terminate + relaunch) and wait until ready  |
-| `tap`       | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }`                                                           | tap an element by selector (auto-waits), or a raw normalized point      |
-| `type`      | `- type: { into: email, text: "a@b.com" }`                                                               | focus a field, type, then press Enter to submit + dismiss the keyboard  |
-| `scroll-to` | `- scroll-to: "Order #1234"` (scrolls down) or `- scroll-to: { target: …, direction: right, within: … }` | momentum-free scroll until the target is visible                        |
-| `await`     | `- await: { visible: Home }`                                                                             | wait for a UI condition                                                 |
-| `wait`      | `- wait: 500`                                                                                            | pause for a fixed number of milliseconds (last resort — prefer `await`) |
-| `assert`    | `- assert: { visible: Welcome }`                                                                         | check a condition, hard-fail if it never holds                          |
-| `snapshot`  | `- snapshot: home` or `- snapshot: { name: home, maxMismatch: 0.5 }`                                     | diff a screenshot against a stored baseline                             |
-| `run`       | `- run: login`                                                                                           | execute a fragment's steps inline                                       |
+| Directive    | YAML                                                                                                     | Meaning                                                                 |
+| ------------ | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `launch`     | `- launch: com.acme.app` or `- launch: { ios: …, android: … }`                                           | start the app from scratch (terminate + relaunch) and wait until ready  |
+| `tap`        | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }`                                                           | tap an element by selector (auto-waits), or a raw normalized point      |
+| `long-press` | `- long-press: Row 3` or `- long-press: { on: <sel>, duration: 1200 }`                                   | press and hold an element (default 800ms; Chromium: mouse press-hold)   |
+| `type`       | `- type: { into: email, text: "a@b.com" }`                                                               | focus a field, type, then press Enter to submit + dismiss the keyboard  |
+| `scroll-to`  | `- scroll-to: "Order #1234"` (scrolls down) or `- scroll-to: { target: …, direction: right, within: … }` | momentum-free scroll until the target is visible                        |
+| `await`      | `- await: { visible: Home }`                                                                             | wait for a UI condition                                                 |
+| `wait`       | `- wait: 500`                                                                                            | pause for a fixed number of milliseconds (last resort — prefer `await`) |
+| `assert`     | `- assert: { visible: Welcome }`                                                                         | check a condition, hard-fail if it never holds                          |
+| `snapshot`   | `- snapshot: home` or `- snapshot: { name: home, maxMismatch: 0.5 }`                                     | diff a screenshot against a stored baseline                             |
+| `run`        | `- run: login`                                                                                           | execute a fragment's steps inline                                       |
 
 ### Selectors
 
@@ -63,7 +64,7 @@ For a custom poll interval or bundleId, drop to an explicit `- tool: await-ui-el
 
 ### TV targets (Vega)
 
-A Vega (Fire TV) device is remote-driven — there is no touch input, so the touch directives (`tap`, `type`, `scroll-to`) fail on it with guidance. Drive focus with `tool: tv-remote` steps and type with `tool: keyboard` instead; everything else (`launch`, `await`, `assert`, `wait`, `snapshot`, `echo`, `run`, selectors) works unchanged — the tree comes from the on-device automation toolkit, which attaches at app launch (the `launch` step waits for it, so a leading `launch` also guarantees selectors resolve).
+A Vega (Fire TV) device is remote-driven — there is no touch input, so the touch directives (`tap`, `long-press`, `type`, `scroll-to`) fail on it with guidance. Drive focus with `tool: tv-remote` steps and type with `tool: keyboard` instead; everything else (`launch`, `await`, `assert`, `wait`, `snapshot`, `echo`, `run`, selectors) works unchanged — the tree comes from the on-device automation toolkit, which attaches at app launch (the `launch` step waits for it, so a leading `launch` also guarantees selectors resolve).
 
 ```yaml
 steps:

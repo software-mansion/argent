@@ -231,6 +231,7 @@ export type FlowStep =
   | { kind: "launch"; app: Launch }
   | { kind: "run"; flow: string }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number }
+  | { kind: "long-press"; selector: FlowSelector; duration?: number }
   | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
   | {
       kind: "await";
@@ -358,6 +359,7 @@ type YamlStep =
   | { run: string }
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
+  | { "long-press": YamlSelector | { on: YamlSelector; duration?: number } }
   | { type: { into: YamlSelector; text: string; submit?: boolean } }
   | { await: YamlWaitCondition & { timeout?: number } }
   | { assert: YamlWaitCondition }
@@ -465,6 +467,12 @@ function toYamlStep(step: FlowStep): YamlStep {
         ? selectorToYaml(step.selector)
         : { x: step.x!, y: step.y! };
       return { tap: body };
+    }
+    case "long-press": {
+      const sel = selectorToYaml(step.selector);
+      return {
+        "long-press": step.duration !== undefined ? { on: sel, duration: step.duration } : sel,
+      };
     }
     case "type": {
       const body: { into: YamlSelector; text: string; submit?: boolean } = {
@@ -876,6 +884,7 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "run",
   "tool",
   "tap",
+  "long-press",
   "type",
   "await",
   "assert",
@@ -883,6 +892,52 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "scroll-to",
   "snapshot",
 ];
+
+/**
+ * Parse a `long-press` body: a selector (bare = loose, map = strict) or the
+ * options form `{ on: <selector>, duration?: <ms> }` — nesting the selector
+ * under `on` so an option key can never be mistaken for — or silently
+ * stripped from — a selector field. No coordinate form: a point long-press is
+ * the `tool: gesture-custom` escape hatch.
+ */
+function parseLongPress(body: unknown, entry: unknown): FlowStep {
+  const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+
+  if (obj.on !== undefined || obj.duration !== undefined) {
+    if (
+      obj.text !== undefined ||
+      obj.id !== undefined ||
+      obj.identifier !== undefined ||
+      obj.role !== undefined
+    ) {
+      badEntry(
+        entry,
+        'the long-press options form takes a nested selector — e.g. long-press: { on: { text: "Row" }, duration: 1200 }'
+      );
+    }
+    if (!Object.keys(obj).every((k) => k === "on" || k === "duration")) {
+      badEntry(entry, "the long-press options form accepts only { on, duration }");
+    }
+    if (obj.on === undefined) {
+      badEntry(entry, 'long-press needs a target — e.g. long-press: { on: "Row", duration: 1200 }');
+    }
+    const step: FlowStep = { kind: "long-press", selector: parseSelector(obj.on, "long-press.on") };
+    if (obj.duration !== undefined) {
+      // Like `await.timeout`: reject non-finite values (YAML `.inf` parses to
+      // Infinity), which would hold the press forever.
+      if (typeof obj.duration !== "number" || !Number.isFinite(obj.duration) || obj.duration <= 0) {
+        badEntry(
+          entry,
+          "long-press.duration needs a positive number of milliseconds (e.g. `duration: 1200`)"
+        );
+      }
+      step.duration = obj.duration;
+    }
+    return step;
+  }
+
+  return { kind: "long-press", selector: parseSelector(body, "long-press") };
+}
 
 function fromYamlStep(raw: YamlStep): FlowStep {
   const entry = raw as Record<string, unknown>;
@@ -945,6 +1000,10 @@ function fromYamlStep(raw: YamlStep): FlowStep {
       return { kind: "tap", x: obj.x, y: obj.y };
     }
     return { kind: "tap", selector: parseSelector(body, "tap") };
+  }
+
+  if ("long-press" in raw) {
+    return parseLongPress((raw as { "long-press": unknown })["long-press"], raw);
   }
 
   if ("type" in raw) {
