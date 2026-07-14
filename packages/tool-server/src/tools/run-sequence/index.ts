@@ -96,7 +96,7 @@ a prior tap), use individual tool calls instead.
 
 Allowed tools and their args (udid is auto-injected, do NOT include it in args):
 
-  gesture-tap:    { x: number, y: number }                                                                              [ios/android/chromium]
+  gesture-tap:    { x: number, y: number, clickCount?: number }                                                        [ios/android/chromium]
   gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [ios/android]
   gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [chromium only]
   gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [chromium only]
