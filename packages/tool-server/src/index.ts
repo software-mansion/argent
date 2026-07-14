@@ -9,6 +9,8 @@ import {
   shutdown as telemetryShutdown,
   warmTelemetryIdentity,
   aiTelemetryFromMeta,
+  describeCrash,
+  type CrashDiagnostics,
   type EventPropertyMap,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
@@ -101,13 +103,21 @@ export function start(): void {
   let finalExitCode = 0;
   let shutdownReason: "idle" | "signal" | "crash" = "signal";
   let shutdownFailureSignal: FailureSignal | null = null;
+  // Anonymous crash detail (class name, syscall, stack fingerprint, phase),
+  // merged into the final toolserver:stop only on a real crash. Left null on
+  // idle/signal stops so clean shutdowns carry no crash fields.
+  let shutdownCrashDiagnostics: CrashDiagnostics | null = null;
+  // Flips once the HTTP listener has bound: lets a crash record whether it hit
+  // during startup (the dominant, sub-second, restart-loop population) or while
+  // actually serving.
+  let listening = false;
   let shutdown: ((exitCode?: number) => Promise<void>) | null = null;
 
   // The crash classification is passed in explicitly rather than re-derived from
   // `label`: `label` is a human-readable stderr prefix, and coupling the emitted
   // failure code to its exact wording would silently misclassify the crash if the
   // message were ever reworded.
-  function crashShutdown(label: string, detail: string, signal: FailureSignal): void {
+  function crashShutdown(label: string, detail: string, signal: FailureSignal, err: unknown): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
     // A second fatal event must not re-run teardown or schedule a second timer.
     if (crashing) return;
@@ -115,6 +125,14 @@ export function start(): void {
     shutdownReason = "crash";
     finalExitCode = 1;
     shutdownFailureSignal = signal;
+    // Derive the anonymous crash detail from the raw error (never from `detail`,
+    // which is a human-readable stderr string). Best-effort — a failure here must
+    // not stop the crash from being reported, so fall back to phase-only.
+    try {
+      shutdownCrashDiagnostics = describeCrash(err, listening ? "serving" : "startup");
+    } catch {
+      shutdownCrashDiagnostics = { crash_phase: listening ? "serving" : "startup" };
+    }
     setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
       shutdown(1).catch(() => process.exit(1));
@@ -124,12 +142,17 @@ export function start(): void {
   }
 
   process.on("uncaughtException", (err) => {
-    crashShutdown("Uncaught exception", String(err.stack ?? err), {
-      error_code: FAILURE_CODES.TOOLSERVER_UNCAUGHT_EXCEPTION,
-      failure_stage: "toolserver_uncaught_exception",
-      failure_area: "tool_server",
-      error_kind: "crash",
-    });
+    crashShutdown(
+      "Uncaught exception",
+      String(err.stack ?? err),
+      {
+        error_code: FAILURE_CODES.TOOLSERVER_UNCAUGHT_EXCEPTION,
+        failure_stage: "toolserver_uncaught_exception",
+        failure_area: "tool_server",
+        error_kind: "crash",
+      },
+      err
+    );
   });
   process.on("unhandledRejection", (reason) => {
     crashShutdown(
@@ -140,7 +163,8 @@ export function start(): void {
         failure_stage: "toolserver_unhandled_rejection",
         failure_area: "tool_server",
         error_kind: "crash",
-      }
+      },
+      reason
     );
   });
 
@@ -377,6 +401,7 @@ export function start(): void {
         uptime_ms: Date.now() - serverStartedAt,
         total_tool_calls: telemetryHandle.getTotalToolCalls(),
         ...(shutdownFailureSignal ?? {}),
+        ...(shutdownCrashDiagnostics ?? {}),
       });
       telemetryHandle.detach();
       await telemetryShutdown(1500);
@@ -430,6 +455,8 @@ export function start(): void {
   Promise.all([watcherReady, identityWarm])
     .then(() => {
       server = httpHandle.app.listen(PORT, HOST, () => {
+        // Past this point a crash is a serving-time fault, not a startup fault.
+        listening = true;
         const addr = server!.address();
         const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
         const origin = formatOrigin(HOST, boundPort);
@@ -453,13 +480,15 @@ export function start(): void {
           /* swallow */
         }
       });
-      // Surface bind failures (EADDRINUSE / EACCES on privileged ports) as a
-      // clean exit instead of routing through uncaughtException → crashShutdown.
-      server.on("error", async (err: NodeJS.ErrnoException) => {
-        const code = err.code ? `${err.code}: ` : "";
-        process.stderr.write(
-          `[tool-server] Failed to bind ${HOST}:${PORT} — ${code}${err.message}\n`
-        );
+      // A bind failure (EADDRINUSE from a stale server still holding the port,
+      // EACCES on a privileged port) is the socket half of the startup
+      // restart-loop population this diagnostics work exists to surface. Route it
+      // through crashShutdown so `err.code` is captured as error_syscall on a
+      // reason:"crash" stop instead of exiting silently with no telemetry at all.
+      // `listening` is still false here (the listen callback never ran), so the
+      // crash is correctly phased as "startup"; crashShutdown handles teardown,
+      // telemetry drain, and exit.
+      server.on("error", (err: NodeJS.ErrnoException) => {
         eventLog?.error({
           type: "tool_server.bind_failed",
           msg: `Tool server failed to bind ${HOST}:${PORT}.`,
@@ -469,15 +498,21 @@ export function start(): void {
             error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
             failure_stage: "toolserver_bind",
             failure_area: "tool_server",
-            error_kind: "unknown",
+            error_kind: "crash",
           },
         });
-        try {
-          await eventLog?.dispose();
-        } catch (err) {
-          process.stderr.write(`[tool-server] event log dispose failed: ${String(err)}\n`);
-        }
-        process.exit(1);
+        const code = err.code ? `${err.code}: ` : "";
+        crashShutdown(
+          `Failed to bind ${HOST}:${PORT}`,
+          `${code}${err.message}`,
+          {
+            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+            failure_stage: "toolserver_bind",
+            failure_area: "tool_server",
+            error_kind: "crash",
+          },
+          err
+        );
       });
       // Bolt the per-Chromium-device WebSocket upgrade handler onto the live
       // server. Must happen AFTER `listen()` so the http.Server instance
@@ -500,6 +535,16 @@ export function start(): void {
           },
         });
         shutdownReason = "crash";
+        // The readiness gate rejected before the HTTP listener bound, so this is
+        // definitionally a startup crash — attach the anonymous diagnostics from
+        // `err` (phase + name/fingerprint) so it clusters instead of collapsing
+        // back into the opaque bucket. Best-effort — a diagnostics failure must
+        // never stop the crash from being reported, so fall back to phase-only.
+        try {
+          shutdownCrashDiagnostics = describeCrash(err, "startup");
+        } catch {
+          shutdownCrashDiagnostics = { crash_phase: "startup" };
+        }
         await shutdown?.(1);
       })();
     });

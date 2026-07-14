@@ -32,6 +32,8 @@ export { attachRegistryTelemetry } from "./registry-listener.js";
 export { POSTHOG_HOST, resolveConfig } from "./posthog.js";
 export { _resetConsentCacheForTest } from "./consent.js";
 export { EVENT_NAMES } from "./events.js";
+export { describeCrash } from "./crash-diagnostics.js";
+export type { CrashDiagnostics, CrashPhase } from "./crash-diagnostics.js";
 export { isDebugEnabled } from "./debug.js";
 export { getConsentState, isEnabled } from "./consent.js";
 // Persists the consent flag — for recording an initial first-run choice. Use
