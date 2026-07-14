@@ -10,9 +10,10 @@ import { parse as parseStackTrace } from "stacktrace-parser";
 const ALLOWED_SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
 
 function isInsideProject(absFile: string, projectRoot: string): boolean {
-  // No project root (Metro did not report one) means containment cannot be
-  // established, so fail closed rather than resolving against `path.resolve("")`
-  // — which is the tool-server's cwd, not the app's.
+  // Containment against an empty root is meaningless: `path.resolve("")` is the
+  // tool-server's cwd, not the app's, so every path under the tool-server would
+  // read as "inside the project". Callers must not get here with an empty root
+  // (readSourceFragment bails first), but keep the predicate total.
   if (!projectRoot) return false;
   const resolvedRoot = path.resolve(projectRoot);
   const resolvedFile = path.resolve(absFile);
@@ -118,7 +119,14 @@ export function createSourceResolver(port: number, projectRoot: string): SourceR
       // react-navigation route components), which we keep.
       if (/^https?:\/\//.test(frame.file)) return null;
 
-      const relFile = frame.file.replace(projectRoot + "/", "").replace(/^\/+/, "");
+      // Relativize against the project root when Metro reported one. With no
+      // root (RN 0.72 / Vega Metro sends no X-React-Native-Project-Root) there
+      // is nothing to strip, and `replace("" + "/", "")` would delete the first
+      // slash ANYWHERE in the path — turning "src/screens/Home.tsx" into
+      // "srcscreens/Home.tsx" — so hand the path back untouched instead.
+      const relFile = projectRoot
+        ? frame.file.replace(projectRoot + "/", "").replace(/^\/+/, "")
+        : frame.file;
 
       return {
         file: relFile,
@@ -141,6 +149,11 @@ export function createSourceResolver(port: number, projectRoot: string): SourceR
     symbolicate: symbolicateFrame,
 
     async readSourceFragment(location: SourceLocation, contextLines = 3): Promise<string | null> {
+      // Fail closed with no project root (RN 0.72 / Vega Metro reports none):
+      // containment cannot be established, and the checks below would otherwise
+      // lean on `fs.realpath("")` rejecting — an implementation detail of the
+      // promises API (the sync one happily returns the tool-server's cwd).
+      if (!projectRoot) return null;
       try {
         // location.file ultimately comes from a React fiber's
         // _debugSource.fileName, which is attacker-controllable code running
