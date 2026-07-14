@@ -164,8 +164,18 @@ describe("Vega target routing on a legacy Metro (no logicalDeviceId)", () => {
     // to the first target. debugger-evaluate would then run JS on the phone.
     listTargets = [LEGACY_PHONE_TARGET, ...VEGA_TARGETS];
 
-    await expect(
-      registry.invokeTool("debugger-connect", { port: mockPort, device_id: VEGA_DEVICE_ID })
-    ).rejects.toThrow(/No debugger target matches device_id/);
+    const err = await registry
+      .invokeTool("debugger-connect", { port: mockPort, device_id: VEGA_DEVICE_ID })
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    const message = err instanceof Error ? err.message : String(err);
+    expect(message).toMatch(/No debugger target matches device_id/);
+    // Both devices are legacy (no logicalDeviceId), so the guidance must name
+    // that explicitly rather than dangling an empty `()` the caller might paste
+    // back, and must point at the only real fix — a dedicated Metro port.
+    expect(message).toContain("legacy inspector — no logicalDeviceId");
+    expect(message).toContain("give it its own Metro port");
   });
 });
