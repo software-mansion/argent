@@ -37,11 +37,23 @@ export function selectTarget(
       // distinct devices connected, refuse to guess and report the valid ids so
       // the caller can re-target (the logicalDeviceId is what debugger-connect
       // returns and what subsequent debugger-* calls must pass).
+      //
+      // Identify a device by its logicalDeviceId, falling back to deviceName:
+      // the LEGACY inspector-proxy (RN 0.72, which is what Vega/Kepler serves)
+      // emits no `reactNative` block at all, so keying only on logicalDeviceId
+      // makes those devices invisible here. A Vega device_id would then match no
+      // target, count zero devices, look like "nothing to disambiguate" and fall
+      // through to the priority target — i.e. straight into another device's
+      // runtime (a Fusebox iOS/Android app on the same Metro wins the priority
+      // list), so debugger-evaluate would run JS in the wrong app.
       const distinctDevices = new Map<string, string | undefined>();
       for (const t of targets) {
-        const id = t.reactNative?.logicalDeviceId;
-        if (id !== undefined && id !== "" && !distinctDevices.has(id)) {
-          distinctDevices.set(id, t.deviceName);
+        const logicalId = t.reactNative?.logicalDeviceId;
+        const key = logicalId || t.deviceName;
+        if (key && !distinctDevices.has(key)) {
+          // Only report a name alongside the key when the key is an opaque id;
+          // for a legacy target the key already IS the device name.
+          distinctDevices.set(key, logicalId ? t.deviceName : undefined);
         }
       }
       if (distinctDevices.size > 1) {
@@ -51,8 +63,10 @@ export function selectTarget(
         throw new Error(
           `No debugger target matches device_id "${deviceId}". ` +
             `${distinctDevices.size} devices are connected to Metro on port ${port}: ` +
-            `${listed}. Pass the logicalDeviceId (in parentheses) of the desired ` +
-            `device as device_id (the logicalDeviceId returned by debugger-connect).`
+            `${listed}. Re-target with the id of the device you want — debugger-connect ` +
+            `returns it as logicalDeviceId. Devices on the legacy inspector ` +
+            `(RN 0.72 / Vega) expose no logicalDeviceId and are listed by name; ` +
+            `give one its own Metro port to debug it alongside another device.`
         );
       }
     }
