@@ -22,7 +22,6 @@ import { parseInitArgs, InitCancelled } from "./init-args.js";
 import {
   InitTelemetry,
   INSTALL_MODE_FLAG_CONFLICT,
-  INSTALL_UNKNOWN_FLAG,
   INSTALL_UNCLASSIFIED_FAILED,
 } from "./init-telemetry.js";
 import { promptInstallMode } from "./init-mode-prompt.js";
@@ -82,23 +81,6 @@ export async function init(args: string[]): Promise<void> {
       package_manager: detectPackageManager(),
       is_non_interactive: parsed.nonInteractive,
     });
-
-    // Abort on flags this version doesn't know instead of silently ignoring
-    // them. Ignoring is how an OUTDATED installed argent, handed a flag from
-    // newer docs (`npx @swmansion/argent init --local` resolving to a stale
-    // global install that predates --local), ran a global setup the user never
-    // asked for. Failing loudly points the user at the always-current runner.
-    if (parsed.unknownFlags.length > 0) {
-      p.log.error(
-        `Unknown or invalid option${parsed.unknownFlags.length > 1 ? "s" : ""} for argent init: ` +
-          `${parsed.unknownFlags.join(", ")}\n` +
-          `  This argent is v${version} — if the option is newer than that, run\n` +
-          `  ${pc.cyan("npx @swmansion/argent@latest init ...")} to use the current installer,\n` +
-          `  or check the spelling.`
-      );
-      await tel.finalize(INSTALL_UNKNOWN_FLAG);
-      process.exit(2);
-    }
 
     // ── Install mode: global (default) vs local (committable devDependency) ──────
 

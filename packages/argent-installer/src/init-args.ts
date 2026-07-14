@@ -12,35 +12,21 @@ export interface InitArgs {
   wantsLocal: boolean;
   /** --global  force the global install mode */
   wantsGlobal: boolean;
-  /**
-   * Flag-looking tokens init doesn't know, plus malformed known flags (a
-   * `--from` with no value). init aborts on these instead of silently
-   * ignoring them: an old installed CLI fed a flag from newer docs (e.g. a
-   * pre-`--local` argent given `--local`) would otherwise run a DIFFERENT
-   * setup than the one the user asked for — that exact hijack shipped broken
-   * pnpm local installs. Typos get the same loud failure.
-   */
-  unknownFlags: string[];
 }
 
-const KNOWN_FLAGS = new Set(["--yes", "-y", "--no-telemetry", "--from", "--local", "--global"]);
-
+// Unknown flags are silently ignored (kept from the original parser): aborting
+// on them would break existing invocations/scripts that pass flags this
+// version doesn't know.
 export function parseInitArgs(args: string[]): InitArgs {
-  const unknownFlags: string[] = [];
   let fromTar: string | null = null;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--from" || arg.startsWith("--from=")) {
       const value = arg === "--from" ? (i + 1 < args.length ? args[++i]! : "") : arg.slice(7);
-      if (value === "") {
-        unknownFlags.push("--from (missing value)");
-      } else if (fromTar === null) {
-        // First occurrence wins, matching the previous indexOf-based parser.
-        fromTar = value;
-      }
-      continue;
+      // First non-empty occurrence wins, matching the previous indexOf-based
+      // parser; a dangling `--from` is ignored like any other malformed input.
+      if (value !== "" && fromTar === null) fromTar = value;
     }
-    if (arg.startsWith("-") && !KNOWN_FLAGS.has(arg)) unknownFlags.push(arg);
   }
   return {
     nonInteractive: args.includes("--yes") || args.includes("-y"),
@@ -48,7 +34,6 @@ export function parseInitArgs(args: string[]): InitArgs {
     fromTar,
     wantsLocal: args.includes("--local"),
     wantsGlobal: args.includes("--global"),
-    unknownFlags,
   };
 }
 
