@@ -673,6 +673,41 @@ describe("detectProjectPackageManager", () => {
     );
     expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
   });
+  it("honors devEngines.packageManager (pnpm init default, pre-first-install)", () => {
+    // `pnpm init` (pnpm 10+) writes ONLY devEngines — no packageManager
+    // field, and no lockfile exists before the first install.
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({
+        devEngines: { packageManager: { name: "pnpm", version: "^11.0.0", onFail: "download" } },
+      })
+    );
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("honors devEngines.packageManager in array form", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devEngines: { packageManager: [{ name: "bun" }] } })
+    );
+    expect(detectProjectPackageManager(tmpDir)).toBe("bun");
+  });
+  it("ignores a devEngines packageManager with an unknown name", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devEngines: { packageManager: { name: "vlt" } } })
+    );
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("yarn");
+  });
+  it("detects pnpm from pnpm-workspace.yaml when no lockfile exists yet", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("a real lockfile outranks a stray pnpm-workspace.yaml (pnpm→yarn migration)", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("yarn");
+  });
   it("walks up to a workspace-root lockfile (monorepo sub-package)", () => {
     // pnpm/yarn workspaces keep the single lockfile at the monorepo root.
     fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");

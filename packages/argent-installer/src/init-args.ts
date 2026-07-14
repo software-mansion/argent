@@ -12,21 +12,43 @@ export interface InitArgs {
   wantsLocal: boolean;
   /** --global  force the global install mode */
   wantsGlobal: boolean;
+  /**
+   * Flag-looking tokens init doesn't know, plus malformed known flags (a
+   * `--from` with no value). init aborts on these instead of silently
+   * ignoring them: an old installed CLI fed a flag from newer docs (e.g. a
+   * pre-`--local` argent given `--local`) would otherwise run a DIFFERENT
+   * setup than the one the user asked for — that exact hijack shipped broken
+   * pnpm local installs. Typos get the same loud failure.
+   */
+  unknownFlags: string[];
 }
 
-function extractFlag(args: string[], flag: string): string | null {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return null;
-  return args[idx + 1]!;
-}
+const KNOWN_FLAGS = new Set(["--yes", "-y", "--no-telemetry", "--from", "--local", "--global"]);
 
 export function parseInitArgs(args: string[]): InitArgs {
+  const unknownFlags: string[] = [];
+  let fromTar: string | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--from" || arg.startsWith("--from=")) {
+      const value = arg === "--from" ? (i + 1 < args.length ? args[++i]! : "") : arg.slice(7);
+      if (value === "") {
+        unknownFlags.push("--from (missing value)");
+      } else if (fromTar === null) {
+        // First occurrence wins, matching the previous indexOf-based parser.
+        fromTar = value;
+      }
+      continue;
+    }
+    if (arg.startsWith("-") && !KNOWN_FLAGS.has(arg)) unknownFlags.push(arg);
+  }
   return {
     nonInteractive: args.includes("--yes") || args.includes("-y"),
     noTelemetry: args.includes("--no-telemetry"),
-    fromTar: extractFlag(args, "--from"),
+    fromTar,
     wantsLocal: args.includes("--local"),
     wantsGlobal: args.includes("--global"),
+    unknownFlags,
   };
 }
 

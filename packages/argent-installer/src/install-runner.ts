@@ -106,19 +106,56 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   // pnpm 10+ exits non-zero on blocked build scripts). isYarnPnp covers PnP
   // layouts with no node_modules; otherwise a missing node_modules entry means
   // the add really failed — don't write a config that runs a missing binary.
-  const { landed, exitError: installError } = await runTrustingDisk(
-    () => runShellCommand(cmd, { cwd: projectRoot }),
-    () => isLocallyInstalled(projectRoot) || isYarnPnp(projectRoot)
-  );
+  const attempt = (): Promise<{ landed: boolean; exitError: Error | null }> =>
+    runTrustingDisk(
+      () => runShellCommand(cmd, { cwd: projectRoot }),
+      () => isLocallyInstalled(projectRoot) || isYarnPnp(projectRoot)
+    );
+  let { landed, exitError: installError } = await attempt();
+
+  // The project's package manager isn't on this machine at all (e.g. a cloned
+  // pnpm repo where only npm is installed). Deterministic — don't retry; fail
+  // with a message that names the real problem, because the generic "install
+  // manually" advice fails the same way in the user's shell. POSIX spawns the
+  // manager directly (ENOENT); Windows goes through cmd.exe (see
+  // runShellCommand), which exits 9009 with "not recognized" on stderr.
+  const isMissingBinaryError = (err: Error | null): boolean =>
+    err !== null &&
+    ((err as NodeJS.ErrnoException).code === "ENOENT" ||
+      /is not recognized as an internal or external command/i.test(err.message));
+  const missingBinary = !landed && isMissingBinaryError(installError);
+
+  if (!landed && installError && !missingBinary) {
+    // The package manager ran and failed. Retry once before giving up: first
+    // attempts fail on transient registry/network errors (argent is a large
+    // download) and on pnpm's own first-run state mutations (e.g. it may write
+    // build-script policy stubs and exit non-zero), where an identical rerun
+    // succeeds.
+    spinner.message(`${pm} failed — retrying once...`);
+    ({ landed, exitError: installError } = await attempt());
+  }
 
   if (!landed) {
     spinner.stop(pc.red("Local install failed."));
-    p.log.error(
-      installError
-        ? `${installError}`
-        : `The install reported success but ${pc.cyan(PACKAGE_NAME)} is not in node_modules.`
-    );
-    p.log.info(`Install manually with: ${pc.cyan(`cd ${projectRoot} && ${cmdStr}`)}`);
+    if (missingBinary) {
+      p.log.error(
+        `This project uses ${pc.cyan(pm)}, but the ${pc.cyan(pm)} command was not found on PATH.`
+      );
+      p.log.info(
+        `Install ${pc.cyan(pm)} first` +
+          (pm === "pnpm" || pm === "yarn"
+            ? ` (e.g. ${pc.cyan(`corepack enable ${pm}`)}, or see the ${pm} install docs)`
+            : "") +
+          `, then re-run ${pc.cyan("argent init --local")}.`
+      );
+    } else {
+      p.log.error(
+        installError
+          ? `${installError}`
+          : `The install reported success but ${pc.cyan(PACKAGE_NAME)} is not in node_modules.`
+      );
+      p.log.info(`Install manually with: ${pc.cyan(`cd ${projectRoot} && ${cmdStr}`)}`);
+    }
     await tel.trackPackageAction("fresh_install", startedAt, false, INSTALL_LOCAL_PACKAGE_FAILED);
     await tel.finalize(INSTALL_LOCAL_PACKAGE_FAILED);
     process.exit(1);

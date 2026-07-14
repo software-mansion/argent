@@ -21,8 +21,13 @@ import {
   editJsoncFile,
   isYarnPnp,
   getLocalArgentBinRelPath,
+  RULES_DIR,
+  AGENTS_DIR,
+  ARGENT_SKILL_PREFIX,
 } from "./utils.js";
 import { isMap } from "yaml";
+import { parse as parseJsoncText, type ParseError } from "jsonc-parser";
+import { parse as parseTomlText } from "smol-toml";
 import escapeStringRegexp from "escape-string-regexp";
 
 const TOOL_SERVER_BUNDLE = path.join(import.meta.dirname, "tool-server.cjs");
@@ -287,6 +292,161 @@ function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): voi
   writeToml(filePath, data);
 }
 
+// ── Installed-editor evidence ─────────────────────────────────────────────────
+// A bare `.cursor` / `.codex` directory is NOT proof the editor is installed:
+// argent itself creates those directories when it writes an MCP config, an
+// allowlist, rules, agents, or skills there. Counting them as detection made
+// every later `init` "detect" editors the user never installed
+// (self-fulfilling detection). A directory is evidence only when it holds
+// something argent doesn't write, or an argent-writable file carries
+// non-argent content. Anything empty, unreadable, or unparseable counts as
+// evidence — when unsure, keep the old dirExists behavior.
+
+function dirHasEditorEvidence(dir: string, looksArgentOnly: (dir: string) => boolean): boolean {
+  return dirExists(dir) && !looksArgentOnly(dir);
+}
+
+// Strict parses for the evidence check. The shared readJsonc/readToml swallow
+// read/parse errors and return {} — here that would classify a corrupt USER
+// config as argent-only and drop the editor from detection. null = can't read
+// or parse; callers treat it as user evidence.
+function parseJsoncStrict(filePath: string): Record<string, unknown> | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  const errors: ParseError[] = [];
+  const parsed = parseJsoncText(raw, errors, { allowTrailingComma: true }) as unknown;
+  if (errors.length > 0 || parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+    return null;
+  return parsed as Record<string, unknown>;
+}
+
+function parseTomlStrict(filePath: string): Record<string, unknown> | null {
+  try {
+    return parseTomlText(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+// rules/ and agents/ are byte copies of the bundled payloads — argent-written
+// means every entry matches a bundled name exactly (a user's own
+// "argent-notes.md" must NOT pass). skills/ entries come from the skills CLI;
+// argent reserves the ARGENT_SKILL_PREFIX namespace there. An empty dir was
+// not left by argent (its copies always carry content) — that's user evidence.
+let bundledManagedNamesCache: Map<string, Set<string>> | null = null;
+function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
+  if (!bundledManagedNamesCache) bundledManagedNamesCache = new Map();
+  const cached = bundledManagedNamesCache.get(kind);
+  if (cached) return cached;
+  let names: Set<string>;
+  try {
+    names = new Set(fs.readdirSync(kind === "rules" ? RULES_DIR : AGENTS_DIR));
+  } catch {
+    names = new Set();
+  }
+  bundledManagedNamesCache.set(kind, names);
+  return names;
+}
+
+function managedDirLooksArgentOnly(dir: string, kind: "rules" | "agents" | "skills"): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  if (kind === "skills") return entries.every((name) => name.startsWith(ARGENT_SKILL_PREFIX));
+  const bundled = bundledManagedNames(kind);
+  return entries.every((name) => bundled.has(name));
+}
+
+function cursorDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every((entry) => {
+    const full = path.join(dir, entry);
+    if (entry === "mcp.json") {
+      // Argent-written state is exactly { mcpServers: { argent: ... } } —
+      // remove() prunes empty parents and deletes the emptied file, so any
+      // other shape (extra keys, other servers, an empty document) is the
+      // user's.
+      const config = parseJsoncStrict(full);
+      if (config === null) return false;
+      const keys = Object.keys(config);
+      if (keys.length !== 1 || keys[0] !== "mcpServers") return false;
+      const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+      const serverKeys = Object.keys(servers);
+      return serverKeys.length === 1 && serverKeys[0] === MCP_SERVER_KEY;
+    }
+    if (entry === "permissions.json") {
+      // Written by this adapter's addAllowlist: { mcpAllowlist: ["argent:*"] }.
+      const config = parseJsoncStrict(full);
+      if (config === null) return false;
+      const keys = Object.keys(config);
+      if (keys.length !== 1 || keys[0] !== "mcpAllowlist") return false;
+      const list = config.mcpAllowlist;
+      return (
+        Array.isArray(list) &&
+        list.length > 0 &&
+        list.every((rule) => rule === CURSOR_ALLOWLIST_PATTERN)
+      );
+    }
+    if (entry === "rules" || entry === "agents" || entry === "skills") {
+      return managedDirLooksArgentOnly(full, entry);
+    }
+    return false;
+  });
+}
+
+function codexDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every((entry) => {
+    const full = path.join(dir, entry);
+    if (entry === "config.toml") {
+      const config = parseTomlStrict(full);
+      if (config === null) return false;
+      const configEntries = Object.entries(config);
+      // An empty document isn't argent's either — remove() deletes the file
+      // once it holds nothing.
+      if (configEntries.length === 0) return false;
+      return configEntries.every(([key, value]) => {
+        if (key === "mcp_servers") {
+          const servers = (value ?? {}) as Record<string, unknown>;
+          const serverKeys = Object.keys(servers);
+          return serverKeys.length === 1 && serverKeys[0] === MCP_SERVER_KEY;
+        }
+        if (key === "developer_instructions") {
+          // Argent-written instructions live entirely inside the managed
+          // markers; any text outside them is the user's own.
+          return typeof value === "string" && removeArgentSection(value) === "";
+        }
+        return false;
+      });
+    }
+    if (entry === "rules" || entry === "agents" || entry === "skills") {
+      return managedDirLooksArgentOnly(full, entry);
+    }
+    return false;
+  });
+}
+
 // ── Cursor adapter ────────────────────────────────────────────────────────────
 // MARK: Cursor
 // Format: { mcpServers: { argent: { command, args, env } } }
@@ -296,7 +456,8 @@ const cursorAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), ".cursor")) || dirExists(path.join(process.cwd(), ".cursor"))
+      dirHasEditorEvidence(path.join(homedir(), ".cursor"), cursorDirLooksArgentOnly) ||
+      dirHasEditorEvidence(path.join(process.cwd(), ".cursor"), cursorDirLooksArgentOnly)
     );
   },
 
@@ -947,8 +1108,8 @@ const codexAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), CODEX_FILENAME)) ||
-      dirExists(path.join(process.cwd(), CODEX_FILENAME))
+      dirHasEditorEvidence(path.join(homedir(), CODEX_FILENAME), codexDirLooksArgentOnly) ||
+      dirHasEditorEvidence(path.join(process.cwd(), CODEX_FILENAME), codexDirLooksArgentOnly)
     );
   },
 

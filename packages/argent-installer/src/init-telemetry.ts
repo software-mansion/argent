@@ -40,6 +40,16 @@ export const INSTALL_MODE_FLAG_CONFLICT: InstallerFailureSignal = {
   error_kind: "validation",
 };
 
+// A flag init doesn't recognize. Aborting (rather than ignoring) is what keeps
+// an outdated CLI from silently running a different setup than the flag asked
+// for; the code keeps those aborts distinguishable from real install failures.
+export const INSTALL_UNKNOWN_FLAG: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_UNKNOWN_FLAG,
+  failure_stage: "installer_unknown_flag",
+  failure_area: "installer",
+  error_kind: "validation",
+};
+
 export const INSTALL_FROM_TAR_PACKAGE_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_FROM_TAR_PACKAGE_FAILED,
   failure_stage: "installer_from_tar_package_install",

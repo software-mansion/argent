@@ -24,16 +24,32 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
+function asKnownPm(name: unknown): PackageManager | null {
+  return name === "npm" || name === "yarn" || name === "pnpm" || name === "bun" ? name : null;
+}
+
 // corepack's `packageManager` field ("pnpm@9.1.0") is the project's own
-// declaration — the strongest signal there is.
+// declaration — the strongest signal there is. `devEngines.packageManager` is
+// its modern equivalent and MUST be honored too: `pnpm init` (pnpm 10+) writes
+// ONLY devEngines, and such a fresh project has no lockfile yet either — so
+// without this, detection fell through to npm, whose own devEngines gate then
+// instantly rejected the install (EBADDEVENGINES) as "Local install failed."
 function pmFromPackageManagerField(dir: string): PackageManager | null {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as {
       packageManager?: string;
+      devEngines?: { packageManager?: { name?: string } | { name?: string }[] };
     };
-    if (typeof pkg.packageManager !== "string") return null;
-    const name = pkg.packageManager.split("@")[0];
-    return name === "npm" || name === "yarn" || name === "pnpm" || name === "bun" ? name : null;
+    if (typeof pkg.packageManager === "string") {
+      const name = asKnownPm(pkg.packageManager.split("@")[0]);
+      if (name) return name;
+    }
+    const devEnginesPm = pkg.devEngines?.packageManager;
+    for (const entry of Array.isArray(devEnginesPm) ? devEnginesPm : [devEnginesPm]) {
+      const name = asKnownPm(entry?.name);
+      if (name) return name;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -45,6 +61,12 @@ function pmFromLockfile(dir: string): PackageManager | null {
   if (has("yarn.lock")) return "yarn";
   if (has("bun.lock") || has("bun.lockb")) return "bun";
   if (has("package-lock.json") || has("npm-shrinkwrap.json")) return "npm";
+  // pnpm-workspace.yaml is pnpm-exclusive (workspace layout AND, since pnpm
+  // 10, plain settings), so it identifies pnpm even before the first install
+  // creates a lockfile — but it is weaker than any REAL lockfile above: a
+  // stray copy can survive a migration to yarn/bun, and the lockfile is what
+  // actually records the project's dependency state.
+  if (has("pnpm-workspace.yaml")) return "pnpm";
   return null;
 }
 
