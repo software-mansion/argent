@@ -384,8 +384,9 @@ export function createRunFlowTool(
     id: "flow-execute",
     description: `Run a saved flow from the .argent/flows/ directory.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
-ready; \`tool\` calls dispatch through the registry; \`tap\`/\`type\` resolve a selector to an element and
-act on it; \`scroll-to\` scrolls (momentum-free) until a target is visible; \`await\` waits for a UI
+ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
+element and act on it (\`long-press: { on, duration }\` presses and holds); \`scroll-to\` scrolls
+(momentum-free) until a target is visible; \`await\` waits for a UI
 condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot against a stored baseline (a missing baseline fails the step — set updateBaselines
 to adopt the current screen); \`echo\` annotates; \`run\` executes a referenced fragment inline.
@@ -640,6 +641,8 @@ function stepTarget(step: FlowStep): string | undefined {
       if (step.selector) return selectorLabel(step.selector);
       if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
       return undefined;
+    case "long-press":
+      return selectorLabel(step.selector);
     case "type":
       return `into ${selectorLabel(step.into)}`;
     case "await":
@@ -769,6 +772,7 @@ async function execLeafStep(
     }
 
     case "tap":
+    case "long-press":
     case "type":
     case "await":
     case "assert":
