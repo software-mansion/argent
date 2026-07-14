@@ -40,17 +40,18 @@ const VEGA_TARGETS = [
   },
 ];
 
-// A modern (RN >= 0.76) device on the same Metro — the shape #397 already knows.
-const IOS_TARGET = {
-  id: "page-ios",
-  title: "app (iPhone 16 Pro Max)",
-  description: "[C++ connection]",
-  webSocketDebuggerUrl: "ws://localhost:8081/inspector/debug?device=logical-ios&page=1",
-  deviceName: "iPhone 16 Pro Max",
-  reactNative: {
-    logicalDeviceId: "logical-ios",
-    capabilities: { prefersFuseboxFrontend: true },
-  },
+// A second device on the SAME legacy Metro. It has to be another legacy device:
+// /json/list is built entirely by the proxy, so one Metro cannot serve a mix of
+// legacy and Fusebox target shapes — a modern target here would be fiction. An
+// RN 0.72 phone reports `Build.MODEL - RELEASE - API N` as its name.
+const LEGACY_PHONE_TARGET = {
+  id: "1-1",
+  description: "com.example.phone",
+  title: "Hermes React Native",
+  type: "node",
+  webSocketDebuggerUrl: "ws://[::1]:8081/inspector/debug?device=1&page=1",
+  vm: "Hermes",
+  deviceName: "Pixel 7 - 13 - API 33",
 };
 
 const VEGA_DEVICE_ID = "amazon-6b8a76bae9485138";
@@ -125,12 +126,43 @@ describe("Vega target routing on a legacy Metro (no logicalDeviceId)", () => {
     expect(res.isNewDebugger).toBe(false);
   });
 
+  it("must NOT attach to the proxy's `don't use` page even if it is listed first", async () => {
+    // Nothing in the inspector protocol fixes the order of /json/list, and no
+    // priority rule matches a legacy Hermes target — selection falls through to
+    // "first candidate". If the synthetic reload page ever came first, we would
+    // bind to a page that is not a JS VM.
+    listTargets = [...VEGA_TARGETS].reverse();
+
+    const res = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: VEGA_DEVICE_ID,
+    })) as Record<string, unknown>;
+
+    expect(res.appName).toBe("Hermes React Native");
+  });
+
+  it("must NOT bind one VVD's device_id to a second VVD (both are `kepler-device`)", async () => {
+    // deviceName is a device *class*, identical for every VVD, so it cannot tell
+    // two of them apart — the debugger URL's `device` index can.
+    const secondVvd = VEGA_TARGETS.map((t) => ({
+      ...t,
+      id: t.id.replace("0-", "1-"),
+      webSocketDebuggerUrl: t.webSocketDebuggerUrl.replace("device=0", "device=1"),
+    }));
+    listTargets = [...VEGA_TARGETS, ...secondVvd];
+
+    await expect(
+      registry.invokeTool("debugger-connect", { port: mockPort, device_id: VEGA_DEVICE_ID })
+    ).rejects.toThrow(/No debugger target matches device_id/);
+  });
+
   it("must NOT bind a Vega device_id to another device's runtime", async () => {
-    // A VVD and an iPhone on the same Metro. The Vega device_id matches no
-    // target by logicalDeviceId; without counting the Vega device, the guard
-    // sees a single device and hands back the Fusebox (iOS) target — so
-    // debugger-evaluate would run JS in the iPhone app.
-    listTargets = [...VEGA_TARGETS, IOS_TARGET];
+    // A phone and a VVD on one legacy Metro, phone first (order is just who
+    // connected first). No target carries a logicalDeviceId, so the device_id
+    // matches nothing — and while the guard counted only logicalDeviceIds it saw
+    // ZERO devices, concluded there was nothing to disambiguate, and fell through
+    // to the first target. debugger-evaluate would then run JS on the phone.
+    listTargets = [LEGACY_PHONE_TARGET, ...VEGA_TARGETS];
 
     await expect(
       registry.invokeTool("debugger-connect", { port: mockPort, device_id: VEGA_DEVICE_ID })

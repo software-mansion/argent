@@ -1,6 +1,6 @@
 ---
 name: argent-tv-interact
-description: Control and inspect TV apps via argent — Apple TV (tvOS), Android TV (leanback), and Amazon Fire TV (Vega). Boot the target, read focus, navigate with the D-pad remote, type, and screenshot. Use when a task targets a TV (runtimeKind "tv", or platform "vega"), or mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV / VVD.
+description: Control and inspect TV apps via argent — Apple TV (tvOS), Android TV (leanback), and Amazon Fire TV (Vega). Boot the target, read focus, navigate with the D-pad remote, type, screenshot, and on Vega debug the JS runtime (evaluate, console logs, network inspector). Use when a task targets a TV (runtimeKind "tv", or platform "vega"), or mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV / VVD.
 ---
 
 # Argent TV (Apple TV + Android TV + Fire TV)

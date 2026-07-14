@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { Registry } from "@argent/registry";
+import { createRegistry } from "../../src/utils/setup-registry";
 import { assertSupported, UnsupportedOperationError } from "../../src/utils/capability";
 import { resolveDevice } from "../../src/utils/device-info";
+import {
+  DEBUGGER_TOOL_CAPABILITY,
+  RN_ONLY_TOOL_CAPABILITY,
+} from "../../src/tools/debugger/debugger-service-ref";
 
 // Import the real ToolDefinitions rather than hand-pairing a tool name with a
 // capability constant: the HTTP gate does `assertSupported(def.id, def.capability,
@@ -120,12 +125,26 @@ describe("Vega (RN 0.72) debugger capability", () => {
     }
   );
 
-  it("keeps both lists exhaustive — 6 enabled, 14 gated", () => {
-    // Guards against a tool being silently dropped from a list above (which
-    // would make its gating untested). Update the count only alongside an
-    // explicit Vega-support decision.
-    expect(VEGA_ENABLED_TOOLS).toHaveLength(6);
-    expect(VEGA_GATED_TOOLS).toHaveLength(14);
+  it("keeps both lists exhaustive — every tool on either matrix is pinned above", () => {
+    // Derived from the real registry, not a hardcoded count: a NEW debugger tool
+    // that picks up DEBUGGER_TOOL_CAPABILITY lands on Vega the moment it ships,
+    // and if it needs Runtime.addBinding it hangs there. It must be listed (and
+    // therefore decided about) here.
+    const pinned = new Set([...VEGA_ENABLED_TOOLS, ...VEGA_GATED_TOOLS].map((t) => t.id));
+    const live = createRegistry();
+    const drifted = live
+      .getSnapshot()
+      .tools.map((id) => live.getTool(id))
+      .filter(
+        (def) =>
+          def &&
+          (def.capability === DEBUGGER_TOOL_CAPABILITY ||
+            def.capability === RN_ONLY_TOOL_CAPABILITY) &&
+          !pinned.has(def.id)
+      )
+      .map((def) => def!.id);
+
+    expect(drifted).toEqual([]);
   });
 
   it("does not regress the existing platforms — iOS and Android still get every tool", () => {

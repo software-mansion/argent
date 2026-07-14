@@ -45,9 +45,13 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
  *     VVD: after connect, `typeof __argent_callback` is still "undefined" — so
  *     no `bindingCalled` ever fires and they would hang until timeout.
  *   - `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools do
- *     NOT use the binding (they ride `Runtime.evaluate`, `Page.reload` and the
- *     CDP `Profiler` domain). They are simply unverified against the legacy
- *     inspector and stay out of scope here rather than shipping untested.
+ *     NOT use the binding. `reload-metro` rides `Page.reload` (with an HTTP
+ *     `/reload` fallback), and the capture step — `react-profiler-start` /
+ *     `-stop` — drives `Runtime.evaluate` plus the CDP `Profiler` domain; the
+ *     remaining profiler tools only read a session already written to disk and
+ *     touch no CDP at all. They are gated because that capture path is
+ *     unverified against the legacy inspector (and the query tools are useless
+ *     without it), not because of a missing binding.
  *
  * Either way, gating them out turns a hang or an unknown into an immediate,
  * explicit "not supported".
