@@ -37,6 +37,13 @@ export interface GetHierarchyOptions {
   waitForIdleMs?: number;
   maxDepth?: number;
   maxNodes?: number;
+  /**
+   * Drop the helper's accessibility-node cache before capturing — it can serve
+   * stale text (notably after the inspected app restarts under the helper's
+   * connection). Opt in when asserting on changing text; default keeps the
+   * cheaper cached read.
+   */
+  clearCache?: boolean;
 }
 
 export interface HierarchyResult {
@@ -332,6 +339,7 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
           waitForIdleMs: getOpts.waitForIdleMs ?? 500,
           maxDepth: getOpts.maxDepth ?? 128,
           maxNodes: getOpts.maxNodes ?? 5000,
+          clearCache: getOpts.clearCache ?? false,
         });
       },
       getScreenSize() {

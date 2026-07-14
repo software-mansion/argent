@@ -9,6 +9,7 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 // esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
+const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
 const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
 const NATIVE_DEVTOOLS_IOS_ENTRY = path.resolve(
@@ -41,6 +42,7 @@ const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/
 // from source (rather than each package's compiled dist/) keeps the bundle
 // independent of build order/freshness.
 const ALIASES = {
+  "@argent/archive": ARCHIVE_ENTRY,
   "@argent/registry": REGISTRY_ENTRY,
   "@argent/native-devtools-ios": NATIVE_DEVTOOLS_IOS_ENTRY,
   "@argent/native-devtools-android": NATIVE_DEVTOOLS_ANDROID_ENTRY,
@@ -534,6 +536,17 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // are declared in @swmansion/argent's dependencies so npm installs them
 // alongside the package; keep them external so the bundle resolves them from
 // node_modules/ at runtime.
+//
+// `dtrace-provider` MUST stay external. It is an OPTIONAL dependency of bunyan
+// (the tool-server event-log logger). bunyan loads it defensively as
+// `require('dtrace-provider' + '')` wrapped in try/catch — the `+ ''` is a
+// deliberate trick to hide the module from bundlers, and a failed require just
+// disables the (unused) DTrace USDT probes. esbuild constant-folds that string
+// back to a literal, defeating the trick, and then chokes on dtrace-provider's
+// own dynamic native binding require (`require('./src/build/'+build+'/…')`).
+// Keeping it external restores bunyan's intent: the published package never
+// declares dtrace-provider, so the runtime require misses and bunyan's
+// try/catch nulls it out — no DTrace probes, no functional impact.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -545,6 +558,7 @@ buildBundle({
     "electron",
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
+    "dtrace-provider",
   ],
 });
 

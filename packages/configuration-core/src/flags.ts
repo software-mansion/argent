@@ -57,6 +57,10 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "artifacts-list-endpoint",
     description: "Expose GET /artifacts for remote artifact inventory consumers.",
   },
+  {
+    name: "tool-server-event-log",
+    description: "Write structured tool-server lifecycle events to a JSONL file.",
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the

@@ -498,6 +498,10 @@ describe("VS Code adapter", () => {
 describe("Windsurf adapter", () => {
   const adapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
 
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
   it("writes { mcpServers: { argent: ... } } without type", () => {
     const configPath = path.join(tmpDir, "mcp_config.json");
     adapter.write(configPath, getMcpEntry());
@@ -516,6 +520,36 @@ describe("Windsurf adapter", () => {
     expect(adapter.globalPath()).toBe(
       path.join(os.homedir(), ".codeium", "windsurf", "mcp_config.json")
     );
+  });
+
+  // The argent entry and its alwaysAllow toggle live in the same JSONC config,
+  // and `init` runs write() (comment-preserving) before addAllowlist(). The old
+  // readJson path parsed the commented file to {}, found no argent entry, and
+  // silently skipped the toggle. editJsoncFile applies it while keeping comments
+  // and foreign servers.
+  it("addAllowlist/removeAllowlist round-trip on a commented config (JSONC-safe)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".codeium", "windsurf", "mcp_config.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      `{\n  // my own MCP server, do not touch\n  "mcpServers": { "myserver": { "command": "my-bin", "args": ["x"] } }\n}\n`
+    );
+
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "global");
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("// my own MCP server, do not touch");
+    const servers = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("myserver");
+    expect((servers.argent as Record<string, unknown>).alwaysAllow).toEqual(["*"]);
+
+    adapter.removeAllowlist!(tmpDir, "global");
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("// my own MCP server, do not touch");
+    const servers2 = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
+    expect(servers2).toHaveProperty("myserver");
+    expect(servers2.argent as Record<string, unknown>).not.toHaveProperty("alwaysAllow");
   });
 });
 
@@ -593,6 +627,17 @@ describe("Zed adapter", () => {
     expect(after).toContain("/* fonts */");
     // context_servers wrapper was empty after removing argent and got pruned.
     expect(readJsoncFile(configPath)).not.toHaveProperty("context_servers");
+  });
+
+  it("writes a freshly-created JSONC config with a trailing newline", () => {
+    // No pre-existing file: editJsoncFile creates it. Like writeJson/TOML, a
+    // freshly-created config must end with a newline (POSIX convention; avoids a
+    // git "\\ No newline at end of file" and satisfies newline-requiring linters).
+    const configPath = path.join(tmpDir, ".zed", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+    const text = fs.readFileSync(configPath, "utf8");
+    expect(text.endsWith("\n")).toBe(true);
+    expect(readJsoncFile(configPath).context_servers).toHaveProperty("argent");
   });
 
   it("removes the file when only the argent key was present", () => {
@@ -742,6 +787,35 @@ describe("Gemini adapter", () => {
 
   it("removeAllowlist is a no-op when file does not exist", () => {
     expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
+  });
+
+  // The argent entry and its trust flag live in the same JSONC settings.json,
+  // and `init` runs write() (comment-preserving) before addAllowlist(). The old
+  // readJson path parsed the commented file to {}, found no argent entry, and
+  // silently skipped the toggle. editJsoncFile applies it while keeping comments
+  // and foreign servers.
+  it("addAllowlist/removeAllowlist round-trip on a commented config (JSONC-safe)", () => {
+    const configPath = path.join(tmpDir, ".gemini", "settings.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      `{\n  // my own MCP server, do not touch\n  "mcpServers": { "myserver": { "command": "my-bin", "args": ["x"] } }\n}\n`
+    );
+
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("// my own MCP server, do not touch");
+    const servers = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("myserver");
+    expect((servers.argent as Record<string, unknown>).trust).toBe(true);
+
+    adapter.removeAllowlist!(tmpDir, "local");
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("// my own MCP server, do not touch");
+    const servers2 = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
+    expect(servers2).toHaveProperty("myserver");
+    expect(servers2.argent as Record<string, unknown>).not.toHaveProperty("trust");
   });
 });
 
@@ -1404,6 +1478,35 @@ describe("Kiro adapter", () => {
   it("removeAllowlist is a no-op when file does not exist", () => {
     expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
   });
+
+  // The argent entry and its autoApprove list live in the same JSONC mcp.json,
+  // and `init` runs write() (comment-preserving) before addAllowlist(). The old
+  // readJson path parsed the commented file to {}, found no argent entry, and
+  // silently skipped the toggle. editJsoncFile applies it while keeping comments
+  // and foreign servers.
+  it("addAllowlist/removeAllowlist round-trip on a commented config (JSONC-safe)", () => {
+    const configPath = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      `{\n  // my own MCP server, do not touch\n  "mcpServers": { "myserver": { "command": "my-bin", "args": ["x"] } }\n}\n`
+    );
+
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("// my own MCP server, do not touch");
+    const servers = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("myserver");
+    expect((servers.argent as Record<string, unknown>).autoApprove).toEqual(["*"]);
+
+    adapter.removeAllowlist!(tmpDir, "local");
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("// my own MCP server, do not touch");
+    const servers2 = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
+    expect(servers2).toHaveProperty("myserver");
+    expect(servers2.argent as Record<string, unknown>).not.toHaveProperty("autoApprove");
+  });
 });
 
 // ── Claude permissions ────────────────────────────────────────────────────────
@@ -1804,6 +1907,35 @@ describe("findConfiguredAdapterScopes", () => {
     expect(result.map((r) => `${r.adapter.name}:${r.scope}`)).toContain("Claude Code:global");
     expect(result.map((r) => r.adapter.name)).not.toContain("Hermes");
   });
+
+  it("detects a JSONC (commented) config that strict JSON.parse would have skipped", () => {
+    // The behavior transition this fix is built around: hasArgentEntry reads
+    // through readJsonc, so a comment-carrying config — which the old strict
+    // readJson parsed to {} and `update` silently skipped — is now seen as
+    // configured. A regression back to readJson would make this file parse to
+    // {}, drop the argent entry, and quietly stop refreshing these users (and
+    // stop reaching their allowlist). No other fixture here carries a comment,
+    // so this is the one that pins it.
+    const projectRoot = path.join(tmpDir, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const configPath = cursor.globalPath()!;
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    // A line comment AND a trailing comma — both make strict JSON.parse throw.
+    fs.writeFileSync(
+      configPath,
+      `{\n  // my Cursor MCP config, hand-edited\n  "mcpServers": {\n    "argent": { "command": "argent", "args": ["mcp"] },\n  }\n}`
+    );
+
+    // Guard: the fixture really is invalid strict JSON, so the strict path
+    // would have returned {} and reported "not configured".
+    expect(() => JSON.parse(fs.readFileSync(configPath, "utf8"))).toThrow();
+
+    expect(cursor.hasArgentEntry(configPath)).toBe(true);
+    const result = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
+    expect(result.map((r) => `${r.adapter.name}:${r.scope}`)).toContain("Cursor:global");
+  });
 });
 
 // ── Portability: generated configs must not embed absolute home paths ───────
@@ -1857,5 +1989,375 @@ describe("generated configs are portable across machines (issue #238)", () => {
       expect(written, `${adapter.name} dropped a supplied env var`).toContain("FOO");
       expect(written).toContain("bar");
     }
+  });
+});
+
+// ── Foreign-config preservation ─────────────────────────────────────────────
+// The installer's contract is "only touch argent". Two regressions broke it:
+//  - uninstall recursively pruned every empty object/array in the tree, so a
+//    foreign server's `args: []` / `env: {}` and any sibling user key holding an
+//    empty value were silently deleted (Defect A).
+//  - the VS Code adapter read .vscode/mcp.json with strict JSON, so a JSONC file
+//    (comments / trailing commas) parsed to {} and was rewritten with only the
+//    argent entry, destroying every pre-existing user server (Defect B).
+
+describe("installer preserves foreign MCP config", () => {
+  it("remove keeps an unrelated server's empty env/args and a sibling user key (Cursor)", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const configPath = path.join(dir, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          mcpServers: {
+            argent: { command: "argent", args: ["mcp"] },
+            other: { command: "other-bin", args: [], env: {} },
+          },
+          userSettings: { theme: "dark", overrides: {} },
+        },
+        null,
+        2
+      )
+    );
+    expect(adapter.remove(configPath)).toBe(true);
+    const after = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(after.mcpServers.other).toEqual({ command: "other-bin", args: [], env: {} });
+    expect(after.userSettings).toEqual({ theme: "dark", overrides: {} });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("VS Code write preserves a pre-existing server in a JSONC (commented) file", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const configPath = path.join(dir, ".vscode", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      `{\n  // my own MCP server, do not touch\n  "servers": { "myserver": { "type": "stdio", "command": "my-bin", "args": ["x"] } }\n}`
+    );
+    adapter.write(configPath, getMcpEntry());
+    const after = parseJsonc(fs.readFileSync(configPath, "utf8"), [], {
+      allowTrailingComma: true,
+    }) as Record<string, any>;
+    expect(after.servers).toHaveProperty("argent");
+    expect(after.servers).toHaveProperty("myserver");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Same Defect B, but for the { mcpServers } adapters: Cursor and Kiro are
+  // comment-tolerant VS Code forks, and Claude / Windsurf / Gemini configs are
+  // strict JSON that JSONC is a superset of. All five now write through
+  // editJsoncFile, so a hand-authored comment and a pre-existing foreign server
+  // survive an argent `write` — the old readJson → writeJson path reduced the
+  // commented file to {} and rewrote it with only the argent entry.
+  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+    it(`${name} write preserves a comment and a foreign server in a JSONC file`, () => {
+      const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+      const configPath = path.join(dir, "mcp.json");
+      fs.writeFileSync(
+        configPath,
+        `{\n  // my own MCP server, do not touch\n  "mcpServers": { "myserver": { "command": "my-bin", "args": ["x"] } }\n}`
+      );
+      adapter.write(configPath, getMcpEntry());
+      const raw = fs.readFileSync(configPath, "utf8");
+      expect(raw).toContain("// my own MCP server, do not touch");
+      const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
+      expect(after.mcpServers).toHaveProperty("argent");
+      expect(after.mcpServers).toHaveProperty("myserver");
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  }
+
+  // Defect B's REMOVE side: the write-preservation tests above only prove
+  // `write` keeps comments/foreign servers. Uninstall (`remove`) must ALSO keep
+  // them — a full argent install→uninstall round-trip on a hand-commented JSONC
+  // file must leave the user's comment and foreign server byte-intact and the
+  // file on disk (it still has a foreign server), with only argent gone.
+  it("VS Code remove preserves a comment and a foreign server (uninstall round-trip)", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const configPath = path.join(dir, ".vscode", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      `{\n  // my own MCP server, do not touch\n  "servers": { "myserver": { "type": "stdio", "command": "my-bin", "args": ["x"] } }\n}`
+    );
+    adapter.write(configPath, getMcpEntry());
+    expect(adapter.remove(configPath)).toBe(true);
+    const raw = fs.readFileSync(configPath, "utf8");
+    expect(raw).toContain("// my own MCP server, do not touch");
+    const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
+    expect(after.servers).not.toHaveProperty("argent");
+    expect(after.servers).toHaveProperty("myserver");
+    expect(fs.existsSync(configPath)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+    it(`${name} remove preserves a comment and a foreign server (uninstall round-trip)`, () => {
+      const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+      const configPath = path.join(dir, "mcp.json");
+      fs.writeFileSync(
+        configPath,
+        `{\n  // my own MCP server, do not touch\n  "mcpServers": { "myserver": { "command": "my-bin", "args": ["x"] } }\n}`
+      );
+      adapter.write(configPath, getMcpEntry());
+      expect(adapter.remove(configPath)).toBe(true);
+      const raw = fs.readFileSync(configPath, "utf8");
+      expect(raw).toContain("// my own MCP server, do not touch");
+      const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
+      expect(after.mcpServers).not.toHaveProperty("argent");
+      expect(after.mcpServers).toHaveProperty("myserver");
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  }
+
+  it("Codex remove keeps an unrelated server's empty args and a sibling empty table (TOML)", () => {
+    // Same "only touch argent" contract as the JSON adapters above, but for the
+    // TOML-backed Codex config: writeTomlOrRemove used to deep-prune the whole
+    // tree (pruneEmptyConfig), silently stripping a foreign server's `args = []`
+    // and any sibling empty table alongside deleting the argent entry.
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const configPath = path.join(dir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      'model = "o3"\n\n' +
+        "[other_section]\n\n" +
+        "[mcp_servers.other]\n" +
+        'command = "other-bin"\n' +
+        "args = []\n\n" +
+        "[mcp_servers.argent]\n" +
+        'command = "argent"\n' +
+        'args = ["mcp"]\n'
+    );
+    expect(adapter.remove(configPath)).toBe(true);
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).not.toContain("mcp_servers.argent");
+    expect(after).toContain('model = "o3"');
+    expect(after).toContain("[other_section]");
+    expect(after).toContain("[mcp_servers.other]");
+    expect(after).toContain("args = []");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("Codex remove deletes the file when argent was the only content (TOML)", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const configPath = path.join(dir, "config.toml");
+    fs.writeFileSync(configPath, '[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n');
+    expect(adapter.remove(configPath)).toBe(true);
+    expect(fs.existsSync(configPath)).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // ── Allowlist writers (the last readJson → writeJson clobber path) ──────────
+  // The allowlist helpers were the one surface left on the readJson → writeJson
+  // path this PR migrated everywhere else. Cursor's allowlist lives in a
+  // *separate* ~/.cursor/permissions.json (a JSONC file that can hold the user's
+  // own unrelated rules), and Claude's in .claude/settings.json — both are now
+  // routed through readJsonc / editJsoncFile so an install (add) no longer runs
+  // a commented/multi-rule file through `catch { return {} }` and rewrites it
+  // with only the argent entry, and an uninstall (remove) round-trips cleanly.
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
+  it("Cursor addAllowlist preserves a comment and foreign rules in permissions.json", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(
+      permPath,
+      `{\n  // user's own Cursor rules, do not touch\n  "fileAllowlist": ["src/**"],\n  "mcpAllowlist": ["other:*"]\n}\n`
+    );
+    cursor.addAllowlist!(tmpDir, "global");
+    const raw = fs.readFileSync(permPath, "utf8");
+    const after = readJsoncFile(permPath);
+    expect(after.mcpAllowlist).toContain("argent:*"); // argent added
+    expect(after.mcpAllowlist).toContain("other:*"); // foreign rule survives
+    expect(after.fileAllowlist).toEqual(["src/**"]); // foreign key survives
+    expect(raw).toContain("do not touch"); // comment survives
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
+  it("Cursor addAllowlist/removeAllowlist round-trip preserves foreign rules and keeps the file", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(permPath, `{\n  // keep me\n  "mcpAllowlist": ["other:*"]\n}\n`);
+    cursor.addAllowlist!(tmpDir, "global");
+    cursor.removeAllowlist!(tmpDir, "global");
+    expect(fs.existsSync(permPath)).toBe(true); // foreign rule ⇒ file kept
+    const raw = fs.readFileSync(permPath, "utf8");
+    const after = readJsoncFile(permPath);
+    expect(after.mcpAllowlist).toEqual(["other:*"]); // argent gone, foreign kept
+    expect(raw).toContain("keep me"); // comment survives
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
+  it("Cursor removeAllowlist deletes the file when argent was the only rule", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    cursor.addAllowlist!(tmpDir, "global"); // fresh create: { mcpAllowlist: ["argent:*"] }
+    cursor.removeAllowlist!(tmpDir, "global");
+    expect(fs.existsSync(permPath)).toBe(false);
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
+  it("addClaudePermission preserves a comment and foreign permissions in settings.json", () => {
+    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      `{\n  // user's own settings, do not touch\n  "model": "opus",\n  "permissions": { "allow": ["Bash(ls:*)"] }\n}\n`
+    );
+    addClaudePermission(tmpDir, "local");
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    const after = readJsoncFile(settingsPath);
+    const allow = (after.permissions as Record<string, unknown>).allow as string[];
+    expect(allow).toContain("mcp__argent"); // argent added
+    expect(allow).toContain("Bash(ls:*)"); // foreign permission survives
+    expect(after.model).toBe("opus"); // foreign key survives
+    expect(raw).toContain("do not touch"); // comment survives
+  });
+
+  it("addClaudePermission/removeClaudePermission round-trip preserves foreign permissions", () => {
+    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      `{\n  // keep me\n  "permissions": { "allow": ["Bash(ls:*)"] }\n}\n`
+    );
+    addClaudePermission(tmpDir, "local");
+    removeClaudePermission(tmpDir, "local");
+    expect(fs.existsSync(settingsPath)).toBe(true); // foreign permission ⇒ file kept
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    const after = readJsoncFile(settingsPath);
+    const allow = (after.permissions as Record<string, unknown>).allow as string[];
+    expect(allow).toEqual(["Bash(ls:*)"]); // argent gone, foreign kept
+    expect(raw).toContain("keep me"); // comment survives
+  });
+
+  // ── Behaviors correct but previously unpinned (review coverage notes) ────────
+
+  it("write leaves an existing file without a trailing newline untouched", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
+    const configPath = path.join(tmpDir, ".vscode", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    // Deliberately no trailing newline after the closing brace.
+    fs.writeFileSync(
+      configPath,
+      `{\n  "servers": { "myserver": { "type": "stdio", "command": "my-bin" } }\n}`
+    );
+    adapter.write(configPath, getMcpEntry());
+    const raw = fs.readFileSync(configPath, "utf8");
+    // editJsoncFile only appends a newline on fresh create — an existing file's
+    // own EOL style is preserved, so this one stays newline-free.
+    expect(raw.endsWith("\n")).toBe(false);
+    const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
+    expect(after.servers).toHaveProperty("argent");
+    expect(after.servers).toHaveProperty("myserver");
+  });
+
+  it("re-write replaces a stale env key rather than merging it", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const configPath = path.join(tmpDir, ".cursor", "mcp.json");
+    // A pre-#238 entry that still carried env (the update upgrade path).
+    adapter.write(configPath, {
+      command: "argent",
+      args: ["mcp"],
+      env: { ARGENT_MCP_LOG: "/tmp/x.log" },
+    });
+    adapter.write(configPath, getMcpEntry()); // env-less canonical entry
+    const after = readJsoncFile(configPath);
+    const argent = (after.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
+    expect(argent).not.toHaveProperty("env"); // replaced, not merged
+  });
+
+  it("remove keeps the file and an empty top-level sibling when argent was the only server", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const configPath = path.join(tmpDir, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      `{\n  "mcpServers": { "argent": { "command": "argent", "args": ["mcp"] } },\n  "userThing": {}\n}\n`
+    );
+    expect(adapter.remove(configPath)).toBe(true);
+    expect(fs.existsSync(configPath)).toBe(true); // kept: userThing is a foreign key
+    const after = readJsoncFile(configPath);
+    expect(after).not.toHaveProperty("mcpServers"); // emptied container pruned
+    expect(after.userThing).toEqual({}); // empty top-level sibling survives
+  });
+
+  it("addClaudePermission writes a trailing newline when the existing settings file was empty", () => {
+    // Routing addClaudePermission through editJsoncFile must not regress the
+    // trailing-newline normalization writeJson gave for free: an empty /
+    // whitespace-only existing file has no real content to preserve, so it is
+    // synthesized fresh and gets a final newline (no git "No newline at end of
+    // file"). A file with real content still keeps its own EOL (test above).
+    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, "   \n"); // whitespace-only existing file
+    addClaudePermission(tmpDir, "local");
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    expect(raw.endsWith("\n")).toBe(true);
+    const after = readJsoncFile(settingsPath);
+    expect((after.permissions as Record<string, unknown>).allow).toContain("mcp__argent");
+  });
+
+  it("removeClaudePermission keeps a permissions.deny sibling when argent was the sole allow rule", () => {
+    // The nested-ancestor partial-prune boundary: allow empties and is pruned,
+    // but permissions must be KEPT because a foreign `deny` remains (allow+deny
+    // is a common real Claude config). An over-prune here would silently delete
+    // the user's deny rules.
+    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      `{\n  "permissions": { "allow": ["mcp__argent"], "deny": ["Bash(rm:*)"] }\n}\n`
+    );
+    removeClaudePermission(tmpDir, "local");
+    expect(fs.existsSync(settingsPath)).toBe(true); // deny keeps the file
+    const after = readJsoncFile(settingsPath);
+    const permissions = after.permissions as Record<string, unknown>;
+    expect(permissions).not.toHaveProperty("allow"); // emptied allow pruned
+    expect(permissions.deny).toEqual(["Bash(rm:*)"]); // sibling survives, permissions kept
+  });
+
+  it("addClaudePermission preserves a UTF-8 BOM and foreign keys", () => {
+    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, "﻿" + `{\n  "model": "opus"\n}\n`);
+    addClaudePermission(tmpDir, "local");
+    const raw = fs.readFileSync(settingsPath, "utf8");
+    expect(raw.charCodeAt(0)).toBe(0xfeff); // BOM preserved byte-correct
+    const after = readJsoncFile(settingsPath);
+    expect(after.model).toBe("opus");
+    expect((after.permissions as Record<string, unknown>).allow).toContain("mcp__argent");
+  });
+
+  it("Cursor removeAllowlist prunes an emptied mcpAllowlist but keeps the file for a foreign key", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(
+      permPath,
+      `{\n  "mcpAllowlist": ["argent:*"],\n  "fileAllowlist": ["src/**"]\n}\n`
+    );
+    cursor.removeAllowlist!(tmpDir, "global");
+    expect(fs.existsSync(permPath)).toBe(true); // fileAllowlist keeps the file
+    const after = readJsoncFile(permPath);
+    expect(after).not.toHaveProperty("mcpAllowlist"); // emptied array pruned
+    expect(after.fileAllowlist).toEqual(["src/**"]); // foreign key survives
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 });

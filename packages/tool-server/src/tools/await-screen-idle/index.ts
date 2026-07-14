@@ -10,6 +10,7 @@ import type {
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
@@ -99,13 +100,14 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
   function fetchTree(
     device: DeviceInfo,
     services: Record<string, unknown>,
-    isTvOs: boolean
+    isTvOs: boolean,
+    androidIsTv: boolean
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
       return describeIos(registry, device, {}, { isTvOs });
     }
     if (device.platform === "android") {
-      return describeAndroid(registry, device.id);
+      return describeAndroid(registry, device.id, undefined, androidIsTv);
     }
     return describeChromium(services.chromium as ChromiumCdpApi);
   }
@@ -136,14 +138,18 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "android") await ensureDeps(androidRequires);
 
+      // Resolved once, outside the poll loop, like `isTvOs` — an unlisted
+      // serial's TV probe is never cached, so leaving it inside
+      // `describeAndroid` would spawn `adb devices` per poll.
       const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
+      const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
       const minStableMs = params.minStableMs ?? DEFAULT_MIN_STABLE_MS;
 
       let stableSignature: string | undefined;
       let stableSince = 0;
 
       const poll = await pollDescribeTree<true>({
-        fetchTree: () => fetchTree(device, services, isTvOs),
+        fetchTree: () => fetchTree(device, services, isTvOs, androidIsTv),
         timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         pollIntervalMs: params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
         signal: ctx?.signal,

@@ -17,6 +17,7 @@ import {
   ServiceInitializationError,
   ToolNotFoundError,
   ToolExecutionError,
+  getFailureSignalOrFallback,
 } from "./errors";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
@@ -105,7 +106,13 @@ export class Registry {
 
     const startTime = performance.now();
     const toolInvocationId = options?.toolInvocationId ?? randomUUID();
-    this.events.emit("toolInvoked", id, toolInvocationId);
+    let effectiveParams = params;
+
+    const startedMsg = formatInteractionMessage(
+      () => definition.interaction?.startedMsg?.({ params: effectiveParams }),
+      `Tool ${id} was invoked.`
+    );
+    this.events.emit("toolInvoked", id, toolInvocationId, startedMsg);
 
     try {
       // Validate params against the tool's zod schema for EVERY dispatch path,
@@ -115,7 +122,6 @@ export class Registry {
       // shell metacharacters past a tool's regex (→ injection at the sink).
       // `params ?? {}` mirrors the HTTP layer (express.json yields {} for an
       // empty body) so no-arg internal invokes still validate cleanly.
-      let effectiveParams = params;
       if (definition.zodSchema) {
         const parsed = definition.zodSchema.safeParse(params ?? {});
         if (!parsed.success) {
@@ -162,7 +168,15 @@ export class Registry {
       }
 
       const duration = performance.now() - startTime;
-      this.events.emit("toolCompleted", id, toolInvocationId, duration);
+      const completedMsg = formatInteractionMessage(
+        () =>
+          definition.interaction?.completedMsg?.({
+            params: effectiveParams,
+            result,
+          }),
+        `Tool ${id} completed in ${duration.toFixed(2)} ms.`
+      );
+      this.events.emit("toolCompleted", id, toolInvocationId, duration, completedMsg);
       return result as TResult;
     } catch (error) {
       const originalMsg = error instanceof Error ? error.message : String(error);
@@ -175,13 +189,24 @@ export class Registry {
           : new ToolExecutionError(id, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
+      const failureSignal = getFailureSignalOrFallback(wrappedError);
+      const failedMsg = formatInteractionMessage(
+        () =>
+          definition.interaction?.failedMsg?.({
+            params: effectiveParams,
+            error: wrappedError,
+            failureSignal,
+          }),
+        `Tool ${id} failed.`
+      );
 
       this.events.emit(
         "toolFailed",
         id,
         toolInvocationId,
         wrappedError,
-        performance.now() - startTime
+        performance.now() - startTime,
+        failedMsg
       );
       throw wrappedError;
     }
@@ -411,5 +436,13 @@ export class Registry {
     node.initPromise = null;
     node.dependents.clear();
     this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
+  }
+}
+
+function formatInteractionMessage(format: () => string | undefined, fallback: string): string {
+  try {
+    return format() ?? fallback;
+  } catch {
+    return fallback;
   }
 }

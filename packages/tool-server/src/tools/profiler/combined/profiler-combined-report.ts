@@ -18,6 +18,11 @@ import {
 import type { HotCommitSummary } from "../../../utils/react-profiler/types/output";
 import type { UiHang, MemoryLeak } from "../../../utils/profiler-shared/types";
 import { formatBytes } from "../../../utils/profiler-shared/format";
+import {
+  isCaptureInFlight,
+  inFlightGuardMessage,
+} from "../../../utils/profiler-shared/capture-guard";
+import { renderUnattributedLeaksNote } from "../../../utils/ios-profiler/render";
 import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipeline/index";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
@@ -60,6 +65,33 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
   }),
   async execute(services, params) {
     const nativeApi = services.nativeSession as NativeProfilerSessionApi;
+
+    // Freshness gate: once a newer capture is recording (or ended and pending
+    // recovery), the frozen iOS parsedData this report renders is stale relative
+    // to what the user is now capturing. Refuse and point them at a fresh analyze
+    // so they get the current capture's correlations, not the previous one's.
+    // (Numeric correctness is handled independently by freezing the wall-clock
+    // anchor into parsedData at analyze — see nativeWallStart below — so even if
+    // this gate is bypassed the report stays self-consistent rather than mixing
+    // one capture's hangs with another's clock.) The retryAction must include
+    // native-profiler-analyze: unlike analyze/profiler-load, which re-derive
+    // their data on retry, this report consumes the frozen parsedData that ONLY
+    // native-profiler-analyze rewrites, so "stop then re-run" alone would render
+    // the previous capture again.
+    if (isCaptureInFlight(nativeApi)) {
+      throw new FailureError(
+        inFlightGuardMessage(
+          nativeApi,
+          "run native-profiler-analyze, then re-run profiler-combined-report"
+        ),
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
+          failure_stage: "profiler_combined_report_session_state",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
 
     // For iOS, the analyze step cached uiHangs + memoryLeaks in parsedData.
     // For Android, drill-down re-queries the .pftrace, so we load the same
@@ -126,7 +158,15 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     }
 
     const reactWallStart = onDisk.meta?.profileStartWallMs ?? null;
-    const nativeWallStart = nativeApi.wallClockStartMs;
+    // iOS anchors the FROZEN parsedData hangs, so it must use the anchor frozen
+    // WITH them (at analyze), not the live session field — a later
+    // native-profiler-start re-stamps the live field to a different capture and
+    // would shift every hang. Android re-derives hangs from the live traceFile
+    // (loadAndroidCombinedData above), so its live anchor stays consistent.
+    const nativeWallStart =
+      nativeApi.platform === "android"
+        ? nativeApi.wallClockStartMs
+        : (nativeApi.parsedData?.wallClockStartMs ?? null);
 
     if (!reactWallStart && !nativeWallStart) {
       throw new FailureError(
@@ -330,7 +370,15 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
           .map((c) => c.componentName)
       );
 
-      lines.push(...renderCombinedMemoryLeaks(memoryLeaks, mountComponents));
+      lines.push(
+        ...renderCombinedMemoryLeaks(
+          memoryLeaks,
+          mountComponents,
+          // From parsedData, not the live session field: a recording started
+          // after the analyze must not re-label the data being rendered here.
+          nativeApi.parsedData?.mallocStackLogging ?? null
+        )
+      );
     }
 
     // Summary of opportunities
@@ -371,11 +419,16 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
  * heuristically tied to recently-mounted React components; unattributed leaks
  * (`<Call stack limit reached>` under `xctrace --attach`) are collapsed into one
  * low-confidence YELLOW caveat so the simulator's benign system-allocation noise
- * can't masquerade as a wall of confirmed leaks. Exported for unit testing.
+ * can't masquerade as a wall of confirmed leaks. The caveat line comes from
+ * render.ts's shared renderUnattributedLeaksNote, so its capture-mode handling
+ * (and wording) cannot drift from the analyze report. `mallocStackLogging` is
+ * the session's actual capture mode when known; null/undefined falls back to
+ * inferring it from the attributed count. Exported for unit testing.
  */
 export function renderCombinedMemoryLeaks(
   memoryLeaks: MemoryLeak[],
-  mountComponents: Set<string>
+  mountComponents: Set<string>,
+  mallocStackLogging?: boolean | null
 ): string[] {
   if (memoryLeaks.length === 0) return [];
 
@@ -402,15 +455,9 @@ export function renderCombinedMemoryLeaks(
   }
 
   if (unattributedLeaks.length > 0) {
-    const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
-    const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
     lines.push(
       ``,
-      `> 🟡 **${unattributedLeaks.length} unattributed leak group(s)** ` +
-        `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
-        `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
-        `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
-        `stack logging enabled at launch.`
+      renderUnattributedLeaksNote(unattributedLeaks, attributedLeaks.length, mallocStackLogging)
     );
   }
 

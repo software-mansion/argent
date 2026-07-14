@@ -87,6 +87,21 @@ const AI_CLIENT = oneOf(AI_CLIENTS);
 
 const INSTALL_MODE = oneOf(["global", "local"] as const);
 
+// Crash diagnostics (toolserver:stop, reason:"crash"). Each is a coded, non-
+// identifying shape — the emit side (crash-diagnostics.ts) never produces free
+// text, and these validators are the final gate that drops anything that isn't
+// the expected coded form.
+//
+// error_name  — an error class name (a code identifier), e.g. TypeError.
+// error_syscall — a Node system-error code: leading `E`, uppercase/digits/`_`,
+//   bounded length. Covers EADDRINUSE, ECONNREFUSED, EAI_AGAIN, ERR_* — and by
+//   construction can hold no path, space, or lowercase text.
+// crash_fingerprint — exactly 16 lowercase hex chars (a truncated SHA-256).
+const ERROR_NAME = matches(/^[A-Za-z][A-Za-z0-9_]{0,63}$/, 64);
+const ERROR_SYSCALL = matches(/^E[A-Z0-9_]{1,31}$/, 32);
+const CRASH_FINGERPRINT = matches(/^[0-9a-f]{16}$/, 16);
+const CRASH_PHASE = oneOf(["startup", "serving"] as const);
+
 const AI_TELEMETRY = {
   ai_client: AI_CLIENT,
 };
@@ -231,6 +246,43 @@ export const ALLOWED: ValidatorMap = {
     uptime_ms: DURATION_MS,
     total_tool_calls: COUNT,
     ...FAILURE_SIGNAL,
+    error_name: ERROR_NAME,
+    error_syscall: ERROR_SYSCALL,
+    crash_fingerprint: CRASH_FINGERPRINT,
+    crash_phase: CRASH_PHASE,
+  },
+  "lens:preview_opened": {
+    round: COUNT,
+    element_count: COUNT,
+    variant_count: COUNT,
+    is_cli_session: bool,
+    platform: PLATFORM,
+  },
+  "lens:round_completed": {
+    round: COUNT,
+    element_count: COUNT,
+    variant_count: COUNT,
+    annotation_count: COUNT,
+    element_comment_count: COUNT,
+    skipped_comment_count: COUNT,
+    has_global_comment: bool,
+    inspector_used: bool,
+    offscreen_revealed: bool,
+    is_cli_session: bool,
+    had_parked_await: bool,
+    round_duration_ms: DURATION_MS,
+    platform: PLATFORM,
+  },
+  "lens:round_abandoned": {
+    round: COUNT,
+    element_count: COUNT,
+    variant_count: COUNT,
+    had_parked_await: bool,
+    is_cli_session: bool,
+    platform: PLATFORM,
+  },
+  "lens:cli_session_started": {
+    agent_choice_count: COUNT,
   },
 };
 

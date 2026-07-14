@@ -169,7 +169,7 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 { "udid": "<UDID>", "text": "search query", "key": "enter" }
 ```
 
-Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms).
+Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
 ### rotate — Change orientation
 
@@ -188,8 +188,8 @@ Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to 
 ```
 
 - `condition`: `exists`, `visible`, `hidden`, or `text`.
-- `selector`: `{ text?, identifier?, role? }` — every provided field must match (case-insensitive substring). `text` matches the element's label or value; `identifier` matches its accessibility id / resource-id / testID; `role` matches its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`). The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
-- Prefer a **specific** selector. A loose substring can match several elements, and the tool may then key off one you didn't mean: `text` reads the **first** match in **reading order** (top-to-bottom, left-to-right — the same order `describe` lists them, so it's the one you saw first), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
+- `selector`: `{ text?, identifier?, role? }` — every provided field must match. `text` matches the element's label or value and `role` its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`), both as case-insensitive substrings; `identifier` matches its accessibility id / resource-id / testID **exactly** (case-insensitive), also accepting the unqualified Android resource-id name (`submit` matches `com.example.app:id/submit`). The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
+- Prefer a **specific** selector. A loose substring can match several elements, and the tool may then key off one you didn't mean: `text` reads the first **visible** match in **reading order** (top-to-bottom, left-to-right — the same order `describe` lists them, so it's the one you saw first; when no match is visible, the first match overall), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
 - `text` condition also needs `expectedText` (substring the matched element must contain).
 - `hidden` treats a selector that matches **nothing** as already-hidden, so a typo'd selector returns an instant (false) success. Double-check the selector for `hidden` waits — the result `note` flags when the selector never matched any element. (On iOS, if the accessibility backend is down the tree comes back empty; the tool will **not** report `hidden` success off such a degraded read and the `note` surfaces the boot hint instead.)
 - Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
@@ -215,6 +215,8 @@ When using `screenshot` for permission or native modal navigation:
 - Prefer obvious, centered alert buttons such as `Allow`, `OK`, `Don't Allow`, `Not Now`, or `Continue`.
 - Tap one control at a time and inspect the returned auto-screenshot before doing anything else.
 - After the modal is dismissed, return to normal discovery with `describe`, `native-describe-screen`, or `debugger-component-tree`.
+
+> **Prefer the dialog over the Settings tool.** When the app triggers its own permission prompt, answering it here is the real user path — do that. Reach for the `settings-permissions` tool only when you can't get to the change through the app: pre-authorize/deny a permission _before_ the app asks, re-enable one the user already denied (iOS won't re-prompt), or reset it so the prompt reappears. See the `argent-settings-permissions` skill.
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 

@@ -161,6 +161,19 @@ function el(opts: Opts = {}): MockElement {
   return node;
 }
 
+// An <input> the script's `instanceof HTMLInputElement` branches recognise
+// (accessibleName's placeholder/value fallbacks, isPassword, isChecked): built
+// like el(), then re-prototyped onto the mock input class with the live
+// .type/.value/.placeholder properties those branches read directly.
+function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: string }) {
+  const node = el({ ...opts, tag: "input" }) as MockElement & Record<string, unknown>;
+  Object.setPrototypeOf(node, MockHTMLInputElement.prototype);
+  if (opts.type) node.type = opts.type;
+  if (opts.value) node.value = opts.value;
+  if (opts.placeholder) node.placeholder = opts.placeholder;
+  return node;
+}
+
 function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean } {
   const root = el({ tag: "html", rect: { x: 0, y: 0, w: W, h: H } }) as MockElement &
     Record<string, unknown>;
@@ -765,6 +778,97 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       el({ tag: "iframe", rect: { x: 0, y: 0, w: 500, h: 500 }, iframeDoc: innerDoc }),
     ]);
     expect(valuesOf(tree)).toContain("IFRAMETEXT");
+  });
+
+  // ---- a password input's typed value must never become its label ----
+  it("never reads a password input's typed value as its accessible name", () => {
+    // A placeholder-less password input (floating/uncontrolled-label pattern)
+    // with a typed value: the aria/placeholder/title fallbacks are all empty,
+    // and the value fallback must be skipped — otherwise the plaintext secret
+    // becomes node.label and reaches every describe consumer verbatim.
+    const { tree } = run([
+      inputEl({ type: "password", value: "hunter2", attrs: { id: "pw" }, rect: BOX }),
+    ]);
+    const pw = findById(tree, "pw");
+    expect(pw).toBeTruthy();
+    expect(pw!.password).toBe(true);
+    expect(pw!.label).toBeUndefined();
+    expect(JSON.stringify(tree)).not.toContain("hunter2");
+  });
+
+  it("still reads a non-password input's value as its accessible name", () => {
+    const { tree } = run([
+      inputEl({ type: "text", value: "typed text", attrs: { id: "txt" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "txt")!.label).toBe("typed text");
+  });
+
+  // ---- input focus (the flow type directive's focus wait reads this) ----
+  it("marks the document's activeElement as focused, excluding the body", () => {
+    const focusedInput = el({ tag: "input", attrs: { id: "focused-input" }, rect: BOX });
+    const otherInput = el({
+      tag: "input",
+      attrs: { id: "other-input" },
+      rect: { x: 0, y: 200, w: 200, h: 30 },
+    });
+    const body = el({
+      tag: "body",
+      attrs: { id: "the-body" },
+      rect: { x: 0, y: 0, w: W, h: H },
+      children: [focusedInput, otherInput],
+    });
+    // The mock defines no Document constructor, so the script's protoGetter
+    // falls back to direct reads: a stub document with activeElement/body is
+    // enough. The body being activeElement (the no-focus default) must NOT
+    // mark it focused.
+    const doc = { activeElement: focusedInput, body };
+    for (const n of [focusedInput, otherInput, body]) {
+      (n as unknown as Record<string, unknown>).ownerDocument = doc;
+    }
+
+    const { tree } = run([body]);
+    expect(findById(tree, "focused-input")!.focused).toBe(true);
+    expect(findById(tree, "other-input")!.focused).toBeUndefined();
+
+    doc.activeElement = body;
+    const { tree: unfocusedTree } = run([body]);
+    expect(findById(unfocusedTree, "focused-input")!.focused).toBeUndefined();
+    expect(findById(unfocusedTree, "the-body")!.focused).toBeUndefined();
+  });
+
+  it("flags a focused input inside a same-origin iframe once — never its host <iframe>", () => {
+    // Focus inside a subdocument makes BOTH activeElements point at it: the
+    // inner document's is the input, the outer document's is the host iframe
+    // element. Only the inner element carries the flag; flagging the host too
+    // would double-report the focus.
+    const innerInput = el({ tag: "input", attrs: { id: "iframe-input" }, rect: BOX });
+    const innerBody = el({
+      tag: "body",
+      rect: { x: 0, y: 0, w: 500, h: 500 },
+      children: [innerInput],
+    });
+    const innerHtml = el({
+      tag: "html",
+      rect: { x: 0, y: 0, w: 500, h: 500 },
+      children: [innerBody],
+    });
+    const innerDoc = { documentElement: innerHtml, activeElement: innerInput, body: innerBody };
+    for (const n of [innerHtml, innerBody, innerInput]) {
+      (n as unknown as Record<string, unknown>).ownerDocument = innerDoc;
+    }
+    const iframe = el({
+      tag: "iframe",
+      attrs: { id: "the-iframe" },
+      rect: { x: 0, y: 0, w: 500, h: 500 },
+    });
+    (iframe as unknown as Record<string, unknown>).contentDocument = innerDoc;
+    // The outer document reports the host iframe as ITS activeElement.
+    const outerDoc = { activeElement: iframe, body: null };
+    (iframe as unknown as Record<string, unknown>).ownerDocument = outerDoc;
+
+    const { tree } = run([iframe]);
+    expect(findById(tree, "iframe-input")!.focused).toBe(true);
+    expect(findById(tree, "the-iframe")!.focused).toBeUndefined();
   });
 
   // ---- a missing captured accessor must degrade, not abort the whole describe ----

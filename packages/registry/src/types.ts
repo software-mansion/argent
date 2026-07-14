@@ -2,6 +2,7 @@ import { TypedEventEmitter } from "./event-emitter";
 import { z } from "zod";
 import type { ArtifactStore } from "./artifacts";
 import type { FileInputSpec, ResolvedFileInput } from "./file-inputs";
+import type { FailureSignal } from "./errors";
 
 // ── Service Types ──
 
@@ -117,6 +118,15 @@ export interface InvokeToolOptions {
    * reads nor validates the recorded metadata.
    */
   recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;
+  /**
+   * Fire-and-forget progress events emitted by a long-running tool while it
+   * executes (e.g. flow-execute streaming one report per completed step). Set
+   * by transports that can deliver increments — the HTTP layer's NDJSON mode —
+   * and absent when the caller can only consume a final result. Tools must
+   * treat it as optional and never behave differently based on its presence;
+   * the final return value remains the complete, authoritative result.
+   */
+  emitProgress?: (event: unknown) => void;
 }
 
 /**
@@ -213,6 +223,15 @@ export type ToolDependency = "adb" | "xcrun" | "emulator" | "sim-remote" | "vega
 
 export interface ToolDefinition<TParams = void, TResult = unknown> {
   id: string;
+  interaction?: {
+    startedMsg?: (context: { params: TParams }) => string;
+    completedMsg?: (context: { params: TParams; result: TResult }) => string;
+    failedMsg?: (context: {
+      params: TParams;
+      error: unknown;
+      failureSignal: FailureSignal;
+    }) => string;
+  };
   description?: string;
   /** Zod schema for tool input; used for runtime validation. When provided, inputSchema is auto-derived at registration time. */
   zodSchema?: z.ZodObject<any>;
@@ -296,7 +315,18 @@ export type RegistryEvents = {
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
-  toolInvoked: (toolId: string, toolInvocationId: string) => void;
-  toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number) => void;
-  toolFailed: (toolId: string, toolInvocationId: string, error: Error, durationMs?: number) => void;
+  toolInvoked: (toolId: string, toolInvocationId: string, msg: string) => void;
+  toolCompleted: (
+    toolId: string,
+    toolInvocationId: string,
+    durationMs: number,
+    msg: string
+  ) => void;
+  toolFailed: (
+    toolId: string,
+    toolInvocationId: string,
+    error: Error,
+    durationMs: number | undefined,
+    msg: string
+  ) => void;
 };

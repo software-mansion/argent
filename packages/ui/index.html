@@ -2913,6 +2913,7 @@
       const opPillCount = document.getElementById("op-pill-count");
       const revealOffscreenChoices = () => {
         vp.revealOffscreen = true;
+        vp.offscreenRevealed = true; // sticky per-round usage flag for telemetry
         vpRender();
       };
       opShow.addEventListener("click", () => {
@@ -2960,7 +2961,19 @@
         // While the server still reports this round (the agent hasn't opened a new
         // one yet) we hide its proposals/comments so "Request changes" feels final.
         sentRound: -1,
+        // Last round for which we posted the lens:preview_opened trigger. Locally
+        // dedups the ~1.2s poll so we post once per round we actually render in a
+        // visible window (the server dedups across tabs too). See reportPreviewOpened.
+        openReportedRound: -1,
         inspect: false,
+        // Sticky per-round usage flags for telemetry (reset when a new round
+        // loads / after a CLI submit). inspectorUsed: the human opened the
+        // "Add comment" inspector at least once this round (distinct from
+        // `inspect`, the live toggle, which is false again after they close it).
+        // offscreenRevealed: they clicked "Show them"/the pill to reveal
+        // off-screen choices. Both ride the submit POST → lens:round_completed.
+        inspectorUsed: false,
+        offscreenRevealed: false,
         focus: null, // describe node currently spotlighted
         commentFor: null, // describe node a comment-pop is open for
         spot: null, // spotlight layer root (child of mainEl)
@@ -3261,6 +3274,8 @@
                 vp.anchors = {};
                 vp.revealOffscreen = false;
                 vp.offscreenPromptCollapsed = false;
+                vp.inspectorUsed = false; // new round → reset per-round usage flags
+                vp.offscreenRevealed = false;
                 if (globalCommentEl) globalCommentEl.value = "";
                 if (vp.justCompletedRound === snap.round) {
                   /* keep our own success note */
@@ -3290,7 +3305,41 @@
           /* keep last state */
         }
         vpRender();
+        // A human is looking at this round → emit the lens:preview_opened trigger
+        // (deduped locally + server-side per round). Runs after the render so the
+        // round we report is the one now on screen.
+        reportPreviewOpened();
       }
+
+      // Tell the server a human opened/rendered the current round in a VISIBLE
+      // window — the source of `lens:preview_opened`. Gated on visibility so a
+      // forgotten BACKGROUND tab (which keeps polling /variants) never claims an
+      // open with nobody looking, and deduped per round so the ~1.2s poll and
+      // multiple tabs collapse to one. Posts only the round as a trigger; the
+      // server reads the counts/platform from its own snapshot. Fires again on
+      // visibilitychange so a tab foregrounded onto a not-yet-reported round
+      // counts the moment the human actually looks at it.
+      function reportPreviewOpened() {
+        if (document.visibilityState !== "visible") return;
+        const round = vp.round;
+        if (round < 0 || round === vp.openReportedRound) return;
+        // Only a live round is an "open": staged proposals, or a CLI session whose
+        // window is opened up front before any proposal. (Mirrors the server gate.)
+        const liveRound = (vp.proposals && vp.proposals.length > 0) || vp.cliSession;
+        if (!liveRound) return;
+        vp.openReportedRound = round;
+        fetch(`${TOOL_SERVER}/preview/opened`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ round }),
+          keepalive: true,
+        }).catch(() => {
+          // Best-effort telemetry trigger — a miss just drops one open signal, so
+          // roll back the local dedup and let the next poll re-attempt.
+          if (vp.openReportedRound === round) vp.openReportedRound = -1;
+        });
+      }
+      document.addEventListener("visibilitychange", reportPreviewOpened);
 
       // ── Agent picker (CLI Lens session) ─────────────────────────────────
       // The `argent lens` bridge offers a list of installed agents when more
@@ -4615,6 +4664,7 @@
       }
       function setInspect(on) {
         vp.inspect = on;
+        if (on) vp.inspectorUsed = true; // sticky per-round usage flag for telemetry
         commentBtn.classList.toggle("active", on);
         const commentLabel = on ? "Done commenting" : "Add comment";
         commentBtn.title = commentLabel;
@@ -5221,6 +5271,11 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+              // The round this submit was built against. The server rejects it as
+              // stale if the round has since rolled (agent auto-rolled after the
+              // previous submit and a second click landed), so a stale click can't
+              // mint a phantom completion for a round nobody reviewed.
+              round: vp.round,
               selections,
               annotations: vp.annotations.map((a) => ({
                 target: a.target,
@@ -5228,6 +5283,9 @@
                 comment: a.comment,
               })),
               globalComment: globalCommentEl ? globalCommentEl.value : "",
+              // Privacy-safe per-round UI usage signals → lens:round_completed.
+              inspectorUsed: !!vp.inspectorUsed,
+              offscreenRevealed: !!vp.offscreenRevealed,
             }),
           });
           const body = await res.json().catch(() => ({}));
@@ -5237,6 +5295,11 @@
           vp.justCompletedRound = vp.round;
           setNote(`Sent ${picked} pick(s) + ${annCount} comment(s) to the agent.`, "ok");
           showSuccessToast(picked, annCount);
+          // Round sent → reset the per-round inspector/offscreen usage flags on
+          // BOTH paths (not just CLI): if the agent auto-rolls and a stale click
+          // lands, those flags must not carry into the next round's telemetry.
+          vp.inspectorUsed = false;
+          vp.offscreenRevealed = false;
           // CLI Lens: the round stays open server-side until the agent proposes
           // anew, but the user has "sent" this batch — clear it from the overlay
           // now (and keep it cleared via vp.sentRound in pollVariants, since the
@@ -5328,6 +5391,12 @@
         vp.revealOffscreen = false;
         vp.offscreenPromptCollapsed = false;
         if (globalCommentEl) globalCommentEl.value = "";
+        // NOTE: vp.inspectorUsed / vp.offscreenRevealed are deliberately NOT
+        // reset here. "Clear all" wipes the human's picks/comments for a fresh
+        // start WITHIN the same round; it doesn't undo the fact that they opened
+        // the inspector / revealed off-screen choices this round, so the usage
+        // telemetry must still reflect it. They reset only on a genuine new round
+        // (pollVariants) or after a submit.
         setNote("");
         closeAnnPop();
         vpRender();

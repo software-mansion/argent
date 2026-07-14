@@ -6,6 +6,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "dependencies": {
+    "@argent/archive": "file:../archive"
+  },
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "test": "vitest run",

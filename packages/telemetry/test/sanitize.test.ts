@@ -411,6 +411,92 @@ describe("sanitize", () => {
     });
   });
 
+  describe("crash diagnostics on stop events", () => {
+    it("passes the coded crash fields through when well-formed", () => {
+      expect(
+        sanitize("toolserver:stop", {
+          reason: "crash",
+          uptime_ms: 480,
+          total_tool_calls: 0,
+          error_code: "TOOLSERVER_UNCAUGHT_EXCEPTION",
+          failure_stage: "toolserver_uncaught_exception",
+          failure_area: "tool_server",
+          error_kind: "crash",
+          error_name: "TypeError",
+          error_syscall: "EADDRINUSE",
+          crash_fingerprint: "0123456789abcdef",
+          crash_phase: "startup",
+        })
+      ).toEqual({
+        reason: "crash",
+        uptime_ms: 480,
+        total_tool_calls: 0,
+        error_code: "TOOLSERVER_UNCAUGHT_EXCEPTION",
+        failure_stage: "toolserver_uncaught_exception",
+        failure_area: "tool_server",
+        error_kind: "crash",
+        error_name: "TypeError",
+        error_syscall: "EADDRINUSE",
+        crash_fingerprint: "0123456789abcdef",
+        crash_phase: "startup",
+      });
+    });
+
+    it("accepts ERR_*-style Node error codes as a syscall", () => {
+      const out = sanitize("toolserver:stop", {
+        reason: "crash",
+        uptime_ms: 1,
+        total_tool_calls: 0,
+        error_syscall: "ERR_MODULE_NOT_FOUND",
+      });
+      expect(out).toMatchObject({ error_syscall: "ERR_MODULE_NOT_FOUND" });
+    });
+
+    it("drops a message masquerading as error_name (spaces / punctuation / path)", () => {
+      const out = sanitize("toolserver:stop", {
+        reason: "crash",
+        uptime_ms: 1,
+        total_tool_calls: 0,
+        error_name: "Error: ENOENT /Users/alice/.ssh/id_rsa",
+      });
+      expect(out).not.toHaveProperty("error_name");
+    });
+
+    it("drops a path-like or lowercase error_syscall", () => {
+      for (const bad of ["/Users/alice/x", "eaddrinuse", "listen 127.0.0.1:3001", "PORT_9229"]) {
+        const out = sanitize("toolserver:stop", {
+          reason: "crash",
+          uptime_ms: 1,
+          total_tool_calls: 0,
+          error_syscall: bad,
+        });
+        expect(out).not.toHaveProperty("error_syscall");
+      }
+    });
+
+    it("drops a fingerprint that is not exactly 16 lowercase hex chars", () => {
+      for (const bad of ["0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", "zzzz", ""]) {
+        const out = sanitize("toolserver:stop", {
+          reason: "crash",
+          uptime_ms: 1,
+          total_tool_calls: 0,
+          crash_fingerprint: bad,
+        });
+        expect(out).not.toHaveProperty("crash_fingerprint");
+      }
+    });
+
+    it("drops an unknown crash_phase", () => {
+      const out = sanitize("toolserver:stop", {
+        reason: "crash",
+        uptime_ms: 1,
+        total_tool_calls: 0,
+        crash_phase: "booting",
+      });
+      expect(out).not.toHaveProperty("crash_phase");
+    });
+  });
+
   describe("package action telemetry", () => {
     it("accepts the requested package-action enum set", () => {
       for (const action of [
@@ -497,6 +583,62 @@ describe("sanitize", () => {
         error_message: "password=hunter2",
       });
       expect(out).toEqual({ tool: "x", platform: "ios", duration_ms: 1 });
+    });
+  });
+
+  describe("lens telemetry events", () => {
+    it("keeps the round_completed usage flags and drops leaked content", () => {
+      const out = sanitize("lens:round_completed", {
+        round: 2,
+        element_count: 3,
+        variant_count: 5,
+        annotation_count: 1,
+        element_comment_count: 2,
+        skipped_comment_count: 1,
+        has_global_comment: true,
+        inspector_used: true,
+        offscreen_revealed: false,
+        is_cli_session: true,
+        had_parked_await: false,
+        round_duration_ms: 1234,
+        platform: "ios",
+        // Content that must never survive:
+        element_name: "Checkout button",
+        comment_text: "make it pop",
+      });
+      expect(out).toEqual({
+        round: 2,
+        element_count: 3,
+        variant_count: 5,
+        annotation_count: 1,
+        element_comment_count: 2,
+        skipped_comment_count: 1,
+        has_global_comment: true,
+        inspector_used: true,
+        offscreen_revealed: false,
+        is_cli_session: true,
+        had_parked_await: false,
+        round_duration_ms: 1234,
+        platform: "ios",
+      });
+    });
+
+    it("drops a non-boolean inspector_used / offscreen_revealed", () => {
+      const out = sanitize("lens:round_completed", {
+        round: 1,
+        inspector_used: "yes",
+        offscreen_revealed: 1,
+      });
+      // The bool validator rejects non-booleans, so both keys are removed.
+      expect(out).toEqual({ round: 1 });
+    });
+
+    it("keeps agent_choice_count on cli_session_started and drops extras", () => {
+      const out = sanitize("lens:cli_session_started", {
+        agent_choice_count: 2,
+        agent_names: ["claude", "cursor"], // must be dropped
+      });
+      expect(out).toEqual({ agent_choice_count: 2 });
     });
   });
 

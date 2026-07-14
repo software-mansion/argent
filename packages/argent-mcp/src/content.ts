@@ -5,7 +5,11 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { materializeArtifacts, type MaterializeContext } from "@argent/tools-client";
+import {
+  materializeArtifacts,
+  isArtifactHandle,
+  type MaterializeContext,
+} from "@argent/tools-client";
 
 export type ContentBlock =
   | { type: "text"; text: string }
@@ -81,7 +85,7 @@ export async function toMcpContent(
       return legacyImageContent(rewritten, suppressImage);
     }
 
-    const blocks: ContentBlock[] = [{ type: "text", text: JSON.stringify(rewritten, null, 2) }];
+    const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
     // Surface any images that rode along on a non-image result.
     if (!suppressImage) for (const img of images) blocks.push(imageBlock(img.data, img.mimeType));
     return blocks;
@@ -91,7 +95,16 @@ export async function toMcpContent(
     return legacyImageContent(result, suppressImage);
   }
 
-  return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
+  return [{ type: "text" as const, text: stringifyForText(result) }];
+}
+
+/**
+ * JSON.stringify(undefined) returns undefined, which would produce an invalid
+ * MCP content block ({ type: "text", text: undefined }). Coerce to "null" so a
+ * result with no value still serializes to a valid text block.
+ */
+function stringifyForText(value: unknown): string {
+  return JSON.stringify(value ?? null, null, 2);
 }
 
 /**
@@ -192,23 +205,68 @@ export async function screenshotDiffToMcpContent(
 
 // ── flow-execute adapter ─────────────────────────────────────────────
 
-export type FlowExecuteResult = {
-  flow: string;
-  executionPrerequisite?: string;
-  steps: {
-    kind: string;
-    tool?: string;
-    message?: string;
-    result?: unknown;
-    outputHint?: string;
-    args?: unknown;
-    error?: string;
-  }[];
+export type FlowStepResult = {
+  index?: number;
+  kind: string;
+  status?: "pass" | "fail" | "skip" | "error";
+  reason?: string;
+  /**
+   * Legacy: older tool-servers passed a snapshot that adopted a missing
+   * baseline and annotated it with this caveat (a missing baseline now fails
+   * the step). Rendered for wire compat with a not-yet-updated server.
+   */
+  warning?: string;
+  tool?: string;
+  message?: string;
+  result?: unknown;
+  outputHint?: string;
+  args?: unknown;
+  flow?: string;
+  /** Human-readable step target (selector / snapshot name), set by the runner. */
+  target?: string;
+  /**
+   * Snapshot-step artifacts keyed by role (baseline/current/diff). Values are
+   * artifact handles on current tool-servers; treated as untrusted wire data
+   * here, so anything else renders as text or is skipped.
+   */
+  artifacts?: Record<string, unknown>;
+  /** Legacy field from pre-report flow-execute results. */
+  error?: string;
 };
 
+export type FlowExecuteResult = {
+  flow: string;
+  device?: string;
+  executionPrerequisite?: string;
+  ok?: boolean;
+  passed?: number;
+  failed?: number;
+  skipped?: number;
+  errored?: number;
+  steps: FlowStepResult[];
+};
+
+const STATUS_GLYPH: Record<string, string> = {
+  pass: "✓",
+  fail: "✗",
+  error: "✗",
+  skip: "·",
+};
+
+function stepLabel(step: FlowStepResult): string {
+  if (step.kind === "echo") return step.message ?? "";
+  if (step.kind === "run") return `run ${step.flow ?? ""}`.trim();
+  if (step.tool) return step.tool;
+  if (step.target) return `${step.kind} ${step.target}`;
+  return step.kind;
+}
+
 /**
- * Unpack flow-execute's structured step results into MCP content blocks.
- * Each step carries its own outputHint so toMcpContent handles images correctly.
+ * Unpack flow-execute's structured step report into MCP content blocks. Only
+ * steps that carry a tool result surface their (image-bearing) content inline;
+ * directive steps (tap/assert/expect/run/skip) render as a status line. This
+ * never calls toMcpContent on an undefined result, which would serialize to an
+ * invalid (text: undefined) content block.
  */
 export async function flowRunToMcpContent(
   result: FlowExecuteResult,
@@ -217,35 +275,91 @@ export async function flowRunToMcpContent(
   const blocks: ContentBlock[] = [];
 
   if (result.executionPrerequisite) {
-    blocks.push({
-      type: "text",
-      text: `Prerequisite: ${result.executionPrerequisite}`,
-    });
+    blocks.push({ type: "text", text: `Prerequisite: ${result.executionPrerequisite}` });
   }
 
   blocks.push({
     type: "text",
-    text: `Running flow "${result.flow}" (${result.steps.length} steps)`,
+    text: `Running flow "${result.flow}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
   });
 
   for (let i = 0; i < result.steps.length; i++) {
     const step = result.steps[i]!;
-    const num = i + 1;
+    const num = step.index !== undefined ? step.index + 1 : i + 1;
+    // Glyph only when a status is present (the new report). Legacy status-less
+    // results render without one.
+    const glyph = step.status ? `${STATUS_GLYPH[step.status] ?? "•"} ` : "";
+    // `reason` is the new field; `error` is the legacy one.
+    const reason = step.reason ?? step.error;
+    const suffix = reason ? ` — ${reason}` : "";
+    const warning = step.warning ? ` ⚠ ${step.warning}` : "";
+    blocks.push({ type: "text", text: `[${num}] ${glyph}${stepLabel(step)}${suffix}${warning}` });
 
-    if (step.kind === "echo") {
-      blocks.push({ type: "text", text: `[${num}] ${step.message}` });
-    } else if ("error" in step && step.error) {
-      blocks.push({
-        type: "text",
-        text: `[${num}] ${step.tool} ERROR: ${step.error}`,
-      });
-    } else {
-      blocks.push({ type: "text", text: `[${num}] ${step.tool}` });
-      const stepContent = await toMcpContent(step.result, step.outputHint, ctx, step.args);
-      blocks.push(...stepContent);
+    // Surface a step's own content (e.g. a screenshot) only when it actually
+    // returned one.
+    if (step.result !== undefined) {
+      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
+    }
+
+    // Snapshot steps carry artifacts instead of a result — list their paths,
+    // and inline the annotated diff image when the assertion failed.
+    if (isRecord(step.artifacts)) {
+      blocks.push(...(await stepArtifactBlocks(step.artifacts, step.status, ctx)));
     }
   }
 
-  blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
+  if (result.ok !== undefined) {
+    blocks.push({
+      type: "text",
+      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped`,
+    });
+  } else {
+    blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
+  }
+  return blocks;
+}
+
+/**
+ * Render a step's artifacts (snapshot baseline/current/diff): one text block
+ * listing each artifact, plus the annotated diff image inline when the step
+ * failed — otherwise the agent has no way to see WHAT differed. Only that
+ * inlined diff is materialized (local read or remote download); baseline and
+ * current are full-res PNGs nobody renders, so their handles print as
+ * tool-server paths (or filenames) without pulling the bytes over the wire —
+ * the same economy flow-visual.ts applies by omitting artifacts on a clean
+ * pass. A legacy string[] (pre-handle tool-servers) renders its paths as
+ * plain text.
+ */
+async function stepArtifactBlocks(
+  artifacts: Record<string, unknown>,
+  status: string | undefined,
+  ctx?: ContentContext
+): Promise<ContentBlock[]> {
+  const failed = status === "fail" || status === "error";
+  const entries: [string, string][] = [];
+  let diffImage: ContentBlock | undefined;
+
+  for (const [k, v] of Object.entries(artifacts)) {
+    if (ctx && failed && k === "diff" && isArtifactHandle(v)) {
+      // The one artifact rendered inline: materialize it so the image works
+      // against a remote tool-server too.
+      const { result, images } = await materializeArtifacts(v, ctx);
+      // A null means the handle couldn't be fetched; say so rather than
+      // rendering a dangling reference.
+      entries.push([k, typeof result === "string" ? result : "(unavailable)"]);
+      const img = images.find((i) => i.localPath === result);
+      if (img) diffImage = imageBlock(img.data, img.mimeType);
+    } else if (isArtifactHandle(v)) {
+      entries.push([k, v.hostPath ?? v.filename]);
+    } else if (typeof v === "string") {
+      entries.push([k, v]);
+    }
+  }
+
+  const blocks: ContentBlock[] =
+    entries.length > 0
+      ? [{ type: "text", text: entries.map(([k, v]) => `  ${k}: ${v}`).join("\n") }]
+      : [];
+  if (diffImage) blocks.push(diffImage);
   return blocks;
 }
