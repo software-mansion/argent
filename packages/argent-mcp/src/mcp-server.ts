@@ -95,10 +95,10 @@ export interface StartMcpServerOptions {
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
   // First-run telemetry notice, once per installation, for users who reach a
-  // telemetry-enabled build via an update: `argent update` runs the OLD binary
-  // (postinstall skipped), so the editor relaunching `argent mcp` is often the
-  // first time the new code runs. stdout is the JSON-RPC channel — the notice
-  // MUST go to stderr to avoid corrupting it.
+  // telemetry-enabled build via an update: `argent update` runs the OLD binary,
+  // so the editor relaunching `argent mcp` is often the first time the new
+  // code runs. stdout is the JSON-RPC channel — the notice MUST go to stderr
+  // to avoid corrupting it.
   if (shouldShowFirstRunNotice()) {
     process.stderr.write(`[argent] ${FIRST_RUN_NOTICE}\n`);
     markFirstRunNoticeShown();

@@ -22,8 +22,7 @@
     "test:watch": "vitest",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "observe": "node scripts/observe.cjs",
-    "benchmark": "node scripts/benchmark.cjs",
-    "postinstall": "node scripts/postinstall.cjs"
+    "benchmark": "node scripts/benchmark.cjs"
   },
   "private": false,
   "publishConfig": {
@@ -37,8 +36,7 @@
     "skills/",
     "agents/",
     "rules/",
-    "assets/",
-    "scripts/postinstall.cjs"
+    "assets/"
   ],
   "dependencies": {
     "@fails-components/webtransport": "^1.6.3",

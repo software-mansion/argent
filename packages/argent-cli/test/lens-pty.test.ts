@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  ensureSpawnHelperExecutable,
   ptyInjectBeats,
   loadNodePty,
   startPtyProxy,
@@ -40,6 +44,51 @@ describe("loadNodePty", () => {
 
   it("returns null when the module has no spawn()", () => {
     expect(loadNodePty(((): unknown => ({})) as unknown as NodeRequire)).toBeNull();
+  });
+
+  it("tolerates a req seam without resolve() — module still returned", () => {
+    // loadNodePty calls ensureSpawnHelperExecutable, whose req.resolve access
+    // must stay best-effort so bare-function seams (and exotic runtimes) work.
+    const fake = { spawn: () => ({}) } as unknown as NodePty;
+    expect(loadNodePty(((): unknown => fake) as unknown as NodeRequire)).toBe(fake);
+  });
+});
+
+// ── ensureSpawnHelperExecutable (the old postinstall chmod, now at load time) ─
+
+describe.runIf(process.platform === "darwin")("ensureSpawnHelperExecutable", () => {
+  function makeFakeNodePtyPackage(): { root: string; helper: string } {
+    const root = mkdtempSync(join(tmpdir(), "argent-pty-chmod-"));
+    const pkgDir = join(root, "node-pty");
+    const prebuildDir = join(pkgDir, "prebuilds", "darwin-arm64");
+    mkdirSync(prebuildDir, { recursive: true });
+    writeFileSync(join(pkgDir, "package.json"), '{"name":"node-pty"}');
+    const helper = join(prebuildDir, "spawn-helper");
+    writeFileSync(helper, "#!/bin/sh\n", { mode: 0o644 });
+    return { root, helper };
+  }
+
+  it("restores +x on every prebuild's spawn-helper", () => {
+    const { root, helper } = makeFakeNodePtyPackage();
+    try {
+      const req = {
+        resolve: () => join(root, "node-pty", "package.json"),
+      } as unknown as NodeRequire;
+      expect(statSync(helper).mode & 0o111).toBe(0);
+      ensureSpawnHelperExecutable(req);
+      expect(statSync(helper).mode & 0o755).toBe(0o755);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("is silent when node-pty cannot be resolved", () => {
+    const req = {
+      resolve: () => {
+        throw new Error("Cannot find module 'node-pty/package.json'");
+      },
+    } as unknown as NodeRequire;
+    expect(() => ensureSpawnHelperExecutable(req)).not.toThrow();
   });
 });
 
