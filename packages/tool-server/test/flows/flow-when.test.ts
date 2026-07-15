@@ -345,9 +345,61 @@ describe("when: execution", () => {
     const result = await run("blind");
 
     // "Could not evaluate" is not "condition false" — a broken tree source
-    // must not silently turn a guarded dismissal into a green no-op.
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["when:error", "echo:skip"]);
+    // must not silently turn a guarded dismissal into a green no-op. The
+    // guarded steps still expand: one skip line per authored step, same
+    // report shape as an unmet guard.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:error",
+      "tap:skip",
+      "echo:skip",
+    ]);
     expect(result.steps[0].reason).toMatch(/could not evaluate when guard/i);
+    expect(result.steps[1].reason).toBe("when guard errored");
+    expect(result.ok).toBe(false);
+  });
+
+  it("expands a nested when block when the guard errors", async () => {
+    currentTree = () => {
+      throw new Error("native devtools disconnected");
+    };
+    await writeFlow("blind-nested", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "What's new", loose: true },
+          },
+          steps: [
+            { kind: "tap", selector: { text: "Skip", loose: true } },
+            {
+              kind: "when",
+              condition: { kind: "platform", platform: "ios" },
+              steps: [{ kind: "echo", message: "nested" }],
+            },
+          ],
+        },
+        { kind: "echo", message: "never reached" },
+      ],
+    });
+
+    const result = await run("blind-nested");
+
+    // An errored guard reports the same shape as an unmet one — the block
+    // marker errors, then one skip line per authored step with the nested
+    // when's subtree expanded.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:error",
+      "tap:skip",
+      "when:skip",
+      "echo:skip",
+      "echo:skip",
+    ]);
+    expect(result.steps[2].reason).toBe("when guard errored");
+    expect(result.errored).toBe(1);
+    expect(result.skipped).toBe(2); // tap + nested when marker; echo is narration
     expect(result.ok).toBe(false);
   });
 
@@ -375,7 +427,11 @@ describe("when: execution", () => {
 
     const result = await run("degraded");
 
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["when:error", "echo:skip"]);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:error",
+      "tap:skip",
+      "echo:skip",
+    ]);
     expect(result.steps[0].reason).toMatch(/could not evaluate when guard/i);
     expect(result.taps).toHaveLength(0);
     expect(result.ok).toBe(false);
@@ -408,7 +464,11 @@ describe("when: execution", () => {
 
     const result = await run("spinner-gone");
 
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["when:error", "echo:skip"]);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:error",
+      "echo:skip",
+      "echo:skip",
+    ]);
     expect(result.steps[0].reason).toMatch(/could not confirm the element is hidden/i);
     expect(result.ok).toBe(false);
   });

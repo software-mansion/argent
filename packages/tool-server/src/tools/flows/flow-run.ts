@@ -797,12 +797,12 @@ function describeWhenCondition(cond: WhenCondition): string {
 
 /**
  * Report every step of a `when:` block that will not run as skipped — so a
- * run where the block was skipped (unmet guard, hard stop, or cancellation)
- * produces the same report shape (one line per authored step) as a run where
- * it entered, and reports stay comparable run-to-run. Nested when blocks
- * expand (their literal steps are known); a `run:` composition stays one
- * line, matching how post-hard-stop skips report a fragment that was never
- * loaded.
+ * run where the block was skipped (unmet guard, errored guard, hard stop, or
+ * cancellation) produces the same report shape (one line per authored step)
+ * as a run where it entered, and reports stay comparable run-to-run. Nested
+ * when blocks expand (their literal steps are known); a `run:` composition
+ * stays one line, matching how post-hard-stop skips report a fragment that
+ * was never loaded.
  */
 function reportBlockSkipped(
   state: ExecState,
@@ -878,6 +878,7 @@ async function execWhenStep(
         target,
       });
       state.stopped = true;
+      reportBlockSkipped(state, step.steps, sourceFlow, "when guard errored");
       return;
     }
     met = probe.ok;
