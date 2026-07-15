@@ -561,11 +561,21 @@ export async function sweepDeadStateFiles(): Promise<void> {
     // stays unguarded there rather than never retiring dead-bundle servers.
     const guarded = process.platform !== "win32";
     if (guarded && !processCommandMatches(fresh.pid, fresh.bundlePath)) continue;
-    await terminatePid(
+    // Unlink first, then terminate WITHOUT awaiting the grace window: the
+    // sweep runs on ensureToolsServer's slow path under the spawn lock, right
+    // when a session is waiting for tools to come up — a wedged orphan must
+    // not add its multi-second SIGTERM grace to that wait. terminatePid
+    // delivers the guarded SIGTERM synchronously before its first await and
+    // never rejects; only the SIGKILL escalation outlives this call (the
+    // pending poll keeps a short-lived CLI process alive until the orphan is
+    // confirmed dead, so the escalation actually lands). Losing the record
+    // for a server we're actively killing is fine — the same code was
+    // unreachable via `server stop` under the old postinstall too.
+    await unlink(file).catch(() => {});
+    void terminatePid(
       fresh.pid,
       guarded ? () => processCommandMatches(fresh.pid, fresh.bundlePath) : undefined
     );
-    await unlink(file).catch(() => {});
   }
 }
 

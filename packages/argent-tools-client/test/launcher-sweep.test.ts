@@ -50,11 +50,16 @@ function writeRecord(bundlePath: string, pid: number): string {
 /** Spawn a keepalive child running `node <bundlePath> start`, exactly the
  * command shape the launcher's identity check requires. Resolves once the
  * child has printed its ready marker, so callers may delete the bundle file
- * without racing node's module load. */
-async function spawnFakeServer(bundlePath: string): Promise<ChildProcess> {
+ * without racing node's module load. With `trapSigterm`, the child installs a
+ * no-op SIGTERM handler BEFORE printing ready, simulating a wedged server. */
+async function spawnFakeServer(
+  bundlePath: string,
+  opts?: { trapSigterm?: boolean }
+): Promise<ChildProcess> {
   writeFileSync(
     bundlePath,
-    'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);\n',
+    (opts?.trapSigterm ? 'process.on("SIGTERM", () => {});\n' : "") +
+      'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);\n',
     "utf8"
   );
   const child = spawn("node", [bundlePath, "start"], { stdio: ["ignore", "pipe", "ignore"] });
@@ -107,6 +112,25 @@ describe("sweepDeadStateFiles", () => {
       await launcher.sweepDeadStateFiles();
       expect(await waitForExit(child)).toBe(true);
       expect(existsSync(file)).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  it("returns without waiting out the kill grace window on a SIGTERM-ignoring orphan", async () => {
+    const bundle = join(TEST_HOME, "wedged-bundle.cjs");
+    const child = await spawnFakeServer(bundle, { trapSigterm: true });
+    const file = writeRecord(bundle, child.pid!);
+    rmSync(bundle);
+    try {
+      // The sweep runs under ensureToolsServer's spawn lock, so it must not
+      // block on the multi-second SIGTERM grace of a wedged orphan: the
+      // record is unlinked and the guarded SIGTERM delivered, but the sweep
+      // returns while the orphan (which trapped the signal) is still alive —
+      // the SIGKILL escalation happens in the background.
+      await launcher.sweepDeadStateFiles();
+      expect(existsSync(file)).toBe(false);
+      expect(child.exitCode).toBeNull();
     } finally {
       child.kill("SIGKILL");
     }
