@@ -195,6 +195,88 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
   });
 
+  it.each([
+    [
+      "selector",
+      "steps:\n  - tap: { text: { matches: '^Order #\\d+$' } }\n",
+      { kind: "tap", selector: { textMatches: "^Order #\\d+$" } },
+    ],
+    [
+      "text condition",
+      "steps:\n  - assert: { text: { in: total, matches: '^Total: \\$\\d+$' } }\n",
+      {
+        kind: "assert",
+        condition: "text",
+        selector: { text: "total", loose: true },
+        expectedText: "^Total: \\$\\d+$",
+        textMatch: "matches",
+      },
+    ],
+  ] as const)("accepts a valid regex pattern at the %s ingress", (_ingress, yaml, expected) => {
+    expect(parseFlow(yaml).steps).toEqual([expected]);
+  });
+
+  it("accepts a regex selector combined with id and role", () => {
+    expect(
+      parseFlow(
+        "steps:\n  - tap: { text: { matches: '^Order #\\d+$' }, id: order-row, role: button }\n"
+      ).steps
+    ).toEqual([
+      {
+        kind: "tap",
+        selector: {
+          textMatches: "^Order #\\d+$",
+          identifier: "order-row",
+          role: "button",
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    ["id", "''"],
+    ["id", "42"],
+    ["role", "''"],
+    ["role", "42"],
+  ])(
+    "validates an invalid regex-selector %s through the same schema as a literal selector (%s)",
+    (field, value) => {
+      const validationDetail = (text: string | { matches: string }): string => {
+        const yamlText = typeof text === "string" ? text : `{ matches: '${text.matches}' }`;
+        try {
+          parseFlow(`steps:\n  - tap: { text: ${yamlText}, ${field}: ${value} }\n`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const detail = /^Unrecognized flow entry \((.*)\): /.exec(message)?.[1];
+          expect(detail).toBeDefined();
+          return detail!;
+        }
+        throw new Error("expected selector validation to fail");
+      };
+
+      const literalDetail = validationDetail("Order");
+      const regexDetail = validationDetail({ matches: "^Order #\\d+$" });
+
+      expect(literalDetail).toMatch(/^tap: /);
+      expect(regexDetail).toBe(literalDetail);
+    }
+  );
+
+  it.each([
+    [
+      "selector",
+      "steps:\n  - assert: { visible: { text: { matches: '(' } } }\n",
+      "assert.visible: text",
+    ],
+    [
+      "text condition",
+      "steps:\n  - assert: { text: { in: total, matches: '(' } }\n",
+      "assert text",
+    ],
+  ])("reports invalid regex syntax consistently at the %s ingress", (_ingress, yaml, where) => {
+    expect(() => parseFlow(yaml)).toThrow(`${where} \`matches\` is not a valid regular expression`);
+  });
+
   it("parses the map form's `id` as the internal identifier field (strict)", () => {
     const flow = parseFlow("steps:\n  - tap: { id: submit-btn }\n");
     expect(flow.steps).toEqual([{ kind: "tap", selector: { identifier: "submit-btn" } }]);
@@ -268,7 +350,7 @@ describe("parseFlow", () => {
   it("rejects text sugar with both contains and equals", () => {
     expect(() =>
       parseFlow("steps:\n  - assert: { text: { in: counter, contains: a, equals: b } }\n")
-    ).toThrow(/exactly one of `contains` or `equals`/);
+    ).toThrow(/exactly one of `contains`, `equals`, or `matches`/);
   });
 
   it("rejects the explicit { condition, selector, expectedText } form (sugar only)", () => {
@@ -293,7 +375,7 @@ describe("parseFlow", () => {
 
   it("rejects text sugar with neither contains nor equals", () => {
     expect(() => parseFlow("steps:\n  - assert: { text: { in: counter } }\n")).toThrow(
-      /exactly one of `contains` or `equals`/
+      /exactly one of `contains`, `equals`, or `matches`/
     );
   });
 
@@ -333,6 +415,25 @@ describe("parseFlow", () => {
     expect(yaml).not.toContain("identifier:");
     // An assert never emits a `timeout` key (the parser would reject it back).
     expect(yaml).not.toContain("timeout");
+  });
+
+  it.each([
+    ["contains", "contains: Expected"],
+    ["equals", "equals: Expected"],
+    ["matches", "matches: Expected"],
+  ] as const)("serializes and round-trips the %s text comparator", (textMatch, yamlComparator) => {
+    const step = {
+      kind: "assert" as const,
+      condition: "text" as const,
+      selector: { identifier: "status" },
+      expectedText: "Expected",
+      textMatch,
+    };
+
+    const yaml = serializeFlow({ executionPrerequisite: "", steps: [step] });
+
+    expect(yaml).toContain(yamlComparator);
+    expect(parseFlow(yaml).steps).toEqual([step]);
   });
 
   it("roundtrips the sugared step kinds through YAML", () => {

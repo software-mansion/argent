@@ -25,6 +25,7 @@ import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
 import {
   describeSelector,
+  describeTextExpectation,
   type FlowSelector,
   type FlowStep,
   type ScrollDirection,
@@ -807,14 +808,14 @@ function assertReason(
     case "text": {
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       if (!first) return `no element matched selector ${sel}`;
-      const wanted = textMatch === "equals" ? "equal" : "contain";
+      const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted
       // subtree text (see evaluateCondition), so when they differ quote both —
       // the author may have been asserting against either.
       const shown = assertText(first);
       const own = nodeText(first);
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
-      return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted} "${expectedText}")`;
+      return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;
     }
     default:
       return `assertion failed for selector ${sel}`;

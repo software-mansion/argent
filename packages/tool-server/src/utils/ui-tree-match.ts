@@ -18,7 +18,13 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../blueprints/chromium-cdp"
 // substrings so callers don't need the exact label; `identifier` matches
 // exactly (or as the unqualified name of an Android resource-id) — see
 // `identifierMatches`.
-export const selectorSchema = z
+/**
+ * Strict validation for the fields shared by every selector representation.
+ * Kept separate from the non-empty selector refinement so flow-only selector
+ * forms can replace `text` with another validated text constraint while still
+ * reusing the canonical identifier/role validation.
+ */
+export const selectorFieldsSchema = z
   .object({
     text: z
       .string()
@@ -40,11 +46,30 @@ export const selectorSchema = z
         "Case-insensitive substring of the element's role (e.g. AXButton, button, TextView)."
       ),
   })
-  .refine((s) => Boolean(s.text || s.identifier || s.role), {
-    message: "selector needs at least one of text, identifier, or role",
-  });
+  .strict();
 
-export type Selector = z.infer<typeof selectorSchema>;
+export const selectorSchema = selectorFieldsSchema.refine(
+  (s) => Boolean(s.text || s.identifier || s.role),
+  {
+    message: "selector needs at least one of text, identifier, or role",
+  }
+);
+
+export type Selector = z.infer<typeof selectorSchema> & {
+  /**
+   * Flow-only regex text locator (`{ text: { matches: '<pattern>' } }` in flow
+   * YAML): a JS regular expression tested — unanchored and case-sensitive,
+   * the same doctrine as the `text` condition's `matches` — against the
+   * node's OWN label/value, deliberately not the hoisted `subtreeText`:
+   * subtree matching would make every unshielded ancestor of a text leaf
+   * match too, degrading the exact-beats-substring ranking actions rely on.
+   * Aggregate checks stay the `text` condition's job (`{ in, matches }`).
+   * A type-level extension, not a schema field, so the `await-ui-element`
+   * tool surface doesn't grow (the same boundary `TextMatchMode.matches`
+   * draws below).
+   */
+  textMatches?: string;
+};
 
 export type WaitCondition = "exists" | "visible" | "hidden" | "text";
 
@@ -52,8 +77,14 @@ export type WaitCondition = "exists" | "visible" | "hidden" | "text";
 // string: `contains` (default) is a case-insensitive substring; `equals` is a
 // case-insensitive full-string match (so "1" no longer satisfies "10"). Both
 // are offered so a caller can assert "shows this somewhere" or "shows exactly
-// this" interchangeably.
-export type TextMatchMode = "contains" | "equals";
+// this" interchangeably. `matches` treats the expected string as a JS regular
+// expression tested unanchored against the text (the `contains` analog —
+// anchor with ^…$ for the `equals` analog) for dynamic content that neither
+// literal mode can pin (counters, prices, dates). Unlike the literal modes it
+// is CASE-SENSITIVE — a regex carries its semantics in the pattern, and
+// forcing `i` would betray `\d{2}`-style precision. Flow directives only; the
+// await-ui-element tool's schema deliberately stays contains/equals.
+export type TextMatchMode = "contains" | "equals" | "matches";
 
 // ── Tree matching ──────────────────────────────────────────────────────────
 
@@ -95,18 +126,50 @@ export function identifierMatches(actual: string | undefined, needle: string): b
   return equalsCI(actual, needle) || actual.toLowerCase().endsWith(`:id/${needle.toLowerCase()}`);
 }
 
+/** @internal A narrow seam for verifying regex compilation lifetime in tests. */
+export const uiTreeMatchInternals = {
+  createRegExp(pattern: string): RegExp {
+    return new RegExp(pattern);
+  },
+};
+
+// Empty/absent text is not a regex haystack, matching includesCI's semantics.
+// Keeping that rule here prevents selector, assertion, and ranking paths from
+// drifting apart when they reuse a compiled expression.
+function regexMatchesNonEmpty(regex: RegExp, actual: string | undefined): boolean {
+  if (!actual) return false;
+  return regex.test(actual);
+}
+
 /** Compare an element's text to the expected string under the chosen mode. */
 export function textMatches(
   actual: string | undefined,
   expected: string,
   mode: TextMatchMode
 ): boolean {
+  // The pattern was validated at flow parse time, so construction here cannot
+  // throw on a flow's behalf.
+  if (mode === "matches") {
+    return regexMatchesNonEmpty(uiTreeMatchInternals.createRegExp(expected), actual);
+  }
   return mode === "equals" ? equalsCI(actual, expected) : includesCI(actual, expected);
 }
 
-export function matchNode(node: DescribeNode, selector: Selector): boolean {
+function matchNodeWithRegex(
+  node: DescribeNode,
+  selector: Selector,
+  textRegex: RegExp | undefined
+): boolean {
   if (selector.text !== undefined) {
     if (!includesCI(node.label, selector.text) && !includesCI(node.value, selector.text)) {
+      return false;
+    }
+  }
+  if (textRegex !== undefined) {
+    if (
+      !regexMatchesNonEmpty(textRegex, node.label) &&
+      !regexMatchesNonEmpty(textRegex, node.value)
+    ) {
       return false;
     }
   }
@@ -122,9 +185,24 @@ export function matchNode(node: DescribeNode, selector: Selector): boolean {
   return true;
 }
 
-function collectMatches(node: DescribeNode, selector: Selector, acc: DescribeNode[]): void {
-  if (matchNode(node, selector)) acc.push(node);
-  for (const child of node.children) collectMatches(child, selector, acc);
+function selectorTextRegex(selector: Selector): RegExp | undefined {
+  return selector.textMatches === undefined
+    ? undefined
+    : uiTreeMatchInternals.createRegExp(selector.textMatches);
+}
+
+export function matchNode(node: DescribeNode, selector: Selector): boolean {
+  return matchNodeWithRegex(node, selector, selectorTextRegex(selector));
+}
+
+function collectMatches(
+  node: DescribeNode,
+  selector: Selector,
+  textRegex: RegExp | undefined,
+  acc: DescribeNode[]
+): void {
+  if (matchNodeWithRegex(node, selector, textRegex)) acc.push(node);
+  for (const child of node.children) collectMatches(child, selector, textRegex, acc);
 }
 
 // Every node matching the selector in the subtree, EXCLUDING `root` itself — the
@@ -133,7 +211,8 @@ function collectMatches(node: DescribeNode, selector: Selector, acc: DescribeNod
 // role selector satisfy `visible`/`exists` on any screen.
 export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
   const acc: DescribeNode[] = [];
-  for (const child of root.children) collectMatches(child, selector, acc);
+  const textRegex = selectorTextRegex(selector);
+  for (const child of root.children) collectMatches(child, selector, textRegex, acc);
   return acc;
 }
 
@@ -268,13 +347,36 @@ export function nodeAtPoint(
   return best;
 }
 
+// Does the regex consume the WHOLE non-empty string? The regex analog of an exact
+// text match, for ranking: `^Order #\d+$`-style full hits on a leaf must beat
+// a container whose aggregated label merely contains the same text. Wrapping
+// in `^(?:…)$` is safe for any valid pattern (non-capturing, so backreference
+// numbering is unchanged; inner `^`/`$` stay valid).
+function fullConsumptionRegex(selector: Selector): RegExp | undefined {
+  return selector.textMatches === undefined
+    ? undefined
+    : uiTreeMatchInternals.createRegExp(`^(?:${selector.textMatches})$`);
+}
+
 // How many of the selector's provided fields this node matches exactly
-// (case-insensitive equality) rather than merely as a substring.
-function exactFieldCount(node: DescribeNode, selector: Selector): number {
+// (case-insensitive equality; full-string consumption for a regex) rather
+// than merely as a substring / partial hit.
+function exactFieldCount(
+  node: DescribeNode,
+  selector: Selector,
+  fullTextRegex: RegExp | undefined
+): number {
   let count = 0;
   if (
     selector.text !== undefined &&
     (equalsCI(node.label, selector.text) || equalsCI(node.value, selector.text))
+  ) {
+    count++;
+  }
+  if (
+    fullTextRegex !== undefined &&
+    (regexMatchesNonEmpty(fullTextRegex, node.label) ||
+      regexMatchesNonEmpty(fullTextRegex, node.value))
   ) {
     count++;
   }
@@ -296,10 +398,12 @@ function exactFieldCount(node: DescribeNode, selector: Selector): number {
  */
 export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
   const visible = findAll(root, selector).filter(isVisible);
+  if (visible.length === 0) return undefined;
+  const fullTextRegex = fullConsumptionRegex(selector);
   let best: DescribeNode | undefined;
   let bestExact = -1;
   for (const n of visible) {
-    const exact = exactFieldCount(n, selector);
+    const exact = exactFieldCount(n, selector, fullTextRegex);
     if (best === undefined || exact !== bestExact) {
       if (exact > bestExact) {
         best = n;
