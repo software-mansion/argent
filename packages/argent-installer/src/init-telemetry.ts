@@ -100,13 +100,15 @@ export class InitTelemetry {
     action: PackageActionName,
     startedAt: number,
     isSuccess: boolean,
-    failureSignal?: InstallerFailureSignal
+    failureSignal?: InstallerFailureSignal,
+    attemptInfo?: { retry_count: number; last_attempt_duration_ms: number }
   ): Promise<void> {
     track("installation:package_action", {
       trigger: "init",
       action,
       is_success: isSuccess,
       duration_ms: performance.now() - startedAt,
+      ...(attemptInfo ?? {}),
       ...(failureSignal ?? {}),
     });
   }

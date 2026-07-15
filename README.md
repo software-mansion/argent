@@ -12,7 +12,9 @@
 **[Argent](https://argent.swmansion.com)** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators, Android emulators and physical devices, TVs (Apple TV, Android TV, Fire TV) and Electron/Chromium desktop and web apps. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
-npx @swmansion/argent init
+npx @swmansion/argent@latest init
+# or, in a pnpm project (where npm's devEngines check may refuse to run npx):
+pnpm dlx @swmansion/argent@latest init
 ```
 
 ## Supported platforms
@@ -98,7 +100,9 @@ Argent runs Android emulators on Linux but the default install can be slow if a 
 From your project root:
 
 ```bash
-npx @swmansion/argent init
+npx @swmansion/argent@latest init
+# or, in a pnpm project (where npm's devEngines check may refuse to run npx):
+pnpm dlx @swmansion/argent@latest init
 ```
 
 This command triggers an installation wizard which:
@@ -121,8 +125,13 @@ teammate gets the same setup on `npm install` — no per-developer global instal
 `argent init` — choose the local mode:
 
 ```bash
-npx @swmansion/argent init --local
+npx @swmansion/argent@latest init --local
+# or, in a pnpm project:
+pnpm dlx @swmansion/argent@latest init --local
 ```
+
+> Note: in a freshly `pnpm init`-ed project, `npx` itself may refuse to run
+> (npm's `devEngines` check) — use the `pnpm dlx` form there.
 
 This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP
 configs that launch the project-local copy (`node node_modules/@swmansion/argent/dist/cli.js mcp`).
