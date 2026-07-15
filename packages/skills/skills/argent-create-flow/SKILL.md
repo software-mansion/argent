@@ -82,7 +82,7 @@ Since a `tv-remote` path is positional (like a coordinate tap), gate each naviga
 
 ### Standalone runner
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`, keyed by platform + resolution; a `snapshot` step **fails** when no baseline exists for the run's device class, so seed baselines with `--update-baselines`, review them, and commit `__baselines__/` — and pin the device class in CI (`--device`/`--platform`, same simulator model) so runs compare against the committed key. The status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs. `--output <dir>` writes each failed snapshot's baseline/current/diff images to `<dir>/<flow>/` — a stable path for CI artifact upload.
+`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`, keyed by platform + resolution; a `snapshot` step **fails** when no baseline exists for the run's device class, so seed baselines with `--update-baselines` and have the user review and commit `__baselines__/` — and pin the device class in CI (`--device`/`--platform`, same simulator model) so runs compare against the committed key. The status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs. `--output <dir>` writes each failed snapshot's baseline/current/diff images to `<dir>/<flow>/` — a stable path for CI artifact upload.
 
 ## Tools
 
@@ -178,7 +178,7 @@ Note there is **no device id** anywhere in the file — the recorder strips them
 
 ## When to proactively record a flow
 
-Proactive recording is part of this skill's scope (see the description). Record a flow without waiting to be asked when you recognize any of these patterns:
+Proactive recording is part of this skill's scope (see the description). Record a flow without waiting to be asked — telling the user you are doing so — when you recognize any of these patterns:
 
 - **About to re-profile**: You completed a profiling session and are about to apply a fix and re-profile. Record the interaction steps now so the re-profile replays them identically (see `argent-react-native-profiler` and `argent-native-profiler` skills).
 - **Repeating steps**: You have already performed a multi-step interaction sequence once and the task requires doing it again (comparison, retry, re-test).
