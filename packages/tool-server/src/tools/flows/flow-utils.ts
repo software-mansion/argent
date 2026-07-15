@@ -4,6 +4,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import { CLIENT_FILE_MARKER, type ClientFileDirective } from "@argent/registry";
 import {
+  hasVisibleText,
   selectorFieldsSchema,
   selectorSchema,
   type Selector,
@@ -410,18 +411,20 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     );
   }
 
-  // A loose selector serializes to the bare-string spelling, which is parsed
-  // back through selectorSchema's non-empty `text` constraint. Guard the
-  // serialization boundary too: an empty (or runtime-invalid) text value
-  // would otherwise produce YAML that selectorToYaml's inverse rejects.
-  if (
-    sel.loose &&
-    sel.text !== undefined &&
-    (typeof sel.text !== "string" || sel.text.length === 0)
-  ) {
+  // Both spellings parse back through selectorSchema's visible-text
+  // constraint. Guard the serialization boundary too — for the strict map
+  // form as much as the bare string: an empty, runtime-invalid, or
+  // invisible-only text value (icon-font Private Use Area glyphs, zero-width
+  // characters) would otherwise produce YAML that DISPLAYS as an empty
+  // selector and that selectorToYaml's inverse rejects. Recorders never hit
+  // this (deriveSelector refuses invisible text and falls back to
+  // coordinates); a hand-built selector fails loudly instead of writing a
+  // flow no one can read or replay.
+  if (sel.text !== undefined && (typeof sel.text !== "string" || !hasVisibleText(sel.text))) {
     throw new Error(
-      "Cannot serialize loose flow selector: `text` must be a non-empty string so " +
-        "bare-string YAML can round-trip through selector validation."
+      "Cannot serialize flow selector: `text` must contain at least one visible character " +
+        "(icon-font/private-use and zero-width characters render as nothing). Select by " +
+        "identifier or role, or use a coordinate tap."
     );
   }
 

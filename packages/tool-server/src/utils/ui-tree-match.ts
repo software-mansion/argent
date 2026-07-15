@@ -24,11 +24,30 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../blueprints/chromium-cdp"
  * forms can replace `text` with another validated text constraint while still
  * reusing the canonical identifier/role validation.
  */
+/**
+ * True when `text` contains at least one visibly-rendered, font-independent
+ * character. Icon fonts expose their glyphs as Private Use Area code points
+ * (a tab-bar icon's label can be U+E163 — an icon, not text) and zero-width /
+ * format characters render as nothing: a text constraint made only of those
+ * displays as EMPTY in flow YAML, is meaningless outside the app's private
+ * font, and at replay matches an element no reader of the flow can predict.
+ * Strips Cf (format: zero-width space/joiners, BOM), Co (private use) and
+ * Cc (controls), then whitespace; visible = anything left.
+ */
+export function hasVisibleText(text: string): boolean {
+  return text.replace(/[\p{Cf}\p{Co}\p{Cc}]/gu, "").trim().length > 0;
+}
+
 export const selectorFieldsSchema = z
   .object({
     text: z
       .string()
       .min(1)
+      .refine(hasVisibleText, {
+        message:
+          "text must contain at least one visible character (icon-font/private-use and " +
+          "zero-width characters render as nothing) — select by identifier or role instead",
+      })
       .optional()
       .describe("Case-insensitive substring of the element's visible label or value."),
     identifier: z
@@ -448,7 +467,10 @@ export function deriveSelector(node: DescribeNode): Selector | null {
   // separately, so a joined "Volume 50%" would match nothing, not even the
   // node it was derived from. Label first — a value like "50%" is the
   // volatile part of a control, the label is the stabler replay anchor.
-  const text = [node.label, node.value].map((t) => t?.trim()).find(Boolean);
+  // Only visibly-rendered text counts as stable: icon-font labels are Private
+  // Use Area glyphs that serialize to invisible YAML (see hasVisibleText), so
+  // a node carrying only those falls through to role/coordinates.
+  const text = [node.label, node.value].map((t) => t?.trim()).find((t) => t && hasVisibleText(t));
   if (text) return { text };
   if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) return { role: node.role };
   return null;

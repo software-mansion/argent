@@ -167,9 +167,12 @@ describe("regex text selectors: parse/serialize", () => {
     }
   });
 
-  it("rejects empty loose text with a pointed round-trip error", () => {
+  it("rejects empty loose text with the visible-character error", () => {
+    // The empty-text guard is now shared with the strict map spelling and
+    // also refuses invisible-only text (icon-font PUA glyphs, zero-width) —
+    // see "rejects a text selector with no visible characters" in flow-tap.
     expect(() => selectorToYaml({ text: "", loose: true })).toThrow(
-      /`text` must be a non-empty string.*round-trip through selector validation/i
+      /`text` must contain at least one visible character/i
     );
   });
 
