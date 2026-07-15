@@ -60,6 +60,8 @@ For a custom poll interval or bundleId, drop to an explicit `- tool: await-ui-el
 
 `type` presses Enter after typing to commit the value and dismiss the keyboard, so it can't cover later targets. For a chained form whose fields feed one explicit submit — e.g. email then password then a `tap: "Log in"` — set `submit: false` on the intermediate fields so a premature Enter doesn't fire the form early: `type: { into: password, text: "hunter2", submit: false }`.
 
+Never record a real credential into a flow — the YAML is committed to the repo. Use a secret placeholder instead: `type: { into: password, text: "{{secret:APP_PASSWORD}}" }`. The placeholder is stored verbatim (the YAML stays secret-free) and is resolved at run time by the tool-server from the `ARGENT_SECRET_APP_PASSWORD` environment variable — including agent-less `argent flow run` in CI, where the variable comes from the job's secrets.
+
 `scroll-to` takes an optional `direction` (`up` | `down` | `left` | `right`, default `down` — so the common case is just `- scroll-to: <selector>`) and optionally a `within: <selector>` that anchors the scroll inside a specific container — required to drive a **nested** scroller (e.g. a horizontal carousel inside a vertical list), since the device can't be asked which container to scroll. It scrolls in bounded momentum-free increments, re-checks after each, and stops if a scroll reveals nothing new (end of the container). `tap`/`type` do **not** scroll — add a `scroll-to` before any target that may be off-screen. It's a no-op when the target is already visible, so a defensive `scroll-to` costs nothing on replay and keeps the flow working on smaller screens.
 
 ### TV targets (Vega)

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
 import type { KeyboardParams, KeyboardResult } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeAndroidImpl } from "./platforms/android";
@@ -16,7 +17,12 @@ const zodSchema = z.object({
   text: z
     .string()
     .optional()
-    .describe("Text to type character by character. Handles uppercase and common punctuation."),
+    .describe(
+      "Text to type character by character. Handles uppercase and common punctuation. " +
+        "To type a credential without its plaintext ever entering your context, use a secret placeholder: " +
+        '`{{secret:NAME}}` types the value of the `ARGENT_SECRET_NAME` environment variable set on the machine running the tool-server (e.g. text: "{{secret:APP_PASSWORD}}"). ' +
+        "Placeholders can be embedded in longer text and are never echoed back resolved."
+    ),
   key: z
     .string()
     .optional()
@@ -52,12 +58,28 @@ const capability: ToolCapability = {
 // eagerly: distinguishing a TV target is async, and declaring simulator-server up
 // front would also spawn it for a tvOS udid it can't drive.
 export function createKeyboardTool(registry: Registry): ToolDefinition<Params, KeyboardResult> {
+  const dispatch = dispatchByPlatform<
+    Record<string, unknown>,
+    Record<string, unknown>,
+    KeyboardParams,
+    KeyboardResult,
+    Record<string, unknown>,
+    Record<string, unknown>
+  >({
+    toolId: "keyboard",
+    capability,
+    ios: makeIosImpl(registry),
+    iosRemote: makeIosRemoteImpl(registry),
+    android: makeAndroidImpl(registry),
+    chromium: makeChromiumImpl(registry),
+    vega: vegaImpl,
+  });
   return {
     id: "keyboard",
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
 Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the device's input backend is not reachable.
-- text: types a string (supports uppercase, digits, common punctuation)
+- text: types a string (supports uppercase, digits, common punctuation). Supports \`{{secret:NAME}}\` placeholders resolved server-side from \`ARGENT_SECRET_NAME\` env vars, so credentials never enter agent context — the result echoes the placeholder, not the value.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
 Provide text, key, or both — when both are given, the text is typed first and the key is pressed after it (text + key:"enter" types and submits).`,
@@ -69,21 +91,23 @@ Provide text, key, or both — when both are given, the text is typed first and 
     // simulator-server, CDP, or Vega adb), since distinguishing a TV target is
     // async and a tvOS udid must never resolve simulator-server.
     services: () => ({}),
-    execute: dispatchByPlatform<
-      Record<string, unknown>,
-      Record<string, unknown>,
-      KeyboardParams,
-      KeyboardResult,
-      Record<string, unknown>,
-      Record<string, unknown>
-    >({
-      toolId: "keyboard",
-      capability,
-      ios: makeIosImpl(registry),
-      iosRemote: makeIosRemoteImpl(registry),
-      android: makeAndroidImpl(registry),
-      chromium: makeChromiumImpl(registry),
-      vega: vegaImpl,
-    }),
+    execute: async (services, params, options) => {
+      // Secret placeholders resolve here — inside execute, after every logging
+      // boundary (agent transcript, mcp-calls.log, the event log, recorded
+      // flow YAMLs all see only the placeholder) and before the platform
+      // dispatch, so run-sequence and flow `type` steps are covered for free.
+      if (params.text === undefined) return dispatch(services, params, options);
+      const { text, secrets } = resolveSecretPlaceholders(params.text);
+      if (secrets.length === 0) return dispatch(services, params, options);
+      try {
+        const result = await dispatch(services, { ...params, text }, options);
+        // Echo the placeholder form, never the resolved value.
+        return { ...result, typed: params.text };
+      } catch (err) {
+        // A backend error can quote its input (e.g. the Android `input text`
+        // command line) — scrub the resolved values before it propagates.
+        throw redactSecretsFromError(err, secrets);
+      }
+    },
   };
 }

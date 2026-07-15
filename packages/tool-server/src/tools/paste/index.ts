@@ -2,11 +2,18 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
+import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
 import { sendCommand } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
   udid: z.string().min(1).describe("iOS simulator UDID — paste is iOS-only."),
-  text: z.string().describe("Text to paste into the focused field"),
+  text: z
+    .string()
+    .describe(
+      "Text to paste into the focused field. Supports `{{secret:NAME}}` placeholders resolved " +
+        "server-side from `ARGENT_SECRET_NAME` environment variables, so a credential can be " +
+        "pasted without its plaintext ever entering your context."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -29,6 +36,7 @@ export const pasteTool: ToolDefinition<Params, Result> = {
 Use when you need to fill a text input with a long string faster than character-by-character typing.
 Returns { pasted: true }. Fails if no field is focused or the simulator server is not running.
 Tap the text field first to focus it, then call paste.
+Supports \`{{secret:NAME}}\` placeholders resolved server-side from \`ARGENT_SECRET_NAME\` env vars, so credentials never enter agent context.
 If paste doesn't work for a particular field, use the keyboard tool instead.`,
   zodSchema,
   capability,
@@ -37,7 +45,14 @@ If paste doesn't work for a particular field, use the keyboard tool instead.`,
   }),
   async execute(services, params) {
     const api = services.simulatorServer as SimulatorServerApi;
-    sendCommand(api, { cmd: "paste", text: params.text });
+    // Secret placeholders resolve here — inside execute, past every logging
+    // boundary — so only the placeholder form appears in transcripts and logs.
+    const { text, secrets } = resolveSecretPlaceholders(params.text);
+    try {
+      sendCommand(api, { cmd: "paste", text });
+    } catch (err) {
+      throw redactSecretsFromError(err, secrets);
+    }
     return { pasted: true };
   },
 };
