@@ -26,7 +26,9 @@
  * package — there's nothing for esbuild to inline.
  */
 
+import { chmodSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { flattenLine } from "./lens-terminal.js";
 
 // Resolve node-pty at runtime from the installed package, not at bundle time.
@@ -66,6 +68,31 @@ export interface NodePty {
 }
 
 /**
+ * node-pty's macOS prebuilds ship `spawn-helper` WITHOUT the executable bit,
+ * so the very first pty.spawn() fails with "posix_spawnp failed". Restore +x
+ * on every prebuild's helper before use. Best-effort: any failure (req seam
+ * without `resolve`, package layout change, read-only store) leaves the
+ * AppleScript new-window fallback intact. This ran in the npm postinstall
+ * before — it lives at load time so installs that never run install scripts
+ * (pnpm's build gate, --ignore-scripts, Yarn PnP) still get a working PTY.
+ */
+export function ensureSpawnHelperExecutable(req: NodeRequire = nodeRequire): void {
+  if (process.platform !== "darwin") return;
+  try {
+    const prebuilds = join(dirname(req.resolve("node-pty/package.json")), "prebuilds");
+    for (const entry of readdirSync(prebuilds)) {
+      try {
+        chmodSync(join(prebuilds, entry, "spawn-helper"), 0o755);
+      } catch {
+        /* no helper for this arch — ignore */
+      }
+    }
+  } catch {
+    /* node-pty missing or layout changed — lens falls back gracefully */
+  }
+}
+
+/**
  * Load the native `node-pty` module, or null when it isn't installed / fails to
  * load (so the caller can fall back to the AppleScript new-window path). The
  * `req` seam keeps this unit-testable without the real native addon.
@@ -73,7 +100,9 @@ export interface NodePty {
 export function loadNodePty(req: NodeRequire = nodeRequire): NodePty | null {
   try {
     const mod = req("node-pty") as NodePty;
-    return mod && typeof mod.spawn === "function" ? mod : null;
+    if (!mod || typeof mod.spawn !== "function") return null;
+    ensureSpawnHelperExecutable(req);
+    return mod;
   } catch {
     return null;
   }

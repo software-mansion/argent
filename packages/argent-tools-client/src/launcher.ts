@@ -532,17 +532,40 @@ export async function readAllToolsServerStates(): Promise<
 }
 
 // Per-bundle files for installs that no longer run anything are junk left on
-// disk (bundle paths change across versions under pnpm's store layout). Swept
-// opportunistically from ensureToolsServer's slow path.
-async function sweepDeadStateFiles(): Promise<void> {
+// disk (bundle paths change across versions under pnpm's store layout), and a
+// LIVE server whose recorded bundle is GONE from disk can never serve current
+// code again (pnpm and yarn keep installs in version-pinned dirs, so an
+// upgrade replaces the whole dir and strands the old install's server at a
+// dead path). Both are swept opportunistically from ensureToolsServer's slow
+// path. Retiring the live orphan used to be the npm postinstall's job — it
+// lives here so installs that never run install scripts (pnpm's build gate,
+// --ignore-scripts, Yarn PnP) get the same hygiene.
+export async function sweepDeadStateFiles(): Promise<void> {
   for (const { file } of await readAllToolsServerStates()) {
     if (file === STATE_FILE) continue; // legacy slot is handled by its owners
-    // Re-read before unlinking: `argent server start --detach` writes without
+    // Re-read before acting: `argent server start --detach` writes without
     // the spawn lock, so a fresh LIVE record may have been rename()'d over
     // this slot since the snapshot. Deleting that would orphan a running
     // server — decide on the current contents.
     const fresh = await readStateFile(file);
-    if (fresh && !isProcessAlive(fresh.pid)) await unlink(file).catch(() => {});
+    if (!fresh) continue;
+    if (!isProcessAlive(fresh.pid)) {
+      await unlink(file).catch(() => {});
+      continue;
+    }
+    if (fs.existsSync(fresh.bundlePath)) continue;
+    // Same identity guard as killToolServerForInstallDir: never signal a
+    // recycled pid, and keep an unidentifiable-but-live record so `server
+    // stop`/status can still reach it (it is swept once its pid dies). On
+    // Windows `ps` is unavailable and the check always fails, so the kill
+    // stays unguarded there rather than never retiring dead-bundle servers.
+    const guarded = process.platform !== "win32";
+    if (guarded && !processCommandMatches(fresh.pid, fresh.bundlePath)) continue;
+    await terminatePid(
+      fresh.pid,
+      guarded ? () => processCommandMatches(fresh.pid, fresh.bundlePath) : undefined
+    );
+    await unlink(file).catch(() => {});
   }
 }
 
@@ -894,7 +917,8 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     }
     // Retire only OUR OWN record — another install's must survive so its
     // server stays reachable by its owner. Also sweep per-bundle files whose
-    // pid is gone, so retired installs don't accumulate junk in ~/.argent.
+    // pid is gone or whose bundle was deleted from disk, so retired installs
+    // don't accumulate junk in ~/.argent or strand servers running dead code.
     await clearToolsServerState(paths.bundlePath);
     await sweepDeadStateFiles();
 
