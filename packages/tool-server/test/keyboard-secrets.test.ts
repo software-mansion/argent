@@ -95,6 +95,40 @@ describe("resolveSecretPlaceholders", () => {
     const raw = "{{secret:has-dash}} {{secret}} {secret:APP_PASSWORD}";
     expect(resolveSecretPlaceholders(raw, ENV).text).toBe(raw);
   });
+
+  it("accepts a redundant ARGENT_SECRET_ prefix in the name, any casing", () => {
+    for (const spelling of [
+      "{{secret:ARGENT_SECRET_APP_PASSWORD}}",
+      "{{secret:Argent_SECRET_APP_PASSWORD}}",
+      "{{secret:argent_secret_APP_PASSWORD}}",
+    ]) {
+      const { text, secrets } = resolveSecretPlaceholders(spelling, ENV);
+      expect(text).toBe("hunter2");
+      // The recorded name is canonical, so error/redaction output steers
+      // toward the correct spelling.
+      expect(secrets).toEqual([{ name: "APP_PASSWORD", value: "hunter2" }]);
+    }
+  });
+
+  it("prefers an exact match over prefix-stripping", () => {
+    const env: NodeJS.ProcessEnv = {
+      ARGENT_SECRET_ARGENT_SECRET_X: "literal",
+      ARGENT_SECRET_X: "bare",
+    };
+    expect(resolveSecretPlaceholders("{{secret:ARGENT_SECRET_X}}", env).text).toBe("literal");
+  });
+
+  it("quotes the typed name but recommends the canonical var when both spellings miss", () => {
+    let caught: Error | undefined;
+    try {
+      resolveSecretPlaceholders("{{secret:ARGENT_SECRET_NOPE}}", ENV);
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught!.message).toContain('Unknown secret "ARGENT_SECRET_NOPE"');
+    expect(caught!.message).toContain("export ARGENT_SECRET_NOPE");
+    expect(caught!.message).not.toContain("ARGENT_SECRET_ARGENT_SECRET_NOPE");
+  });
 });
 
 describe("availableSecretNames", () => {

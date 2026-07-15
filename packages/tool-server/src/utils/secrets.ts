@@ -44,6 +44,16 @@ export interface ResolvedSecretText {
 }
 
 /**
+ * A placeholder name that (redundantly) repeats the env prefix in any casing —
+ * `{{secret:ARGENT_SECRET_APP_PASSWORD}}` instead of the canonical
+ * `{{secret:APP_PASSWORD}}`. Agents naturally paste the full variable name, so
+ * this spelling is accepted as a fallback: the exact name is tried first, and
+ * only when that env var doesn't exist is the prefix stripped and retried.
+ * Exact-first keeps a literal `ARGENT_SECRET_ARGENT_SECRET_X` var reachable.
+ */
+const REDUNDANT_PREFIX_RE = /^argent_secret_/i;
+
+/**
  * Replace every `{{secret:NAME}}` in `text` with the value of
  * `ARGENT_SECRET_NAME`. Unknown names reject with a message that lists the
  * *names* of available secrets — never a value — so an agent can self-correct
@@ -54,12 +64,17 @@ export function resolveSecretPlaceholders(
   env: NodeJS.ProcessEnv = process.env
 ): ResolvedSecretText {
   const secrets: Array<{ name: string; value: string }> = [];
-  const resolved = text.replace(PLACEHOLDER_RE, (placeholder, name: string) => {
-    const value = env[SECRET_ENV_PREFIX + name];
+  const resolved = text.replace(PLACEHOLDER_RE, (placeholder, rawName: string) => {
+    let name = rawName;
+    let value = env[SECRET_ENV_PREFIX + name];
+    if (value === undefined && REDUNDANT_PREFIX_RE.test(name)) {
+      name = name.replace(REDUNDANT_PREFIX_RE, "");
+      value = env[SECRET_ENV_PREFIX + name];
+    }
     if (value === undefined) {
       const names = availableSecretNames(env);
       throw new InvalidToolInputError(
-        `Unknown secret "${name}" — no ${SECRET_ENV_PREFIX}${name} environment variable is set ` +
+        `Unknown secret "${rawName}" — no ${SECRET_ENV_PREFIX}${name} environment variable is set ` +
           `on the machine running the tool-server. Available secrets: ${
             names.length ? names.join(", ") : "(none)"
           }. To make it available, ask the user to export ${SECRET_ENV_PREFIX}${name} in the ` +
