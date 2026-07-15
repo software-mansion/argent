@@ -23,7 +23,7 @@ Beyond raw `tool:` steps and `echo:`, flows support declarative directives inter
 | Directive    | YAML                                                                                                     | Meaning                                                                 |
 | ------------ | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `launch`     | `- launch: com.acme.app` or `- launch: { ios: …, android: … }`                                           | start the app from scratch (terminate + relaunch) and wait until ready  |
-| `tap`        | `- tap: Login` or `- tap: { x: 0.5, y: 0.57 }`                                                           | tap an element by selector (auto-waits), or a raw normalized point      |
+| `tap`        | `- tap: Login`, `- tap: { x: 0.5, y: 0.57 }`, `- tap: { on: Login, times: 2 }`                           | tap by selector (auto-waits) or raw point; `times: 2` = double-tap      |
 | `long-press` | `- long-press: Row 3` or `- long-press: { on: <sel>, duration: 1200 }`                                   | press and hold an element (default 800ms; Chromium: mouse press-hold)   |
 | `type`       | `- type: { into: email, text: "a@b.com" }`                                                               | focus a field, type, then press Enter to submit + dismiss the keyboard  |
 | `scroll-to`  | `- scroll-to: "Order #1234"` (scrolls down) or `- scroll-to: { target: …, direction: right, within: … }` | momentum-free scroll until the target is visible                        |
