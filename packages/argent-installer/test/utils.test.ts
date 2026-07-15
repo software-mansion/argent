@@ -673,6 +673,91 @@ describe("detectProjectPackageManager", () => {
     );
     expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
   });
+  it("honors devEngines.packageManager (pnpm init default, pre-first-install)", () => {
+    // `pnpm init` (pnpm 10+) writes ONLY devEngines — no packageManager
+    // field, and no lockfile exists before the first install.
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({
+        devEngines: { packageManager: { name: "pnpm", version: "^11.0.0", onFail: "download" } },
+      })
+    );
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("honors devEngines.packageManager in array form", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devEngines: { packageManager: [{ name: "bun" }] } })
+    );
+    expect(detectProjectPackageManager(tmpDir)).toBe("bun");
+  });
+  it("ignores a devEngines packageManager with an unknown name", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devEngines: { packageManager: { name: "vlt" } } })
+    );
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("yarn");
+  });
+  it("a real lockfile outranks devEngines (an OR-set of acceptable managers, not the project's choice)", () => {
+    // The common EBADDEVENGINES workaround declares npm AND pnpm acceptable;
+    // taking devEngines[0] would run `npm install` in a pnpm repo and stale
+    // pnpm-lock.yaml. The lockfile records what the project actually uses.
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devEngines: { packageManager: [{ name: "npm" }, { name: "pnpm" }] } })
+    );
+    fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("a multi-entry devEngines array alone identifies nothing (falls through)", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devEngines: { packageManager: [{ name: "npm" }, { name: "pnpm" }] } })
+    );
+    // No lockfile: nothing identifies a single manager, so detection falls
+    // back to the user-agent default rather than guessing from entry order.
+    expect(["npm", "yarn", "pnpm", "bun"]).toContain(detectProjectPackageManager(tmpDir));
+  });
+  it("a stale devEngines declaration does not outrank the lockfile (pnpm→yarn/bun migration)", () => {
+    // yarn and bun neither read nor update devEngines, so a `pnpm init`-era
+    // declaration survives a migration forever while the lockfile moves on.
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ devEngines: { packageManager: { name: "pnpm", version: "^11.0.0" } } })
+    );
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("yarn");
+  });
+  it("duplicate devEngines entries naming one manager still identify it", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({
+        devEngines: { packageManager: [{ name: "pnpm", version: "^10" }, { name: "pnpm" }] },
+      })
+    );
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("the corepack packageManager field still outranks everything", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({
+        packageManager: "bun@1.2.0",
+        devEngines: { packageManager: { name: "pnpm" } },
+      })
+    );
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("bun");
+  });
+  it("detects pnpm from pnpm-workspace.yaml when no lockfile exists yet", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+    expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
+  });
+  it("a real lockfile outranks a stray pnpm-workspace.yaml (pnpm→yarn migration)", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectProjectPackageManager(tmpDir)).toBe("yarn");
+  });
   it("walks up to a workspace-root lockfile (monorepo sub-package)", () => {
     // pnpm/yarn workspaces keep the single lockfile at the monorepo root.
     fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");

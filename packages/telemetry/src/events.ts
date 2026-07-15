@@ -113,6 +113,12 @@ export interface InstallationPackageActionProps extends FailureTelemetryProps {
   action: InstallationPackageAction;
   is_success: boolean;
   duration_ms: number;
+  // Local-install retry visibility: how many times the retry-once fired (0/1)
+  // and the duration of the final attempt alone — duration_ms spans ALL
+  // attempts, which would otherwise wash out the fast-fail duration signature
+  // used to spot deterministic failure clusters.
+  retry_count?: number;
+  last_attempt_duration_ms?: number;
 }
 
 export type InstallationCliUpdateStartProps = Record<string, never>;

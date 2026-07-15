@@ -1,7 +1,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
-import { copyRulesAndAgents, type McpConfigAdapter } from "./mcp-configs.js";
+import { ALL_ADAPTERS, copyRulesAndAgents, type McpConfigAdapter } from "./mcp-configs.js";
 import {
   RULES_DIR,
   AGENTS_DIR,
@@ -166,7 +166,11 @@ export async function init(args: string[]): Promise<void> {
     // the entries just written. See init-stale-config.ts for the policy.
     const staleCleanup = await cleanupStaleMcpConfigs({
       writtenAdapters,
-      detectedAdapters: detected,
+      // Sweep EVERY adapter, not just the detected set: the sweep is fully
+      // gated on an existing argent entry (getArgentEntry), and the stale
+      // entries most worth pruning live in argent-only dirs (~/.cursor,
+      // ~/.codex) that detection now deliberately ignores.
+      detectedAdapters: ALL_ADAPTERS,
       installMode: tel.installMode,
       scope: normalizedScope,
       effectiveRoot,

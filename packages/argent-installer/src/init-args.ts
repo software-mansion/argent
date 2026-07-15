@@ -14,17 +14,24 @@ export interface InitArgs {
   wantsGlobal: boolean;
 }
 
-function extractFlag(args: string[], flag: string): string | null {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return null;
-  return args[idx + 1]!;
-}
-
+// Unknown flags are silently ignored (kept from the original parser): aborting
+// on them would break existing invocations/scripts that pass flags this
+// version doesn't know.
 export function parseInitArgs(args: string[]): InitArgs {
+  let fromTar: string | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--from" || arg.startsWith("--from=")) {
+      const value = arg === "--from" ? (i + 1 < args.length ? args[++i]! : "") : arg.slice(7);
+      // First non-empty occurrence wins, matching the previous indexOf-based
+      // parser; a dangling `--from` is ignored like any other malformed input.
+      if (value !== "" && fromTar === null) fromTar = value;
+    }
+  }
   return {
     nonInteractive: args.includes("--yes") || args.includes("-y"),
     noTelemetry: args.includes("--no-telemetry"),
-    fromTar: extractFlag(args, "--from"),
+    fromTar,
     wantsLocal: args.includes("--local"),
     wantsGlobal: args.includes("--global"),
   };

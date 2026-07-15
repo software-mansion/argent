@@ -7,6 +7,7 @@ import {
   AUTO_SCREENSHOT_TOOLS,
   AUTO_SCREENSHOT_DELAY_MS_BY_TOOL,
   autoScreenshotEnabled,
+  containsSecretPlaceholder,
   getUdidFromArgs,
   normalizeToolName,
   shouldAutoScreenshot,
@@ -211,5 +212,38 @@ describe("shouldAutoScreenshot — unified surface", () => {
   it("normalizes MCP-prefixed names before looking up the allow-list", () => {
     expect(shouldAutoScreenshot("mcp__argent__gesture-tap")).toBe(true);
     expect(shouldAutoScreenshot("mcp__argent__launch-app")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// containsSecretPlaceholder — the auto-screenshot must not render a just-typed
+// secret back into model context as pixels
+// ---------------------------------------------------------------------------
+describe("containsSecretPlaceholder", () => {
+  it("detects a placeholder in flat keyboard args", () => {
+    expect(containsSecretPlaceholder({ udid: "X", text: "{{secret:APP_PASSWORD}}" })).toBe(true);
+  });
+
+  it("detects a placeholder nested in run-sequence steps", () => {
+    expect(
+      containsSecretPlaceholder({
+        udid: "X",
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+          { tool: "keyboard", args: { text: "user@{{secret:PW}}" } },
+        ],
+      })
+    ).toBe(true);
+  });
+
+  it("returns false for ordinary args", () => {
+    expect(containsSecretPlaceholder({ udid: "X", text: "hello" })).toBe(false);
+    expect(containsSecretPlaceholder(undefined)).toBe(false);
+  });
+
+  it("fails safe (true) on unserializable args", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(containsSecretPlaceholder(circular)).toBe(true);
   });
 });
