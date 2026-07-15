@@ -60,12 +60,12 @@ Steps:
 2. gesture-tap { x: 0.5, y: 0.4 }  → tap email field
 3. keyboard { text: "user@example.com" }
 4. gesture-tap { x: 0.5, y: 0.55 } → tap password field
-5. keyboard { text: "<test password supplied by the user>" }
+5. keyboard { text: "{{secret:APP_PASSWORD}}" }
 6. gesture-tap { x: 0.5, y: 0.7 }  → tap Login button
 7. screenshot → verify home screen appeared
 ```
 
-> **Credentials:** only type test credentials the user (or the environment) supplied for this test. Never invent, hardcode, or reuse real credentials in steps, and never echo secret values into reports or saved files.
+> **Credentials:** never type plaintext credentials — use a `{{secret:<NAME>}}` placeholder in `keyboard`/`paste`, resolved server-side from the `ARGENT_SECRET_<NAME>` environment variable, so the value never enters agent context. If the variable is not set, ask the user to export it (e.g. `ARGENT_SECRET_APP_PASSWORD`) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
 
 ### Scroll and navigation
 
