@@ -585,6 +585,59 @@ describe("flow-finish-recording", () => {
     const result = await flowFinishRecordingTool.execute({}, {});
     expect(result.summary).toEqual(["1. echo: Before tap", '2. tool: tap {"x":0.5}']);
   });
+
+  it("distinguishes contains, equals, and regex text comparisons in the summary", async () => {
+    const name = "text-comparison-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [
+          {
+            kind: "await",
+            condition: "text",
+            selector: { identifier: "status" },
+            expectedText: 'Ready "now"\nnext',
+            textMatch: "contains",
+          },
+          {
+            kind: "assert",
+            condition: "text",
+            selector: { identifier: "status" },
+            expectedText: "Ready",
+            textMatch: "equals",
+          },
+          {
+            kind: "assert",
+            condition: "text",
+            selector: { identifier: "total" },
+            expectedText: "^Total: \\$\\d+\\.\\d{2}$",
+            textMatch: "matches",
+          },
+          {
+            kind: "assert",
+            condition: "text",
+            selector: { identifier: "legacy-status" },
+            expectedText: "Still running",
+          },
+        ],
+      })
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, {});
+
+    expect(result.summary).toEqual([
+      '1. await: text {"id":"status"} contains "Ready \\"now\\"\\nnext"',
+      '2. assert: text {"id":"status"} == "Ready"',
+      '3. assert: text {"id":"total"} matches /^Total: \\$\\d+\\.\\d{2}$/',
+      '4. assert: text {"id":"legacy-status"} contains "Still running"',
+    ]);
+  });
 });
 
 // ── flow-execute ─────────────────────────────────────────────────────

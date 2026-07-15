@@ -132,6 +132,7 @@ describe("loose (bare-string) selector resolution", () => {
     expect(result.taps[0].y).toBeCloseTo(0.85, 6);
   });
 
+  // An unresolved action intentionally consumes its 7.5s auto-wait budget.
   it("an explicit { text } map stays strict and does NOT match a testID-only node", async () => {
     currentTree = () =>
       screen([n({ identifier: "tap-box", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]);
@@ -147,7 +148,7 @@ describe("loose (bare-string) selector resolution", () => {
     const result = (await run("strict")) as FlowRunResult & { taps: TapCall[] };
     expect(result.steps[0].status).toBe("fail");
     expect(result.taps).toHaveLength(0);
-  }, 10000); // an unresolved tap auto-waits its full timeout before failing
+  }, 10_000);
 
   it("await resolves a bare string against an identifier (testID), like every other directive", async () => {
     // The element is exposed only via testID — a text-only await would time out.
