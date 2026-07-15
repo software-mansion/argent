@@ -96,19 +96,22 @@ _record() { # phase tool case status detail
 }
 
 pass() { # phase tool case [detail]
-  _record "$1" "$2" "$3" "pass" "${4:-}"
+  local phase="${1:-}" tool="${2:-}" case="${3:-}" detail="${4:-}"
+  _record "$phase" "$tool" "$case" "pass" "$detail"
   PASS_N=$((PASS_N + 1))
-  printf '%s\n' "  ${C_GRN}✓${C_RST} ${C_DIM}$2${C_RST} $3" >&2
+  printf '%s\n' "  ${C_GRN}✓${C_RST} ${C_DIM}$tool${C_RST} $case" >&2
 }
 fail() { # phase tool case detail
-  _record "$1" "$2" "$3" "fail" "${4:-}"
+  local phase="${1:-}" tool="${2:-}" case="${3:-}" detail="${4:-}"
+  _record "$phase" "$tool" "$case" "fail" "$detail"
   FAIL_N=$((FAIL_N + 1))
-  printf '%s\n' "  ${C_RED}✗${C_RST} $2 ${C_DIM}[$3]${C_RST} ${4:-}" >&2
+  printf '%s\n' "  ${C_RED}✗${C_RST} $tool ${C_DIM}[$case]${C_RST} $detail" >&2
 }
 skip() { # phase tool case reason
-  _record "$1" "$2" "$3" "skip" "${4:-}"
+  local phase="${1:-}" tool="${2:-}" case="${3:-}" detail="${4:-}"
+  _record "$phase" "$tool" "$case" "skip" "$detail"
   SKIP_N=$((SKIP_N + 1))
-  printf '%s\n' "  ${C_YEL}∼${C_RST} ${C_DIM}$2 ($3): ${4:-}${C_RST}" >&2
+  printf '%s\n' "  ${C_YEL}∼${C_RST} ${C_DIM}$tool ($case): $detail${C_RST}" >&2
 }
 
 # ---------------------------------------------------------------------------

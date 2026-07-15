@@ -81,7 +81,7 @@ run_phase() {
   run_tool button "{\"udid\":\"$DEV\",\"button\":\"home\"}" >/dev/null 2>&1
   _shot_ok "$P" "$DEV" diff-current && c="$SHOT_PATH"
   if [ -n "${b:-}" ] && [ -n "${c:-}" ]; then
-    assert_ok "$P" screenshot-diff diff "{\"baselinePath\":\"$E2E_WORK/diff-base.png\",\"currentPath\":\"$c\"}"
+    assert_ok "$P" screenshot-diff diff "{\"udid\":\"$DEV\",\"baselinePath\":\"$E2E_WORK/diff-base.png\",\"currentPath\":\"$c\"}"
   else
     skip "$P" screenshot-diff diff "could not capture two screenshots"
   fi

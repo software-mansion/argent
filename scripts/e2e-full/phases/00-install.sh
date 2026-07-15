@@ -168,5 +168,5 @@ run_phase() {
     log "restoring sandbox driver after uninstall test"
     npm install -g "$E2E_TGZ" --prefix "$E2E_PREFIX" --omit=optional >/dev/null 2>&1 || true
   fi
-  if argent_cli --version >/dev/null 2>&1; then pass "$P" driver-restored; else fail "$P" driver-restored "argent not runnable after restore"; fi
+  if argent_cli --version >/dev/null 2>&1; then pass "$P" driver-restored ok; else fail "$P" driver-restored ok "argent not runnable after restore"; fi
 }
