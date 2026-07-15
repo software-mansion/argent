@@ -178,7 +178,7 @@ Note there is **no device id** anywhere in the file — the recorder strips them
 
 ## When to proactively record a flow
 
-You do not need the user to ask for a flow. Record one proactively when you recognize any of these patterns:
+Proactive recording is part of this skill's scope (see the description). Record a flow without waiting to be asked when you recognize any of these patterns:
 
 - **About to re-profile**: You completed a profiling session and are about to apply a fix and re-profile. Record the interaction steps now so the re-profile replays them identically (see `argent-react-native-profiler` and `argent-native-profiler` skills).
 - **Repeating steps**: You have already performed a multi-step interaction sequence once and the task requires doing it again (comparison, retry, re-test).
