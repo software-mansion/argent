@@ -60,10 +60,12 @@ Steps:
 2. gesture-tap { x: 0.5, y: 0.4 }  → tap email field
 3. keyboard { text: "user@example.com" }
 4. gesture-tap { x: 0.5, y: 0.55 } → tap password field
-5. keyboard { text: "password123" }
+5. keyboard { text: "<test password supplied by the user>" }
 6. gesture-tap { x: 0.5, y: 0.7 }  → tap Login button
 7. screenshot → verify home screen appeared
 ```
+
+> **Credentials:** only type test credentials the user (or the environment) supplied for this test. Never invent, hardcode, or reuse real credentials in steps, and never echo secret values into reports or saved files.
 
 ### Scroll and navigation
 
