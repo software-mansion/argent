@@ -77,6 +77,11 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  // Safety net for tests that set the override inside an it() body: a leaked
+  // override points homedir() at an already-removed tmpdir, which silently
+  // neutralizes the home-branch of every later detection/adapter test (and
+  // conversely, tests passing only thanks to the leak).
+  homedirOverride = undefined;
 });
 
 // ── isArgentManagedEntry ──────────────────────────────────────────────────────
@@ -858,18 +863,21 @@ describe("Codex adapter", () => {
 
   it("detect() returns true when the local .codex dir holds user content", () => {
     // A bare/argent-only .codex dir is NOT detection evidence (see the
-    // detection-evidence suite); real user content in it is.
-    const localCodex = path.join(process.cwd(), ".codex");
-    const existed = fs.existsSync(localCodex);
-    const marker = path.join(localCodex, "history.jsonl");
-    const markerExisted = fs.existsSync(marker);
-    if (!existed) fs.mkdirSync(localCodex, { recursive: true });
-    if (!markerExisted) fs.writeFileSync(marker, "");
+    // detection-evidence suite); real user content in it is. Both detect()
+    // branches must be isolated: an EMPTY temp home pins the assertion to the
+    // project-dir branch (a real ~/.codex would satisfy detect() on its own
+    // and mask a broken cwd path), and the mocked cwd keeps the marker out of
+    // the actual working directory.
+    homedirOverride = path.join(tmpDir, "home");
+    fs.mkdirSync(homedirOverride, { recursive: true });
+    const proj = path.join(tmpDir, "proj");
+    fs.mkdirSync(path.join(proj, ".codex"), { recursive: true });
+    fs.writeFileSync(path.join(proj, ".codex", "history.jsonl"), "");
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(proj);
     try {
       expect(adapter.detect()).toBe(true);
     } finally {
-      if (!markerExisted) fs.rmSync(marker, { force: true });
-      if (!existed) fs.rmdirSync(localCodex);
+      cwdSpy.mockRestore();
     }
   });
 
@@ -2373,9 +2381,16 @@ describe("installer preserves foreign MCP config", () => {
 // "the editor is installed" on later runs (self-fulfilling detection), while
 // anything the user/editor itself put there still must.
 
-describe("Cursor/Codex detection evidence", () => {
+describe("detection evidence", () => {
   const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
   const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+  const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+  const vscode = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
+  const windsurf = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+  const zed = ALL_ADAPTERS.find((a) => a.name === "Zed")!;
+  const gemini = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+  const hermes = ALL_ADAPTERS.find((a) => a.name === "Hermes")!;
+  const kiro = ALL_ADAPTERS.find((a) => a.name === "Kiro")!;
   let home: string;
   let proj: string;
   let cwdSpy: ReturnType<typeof vi.spyOn>;
@@ -2508,5 +2523,233 @@ describe("Cursor/Codex detection evidence", () => {
       'developer_instructions = "Always answer in Polish."\n\n[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n'
     );
     expect(codex.detect()).toBe(true);
+  });
+
+  // ── Claude Code ──────────────────────────────────────────────────────────
+
+  it("does not detect Claude Code from argent-only artifacts (.mcp.json + .claude permissions/rules/skills)", () => {
+    claude.write(path.join(proj, ".mcp.json"), getMcpEntry());
+    addClaudePermission(proj, "local");
+    fs.mkdirSync(path.join(proj, ".claude", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(proj, ".claude", "rules", "argent.md"), "rules");
+    fs.mkdirSync(path.join(home, ".claude", "skills", "argent-device-interact"), {
+      recursive: true,
+    });
+    expect(claude.detect()).toBe(false);
+  });
+
+  it("does not detect Claude Code from an argent-only ~/.claude.json", () => {
+    claude.write(path.join(home, ".claude.json"), getMcpEntry());
+    expect(claude.detect()).toBe(false);
+  });
+
+  it("detects Claude Code from a real ~/.claude.json (OAuth/projects state)", () => {
+    fs.writeFileSync(
+      path.join(home, ".claude.json"),
+      JSON.stringify({
+        oauthAccount: { email: "user@example.com" },
+        mcpServers: { argent: { command: "argent", args: ["mcp"] } },
+      })
+    );
+    expect(claude.detect()).toBe(true);
+  });
+
+  it("detects Claude Code when .claude/settings.json holds the user's own permissions", () => {
+    fs.mkdirSync(path.join(proj, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(proj, ".claude", "settings.json"),
+      JSON.stringify({ permissions: { allow: ["Bash(npm:*)"] } })
+    );
+    expect(claude.detect()).toBe(true);
+  });
+
+  it("detects Claude Code when .mcp.json has a foreign server", () => {
+    fs.writeFileSync(
+      path.join(proj, ".mcp.json"),
+      JSON.stringify({ mcpServers: { argent: { command: "argent" }, other: { command: "x" } } })
+    );
+    expect(claude.detect()).toBe(true);
+  });
+
+  it("detects Claude Code from user files in .claude (settings.local.json)", () => {
+    fs.mkdirSync(path.join(proj, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(proj, ".claude", "settings.local.json"), "{}");
+    expect(claude.detect()).toBe(true);
+  });
+
+  // ── VS Code ──────────────────────────────────────────────────────────────
+
+  it("does not detect VS Code from an argent-only .vscode/mcp.json", () => {
+    vscode.write(path.join(proj, ".vscode", "mcp.json"), getMcpEntry());
+    expect(vscode.detect()).toBe(false);
+  });
+
+  it("detects VS Code from the user's own workspace files", () => {
+    fs.mkdirSync(path.join(proj, ".vscode"), { recursive: true });
+    fs.writeFileSync(path.join(proj, ".vscode", "settings.json"), "{}");
+    expect(vscode.detect()).toBe(true);
+  });
+
+  it("detects VS Code from a bare ~/.vscode (argent never writes there)", () => {
+    fs.mkdirSync(path.join(home, ".vscode"), { recursive: true });
+    expect(vscode.detect()).toBe(true);
+  });
+
+  it("detects VS Code when .vscode/mcp.json has a foreign server", () => {
+    fs.mkdirSync(path.join(proj, ".vscode"), { recursive: true });
+    fs.writeFileSync(
+      path.join(proj, ".vscode", "mcp.json"),
+      JSON.stringify({ servers: { argent: { command: "argent" }, other: { command: "x" } } })
+    );
+    expect(vscode.detect()).toBe(true);
+  });
+
+  // ── Windsurf ─────────────────────────────────────────────────────────────
+
+  it("does not detect Windsurf from an argent-only mcp_config.json (incl. alwaysAllow)", () => {
+    windsurf.write(path.join(home, ".codeium", "windsurf", "mcp_config.json"), getMcpEntry());
+    windsurf.addAllowlist!(proj, "global");
+    expect(windsurf.detect()).toBe(false);
+  });
+
+  it("detects Windsurf when its dir holds anything else", () => {
+    const dir = path.join(home, ".codeium", "windsurf");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "memories.json"), "{}");
+    expect(windsurf.detect()).toBe(true);
+  });
+
+  it("detects Windsurf when mcp_config.json has a foreign server", () => {
+    const dir = path.join(home, ".codeium", "windsurf");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "mcp_config.json"),
+      JSON.stringify({ mcpServers: { argent: { command: "argent" }, other: { command: "x" } } })
+    );
+    expect(windsurf.detect()).toBe(true);
+  });
+
+  // ── Zed ──────────────────────────────────────────────────────────────────
+
+  it("does not detect Zed from an argent-only settings.json (entry + allowlist default)", () => {
+    zed.write(path.join(home, ".config", "zed", "settings.json"), getMcpEntry());
+    zed.addAllowlist!(proj, "global");
+    expect(zed.detect()).toBe(false);
+  });
+
+  it("detects Zed when settings.json carries user settings", () => {
+    const settingsPath = path.join(home, ".config", "zed", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        theme: "One Dark",
+        context_servers: { argent: { command: "argent", args: ["mcp"] } },
+      })
+    );
+    expect(zed.detect()).toBe(true);
+  });
+
+  // ── Gemini ───────────────────────────────────────────────────────────────
+
+  it("does not detect Gemini from argent-only artifacts (settings.json + trust + rules/agents)", () => {
+    gemini.write(path.join(home, ".gemini", "settings.json"), getMcpEntry());
+    gemini.addAllowlist!(proj, "global");
+    fs.mkdirSync(path.join(home, ".gemini", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".gemini", "rules", "argent.md"), "rules");
+    expect(gemini.detect()).toBe(false);
+  });
+
+  it("detects Gemini from the user's own files in .gemini", () => {
+    fs.mkdirSync(path.join(home, ".gemini"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".gemini", "GEMINI.md"), "context");
+    expect(gemini.detect()).toBe(true);
+  });
+
+  it("detects Gemini when settings.json carries user settings", () => {
+    const settingsPath = path.join(home, ".gemini", "settings.json");
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        selectedAuthType: "oauth-personal",
+        mcpServers: { argent: { command: "argent", args: ["mcp"] } },
+      })
+    );
+    expect(gemini.detect()).toBe(true);
+  });
+
+  // ── Hermes ───────────────────────────────────────────────────────────────
+
+  it("does not detect Hermes from an argent-only config.yaml", () => {
+    hermes.write(path.join(home, ".hermes", "config.yaml"), getMcpEntry());
+    expect(hermes.detect()).toBe(false);
+  });
+
+  it("detects Hermes when config.yaml carries user settings", () => {
+    const configPath = path.join(home, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "model: gpt-5\nmcp_servers:\n  argent:\n    command: argent\n");
+    expect(hermes.detect()).toBe(true);
+  });
+
+  it("detects Hermes when its dir holds anything else", () => {
+    fs.mkdirSync(path.join(home, ".hermes"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".hermes", "history.db"), "");
+    expect(hermes.detect()).toBe(true);
+  });
+
+  // ── Kiro ─────────────────────────────────────────────────────────────────
+
+  it("does not detect Kiro from an argent-only settings/mcp.json (incl. autoApprove)", () => {
+    kiro.write(path.join(proj, ".kiro", "settings", "mcp.json"), getMcpEntry());
+    kiro.addAllowlist!(proj, "local");
+    expect(kiro.detect()).toBe(false);
+  });
+
+  it("detects Kiro from the user's own content (.kiro/steering)", () => {
+    fs.mkdirSync(path.join(proj, ".kiro", "steering"), { recursive: true });
+    fs.writeFileSync(path.join(proj, ".kiro", "steering", "product.md"), "docs");
+    expect(kiro.detect()).toBe(true);
+  });
+
+  it("detects Kiro when settings/mcp.json has a foreign server", () => {
+    const configPath = path.join(proj, ".kiro", "settings", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcpServers: { argent: { command: "argent" }, other: { command: "x" } } })
+    );
+    expect(kiro.detect()).toBe(true);
+  });
+
+  // ── Loop closure across ALL adapters ─────────────────────────────────────
+
+  it("a full init (entry + allowlist for every adapter, both scopes) leaves no adapter detected", () => {
+    // The self-fulfilling detection bug, end to end: everything argent itself
+    // writes must not count as evidence for ANY adapter — an asymmetric
+    // subset re-detects the unfixed editors on the very next run. opencode is
+    // excluded because it probes for the binary (mocked in this file), not a
+    // directory.
+    for (const adapter of ALL_ADAPTERS) {
+      if (adapter.name === "opencode") continue;
+      const projectPath = adapter.projectPath(proj);
+      if (projectPath) {
+        adapter.write(projectPath, getMcpEntry());
+        adapter.addAllowlist?.(proj, "local");
+      }
+      const globalPath = adapter.globalPath();
+      if (globalPath) {
+        adapter.write(globalPath, getMcpEntry());
+        adapter.addAllowlist?.(proj, "global");
+      }
+    }
+    addClaudePermission(proj, "local");
+    addClaudePermission(proj, "global");
+
+    for (const adapter of ALL_ADAPTERS) {
+      if (adapter.name === "opencode") continue;
+      expect(adapter.detect(), `${adapter.name} must not self-detect`).toBe(false);
+    }
   });
 });

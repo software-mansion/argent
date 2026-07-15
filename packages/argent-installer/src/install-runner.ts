@@ -20,7 +20,7 @@ import {
   getLocallyInstalledVersion,
   isYarnPnp,
 } from "./utils.js";
-import { runShellCommand, runTrustingDisk } from "./shell.js";
+import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { reportSkillRefresh } from "./skills.js";
 import type { InstallMode } from "./install-record.js";
@@ -111,6 +111,8 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
       () => runShellCommand(cmd, { cwd: projectRoot }),
       () => isLocallyInstalled(projectRoot) || isYarnPnp(projectRoot)
     );
+  let lastAttemptStartedAt = performance.now();
+  let retryCount = 0;
   let { landed, exitError: installError } = await attempt();
 
   // The project's package manager isn't on this machine at all (e.g. a cloned
@@ -118,25 +120,49 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   // with a message that names the real problem, because the generic "install
   // manually" advice fails the same way in the user's shell. POSIX spawns the
   // manager directly (ENOENT); Windows goes through cmd.exe (see
-  // runShellCommand), which exits 9009 with "not recognized" on stderr.
+  // runShellCommand), which exits 9009 — cmd.exe's locale-independent
+  // command-not-found code (its "is not recognized" stderr text is localized,
+  // so it can't be matched).
   const isMissingBinaryError = (err: Error | null): boolean =>
     err !== null &&
     ((err as NodeJS.ErrnoException).code === "ENOENT" ||
-      /is not recognized as an internal or external command/i.test(err.message));
+      (process.platform === "win32" && err instanceof ShellCommandError && err.exitCode === 9009));
   const missingBinary = !landed && isMissingBinaryError(installError);
 
-  if (!landed && installError && !missingBinary) {
+  // A signal-terminated install is a cancellation, not a transient failure —
+  // retrying would silently spawn a second full install after the user (or CI
+  // supervisor) killed the first one. Interactive Ctrl-C never reaches here
+  // (clack's raw-mode stdin turns it into a keypress that exits argent), but a
+  // signal-delivered SIGINT/SIGTERM (CI, `kill`, a timeout wrapper) surfaces
+  // as `code null` + signal on the child.
+  const wasInterrupted = (err: Error | null): boolean =>
+    err instanceof ShellCommandError && (err.signal !== null || err.exitCode === null);
+  const interrupted = !landed && wasInterrupted(installError);
+
+  if (!landed && installError && !missingBinary && !interrupted) {
     // The package manager ran and failed. Retry once before giving up: first
     // attempts fail on transient registry/network errors (argent is a large
     // download) and on pnpm's own first-run state mutations (e.g. it may write
     // build-script policy stubs and exit non-zero), where an identical rerun
     // succeeds.
     spinner.message(`${pm} failed — retrying once...`);
+    retryCount = 1;
+    lastAttemptStartedAt = performance.now();
     ({ landed, exitError: installError } = await attempt());
   }
 
+  // Retry visibility for the failure funnel: retry_count tells whether (and
+  // how often) the retry fires and helps, and last_attempt_duration_ms keeps
+  // the per-attempt duration fingerprint usable when duration_ms spans both
+  // attempts (the fast-fail cluster that motivated the retry was identified
+  // by exactly that signature).
+  const attemptTelemetry = (): { retry_count: number; last_attempt_duration_ms: number } => ({
+    retry_count: retryCount,
+    last_attempt_duration_ms: performance.now() - lastAttemptStartedAt,
+  });
+
   if (!landed) {
-    spinner.stop(pc.red("Local install failed."));
+    spinner.stop(pc.red(interrupted ? "Local install interrupted." : "Local install failed."));
     if (missingBinary) {
       p.log.error(
         `This project uses ${pc.cyan(pm)}, but the ${pc.cyan(pm)} command was not found on PATH.`
@@ -148,6 +174,9 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
             : "") +
           `, then re-run ${pc.cyan("argent init --local")}.`
       );
+    } else if (interrupted) {
+      p.log.error(`The ${pc.cyan(pm)} install was interrupted before it finished.`);
+      p.log.info(`Re-run ${pc.cyan("argent init --local")} to try again.`);
     } else {
       p.log.error(
         installError
@@ -156,7 +185,13 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
       );
       p.log.info(`Install manually with: ${pc.cyan(`cd ${projectRoot} && ${cmdStr}`)}`);
     }
-    await tel.trackPackageAction("fresh_install", startedAt, false, INSTALL_LOCAL_PACKAGE_FAILED);
+    await tel.trackPackageAction(
+      "fresh_install",
+      startedAt,
+      false,
+      INSTALL_LOCAL_PACKAGE_FAILED,
+      attemptTelemetry()
+    );
     await tel.finalize(INSTALL_LOCAL_PACKAGE_FAILED);
     process.exit(1);
   }
@@ -184,7 +219,7 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
     }
   }
 
-  await tel.trackPackageAction("fresh_install", startedAt, true);
+  await tel.trackPackageAction("fresh_install", startedAt, true, undefined, attemptTelemetry());
 }
 
 // ── Global (PATH binary) ──────────────────────────────────────────────────────

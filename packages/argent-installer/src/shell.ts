@@ -46,6 +46,23 @@ export function execShellCommandSync(
   });
 }
 
+// Non-zero exit from runShellCommand. Carries the exit code and terminating
+// signal alongside the captured stderr, because the message alone can't be
+// classified reliably: cmd.exe's "is not recognized" text is localized (its
+// locale-independent equivalent is exit code 9009), and a signal-terminated
+// child closes with `code null` — which callers must tell apart from an
+// ordinary failure (an interrupted install must not be retried).
+export class ShellCommandError extends Error {
+  constructor(
+    message: string,
+    readonly exitCode: number | null,
+    readonly signal: NodeJS.Signals | null
+  ) {
+    super(message);
+    this.name = "ShellCommandError";
+  }
+}
+
 // Run a package-manager command, capturing stderr for the rejection message.
 // Windows handling mirrors execShellCommandSync: the BARE bin name through a
 // shell, so PATHEXT resolves both .cmd shims (npm/yarn) and native .exe
@@ -65,9 +82,19 @@ export function runShellCommand(cmd: ShellCommand, opts: { cwd?: string } = {}):
       stderr += chunk.toString();
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(stderr.trim() || `Command exited with code ${code}`));
+      else
+        reject(
+          new ShellCommandError(
+            stderr.trim() ||
+              (signal !== null
+                ? `Command terminated by signal ${signal}`
+                : `Command exited with code ${code}`),
+            code,
+            signal
+          )
+        );
     });
 
     child.on("error", reject);

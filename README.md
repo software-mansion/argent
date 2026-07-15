@@ -13,6 +13,8 @@
 
 ```bash
 npx @swmansion/argent@latest init
+# or, in a pnpm project (where npm's devEngines check may refuse to run npx):
+pnpm dlx @swmansion/argent@latest init
 ```
 
 ## Supported platforms
@@ -99,6 +101,8 @@ From your project root:
 
 ```bash
 npx @swmansion/argent@latest init
+# or, in a pnpm project (where npm's devEngines check may refuse to run npx):
+pnpm dlx @swmansion/argent@latest init
 ```
 
 This command triggers an installation wizard which:

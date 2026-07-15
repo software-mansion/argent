@@ -195,6 +195,8 @@ export const ALLOWED: ValidatorMap = {
     action: PACKAGE_ACTION,
     is_success: bool,
     duration_ms: DURATION_MS,
+    retry_count: COUNT,
+    last_attempt_duration_ms: DURATION_MS,
     ...FAILURE_SIGNAL,
   },
   "installation:cli_update_start": {},
