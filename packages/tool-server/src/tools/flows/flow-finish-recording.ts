@@ -92,6 +92,17 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         }
         case "wait":
           return `${n}. wait: ${step.ms}ms`;
+        case "when": {
+          // Mirror the await/assert rendering above — selectorLabel spelling,
+          // expected text included for text guards.
+          const cond =
+            step.condition.kind === "platform"
+              ? `platform ${step.condition.platform}`
+              : step.condition.condition === "text"
+                ? `text ${selectorLabel(step.condition.selector)} == "${step.condition.expectedText ?? ""}"`
+                : `${step.condition.condition} ${selectorLabel(step.condition.selector)}`;
+          return `${n}. when: ${cond} (${step.steps.length} steps)`;
+        }
         case "scroll-to":
           return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
         case "snapshot":

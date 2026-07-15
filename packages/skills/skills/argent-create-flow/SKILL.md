@@ -32,6 +32,7 @@ Beyond raw `tool:` steps and `echo:`, flows support declarative directives inter
 | `assert`     | `- assert: { visible: Welcome }`                                                                                                                                     | check a condition, hard-fail if it never holds                                                                                                                  |
 | `snapshot`   | `- snapshot: home` or `- snapshot: { name: home, maxMismatch: 0.5 }`                                                                                                 | diff a screenshot against a stored baseline                                                                                                                     |
 | `run`        | `- run: login`                                                                                                                                                       | execute another flow's steps inline (fragment or e2e)                                                                                                           |
+| `when`       | `- when: { visible: "What's new" }` + `steps: [...]`                                                                                                                 | run a guarded step block only when the condition holds (no else)                                                                                                |
 
 ### Selectors
 
@@ -159,6 +160,7 @@ The top-level is an object with `steps` (array) and — fragments only — `exec
 
 - `- echo: <message>` — a label printed during replay
 - `- tool: <name>` with optional `args:` — a raw tool call. A tool step may also carry `delayMs: <ms>` to sleep that long before it runs. (`await-ui-element` is an ordinary tool step; see _flow-add-step arguments_ and _Making flows resilient_ for when to gate a transition with one.)
+- **`when:` blocks** handle one-sided divergences (interstitials, coach marks): `- when: { visible: "What's new" }` with a sibling `steps: [...]` list runs the block only if the condition holds — checked once with the short assert grace (~1s), so a skipped block barely costs a clean run. Guards are one condition key (`exists`/`visible`/`hidden`/`text`, the await/assert shapes) or `platform: ios|android|chromium|vega`. **No else** (parse-rejected): a block exists to dismiss the divergence and reconverge, never to test two paths — two paths are two flows. Failures inside an entered block are real failures; a skipped block reports `skip` lines. Tap-if-present is a one-step block (`when: { visible: "Got it" }` + `steps: [tap: "Got it"]`); there is NO per-step `optional:` key — it is rejected at parse with a pointer to `when:`.
 
 The polished result of the example session above:
 

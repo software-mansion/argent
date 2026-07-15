@@ -2,6 +2,7 @@ import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import type { WhenPlatform } from "./flow-utils";
 
 /**
  * Device resolution + binding for the flow runner. Flows store no device id
@@ -10,7 +11,9 @@ import { invokeSubTool } from "../../utils/sub-invoke";
  * and injects it schema-aware into each step's tool args.
  */
 
-export type FlowPlatform = "ios" | "android" | "chromium" | "vega";
+// One platform set for the whole flows directory — see LAUNCH_PLATFORMS in
+// flow-utils, which this aliases via WhenPlatform.
+export type FlowPlatform = WhenPlatform;
 
 const DEVICE_BIND_KEYS = ["udid", "device_id"] as const;
 
