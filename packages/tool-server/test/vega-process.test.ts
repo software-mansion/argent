@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
 import {
   parseVvdConsolePorts,
   parseVvdPids,
@@ -8,6 +9,7 @@ import {
   listRunningVvdPids,
   PS_ARGS,
   PS_ARGS_WITH_PID,
+  PS_BIN,
 } from "../src/utils/vega-process";
 
 const execFileAsync = promisify(execFile);
@@ -140,5 +142,31 @@ describe("listRunningVvdConsolePorts (real ps)", () => {
     const pids = await listRunningVvdPids();
     expect(Array.isArray(pids)).toBe(true);
     for (const p of pids) expect(Number.isInteger(p) && p > 0).toBe(true);
+  });
+});
+
+// Regression: under an MCP server's sanitized PATH (no /bin), a bare-name `ps`
+// spawn ENOENTs; the catch then yields an empty port set and the VVD adb-shadow
+// dedup no-ops, listing the VVD twice. An absolute `ps` path survives this.
+describe("PS_BIN (survives a sanitized PATH)", () => {
+  it("resolves to an existing absolute path on this host", () => {
+    expect(PS_BIN.startsWith("/")).toBe(true);
+    expect(existsSync(PS_BIN)).toBe(true);
+  });
+
+  it("spawns `ps` with PATH stripped of /bin and /usr/bin", async () => {
+    const savedPath = process.env.PATH;
+    process.env.PATH = "/nonexistent-dir";
+    try {
+      // Load-bearing: a bare "ps" would reject with ENOENT here, so a non-empty
+      // exit-0 result proves the absolute-path resolution is what survives.
+      const { stdout } = await execFileAsync(PS_BIN, [...PS_ARGS], {
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      expect(stdout.split("\n").filter(Boolean).length).toBeGreaterThan(0);
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+    }
   });
 });

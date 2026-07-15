@@ -12,7 +12,7 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { formatSubprocessFailure } from "./subprocess-error";
-import { listRunningVvdConsolePorts } from "./vega-process";
+import { listRunningVvdConsolePorts, PS_BIN } from "./vega-process";
 
 const execFileAsync = promisify(execFile);
 
@@ -184,7 +184,7 @@ async function reapVegaGroup(child: ChildProcess): Promise<void> {
  * group kill is the primary mechanism; this is insurance).
  */
 async function collectDescendantPids(rootPid: number): Promise<number[]> {
-  const { stdout } = await execFileAsync("ps", ["-A", "-o", "pid=,ppid="], {
+  const { stdout } = await execFileAsync(PS_BIN, ["-A", "-o", "pid=,ppid="], {
     timeout: 1_500,
     maxBuffer: 16 * 1024 * 1024,
   });
@@ -218,7 +218,7 @@ async function collectDescendantPids(rootPid: number): Promise<number[]> {
  * itself). Used by reapLingeringGroupMembers; returns [] if `ps` is unavailable.
  */
 async function pgidMembers(pgid: number): Promise<number[]> {
-  const { stdout } = await execFileAsync("ps", ["-A", "-o", "pid=,pgid="], {
+  const { stdout } = await execFileAsync(PS_BIN, ["-A", "-o", "pid=,pgid="], {
     timeout: 1_500,
     maxBuffer: 16 * 1024 * 1024,
   });
