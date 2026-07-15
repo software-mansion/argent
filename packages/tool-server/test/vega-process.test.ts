@@ -149,12 +149,22 @@ describe("listRunningVvdConsolePorts (real ps)", () => {
 // spawn ENOENTs; the catch then yields an empty port set and the VVD adb-shadow
 // dedup no-ops, listing the VVD twice. An absolute `ps` path survives this.
 describe("PS_BIN (survives a sanitized PATH)", () => {
-  it("resolves to an existing absolute path on this host", () => {
-    expect(PS_BIN.startsWith("/")).toBe(true);
-    expect(existsSync(PS_BIN)).toBe(true);
+  // Every host CI runs on has /bin/ps or /usr/bin/ps, so PS_BIN resolves absolute
+  // here. But production deliberately falls back to bare "ps" when neither exists
+  // (Nix, a non-POSIX layout) to preserve PATH resolution — so assert the contract
+  // as a disjunction, not a hard "always absolute", and don't fail the intentional
+  // fallback path.
+  const psBinIsAbsolute = PS_BIN.startsWith("/");
+
+  it("is either an existing absolute path or the bare-`ps` PATH fallback", () => {
+    if (psBinIsAbsolute) expect(existsSync(PS_BIN)).toBe(true);
+    else expect(PS_BIN).toBe("ps");
   });
 
-  it("spawns `ps` with PATH stripped of /bin and /usr/bin", async () => {
+  // Only meaningful when PS_BIN is absolute: a bare "ps" is exactly what ENOENTs
+  // under a sanitized PATH, so asserting it survives there would contradict the
+  // fallback's intent. Skip rather than fail on a host without a canonical `ps`.
+  it.skipIf(!psBinIsAbsolute)("spawns `ps` with PATH stripped of /bin and /usr/bin", async () => {
     const savedPath = process.env.PATH;
     process.env.PATH = "/nonexistent-dir";
     try {
