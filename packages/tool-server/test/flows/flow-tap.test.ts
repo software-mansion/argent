@@ -120,6 +120,29 @@ describe("tap times: parse/serialize", () => {
     expect(serializeFlow({ executionPrerequisite: "", steps })).toContain("- tap: Photo");
   });
 
+  it("rejects a text selector with no visible characters, both at parse and at serialize", () => {
+    // The 0.15.0 QA repro: an icon-font tab bar exposed its Private Use Area
+    // glyph (U+E163) as the accessibility label; the recorder wrote
+    // `tap: { text: <PUA> }` — YAML that DISPLAYS as `text:` (empty) — and
+    // replay green-lit against it. Such selectors must be refused loudly.
+    expect(() => parseFlow('steps:\n  - tap: { text: "\\uE163" }\n')).toThrow(/visible character/i);
+    // Zero-width-only text is the same class; plain-empty already fails min(1).
+    expect(() => parseFlow('steps:\n  - tap: { text: "\\u200B" }\n')).toThrow(/visible character/i);
+    expect(() => parseFlow('steps:\n  - tap: { text: "" }\n')).toThrow();
+    // Serialization boundary guards the strict map spelling too — a hand-built
+    // selector can't write a flow file whose selector displays as empty.
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "tap", selector: { text: "\uE163" } }],
+      })
+    ).toThrow(/visible character/i);
+    // Text that merely contains an icon glyph next to real text stays valid.
+    expect(parseFlow('steps:\n  - tap: { text: "\\uE163 Explore" }\n').steps).toEqual([
+      { kind: "tap", selector: { text: "\uE163 Explore" } },
+    ]);
+  });
+
   it("rejects selector fields alongside times with the nested-selector hint", () => {
     // zod would silently STRIP times from a selector map — this must be loud.
     expect(() => parseFlow('steps:\n  - tap: { text: "Test", times: 2 }\n')).toThrow(

@@ -141,6 +141,28 @@ describe("ui-tree-match", () => {
     ).toEqual({ role: "AXButton" });
   });
 
+  it("deriveSelector refuses invisible-only text (icon-font PUA glyphs, zero-width chars)", () => {
+    const frame = { x: 0, y: 0, width: 0.1, height: 0.1 };
+    // The QA repro: an expo-router tab-bar icon whose accessibility label is
+    // the icon font's Private Use Area glyph (U+E163). Text-wise the node has
+    // "nothing stable to match on" — it must fall through, here to null.
+    expect(deriveSelector(node({ label: "\uE163", frame }))).toBeNull();
+    // Zero-width-only label (ZWSP survives trim(), renders as nothing).
+    expect(deriveSelector(node({ label: "\u200B\u200B", frame }))).toBeNull();
+    // Invisible label falls through to a visible VALUE...
+    expect(deriveSelector(node({ label: "\uE88A", value: "Home", frame }))).toEqual({
+      text: "Home",
+    });
+    // ...or to a specific role when no visible text exists at all.
+    expect(deriveSelector(node({ label: "\uE88A", role: "AXButton", frame }))).toEqual({
+      role: "AXButton",
+    });
+    // Visible text that merely CONTAINS an icon glyph stays usable.
+    expect(deriveSelector(node({ label: "\uE163 Explore", frame }))).toEqual({
+      text: "\uE163 Explore",
+    });
+  });
+
   it("deriveSelector derives text from the label alone — never the label+value join", () => {
     // matchNode compares a text selector against label and value individually,
     // so a selector derived from nodeText's join ("Volume 50%") would match no
