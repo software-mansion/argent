@@ -65,7 +65,7 @@ Steps:
 7. screenshot → verify home screen appeared
 ```
 
-> **Credentials:** never type plaintext credentials — use a `{{secret:<NAME>}}` placeholder in `keyboard`/`paste`, resolved server-side from the `ARGENT_SECRET_<NAME>` environment variable, so the value never enters agent context. If the variable is not set, ask the user to export it (e.g. `ARGENT_SECRET_APP_PASSWORD`) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
+> **Credentials:** never type plaintext credentials — use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side from the `ARGENT_SECRET_<NAME>` environment variable, so the value never enters agent context. If the variable is not set, ask the user to export it (e.g. `ARGENT_SECRET_APP_PASSWORD`) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
 
 ### Scroll and navigation
 
