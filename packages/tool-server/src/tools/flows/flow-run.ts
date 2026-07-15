@@ -741,12 +741,6 @@ async function execRunStep(
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
-  if (isE2eFlow(fragment)) {
-    return fail(
-      `"${target}" is an e2e flow (starts with a launch step); only fragments can be run from another flow`
-    );
-  }
-
   // Marker for the composition point, then expand the fragment's steps inline.
   pushReport(state, { index, kind: "run", status: "pass", flow: target });
   await execSteps(state, fragment.steps, target, [...runStack, target]);
