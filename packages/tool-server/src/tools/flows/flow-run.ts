@@ -14,6 +14,7 @@ import {
   appIdForPlatform,
   assertSafeFlowName,
   chromiumLaunchSpec,
+  describeSelector,
   describeTextExpectation,
   getFlowPath,
   isE2eFlow,
@@ -23,7 +24,10 @@ import {
   type FlowSelector,
   type FlowStep,
   type Launch,
+  type WhenCondition,
+  LAUNCH_PLATFORMS,
 } from "./flow-utils";
+import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
@@ -32,6 +36,7 @@ import {
   runDirective,
   invokeOnDevice,
   ABORTED_OUTCOME,
+  probeWhenCondition,
   type ActionEnv,
   type DirectiveOutcome,
 } from "./flow-actions";
@@ -69,7 +74,7 @@ const zodSchema = z.object({
       "Device id to run against (iOS UDID, Android/Vega serial, Chromium id). Auto-detected when omitted."
     ),
   platform: z
-    .enum(["ios", "android", "chromium", "vega"])
+    .enum(LAUNCH_PLATFORMS)
     .optional()
     .describe("Restrict auto-detection to this platform when several devices are booted."),
   updateBaselines: z
@@ -133,6 +138,11 @@ export interface FlowRunResult {
   device: string;
   executionPrerequisite: string;
   ok: boolean;
+  /**
+   * The run was cancelled mid-flight — set so a FAIL whose step statuses are
+   * all pass/skip is self-explanatory. Absent on completed runs.
+   */
+  aborted?: boolean;
   passed: number;
   failed: number;
   skipped: number;
@@ -391,6 +401,9 @@ element and act on it (\`long-press: { on, duration }\` presses and holds); \`sc
 condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot against a stored baseline (a missing baseline fails the step — set updateBaselines
 to adopt the current screen); \`echo\` annotates; \`run\` executes a referenced fragment inline.
+A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
+checked once with the short assert grace — for one-sided divergences like interstitials and coach
+marks; a skipped block reports distinctly and failures inside an entered block are real failures.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. For a Chromium e2e flow the \`launch\`
@@ -456,14 +469,19 @@ returns a notice with the prerequisite instead of running.`,
         ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
       };
 
+      let aborted: boolean;
       try {
         await execSteps(state, flow.steps, params.name, [params.name]);
       } finally {
+        // Sample the cancel flag before teardown: a client disconnect during
+        // status-bar restore / chromium teardown lands after every step
+        // already ran, and must not flip a finished run to FAIL.
+        aborted = state.signal?.aborted === true;
         if (state.pinned) await restoreStatusBar(device);
         if (resolved.booted) await teardownBootedChromium(registry, resolved.booted);
       }
 
-      return summarize(params.name, device.id, flow.executionPrerequisite, state.reports);
+      return summarize(params.name, device.id, flow.executionPrerequisite, state.reports, aborted);
     },
   };
 }
@@ -583,15 +601,14 @@ function summarize(
   flowName: string,
   deviceId: string,
   executionPrerequisite: string,
-  steps: StepReport[]
+  steps: StepReport[],
+  aborted: boolean
 ): FlowRunResult {
   let passed = 0;
   let failed = 0;
   let skipped = 0;
   let errored = 0;
-  let hasSkippedReport = false;
   for (const s of steps) {
-    hasSkippedReport ||= s.status === "skip";
     // Echo is narration, not a test step — counting it would let the summary
     // disagree with the renderers' step numbering (which skips echo too).
     if (s.kind === "echo") continue;
@@ -604,11 +621,13 @@ function summarize(
     flow: flowName,
     device: deviceId,
     executionPrerequisite,
-    // A skip is never a successful omission: the runner only emits skips after
-    // a hard stop or cancellation. The former already has a fail/error report;
-    // the latter may contain skips alone, so include them in the verdict or an
-    // aborted run would be reported as PASS.
-    ok: failed === 0 && errored === 0 && !hasSkippedReport,
+    // A cancelled run must never read as PASS — it may contain skips alone
+    // (no fail/error report), so the verdict folds the abort in directly. A
+    // skip by itself is NOT a failure: an unmet `when:` guard skips its block
+    // as a successful omission, and a hard stop already carries its own
+    // fail/error report.
+    ok: failed === 0 && errored === 0 && !aborted,
+    ...(aborted ? { aborted: true } : {}),
     passed,
     failed,
     skipped,
@@ -636,6 +655,30 @@ function selectorLabel(sel: FlowSelector): string {
   return parts.join(" ");
 }
 
+/**
+ * One template for rendering an await/assert/when-guard UI condition,
+ * parameterized by selector spelling — {@link selectorLabel} for report
+ * targets, `describeSelector` for reason strings — so the two surfaces share
+ * a single shape and cannot drift.
+ */
+function conditionLabel(
+  cond: {
+    condition: WaitCondition;
+    selector: FlowSelector;
+    expectedText?: string;
+    textMatch?: TextMatchMode;
+  },
+  renderSelector: (sel: FlowSelector) => string
+): string {
+  const sel = renderSelector(cond.selector);
+  // A text condition checks expectedText against the element the selector
+  // locates; the other conditions are about the selector itself.
+  if (cond.condition === "text") {
+    return `${sel} ${describeTextExpectation(cond.expectedText, cond.textMatch)}`;
+  }
+  return `${cond.condition} ${sel}`;
+}
+
 /** Display-only "what this step acts on" for {@link StepReport.target}. */
 function stepTarget(step: FlowStep): string | undefined {
   switch (step.kind) {
@@ -648,15 +691,12 @@ function stepTarget(step: FlowStep): string | undefined {
     case "type":
       return `into ${selectorLabel(step.into)}`;
     case "await":
-    case "assert": {
-      const sel = selectorLabel(step.selector);
-      // A text condition checks expectedText against the element the selector
-      // locates; the other conditions are about the selector itself.
-      if (step.condition === "text") {
-        return `${sel} ${describeTextExpectation(step.expectedText, step.textMatch)}`;
-      }
-      return `${step.condition} ${sel}`;
-    }
+    case "assert":
+      return conditionLabel(step, selectorLabel);
+    case "when":
+      return step.condition.kind === "platform"
+        ? `platform ${step.condition.platform}`
+        : conditionLabel(step.condition, selectorLabel);
     case "scroll-to": {
       const dir = step.direction !== "down" ? ` (${step.direction})` : "";
       return `${selectorLabel(step.target)}${dir}`;
@@ -686,6 +726,9 @@ async function execSteps(
         flow: sourceFlow,
         target: stepTarget(step),
       });
+      // A when block's literal steps are known — expand them so the report
+      // keeps one line per authored step no matter where the stop landed.
+      if (step.kind === "when") reportBlockSkipped(state, step.steps, sourceFlow);
       continue;
     }
     if (state.signal?.aborted) {
@@ -698,6 +741,7 @@ async function execSteps(
         flow: sourceFlow,
         target: stepTarget(step),
       });
+      if (step.kind === "when") reportBlockSkipped(state, step.steps, sourceFlow, "run aborted");
       continue;
     }
 
@@ -705,11 +749,136 @@ async function execSteps(
       await execRunStep(state, step, runStack);
       continue;
     }
+    if (step.kind === "when") {
+      await execWhenStep(state, step, sourceFlow, runStack);
+      continue;
+    }
 
     const report = await execLeafStep(state, step, index, sourceFlow);
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
+}
+
+/** A compact rendering of a when guard for report reasons. */
+function describeWhenCondition(cond: WhenCondition): string {
+  if (cond.kind === "platform") return `platform ${cond.platform}`;
+  return conditionLabel(cond, describeSelector);
+}
+
+/**
+ * Report every step of a `when:` block that will not run as skipped — so a
+ * run where the block was skipped (unmet guard, hard stop, or cancellation)
+ * produces the same report shape (one line per authored step) as a run where
+ * it entered, and reports stay comparable run-to-run. Nested when blocks
+ * expand (their literal steps are known); a `run:` composition stays one
+ * line, matching how post-hard-stop skips report a fragment that was never
+ * loaded.
+ */
+function reportBlockSkipped(
+  state: ExecState,
+  steps: FlowStep[],
+  sourceFlow: string,
+  reason?: string
+): void {
+  for (const step of steps) {
+    pushReport(state, {
+      index: state.reports.length,
+      kind: step.kind,
+      status: "skip",
+      reason,
+      // A `run:` line is attributed to the fragment it names, matching the
+      // executed marker in execRunStep; everything else belongs to the
+      // enclosing flow.
+      flow: step.kind === "run" ? step.flow : sourceFlow,
+      target: stepTarget(step),
+      ...(step.kind === "echo" ? { message: step.message } : {}),
+    });
+    if (step.kind === "when") reportBlockSkipped(state, step.steps, sourceFlow, reason);
+  }
+}
+
+/**
+ * Execute a `when:` block: evaluate the guard (a platform test is static; a UI
+ * condition probes with the short assert grace), then either expand the
+ * guarded steps inline — where failures are real failures, hard-stopping as
+ * usual — or report the whole block as skipped. An unreadable tree errors the
+ * step instead: "could not evaluate" is not "condition false", and silently
+ * skipping would let a broken tree source turn every guarded dismissal into a
+ * green no-op.
+ */
+async function execWhenStep(
+  state: ExecState,
+  step: Extract<FlowStep, { kind: "when" }>,
+  sourceFlow: string,
+  runStack: string[]
+): Promise<void> {
+  const index = state.reports.length;
+  const label = describeWhenCondition(step.condition);
+  const target = stepTarget(step);
+
+  let met: boolean;
+  if (step.condition.kind === "platform") {
+    // "ios-remote" is an iOS simulator driven through sim-remote — for a
+    // platform guard it IS ios. The parser deliberately rejects "ios-remote"
+    // as a guard spelling, so without this fold no guard could ever match on
+    // a remote sim and iOS-only blocks would silently skip there.
+    const platform = state.device.platform === "ios-remote" ? "ios" : state.device.platform;
+    met = platform === step.condition.platform;
+  } else {
+    const probe = await probeWhenCondition(state, step.condition);
+    if (probe.aborted) {
+      pushReport(state, {
+        index,
+        kind: "when",
+        status: "skip",
+        reason: "run aborted",
+        flow: sourceFlow,
+        target,
+      });
+      reportBlockSkipped(state, step.steps, sourceFlow, "run aborted");
+      return;
+    }
+    if (!probe.ok && probe.indeterminate) {
+      pushReport(state, {
+        index,
+        kind: "when",
+        status: "error",
+        reason: `could not evaluate when guard (${label}): ${probe.reason}`,
+        flow: sourceFlow,
+        target,
+      });
+      state.stopped = true;
+      return;
+    }
+    met = probe.ok;
+  }
+
+  if (!met) {
+    const n = step.steps.length;
+    pushReport(state, {
+      index,
+      kind: "when",
+      status: "skip",
+      reason: `condition not met (${label}) — block skipped (${n} step${n === 1 ? "" : "s"})`,
+      flow: sourceFlow,
+      target,
+    });
+    reportBlockSkipped(state, step.steps, sourceFlow, "when block skipped");
+    return;
+  }
+
+  // Marker for the block, then the guarded steps inline — same scope, same
+  // fragment attribution, failures hard-stop as anywhere else.
+  pushReport(state, {
+    index,
+    kind: "when",
+    status: "pass",
+    reason: `condition met (${label})`,
+    flow: sourceFlow,
+    target,
+  });
+  await execSteps(state, step.steps, sourceFlow, runStack);
 }
 
 async function execRunStep(

@@ -45,6 +45,15 @@ export interface DirectiveOutcome {
   reason?: string;
   /** The run was cancelled mid-step — reported as a skip, not a step failure. */
   aborted?: boolean;
+  /**
+   * The condition could not be evaluated — unknown, not false: the window
+   * never produced a trustworthy read (every fetch threw or returned a
+   * blind/degraded tree), or a `hidden` check ended on blind reads after the
+   * element had matched. Read by the `when:` guard probe, which must error
+   * rather than silently skip a block a broken tree source can't vouch for;
+   * a plain `assert` reports it as an ordinary failure.
+   */
+  indeterminate?: boolean;
 }
 
 /**
@@ -177,6 +186,25 @@ function axisFullyInside(
 // Playwright's web-first assertions, assert retries for a short grace window so
 // it absorbs that latency; a genuinely-false assertion still fails quickly.
 const DEFAULT_ASSERT_TIMEOUT_MS = 1000;
+
+/**
+ * Evaluate a `when:` block's UI guard — the same engine as `assert`, on the
+ * same assert grace window: a skipped block must not add an await-sized dead
+ * wait to every clean run. `ok` is "condition met"; `indeterminate`
+ * distinguishes an unreadable tree (the caller errors — unknown is not false)
+ * from a plainly unmet condition (the caller skips).
+ */
+export function probeWhenCondition(
+  env: ActionEnv,
+  cond: {
+    condition: WaitCondition;
+    selector: FlowSelector;
+    expectedText?: string;
+    textMatch?: TextMatchMode;
+  }
+): Promise<DirectiveOutcome> {
+  return waitForCondition(env, cond, DEFAULT_ASSERT_TIMEOUT_MS);
+}
 
 /**
  * The strict selectors a flow selector resolves through, in order. A loose
@@ -763,11 +791,35 @@ async function waitForCondition(
     }
   }
 
-  if (fetchError) return { ok: false, reason: `could not read the UI tree: ${fetchError}` };
-  if (step.condition === "hidden" && !everTrustedRead) {
+  // Unknown, not false: the window never produced a read we can trust —
+  // every fetch either threw or returned a blind tree (empty + degraded
+  // hint, or empty after the selector had matched). This is not specific to
+  // `hidden`: a probe that never got a trustworthy look at the screen cannot
+  // vouch for "condition false" for any condition. Conversely, once a trusted
+  // read exists, a transient fetch error on the trailing polls does NOT make
+  // the outcome unknown — the reads that succeeded already showed the
+  // condition false, and a last-poll blip must not flip a clean skip into a
+  // hard error.
+  if (!everTrustedRead) {
     return {
       ok: false,
-      reason: "could not confirm the element is hidden — the UI tree was empty or unreadable",
+      indeterminate: true,
+      reason: fetchError
+        ? `could not read the UI tree: ${fetchError}`
+        : "could not evaluate the condition — every read of the UI tree was empty or degraded",
+    };
+  }
+  // `hidden` with an evidence gap: the element matched on an earlier trusted
+  // read and every read since was blind or failed, so gone-ness can't be
+  // confirmed — also unknown, not false. (A trusted read WITHOUT a visible
+  // match would have satisfied `hidden` inside the loop; a final trusted
+  // read WITH one falls through to the determinate "still visible" below.)
+  if (step.condition === "hidden" && !lastMatches.some(isVisible)) {
+    return {
+      ok: false,
+      indeterminate: true,
+      reason:
+        "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty or unreadable",
     };
   }
   return {
