@@ -20,8 +20,10 @@ const zodSchema = z.object({
     .describe(
       "Text to type character by character. Handles uppercase and common punctuation. " +
         "To type a credential without its plaintext ever entering your context, use a secret placeholder: " +
-        '`{{secret:NAME}}` types the value of the `ARGENT_SECRET_NAME` environment variable set on the machine running the tool-server (e.g. text: "{{secret:APP_PASSWORD}}"). ' +
-        "Placeholders can be embedded in longer text and are never echoed back resolved."
+        "`{{secret:<NAME>}}` types the value of the `ARGENT_SECRET_<NAME>` environment variable set on the machine running the tool-server " +
+        '— e.g. text: "{{secret:APP_PASSWORD}}" types the value of `ARGENT_SECRET_APP_PASSWORD`. Only env vars with the `ARGENT_SECRET_` prefix are resolvable. ' +
+        "Placeholders can be embedded in longer text and are never echoed back resolved. " +
+        "If the secret you need is not set, ask the user to export it as `ARGENT_SECRET_<NAME>` and restart the session — NEVER ask the user to paste the secret value into the conversation."
     ),
   key: z
     .string()
@@ -79,7 +81,7 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
 Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the device's input backend is not reachable.
-- text: types a string (supports uppercase, digits, common punctuation). Supports \`{{secret:NAME}}\` placeholders resolved server-side from \`ARGENT_SECRET_NAME\` env vars, so credentials never enter agent context — the result echoes the placeholder, not the value.
+- text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var (prefix mandatory; \`{{secret:APP_PASSWORD}}\` ↔ \`ARGENT_SECRET_APP_PASSWORD\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
 Provide text, key, or both — when both are given, the text is typed first and the key is pressed after it (text + key:"enter" types and submits).`,

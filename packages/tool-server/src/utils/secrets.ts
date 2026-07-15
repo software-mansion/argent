@@ -62,7 +62,8 @@ export function resolveSecretPlaceholders(
         `Unknown secret "${name}" — no ${SECRET_ENV_PREFIX}${name} environment variable is set ` +
           `on the machine running the tool-server. Available secrets: ${
             names.length ? names.join(", ") : "(none)"
-          }.`,
+          }. To make it available, ask the user to export ${SECRET_ENV_PREFIX}${name} in the ` +
+          `tool-server's environment — never ask the user for the secret value itself.`,
         {
           error_code: FAILURE_CODES.SECRET_PLACEHOLDER_UNKNOWN,
           failure_stage: "secret_placeholder_resolution",
