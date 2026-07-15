@@ -99,6 +99,39 @@ describe("hidden timeout diagnostics", () => {
     expect(result.steps[0].reason).not.toMatch(/still visible/);
   });
 
+  it("does not claim the element was still visible when the final reads threw", async () => {
+    // Same evidence gap as the blank-tree case, surfaced as a THROW: read 1
+    // is trusted and sees the spinner, then the tree source disconnects and
+    // every later fetch rejects. The stale read-1 match must not stand in as
+    // current evidence — the failure must say the check could not be
+    // confirmed (and why), not that the element was "still visible".
+    let reads = 0;
+    currentFetch = () => {
+      if (reads++ === 0) {
+        return {
+          tree: screen([
+            n({ identifier: "spinner", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } }),
+          ]),
+          source: "native-devtools",
+        };
+      }
+      throw new Error("native devtools disconnected");
+    };
+
+    await writeFlow("dark-hidden", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "hidden", selector: { identifier: "spinner" } }],
+    });
+
+    const result = await run("dark-hidden");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/could not confirm/);
+    expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
+    expect(result.steps[0].reason).not.toMatch(/still visible/);
+  });
+
   it("still reports a genuinely visible element as still visible", async () => {
     currentFetch = () => ({
       tree: screen([
@@ -113,6 +146,34 @@ describe("hidden timeout diagnostics", () => {
     });
 
     const result = await run("stuck-spinner");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/still visible/);
+  });
+
+  it("reports still visible when a mid-window throw is followed by a trusted read", async () => {
+    // A blip that RECOVERS: read 2 throws, but every later read is trusted
+    // and still shows the spinner. The final read is honest evidence, so the
+    // determinate "still visible" verdict stands — indeterminacy is only for
+    // windows whose last look at the screen was blind or failed.
+    let reads = 0;
+    currentFetch = () => {
+      if (reads++ === 1) throw new Error("native devtools disconnected");
+      return {
+        tree: screen([
+          n({ identifier: "spinner", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } }),
+        ]),
+        source: "native-devtools",
+      };
+    };
+
+    await writeFlow("blip-spinner", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "hidden", selector: { identifier: "spinner" } }],
+    });
+
+    const result = await run("blip-spinner");
 
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("fail");

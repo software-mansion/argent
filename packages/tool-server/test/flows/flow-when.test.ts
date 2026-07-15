@@ -473,6 +473,88 @@ describe("when: execution", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("errors a hidden guard whose later reads throw after the element matched", async () => {
+    // The same evidence gap as the blind-read case, surfaced as a THROW: read
+    // 1 is trusted and sees the spinner, then the tree source disconnects and
+    // every later fetch rejects. The visible match left over from read 1 must
+    // not stand in as current evidence and turn the guard into a determinate
+    // "condition not met" skip — gone-ness is unconfirmable, so error.
+    let reads = 0;
+    currentTree = () => {
+      if (reads++ === 0) {
+        return screen([
+          n({ label: "Spinner", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } }),
+        ]);
+      }
+      throw new Error("native devtools disconnected");
+    };
+    await writeFlow("spinner-dark", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "hidden",
+            selector: { text: "Spinner", loose: true },
+          },
+          steps: [{ kind: "echo", message: "cleanup" }],
+        },
+        { kind: "echo", message: "never reached" },
+      ],
+    });
+
+    const result = await run("spinner-dark");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:error",
+      "echo:skip",
+      "echo:skip",
+    ]);
+    expect(result.steps[0].reason).toMatch(/could not confirm the element is hidden/i);
+    expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
+    expect(result.ok).toBe(false);
+  });
+
+  it("keeps a clean skip when trusted reads showed a non-hidden condition false and only trailing reads throw", async () => {
+    // The trailing-blip tolerance for every condition except `hidden`: the
+    // trusted first read already showed "What's new" absent, so a last-poll
+    // disconnect is a blip, not doubt — the skip stays clean and the run green.
+    let reads = 0;
+    currentTree = () => {
+      if (reads++ === 0) {
+        return screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
+      }
+      throw new Error("native devtools disconnected");
+    };
+    await writeFlow("blip-skip", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "What's new", loose: true },
+          },
+          steps: [{ kind: "tap", selector: { text: "Skip", loose: true } }],
+        },
+        { kind: "echo", message: "after block" },
+      ],
+    });
+
+    const result = await run("blip-skip");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:skip",
+      "tap:skip",
+      "echo:pass",
+    ]);
+    expect(result.steps[0].reason).toMatch(/condition not met/);
+    expect(result.taps).toHaveLength(0);
+    expect(result.ok).toBe(true);
+  });
+
   it("streams every when-related report line to the live progress consumer", async () => {
     // All when reports go through pushReport — the progress stream and the
     // final report must contain the same lines.

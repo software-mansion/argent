@@ -48,10 +48,10 @@ export interface DirectiveOutcome {
   /**
    * The condition could not be evaluated — unknown, not false: the window
    * never produced a trustworthy read (every fetch threw or returned a
-   * blind/degraded tree), or a `hidden` check ended on blind reads after the
-   * element had matched. Read by the `when:` guard probe, which must error
-   * rather than silently skip a block a broken tree source can't vouch for;
-   * a plain `assert` reports it as an ordinary failure.
+   * blind/degraded tree), or a `hidden` check ended on a blind or failed
+   * read after the element had matched. Read by the `when:` guard probe,
+   * which must error rather than silently skip a block a broken tree source
+   * can't vouch for; a plain `assert` reports it as an ordinary failure.
    */
   indeterminate?: boolean;
 }
@@ -765,6 +765,10 @@ async function waitForCondition(
   let fetchError: string | undefined;
   let everMatched = false;
   let everTrustedRead = false;
+  // Whether the LAST completed read attempt was trusted — assigned on every
+  // pass through the loop (true on a trusted fetch, false on a blind one or a
+  // throw), so post-loop it describes the final poll.
+  let lastReadTrusted: boolean;
   let finalPoll = false;
 
   for (;;) {
@@ -777,6 +781,7 @@ async function waitForCondition(
       const blind =
         data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
       everTrustedRead ||= !blind;
+      lastReadTrusted = !blind;
       if (
         !blind &&
         evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)
@@ -785,6 +790,9 @@ async function waitForCondition(
       }
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
+      // A throw is as blind as an empty tree — `lastMatches` still holds the
+      // previous successful read, which must not pass for current evidence.
+      lastReadTrusted = false;
     }
     if (Date.now() >= deadline) {
       if (finalPoll) break;
@@ -805,7 +813,10 @@ async function waitForCondition(
   // read exists, a transient fetch error on the trailing polls does NOT make
   // the outcome unknown — the reads that succeeded already showed the
   // condition false, and a last-poll blip must not flip a clean skip into a
-  // hard error.
+  // hard error. (`hidden` is the one exception, handled below: there
+  // "condition false" means the element was VISIBLE, and the element leaving
+  // is exactly the transition `hidden` waits for — so visibility seen before
+  // the reads went dark cannot vouch for it still being on screen.)
   if (!everTrustedRead) {
     return {
       ok: false,
@@ -816,16 +827,18 @@ async function waitForCondition(
     };
   }
   // `hidden` with an evidence gap: the element matched on an earlier trusted
-  // read and every read since was blind or failed, so gone-ness can't be
+  // read and the FINAL read attempt was blind or threw, so gone-ness can't be
   // confirmed — also unknown, not false. (A trusted read WITHOUT a visible
-  // match would have satisfied `hidden` inside the loop; a final trusted
-  // read WITH one falls through to the determinate "still visible" below.)
-  if (step.condition === "hidden" && !lastMatches.some(isVisible)) {
+  // match would have satisfied `hidden` inside the loop, so a trusted final
+  // read implies it saw the element — that falls through to the determinate
+  // "still visible" below with `lastMatches` fresh from that read.)
+  if (step.condition === "hidden" && !lastReadTrusted) {
     return {
       ok: false,
       indeterminate: true,
-      reason:
-        "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty or unreadable",
+      reason: fetchError
+        ? `could not confirm the element is hidden — it was visible earlier, but the last UI read failed: ${fetchError}`
+        : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
     };
   }
   return {
@@ -856,13 +869,11 @@ function assertReason(
         ? `element(s) matched ${sel} but none was visible (zero-area frame)`
         : `no element matched selector ${sel}`;
     case "hidden":
-      // No visible match on the final read means the deadline was spent on
-      // blind reads (blank trees the poll refuses to trust once the element
-      // has matched — see waitForCondition): the element may well be gone,
-      // but that can't be confirmed, so don't claim it was still on screen.
-      return matches.some(isVisible)
-        ? `an element matching ${sel} was still visible`
-        : `could not confirm the element is hidden — it was visible earlier, but the last UI reads returned an empty tree`;
+      // Reached only when the final read was trusted (waitForCondition
+      // returns indeterminate when it was blind or threw), and a trusted read
+      // without a visible match satisfies `hidden` inside the poll loop — so
+      // `matches` holds what that read saw: the element, still on screen.
+      return `an element matching ${sel} was still visible`;
     case "text": {
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       if (!first) return `no element matched selector ${sel}`;
