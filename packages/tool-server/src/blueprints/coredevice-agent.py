@@ -172,8 +172,17 @@ class Agent:
             types = await audit.supported_audits_types()
             await audit._ensure_ready()
             await audit._invoke("deviceBeginAuditTypes:", types, expects_reply=False)
+            deadline = asyncio.get_event_loop().time() + 10.0
             while True:
-                name, args = await audit._event_queue.get()
+                # Bounded wait: if the completion event never arrives (locked
+                # device, unsupported audit), an unbounded get() would wedge
+                # this strictly-serial agent forever — every later op then
+                # times out client-side. Timeout falls into the best-effort
+                # except below and the tree still returns without rects.
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    raise TimeoutError("audit completion event not received within 10s")
+                name, args = await asyncio.wait_for(audit._event_queue.get(), timeout=remaining)
                 if name != "hostDeviceDidCompleteAuditCategoriesWithAuditIssues:":
                     continue
                 issues = deserialize_object(audit._extract_event_payload(args))

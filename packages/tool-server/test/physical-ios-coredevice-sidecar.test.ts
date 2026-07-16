@@ -11,13 +11,24 @@
  *    request/response, and error propagation (via a stand-in node process).
  */
 import { describe, it, expect } from "vitest";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { adaptCoreDeviceAxToDescribeResult } from "../src/tools/describe/platforms/ios/ios-coredevice-ax-adapter";
 import { agentError } from "../src/blueprints/core-device";
-import { CoreDeviceAgent, CoreDeviceAgentError } from "../src/blueprints/coredevice-agent";
+import {
+  CoreDeviceAgent,
+  CoreDeviceAgentError,
+  coreDeviceAgentScript,
+} from "../src/blueprints/coredevice-agent";
+
+describe("embedded agent script", () => {
+  it("AGENT_SCRIPT_B64 matches coredevice-agent.py (regenerate after editing the .py)", () => {
+    const py = readFileSync(join(__dirname, "../src/blueprints/coredevice-agent.py"), "utf8");
+    expect(coreDeviceAgentScript()).toBe(py);
+  });
+});
 
 interface Node {
   role: string;
