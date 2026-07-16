@@ -62,6 +62,10 @@ function listeningPids(port: number): number[] {
     const output = execFileSync("netstat", ["-ano"], {
       encoding: "utf-8",
       timeout: 5_000,
+      // `netstat -ano` dumps every socket on the host; a busy box easily
+      // exceeds Node's default 1 MiB maxBuffer, and the resulting ENOBUFS
+      // throw would misread as "port is free" (stopped:false).
+      maxBuffer: 16 * 1024 * 1024,
     });
     return parseNetstatListeningPids(output, port);
   }

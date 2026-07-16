@@ -29,11 +29,21 @@ on:
       - "packages/tool-server/src/utils/android-binary.ts"
       - "packages/tool-server/src/utils/adb.ts"
       - "packages/tool-server/src/utils/check-deps.ts"
+      - "packages/tool-server/src/utils/vega-cli.ts"
+      - "packages/tool-server/src/utils/chromium-discovery.ts"
       - "packages/tool-server/src/tools/simulator/stop-metro.ts"
       - "packages/tool-server/src/tools/devices/boot-device.ts"
+      # The unit tests this job runs — editing one must re-run it here.
+      - "packages/tool-server/test/command-on-path.test.ts"
+      - "packages/tool-server/test/android-binary-windows.test.ts"
+      - "packages/tool-server/test/adb-resolve-avd-path.test.ts"
+      - "packages/tool-server/test/check-deps.test.ts"
+      - "packages/tool-server/test/http-dep-gate.test.ts"
+      - "packages/tool-server/test/stop-metro-netstat.test.ts"
       - "packages/native-devtools-ios/src/index.ts"
       - "packages/argent/scripts/bundle-tools.cjs"
       - "packages/argent/scripts/argent-simulator-server.cjs"
+      - "scripts/dev.cjs"
       - "scripts/download-simulator-server.sh"
       - "scripts/ci/windows-chromium-e2e.mjs"
       - "scripts/ci/e2e-chromium-page.html"
@@ -78,6 +88,7 @@ jobs:
           test/adb-resolve-avd-path.test.ts
           test/check-deps.test.ts
           test/http-dep-gate.test.ts
+          test/stop-metro-netstat.test.ts
 
       - name: Resolver unit tests on Windows (native-devtools-ios)
         working-directory: packages/native-devtools-ios
