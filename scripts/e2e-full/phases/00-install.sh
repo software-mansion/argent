@@ -14,8 +14,11 @@
 # adapter selection is environment-dependent (which editors are "detected"), so
 # we assert the semantic outcome across all known config files rather than
 # pinning one path. Prints the first matching file (empty if none).
+# The default pattern is the quoted server name, not the npm package name: a
+# global-mode init registers the MCP command as plain `argent` (the global bin),
+# so `@swmansion/argent` never appears in the written config.
 _argent_mcp_in_ws() { # ws [grep-pattern]
-  local pat="${2:-@swmansion/argent}"
+  local pat="${2:-\"argent\"}"
   grep -rl "$pat" "$1" \
     --include='*.json' --include='*.jsonc' --include='*.toml' --include='*.yaml' 2>/dev/null \
     | grep -v -e '/node_modules/' -e 'skills-lock.json' -e 'package-lock.json' -e 'package.json' \
