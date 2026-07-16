@@ -92,6 +92,19 @@ export E2E_TOOLS_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("12
 export HOME_REAL="$HOME"
 # Redirect argent state/config into the sandbox for the whole run.
 export HOME="$E2E_HOME"
+# Device state must stay visible through the sandbox HOME, or the android tier
+# false-fails on every gesture/screenshot: adb auth keys live in ~/.android, and
+# on macOS the emulator writes its gRPC discovery files (avd/running/pid_*.ini)
+# under ~/Library/Caches/TemporaryItems, which simulator-server resolves via
+# $HOME ("emulator not found among running emulators" otherwise). On Linux that
+# discovery uses XDG_RUNTIME_DIR, unaffected by the redirect. Both paths are
+# device state, not the argent/editor config this sandbox exists to isolate —
+# deliberately NOT ~/Library wholesale, which would expose real editor configs.
+[ -d "$HOME_REAL/.android" ] && ln -s "$HOME_REAL/.android" "$E2E_HOME/.android"
+if [ "$E2E_OS" = darwin ] && [ -d "$HOME_REAL/Library/Caches/TemporaryItems" ]; then
+  mkdir -p "$E2E_HOME/Library/Caches"
+  ln -s "$HOME_REAL/Library/Caches/TemporaryItems" "$E2E_HOME/Library/Caches/TemporaryItems"
+fi
 export PATH="$E2E_PREFIX/bin:$PATH"
 # Confine EVERY `npm install -g` (ours AND the ones `argent init/update` runs
 # internally) to the sandbox prefix — never the real system global.
