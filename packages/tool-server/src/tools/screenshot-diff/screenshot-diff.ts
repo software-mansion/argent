@@ -111,12 +111,17 @@ const HORIZONTAL_TEXT_MERGE_MAX_GAP = 120;
 // still report the dominant RGB channel.
 const UNIFORM_BRIGHTNESS_DELTA_TOLERANCE = 4;
 
-export async function diffPngFiles(options: {
+type TopMaskPolicy = "none" | "status-bar";
+
+export interface DiffPngFilesOptions {
   baselinePath: string;
   currentPath: string;
   outputDir: string;
-}): Promise<PngDiffResult> {
-  const settings = resolveDiffSettings();
+  topMask?: TopMaskPolicy;
+}
+
+export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDiffResult> {
+  const settings = resolveDiffSettings(options.topMask ?? "status-bar");
 
   const [decodedBaseline, decodedCurrent] = await Promise.all([
     decodePngFile(options.baselinePath),
@@ -197,10 +202,10 @@ export async function diffPngFiles(options: {
   });
 }
 
-function resolveDiffSettings(): DiffSettings {
+function resolveDiffSettings(topMask: TopMaskPolicy): DiffSettings {
   return {
     thresholdSquared: DEFAULT_THRESHOLD * DEFAULT_THRESHOLD * MAX_RGB_DISTANCE_SQUARED,
-    ignoreTopNormalizedY: DEFAULT_IGNORE_TOP_NORMALIZED_Y,
+    ignoreTopNormalizedY: topMask === "none" ? 0 : DEFAULT_IGNORE_TOP_NORMALIZED_Y,
     joinGapPixels: DEFAULT_REGION_MERGE_DISTANCE,
     contextDiffScale: DEFAULT_CONTEXT_DIFF_SCALE,
   };

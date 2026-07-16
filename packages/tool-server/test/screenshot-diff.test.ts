@@ -218,6 +218,60 @@ describe("diffPngFiles", () => {
     expect(readRgb(diff, 5, 21)).toEqual({ r: 0, g: 200, b: 0 });
   });
 
+  it("compares the full image when the top mask is disabled", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 12, 100, { r: 20, g: 20, b: 20 });
+    await writePng(
+      currentPath,
+      12,
+      100,
+      { r: 20, g: 20, b: 20 },
+      rectPixels(0, 0, 12, 6, { r: 240, g: 240, b: 240 })
+    );
+
+    const result = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      topMask: "none",
+    });
+
+    expect(result).toMatchObject({
+      differentPixels: 72,
+      mismatchPercentage: 6,
+      regions: [
+        expect.objectContaining({
+          bounds: { x: 0, y: 0, width: 12, height: 6 },
+          pixelCount: 72,
+        }),
+      ],
+    });
+    expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ignoreTopPixels: 0 })
+    );
+  });
+
+  it("does not mask an entire one-row image when the top mask is disabled", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 1, { r: 0, g: 0, b: 0 });
+    await writePng(currentPath, 2, 1, { r: 255, g: 255, b: 255 });
+
+    const masked = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+    const unmasked = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      topMask: "none",
+    });
+
+    expect(masked).toMatchObject({ differentPixels: 0, mismatchPercentage: 0 });
+    expect(unmasked).toMatchObject({ differentPixels: 2, mismatchPercentage: 100 });
+  });
+
   it("colors changed pixels green when they brightened and red when they darkened", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");
