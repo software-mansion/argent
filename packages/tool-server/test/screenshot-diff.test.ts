@@ -204,7 +204,12 @@ describe("diffPngFiles", () => {
       ...rectPixels(4, 20, 4, 4, { r: 255, g: 0, b: 0 }),
     ]);
 
-    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+    const result = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      topMask: "status-bar",
+    });
 
     expect(result.regions).toEqual([
       expect.objectContaining({
