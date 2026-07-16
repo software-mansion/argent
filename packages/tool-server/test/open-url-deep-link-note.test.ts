@@ -23,14 +23,34 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// androidImpl goes through the adbShell util; ios-remote through simctlOpenUrl.
+// Stub both at the module boundary to assert their returned result shapes.
+const adbShellMock = vi.fn();
+vi.mock("../src/utils/adb", async () => {
+  const actual = await vi.importActual<object>("../src/utils/adb");
+  return { ...actual, adbShell: (...args: unknown[]) => adbShellMock(...args) };
+});
+const simctlOpenUrlMock = vi.fn();
+vi.mock("../src/utils/sim-remote", async () => {
+  const actual = await vi.importActual<object>("../src/utils/sim-remote");
+  return { ...actual, simctlOpenUrl: (...args: unknown[]) => simctlOpenUrlMock(...args) };
+});
+
 import { httpDeepLinkNote } from "../src/tools/open-url/deep-link-note";
 import { iosImpl } from "../src/tools/open-url/platforms/ios";
+import { androidImpl } from "../src/tools/open-url/platforms/android";
+import { iosRemoteImpl } from "../src/tools/open-url/platforms/ios-remote";
 
 const device = { platform: "ios", udid: "SIM" } as unknown as DeviceInfo;
+const androidDevice = { platform: "android", udid: "emulator-5554" } as unknown as DeviceInfo;
 
 beforeEach(() => {
   execFileMock.mockReset();
   execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+  adbShellMock.mockReset();
+  adbShellMock.mockResolvedValue("Starting: Intent { act=android.intent.action.VIEW }");
+  simctlOpenUrlMock.mockReset();
+  simctlOpenUrlMock.mockResolvedValue(undefined);
 });
 
 describe("httpDeepLinkNote", () => {
@@ -39,6 +59,7 @@ describe("httpDeepLinkNote", () => {
       "https://bsky.app/profile/tvpworld.bsky.social",
       "http://example.com",
       "HTTPS://EXAMPLE.COM", // scheme match is case-insensitive
+      "http:example.com", // slashless form — browsers normalize it to http://
     ]) {
       const note = httpDeepLinkNote(url);
       expect(note, url).toBeTypeOf("string");
@@ -81,6 +102,47 @@ describe("open-url iOS handler surfaces the caveat only for web URLs", () => {
 
   it("omits note for a custom-scheme deep link", async () => {
     const res = await iosImpl.handler({}, { udid: "SIM", url: "bluesky://profile/x" }, device);
+    expect(res.opened).toBe(true);
+    expect(res.note).toBeUndefined();
+  });
+});
+
+describe("open-url Android handler surfaces the caveat only for web URLs", () => {
+  it("attaches note for an https App Link", async () => {
+    const res = await androidImpl.handler(
+      {},
+      { udid: "emulator-5554", url: "https://bsky.app/profile/x" },
+      androidDevice
+    );
+    expect(res.opened).toBe(true);
+    expect(res.note).toBeTypeOf("string");
+  });
+
+  it("omits note for a custom-scheme deep link", async () => {
+    const res = await androidImpl.handler(
+      {},
+      { udid: "emulator-5554", url: "geo:37.0,-122.0" },
+      androidDevice
+    );
+    expect(res.opened).toBe(true);
+    expect(res.note).toBeUndefined();
+  });
+});
+
+describe("open-url iOS remote handler surfaces the caveat only for web URLs", () => {
+  it("attaches note for an https Universal Link", async () => {
+    const res = await iosRemoteImpl.handler(
+      {},
+      { udid: "SIM", url: "https://example.com" },
+      device
+    );
+    expect(res.opened).toBe(true);
+    expect(res.note).toBeTypeOf("string");
+    expect(simctlOpenUrlMock).toHaveBeenCalledWith("SIM", "https://example.com");
+  });
+
+  it("omits note for a custom-scheme deep link", async () => {
+    const res = await iosRemoteImpl.handler({}, { udid: "SIM", url: "maps://" }, device);
     expect(res.opened).toBe(true);
     expect(res.note).toBeUndefined();
   });

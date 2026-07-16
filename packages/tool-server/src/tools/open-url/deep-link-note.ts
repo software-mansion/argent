@@ -15,7 +15,10 @@
  * registered app reliably and need no caveat.
  */
 export function httpDeepLinkNote(url: string): string | undefined {
-  if (!/^https?:\/\//i.test(url)) return undefined;
+  // Scheme-only match (no `//` required): browsers normalize a slashless
+  // `http:example.com` to `http://example.com`, so it lands in Safari the same
+  // way — and no custom scheme starts with `http:`/`https:`.
+  if (!/^https?:/i.test(url)) return undefined;
   return (
     "This is a web URL — it opens the native app only if an app installed on this device is " +
     "verified for the link's domain (iOS Universal Links / Android App Links); otherwise it " +
