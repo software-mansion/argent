@@ -397,14 +397,12 @@ type YamlScrollBody =
 /**
  * A `when:` guard body: exactly one UI condition key (the await/assert shapes,
  * no `timeout` — evaluation always uses the assert grace) or `{ platform }`.
+ * Deriving the UI arm from {@link YamlWaitCondition} keeps the two in lockstep:
+ * the guard is parsed by the same parseWaitFields as await/assert, so a
+ * condition shape added there is a when-guard shape too. `timeout` stays out
+ * by construction — the await step type adds it as a sibling key, not here.
  */
-type YamlWhenBody =
-  | { exists: YamlSelector }
-  | { visible: YamlSelector }
-  | { hidden: YamlSelector }
-  | { text: { in: YamlSelector; contains: string } }
-  | { text: { in: YamlSelector; equals: string } }
-  | { platform: WhenPlatform };
+type YamlWhenBody = YamlWaitCondition | { platform: WhenPlatform };
 
 type YamlStep =
   | { echo: string }
@@ -643,13 +641,13 @@ function toYamlStep(step: FlowStep): YamlStep {
       const when: YamlWhenBody =
         step.condition.kind === "platform"
           ? { platform: step.condition.platform }
-          : (waitToYaml(
+          : waitToYaml(
               step.condition.condition,
               step.condition.selector,
               step.condition.expectedText,
               step.condition.textMatch,
               undefined
-            ) as YamlWhenBody);
+            );
       return { when, steps: step.steps.map(toYamlStep) };
     }
     case "tap": {

@@ -112,6 +112,17 @@ describe("when: parse/serialize", () => {
           },
           steps: [{ kind: "echo" as const, message: "sale banner up" }],
         },
+        {
+          kind: "when" as const,
+          condition: {
+            kind: "ui" as const,
+            condition: "text" as const,
+            selector: { identifier: "total" },
+            expectedText: "^Total: \\$\\d+$",
+            textMatch: "matches" as const,
+          },
+          steps: [{ kind: "echo" as const, message: "total rendered" }],
+        },
       ],
     };
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
