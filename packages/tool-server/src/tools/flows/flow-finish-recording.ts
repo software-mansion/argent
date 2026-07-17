@@ -13,6 +13,7 @@ import {
   type FlowStep,
   type FlowSavedTo,
   type FlowSelector,
+  type GestureTarget,
   type RecordedStepWarning,
   type RecordingSession,
 } from "./flow-utils";
@@ -52,6 +53,10 @@ function textConditionLabel(
     : textMatch === "equals"
       ? `text ${selector} == ${JSON.stringify(expected)}`
       : `text ${selector} contains ${JSON.stringify(expected)}`;
+}
+
+function targetLabel(target: GestureTarget): string {
+  return "selector" in target ? selectorLabel(target.selector) : `(${target.x}, ${target.y})`;
 }
 
 const zodSchema = z.object({
@@ -353,7 +358,9 @@ export function summarizeStep(step: FlowStep, n: number): string {
       // replays and still render nothing. Neither kind is recorder-built, so both
       // reach an author only through the finish `summary`, beside the `flowFile`
       // that spells them out.
-      const target = step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`;
+      const target = targetLabel(
+        step.selector ? { selector: step.selector } : { x: step.x as number, y: step.y as number }
+      );
       // `times: 1` is the default and never lands in the file (parseTapTimes
       // normalizes it to absent), so `×1` would describe a file that can't exist.
       const times =
@@ -361,6 +368,12 @@ export function summarizeStep(step: FlowStep, n: number): string {
       const held =
         step.kind === "long-press" && step.duration !== undefined ? ` for ${step.duration}ms` : "";
       return `${n}. ${step.kind}: ${target}${times}${held}`;
+    }
+    case "swipe": {
+      const travel =
+        step.direction ??
+        (step.by ? `by ${JSON.stringify(step.by)}` : `to ${targetLabel(step.to as GestureTarget)}`);
+      return `${n}. swipe: ${travel}${step.from ? ` from ${targetLabel(step.from)}` : ""}`;
     }
     case "type":
       return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;

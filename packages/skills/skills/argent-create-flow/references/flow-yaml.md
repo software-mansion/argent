@@ -103,7 +103,7 @@ Scopes can combine and nest, with at most six scope keys. Use strict selectors f
 
 ## Directives
 
-Directives stop the flow on failure and skip later steps. `flow-execute` documents their shapes. The available directives are `launch`, `tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `echo`, and `tool`.
+Directives stop the flow on failure and skip later steps. `flow-execute` documents their shapes. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `echo`, and `tool`.
 
 Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
 
@@ -115,6 +115,14 @@ Use the launch map for cross-platform flows. A bare launch applies everywhere an
 An Android app that needs a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` and keep the flow as a fragment.
 
 In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `down`, `left`, and `right` directions. The default is `down`; set it explicitly to reach a target above the viewport or along a horizontal carousel. If the target is already visible, the step is a safe no-op. `tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` when the target can be off-screen. Use `within` for a nested scroller.
+
+### `swipe`
+
+`swipe` is one semantic finger flick where the gesture itself is the action — dismiss a card, page a carousel, open a drawer, pull-to-refresh: `- swipe: left`, `- swipe: { from: Card, direction: left }`, `- swipe: { by: { y: -0.4 } }`.
+
+**Never use `swipe` to scroll.** Whenever the goal is "bring X on screen so the next step can act on it", write `scroll-to: <X>` instead: it is goal-seeking (stops exactly when the target appears), momentum-free, and a no-op if the target is already visible. A `swipe`'s fixed travel plus fling lands differently per device, screen size, and content — and since action directives never auto-scroll, a swipe that lands short leaves the following `tap`/`type` unresolved. If a `swipe` in a flow is followed by a step that needs something the swipe was meant to reveal, that swipe is a scroll in disguise — rewrite it.
+
+**`direction` is the finger's travel** (the Maestro convention): `swipe: left` flings content leftward, revealing what's to the right — the _opposite_ sense of `scroll-to`'s content direction. The travel is exactly one of `direction` (Maestro-compatible screen geometry, edge-gesture-safe start/end points), `by: { x?, y? }` (signed 0–1 screen fractions; one axis or both for a diagonal), or `to: <target>` (explicit endpoint — selector or point). `from` anchors the start on a selector or `{ x, y }` point; omitted, it defaults to the direction's standard start (screen centre for `by`/`to`). Only those unanchored direction defaults provide OS-edge margins: an explicit `from` is an intentional override whose resolved point is used verbatim when it is on-screen. Use `from` only for app-level gestures; keep deliberate system-edge gestures such as system back as raw `tool: gesture-swipe` steps. `settle: true` gives a momentum-free swipe that lands exactly where the finger stops; `duration` (ms) slows the travel. On Chromium a swipe is a mouse drag (`gesture-drag`); on Vega it fails upfront like the other touch directives.
 
 `type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`. The runner uses the first source that defines the name: environment `ARGENT_SECRET_NAME`; project `.argent/secrets.env`; project `.env.local`, then `.env`; then `~/.argent/secrets.env`. The two `secrets.env` files accept the bare `NAME`, but the shared dotenv files expose only `ARGENT_SECRET_`-prefixed keys, so a bare `NAME=…` in `.env` or `.env.local` stays unresolved. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
 
@@ -194,7 +202,7 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 
 - iOS and Android can run fragments or e2e flows inline. A nested e2e launch restarts its app.
 - Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
-- Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
+- Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
 
 ## Snapshots and standalone runs
 
