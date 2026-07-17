@@ -675,7 +675,7 @@ describe("flow-finish-recording", () => {
               expectedText: "^Total: \\$\\d+\\.\\d{2}$",
               textMatch: "matches",
             },
-            steps: guarded,
+            steps: [...guarded, { kind: "echo", message: "and again" }],
           },
         ],
       })
@@ -684,9 +684,9 @@ describe("flow-finish-recording", () => {
     const result = await flowFinishRecordingTool.execute({}, {});
 
     expect(result.summary).toEqual([
-      '1. when: text {"id":"status"} contains "Ready \\"now\\"\\nnext" (1 steps)',
-      '2. when: text {"id":"status"} == "Ready" (1 steps)',
-      '3. when: text {"id":"total"} matches /^Total: \\$\\d+\\.\\d{2}$/ (1 steps)',
+      '1. when: text {"id":"status"} contains "Ready \\"now\\"\\nnext" (1 step)',
+      '2. when: text {"id":"status"} == "Ready" (1 step)',
+      '3. when: text {"id":"total"} matches /^Total: \\$\\d+\\.\\d{2}$/ (2 steps)',
     ]);
   });
 });

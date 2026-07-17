@@ -116,7 +116,9 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
                     step.condition.textMatch
                   )
                 : `${step.condition.condition} ${selectorLabel(step.condition.selector)}`;
-          return `${n}. when: ${cond} (${step.steps.length} steps)`;
+          // Pluralize like flow-run's skip reason so the two surfaces agree.
+          const count = step.steps.length;
+          return `${n}. when: ${cond} (${count} step${count === 1 ? "" : "s"})`;
         }
         case "scroll-to":
           return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
