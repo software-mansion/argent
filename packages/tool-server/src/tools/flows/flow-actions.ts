@@ -576,30 +576,40 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
 }
 
 /**
- * Tap either an element (resolve a selector → frame, auto-waiting) or a raw
- * normalized point. Coordinate taps are the fallback for elements with no
- * stable selector (e.g. an unlabeled view). `times` rides the gesture-tap
- * tool's `clickCount`: one resolution, one dispatched multi-tap gesture —
- * never N separate calls, whose RPC gaps could fall outside the OS
- * double-tap window.
+ * Resolve a gesture target (`tap`/`long-press`) to a normalized point: a
+ * selector resolves to its frame centre (settled tree + auto-wait); raw
+ * coordinates pass through untouched. Coordinate targets are the fallback for
+ * elements with no stable selector (e.g. an unlabeled view).
+ */
+async function resolveTargetPoint(
+  env: ActionEnv,
+  target: { selector?: FlowSelector; x?: number; y?: number }
+): Promise<{ x: number; y: number } | { fail: DirectiveOutcome }> {
+  if (target.selector) {
+    const frame = await waitForFrame(env, target.selector);
+    if (frame === "aborted") return { fail: ABORTED_OUTCOME };
+    if (!frame) {
+      return { fail: { ok: false, reason: offscreenHint(target.selector) } };
+    }
+    return getDescribeTapPoint(frame);
+  }
+  if (typeof target.x === "number" && typeof target.y === "number") {
+    return { x: target.x, y: target.y };
+  }
+  return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };
+}
+
+/**
+ * Tap a resolved target point. `times` rides the gesture-tap tool's
+ * `clickCount`: one resolution, one dispatched multi-tap gesture — never N
+ * separate calls, whose RPC gaps could fall outside the OS double-tap window.
  */
 async function runTap(
   env: ActionEnv,
   target: { selector?: FlowSelector; x?: number; y?: number; times?: number }
 ): Promise<DirectiveOutcome> {
-  let point: { x: number; y: number };
-  if (target.selector) {
-    const frame = await waitForFrame(env, target.selector);
-    if (frame === "aborted") return ABORTED_OUTCOME;
-    if (!frame) {
-      return { ok: false, reason: offscreenHint(target.selector) };
-    }
-    point = getDescribeTapPoint(frame);
-  } else if (typeof target.x === "number" && typeof target.y === "number") {
-    point = { x: target.x, y: target.y };
-  } else {
-    return { ok: false, reason: "tap needs a selector or x/y coordinates" };
-  }
+  const point = await resolveTargetPoint(env, target);
+  if ("fail" in point) return point.fail;
   await invokeOnDevice(env, "gesture-tap", {
     ...point,
     ...(target.times !== undefined ? { clickCount: target.times } : {}),
@@ -616,25 +626,21 @@ async function runTap(
 const DEFAULT_LONG_PRESS_MS = 800;
 
 /**
- * Press-and-hold on an element: resolve the selector (same settle + auto-wait
- * as tap), then hold at the frame centre for `duration` ms. Touch platforms
- * dispatch ONE `gesture-custom` train (Down, then Up delayed by the duration)
- * so the hold length is exact; Chromium has no touch, so the closest honest
- * mapping is a mouse press-hold-release (`gesture-drag` with from == to) —
- * apps implementing pointer-based long-press respond, anything else sees a
- * slow click. A desktop context menu is a *right*-click, deliberately not
- * aliased here.
+ * Press-and-hold on a target (same resolution as tap: selector → frame
+ * centre, or a raw point) for `duration` ms. Touch platforms dispatch ONE
+ * `gesture-custom` train (Down, then Up delayed by the duration) so the hold
+ * length is exact; Chromium has no touch, so the closest honest mapping is a
+ * mouse press-hold-release (`gesture-drag` with from == to) — apps
+ * implementing pointer-based long-press respond, anything else sees a slow
+ * click. A desktop context menu is a *right*-click, deliberately not aliased
+ * here.
  */
 async function runLongPress(
   env: ActionEnv,
-  step: { selector: FlowSelector; duration?: number }
+  step: { selector?: FlowSelector; x?: number; y?: number; duration?: number }
 ): Promise<DirectiveOutcome> {
-  const frame = await waitForFrame(env, step.selector);
-  if (frame === "aborted") return ABORTED_OUTCOME;
-  if (!frame) {
-    return { ok: false, reason: offscreenHint(step.selector) };
-  }
-  const point = getDescribeTapPoint(frame);
+  const point = await resolveTargetPoint(env, step);
+  if ("fail" in point) return point.fail;
   const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
   if (env.device.platform === "chromium") {
     await invokeOnDevice(env, "gesture-drag", {

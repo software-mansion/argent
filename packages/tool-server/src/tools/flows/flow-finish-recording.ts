@@ -69,9 +69,8 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         case "run":
           return `${n}. run: ${step.flow}`;
         case "tap":
-          return `${n}. tap: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
         case "long-press":
-          return `${n}. long-press: ${selectorLabel(step.selector)}`;
+          return `${n}. ${step.kind}: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
         case "type":
           return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
         case "await":

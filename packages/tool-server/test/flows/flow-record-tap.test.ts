@@ -173,4 +173,11 @@ describe("flow-add-step tap selector capture", () => {
     expect(result.message).toContain("selector capture failed");
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
   });
+
+  it("does not persist a raw point that replay would reject", async () => {
+    setTree([]);
+
+    await expect(recordTap({ x: 1.5, y: 0.52 })).rejects.toThrow(/normalized 0–1 fractions/i);
+    expect(await recordedSteps()).toEqual([]);
+  });
 });
