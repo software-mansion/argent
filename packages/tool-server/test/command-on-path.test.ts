@@ -31,7 +31,10 @@ function setPlatform(platform: NodeJS.Platform): void {
 
 describe("commandOnPath", () => {
   beforeEach(() => execFileMock.mockReset());
-  afterEach(() => setPlatform(realPlatform));
+  afterEach(() => {
+    setPlatform(realPlatform);
+    vi.restoreAllMocks();
+  });
 
   it("uses `command -v` via /bin/sh on POSIX and returns the trimmed path", async () => {
     setPlatform("darwin");
@@ -68,6 +71,34 @@ describe("commandOnPath", () => {
   it("returns null when the resolver emits only blank lines", async () => {
     setPlatform("win32");
     execFileMock.mockReturnValue({ stdout: "\r\n  \r\n", stderr: "" });
+    expect(await commandOnPath("adb")).toBeNull();
+  });
+
+  it("skips a CWD match (`where` searches CWD before PATH) and takes the PATH one", async () => {
+    setPlatform("win32");
+    vi.spyOn(process, "cwd").mockReturnValue("C:\\work\\repo");
+    // `where adb` lists the planted CWD copy first, the real SDK adb second.
+    execFileMock.mockReturnValue({
+      stdout: "C:\\work\\repo\\adb.exe\r\nC:\\Android\\platform-tools\\adb.exe\r\n",
+      stderr: "",
+    });
+    expect(await commandOnPath("adb")).toBe("C:\\Android\\platform-tools\\adb.exe");
+  });
+
+  it("matches the CWD case-insensitively when skipping it", async () => {
+    setPlatform("win32");
+    vi.spyOn(process, "cwd").mockReturnValue("C:\\Work\\Repo");
+    execFileMock.mockReturnValue({
+      stdout: "c:\\work\\repo\\adb.exe\r\nC:\\Android\\platform-tools\\adb.exe\r\n",
+      stderr: "",
+    });
+    expect(await commandOnPath("adb")).toBe("C:\\Android\\platform-tools\\adb.exe");
+  });
+
+  it("returns null when the only match is the CWD-planted binary", async () => {
+    setPlatform("win32");
+    vi.spyOn(process, "cwd").mockReturnValue("C:\\work\\repo");
+    execFileMock.mockReturnValue({ stdout: "C:\\work\\repo\\adb.exe\r\n", stderr: "" });
     expect(await commandOnPath("adb")).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { win32 as pathWin32 } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,9 +16,14 @@ const execFileAsync = promisify(execFile);
  *   a miss.
  * - Windows: `where <name>` (ships in System32, always on PATH). It prints one
  *   line per match (e.g. both `adb.exe` and an `adb.bat` shim) and exits
- *   non-zero when nothing matches; we take the first line. `where` also handles
- *   the executable-extension search (`adb` → `adb.exe`) that `command -v` does
- *   not, which is exactly what callers want here.
+ *   non-zero when nothing matches. `where` also handles the executable-extension
+ *   search (`adb` → `adb.exe`) that `command -v` does not, which is exactly what
+ *   callers want here. Unlike POSIX PATH lookup, `where` searches the current
+ *   directory *before* PATH, so we drop any match that lives in the CWD: a tool
+ *   like `adb.exe` sitting in the tool-server's working directory must never be
+ *   preferred over the real one on PATH (that would let a repo plant a binary
+ *   Argent then executes). This keeps Windows resolution PATH-only, matching the
+ *   POSIX branch.
  *
  * Centralised so the three resolvers that need it (android-binary, check-deps,
  * vega-cli) share one cross-platform implementation instead of each hardcoding
@@ -27,11 +33,17 @@ export async function commandOnPath(name: string): Promise<string | null> {
   try {
     if (process.platform === "win32") {
       const { stdout } = await execFileAsync("where", [name], { timeout: 2_000 });
-      const first = stdout
+      // Use win32 path semantics explicitly so this is correct on a real
+      // Windows host and unit-testable on POSIX CI.
+      const cwd = pathWin32.resolve(process.cwd()).toLowerCase();
+      const match = stdout
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .find(Boolean);
-      return first ?? null;
+        .filter(Boolean)
+        // Skip the CWD entry `where` lists ahead of PATH — Windows paths are
+        // case-insensitive, so compare normalized + lowercased directories.
+        .find((candidate) => pathWin32.resolve(pathWin32.dirname(candidate)).toLowerCase() !== cwd);
+      return match ?? null;
     }
     const { stdout } = await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], {
       timeout: 2_000,
