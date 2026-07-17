@@ -414,8 +414,9 @@ export function createRunFlowTool(
     description: `Run a saved flow from the .argent/flows/ directory.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
-element and act on it (\`long-press: { on, duration }\` presses and holds); \`scroll-to\` scrolls
-(momentum-free) until a target is visible; \`await\` waits for a UI
+element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
+holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`);
+\`scroll-to\` scrolls (momentum-free) until a target is visible; \`await\` waits for a UI
 condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot against a stored baseline (a missing baseline fails the step — set updateBaselines
 to adopt the current screen); \`echo\` annotates; \`run\` executes a referenced fragment inline.
@@ -669,11 +670,10 @@ function selectorLabel(sel: FlowSelector): string {
 function stepTarget(step: FlowStep): string | undefined {
   switch (step.kind) {
     case "tap":
+    case "long-press":
       if (step.selector) return selectorLabel(step.selector);
       if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
       return undefined;
-    case "long-press":
-      return selectorLabel(step.selector);
     case "type":
       return `into ${selectorLabel(step.into)}`;
     case "await":

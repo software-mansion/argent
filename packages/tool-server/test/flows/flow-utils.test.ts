@@ -58,6 +58,22 @@ describe("serializeFlow", () => {
     expect(result).toContain("- tool: screenshot");
     expect(result).not.toContain("args:");
   });
+
+  it("rejects gesture targets that cannot round-trip through the parser", () => {
+    const serializeStep = (step: FlowFile["steps"][number]) =>
+      serializeFlow({ executionPrerequisite: "", steps: [step] });
+
+    expect(() => serializeStep({ kind: "tap", x: 1.5, y: 0.5 })).toThrow(
+      /normalized 0–1 fractions/i
+    );
+    expect(() => serializeStep({ kind: "long-press", x: Number.NaN, y: 0.5 })).toThrow(
+      /normalized 0–1 fractions/i
+    );
+    expect(() => serializeStep({ kind: "tap", x: 0.5 })).toThrow(/needs numeric x and y/i);
+    expect(() =>
+      serializeStep({ kind: "long-press", selector: { text: "Row" }, x: 0.5, y: 0.5 })
+    ).toThrow(/selector or x\/y coordinates, not both/i);
+  });
 });
 
 // ── describeSelector ─────────────────────────────────────────────────
@@ -626,10 +642,10 @@ describe("parseFlow", () => {
 
   it("rejects a coordinate tap with a missing or non-numeric x/y", () => {
     expect(() => parseFlow("steps:\n  - tap: { x: 0.5 }\n")).toThrow(
-      "a coordinate tap needs numeric x and y"
+      "tap: a coordinate target needs numeric x and y"
     );
     expect(() => parseFlow('steps:\n  - tap: { x: "0.5", y: 0.5 }\n')).toThrow(
-      "a coordinate tap needs numeric x and y"
+      "tap: a coordinate target needs numeric x and y"
     );
   });
 
@@ -744,7 +760,7 @@ describe("parseFlow", () => {
 
     it("rejects a stray key on a coordinate tap", () => {
       expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, why: 0.6 }\n")).toThrow(
-        /a coordinate tap takes only \{ x, y, times \}/
+        /tap: a coordinate target takes only \{ x, y \}/
       );
     });
 

@@ -233,7 +233,7 @@ export type FlowStep =
   | { kind: "launch"; app: Launch }
   | { kind: "run"; flow: string }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
-  | { kind: "long-press"; selector: FlowSelector; duration?: number }
+  | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
   | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
   | {
       kind: "await";
@@ -326,16 +326,21 @@ type YamlSelector =
     });
 
 /**
- * A tap targets an element (selector, possibly a bare string) or a raw point.
- * The options form nests the selector under `on` so option keys never mix
- * with selector fields: `{ on: <selector>, times: 2 }` is a double-tap
- * (`on` carries the usual bare-string-loose / map-strict sugar). A coordinate
- * body takes `times` directly — it is already an options-shaped map.
+ * A gesture target: an element (selector, possibly a bare string) or a raw
+ * normalized point `{ x, y }`. Only the point-acting directives (`tap`,
+ * `long-press`) accept the point form — a point can be acted on but not
+ * observed, so the selector-only directives (`type`, `await`, `assert`,
+ * `scroll-to`) keep taking {@link YamlSelector}.
  */
-type TapBody =
-  | YamlSelector
-  | { x: number; y: number; times?: number }
-  | { on: YamlSelector; times?: number };
+type YamlTarget = YamlSelector | { x: number; y: number };
+
+/**
+ * A tap targets an element or a raw point. The options form nests the target
+ * under `on` so option keys never mix with target fields:
+ * `{ on: <target>, times: 2 }` is a double-tap (`on` carries the usual
+ * bare-string-loose / map-strict selector sugar).
+ */
+type TapBody = YamlTarget | { on: YamlTarget; times?: number };
 
 /**
  * The condition of an `await`/`assert` step. The condition is the key, not a
@@ -371,7 +376,7 @@ type YamlStep =
   | { run: string }
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
-  | { "long-press": YamlSelector | { on: YamlSelector; duration?: number } }
+  | { "long-press": YamlTarget | { on: YamlTarget; duration?: number } }
   | { type: { into: YamlSelector; text: string; submit?: boolean } }
   | { await: YamlWaitCondition & { timeout?: number } }
   | { assert: YamlWaitCondition }
@@ -536,6 +541,31 @@ function textWaitToYaml(
   }
 }
 
+/** Sugar a gesture target (`tap`/`long-press`) for YAML output, rejecting
+ * internal states that would serialize to a flow the parser cannot read back. */
+function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number }): YamlTarget {
+  const hasPointField = step.x !== undefined || step.y !== undefined;
+  if (step.selector !== undefined) {
+    if (hasPointField) {
+      throw new Error(
+        "Cannot serialize flow gesture target: use a selector or x/y coordinates, not both"
+      );
+    }
+    return selectorToYaml(step.selector);
+  }
+  if (typeof step.x !== "number" || typeof step.y !== "number") {
+    throw new Error(
+      "Cannot serialize flow gesture target: a coordinate target needs numeric x and y"
+    );
+  }
+  if (!(step.x >= 0 && step.x <= 1) || !(step.y >= 0 && step.y <= 1)) {
+    throw new Error(
+      "Cannot serialize flow gesture target: coordinates are normalized 0–1 fractions of the screen, not pixels"
+    );
+  }
+  return { x: step.x, y: step.y };
+}
+
 /** Sugar an await/assert step into the condition-as-key YAML body. */
 function waitToYaml(
   condition: WaitCondition,
@@ -576,18 +606,14 @@ function toYamlStep(step: FlowStep): YamlStep {
       // Canonical minimal spelling: the options form appears only when an
       // option is present (`times` is never stored as 1 — see parseTapTimes),
       // so a plain tap always round-trips to the plain selector/point body.
-      if (step.selector) {
-        const sel = selectorToYaml(step.selector);
-        return { tap: step.times !== undefined ? { on: sel, times: step.times } : sel };
-      }
-      const body: { x: number; y: number; times?: number } = { x: step.x!, y: step.y! };
-      if (step.times !== undefined) body.times = step.times;
-      return { tap: body };
+      const target = targetToYaml(step);
+      return { tap: step.times !== undefined ? { on: target, times: step.times } : target };
     }
     case "long-press": {
-      const sel = selectorToYaml(step.selector);
+      const target = targetToYaml(step);
       return {
-        "long-press": step.duration !== undefined ? { on: sel, duration: step.duration } : sel,
+        "long-press":
+          step.duration !== undefined ? { on: target, duration: step.duration } : target,
       };
     }
     case "type": {
@@ -1017,11 +1043,111 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
 ];
 
 /**
- * Parse a `long-press` body: a selector (bare = loose, map = strict) or the
- * options form `{ on: <selector>, duration?: <ms> }` — nesting the selector
- * under `on` so an option key can never be mistaken for — or silently
- * stripped from — a selector field. No coordinate form: a point long-press is
- * the `tool: gesture-custom` escape hatch.
+ * Parse `times` on a tap body: an integer tap count dispatched as ONE
+ * multi-tap gesture (2 = double-tap; the OS may recognize it as such — N
+ * *independent* taps are N tap steps). `times: 1` is the default and
+ * normalizes to absent, keeping parse/serialize exact inverses. The cap
+ * matches the gesture-tap tool's clickCount bound.
+ */
+function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 10) {
+    badEntry(entry, "tap.times must be an integer between 1 and 10 (2 = double-tap)");
+  }
+  return raw === 1 ? undefined : raw;
+}
+
+/**
+ * Parse a gesture target (`tap`/`long-press` body or its `on:` value): a
+ * selector (bare string = loose, map = strict) or a raw normalized point
+ * `{ x, y }`. A map mixing selector fields with x/y is ambiguous (which
+ * wins?) — and zod would silently STRIP the coordinates from a selector
+ * map — so it is rejected loudly. Only the point-acting directives call
+ * this; the observation directives take `parseSelector` directly, since a
+ * point can be acted on but not observed.
+ */
+function parseTarget(
+  raw: unknown,
+  where: string
+): { selector: FlowSelector } | { x: number; y: number } {
+  if (raw !== null && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (obj.x !== undefined || obj.y !== undefined) {
+      if (
+        obj.text !== undefined ||
+        obj.id !== undefined ||
+        obj.identifier !== undefined ||
+        obj.role !== undefined
+      ) {
+        badEntry(raw, `${where} takes a selector or x/y coordinates, not both`);
+      }
+      if (typeof obj.x !== "number" || typeof obj.y !== "number") {
+        badEntry(raw, `${where}: a coordinate target needs numeric x and y`);
+      }
+      // Coordinates are normalized fractions of the screen. Reject anything
+      // outside [0, 1] — a pixel value like x: 250 would dispatch a far
+      // off-screen gesture — and NaN/.inf, which pass the numeric check.
+      if (!(obj.x >= 0 && obj.x <= 1) || !(obj.y >= 0 && obj.y <= 1)) {
+        badEntry(
+          raw,
+          `${where}: coordinates are normalized 0–1 fractions of the screen, not pixels`
+        );
+      }
+      if (!Object.keys(obj).every((k) => k === "x" || k === "y")) {
+        badEntry(raw, `${where}: a coordinate target takes only { x, y }`);
+      }
+      return { x: obj.x, y: obj.y };
+    }
+  }
+  return { selector: parseSelector(raw, where) };
+}
+
+/**
+ * Parse a `tap` body: a bare target (selector or raw point `{ x, y }`) or
+ * the options form `{ on: <target>, times? }`, which nests the target under
+ * `on` so an option key can never be mistaken for — or silently stripped
+ * from — a target field.
+ */
+function parseTap(body: unknown, entry: unknown): FlowStep {
+  const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+
+  if (obj.on !== undefined || obj.times !== undefined) {
+    if (
+      obj.text !== undefined ||
+      obj.id !== undefined ||
+      obj.identifier !== undefined ||
+      obj.role !== undefined
+    ) {
+      badEntry(
+        entry,
+        'the tap options form takes a nested selector — e.g. tap: { on: { text: "Photo" }, times: 2 }'
+      );
+    }
+    if (obj.x !== undefined || obj.y !== undefined) {
+      badEntry(
+        entry,
+        "the tap options form takes a nested point — e.g. tap: { on: { x: 0.5, y: 0.5 }, times: 2 }"
+      );
+    }
+    if (!Object.keys(obj).every((k) => k === "on" || k === "times")) {
+      badEntry(entry, "the tap options form accepts only { on, times }");
+    }
+    if (obj.on === undefined) {
+      badEntry(entry, 'tap with times needs a target — e.g. tap: { on: "Photo", times: 2 }');
+    }
+    const step: FlowStep = { kind: "tap", ...parseTarget(obj.on, "tap.on") };
+    const times = parseTapTimes(obj.times, entry);
+    if (times !== undefined) step.times = times;
+    return step;
+  }
+
+  return { kind: "tap", ...parseTarget(body, "tap") };
+}
+
+/**
+ * Parse a `long-press` body: a bare target (selector or raw point `{ x, y }`)
+ * or the options form `{ on: <target>, duration?: <ms> }` — the same
+ * nested-`on` convention as tap's options form.
  */
 function parseLongPress(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -1038,13 +1164,19 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
         'the long-press options form takes a nested selector — e.g. long-press: { on: { text: "Row" }, duration: 1200 }'
       );
     }
+    if (obj.x !== undefined || obj.y !== undefined) {
+      badEntry(
+        entry,
+        "the long-press options form takes a nested point — e.g. long-press: { on: { x: 0.5, y: 0.5 }, duration: 1200 }"
+      );
+    }
     if (!Object.keys(obj).every((k) => k === "on" || k === "duration")) {
       badEntry(entry, "the long-press options form accepts only { on, duration }");
     }
     if (obj.on === undefined) {
       badEntry(entry, 'long-press needs a target — e.g. long-press: { on: "Row", duration: 1200 }');
     }
-    const step: FlowStep = { kind: "long-press", selector: parseSelector(obj.on, "long-press.on") };
+    const step: FlowStep = { kind: "long-press", ...parseTarget(obj.on, "long-press.on") };
     if (obj.duration !== undefined) {
       // Like `await.timeout`: reject non-finite values (YAML `.inf` parses to
       // Infinity), which would hold the press forever.
@@ -1059,89 +1191,8 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
     return step;
   }
 
-  return { kind: "long-press", selector: parseSelector(body, "long-press") };
+  return { kind: "long-press", ...parseTarget(body, "long-press") };
 }
-
-/**
- * Parse `times` on a tap body: an integer tap count dispatched as ONE
- * multi-tap gesture (2 = double-tap; the OS may recognize it as such — N
- * *independent* taps are N tap steps). `times: 1` is the default and
- * normalizes to absent, keeping parse/serialize exact inverses. The cap
- * matches the gesture-tap tool's clickCount bound.
- */
-function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
-  if (raw === undefined) return undefined;
-  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 10) {
-    badEntry(entry, "tap.times must be an integer between 1 and 10 (2 = double-tap)");
-  }
-  return raw === 1 ? undefined : raw;
-}
-
-/**
- * Parse a `tap` body — one of three forms:
- * - a selector (bare string = loose, map = strict),
- * - a raw point `{ x, y, times? }`,
- * - the options form `{ on: <selector>, times? }`, which nests the selector
- *   under `on` so an option key can never be mistaken for — or silently
- *   stripped from — a selector field.
- */
-function parseTap(body: unknown, entry: unknown): FlowStep {
-  const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-
-  // A tap targets either an element (selector) or a raw point (x/y) — a body
-  // mixing both is ambiguous (which wins?) and rejected rather than silently
-  // resolved one way.
-  if (obj.x !== undefined || obj.y !== undefined) {
-    if (
-      obj.on !== undefined ||
-      obj.text !== undefined ||
-      obj.id !== undefined ||
-      obj.identifier !== undefined ||
-      obj.role !== undefined
-    ) {
-      badEntry(entry, "tap takes a selector or x/y coordinates, not both");
-    }
-    if (typeof obj.x !== "number" || typeof obj.y !== "number") {
-      badEntry(entry, "a coordinate tap needs numeric x and y");
-    }
-    // A stray key would be silently dropped otherwise — a misspelled option
-    // must fail loudly, like everywhere else in the parser.
-    if (!Object.keys(obj).every((k) => k === "x" || k === "y" || k === "times")) {
-      badEntry(entry, "a coordinate tap takes only { x, y, times }");
-    }
-    const step: FlowStep = { kind: "tap", x: obj.x, y: obj.y };
-    const times = parseTapTimes(obj.times, entry);
-    if (times !== undefined) step.times = times;
-    return step;
-  }
-
-  if (obj.on !== undefined || obj.times !== undefined) {
-    if (
-      obj.text !== undefined ||
-      obj.id !== undefined ||
-      obj.identifier !== undefined ||
-      obj.role !== undefined
-    ) {
-      badEntry(
-        entry,
-        'the tap options form takes a nested selector — e.g. tap: { on: { text: "Photo" }, times: 2 }'
-      );
-    }
-    if (!Object.keys(obj).every((k) => k === "on" || k === "times")) {
-      badEntry(entry, "the tap options form accepts only { on, times }");
-    }
-    if (obj.on === undefined) {
-      badEntry(entry, 'tap with times needs a target — e.g. tap: { on: "Photo", times: 2 }');
-    }
-    const step: FlowStep = { kind: "tap", selector: parseSelector(obj.on, "tap.on") };
-    const times = parseTapTimes(obj.times, entry);
-    if (times !== undefined) step.times = times;
-    return step;
-  }
-
-  return { kind: "tap", selector: parseSelector(body, "tap") };
-}
-
 function fromYamlStep(raw: YamlStep): FlowStep {
   const entry = raw as Record<string, unknown>;
   const kinds = STEP_DIRECTIVE_KEYS.filter((k) => k in entry);
