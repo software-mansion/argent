@@ -306,11 +306,33 @@ async function treeSourceGate(
  * against the CDP service directly, not via `launch-app` — the chromium launch
  * value is an app *path*, which `launch-app`'s bundleId grammar rejects (and
  * its chromium handler is this same viewport refresh anyway).
+ *
+ * Chromium boots exactly one app for the whole run, so only the first launch is
+ * real; a second one (always a nested e2e flow pulled in via `run:`) can't boot
+ * its own instance and is rejected rather than silently passing against the
+ * already-launched app (see `state.chromiumLaunched`).
  */
 async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
   const { registry, device, signal } = state;
 
   if (device.platform === "chromium") {
+    // Only the top-level flow's leading launch is honored: the runner boots that
+    // app (or attaches to a pinned one) before step 1, and `chromiumBootSpec`
+    // only ever consults the top-level flow. Any later launch — a nested e2e
+    // flow's own launch — would run against the already-launched (wrong) app
+    // while booting nothing, so fail loudly instead of passing a no-op. The
+    // first launch still works, keeping a plain chromium e2e flow usable.
+    if (state.chromiumLaunched) {
+      return {
+        ok: false,
+        reason:
+          `chromium launches only the top-level flow's app, once per run — a nested launch can't ` +
+          `boot its own instance and would run against the already-launched app. Nested chromium ` +
+          `e2e flows aren't supported: run this flow at the top level, or drop its launch step to ` +
+          `make it a fragment.`,
+      };
+    }
+    state.chromiumLaunched = true;
     if (state.chromiumBooted) {
       // already booted + fronted; just settle
       if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
@@ -367,6 +389,12 @@ interface ExecState extends ActionEnv {
   pinned: boolean;
   /** True when the runner booted the chromium app for this run (and owns its teardown). */
   chromiumBooted: boolean;
+  /**
+   * True once a chromium `launch` step has run. Chromium boots one app per run
+   * (the top-level flow's), so a later launch — a nested e2e flow's own — is
+   * rejected instead of silently passing against the already-launched app.
+   */
+  chromiumLaunched: boolean;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -453,6 +481,7 @@ returns a notice with the prerequisite instead of running.`,
         stopped: false,
         pinned: statusBarPinned,
         chromiumBooted: resolved.booted !== null,
+        chromiumLaunched: false,
         ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
       };
 
@@ -739,12 +768,6 @@ async function execRunStep(
     fragment = parseFlow(await fs.readFile(fragPath, "utf8"));
   } catch (err) {
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
-  }
-
-  if (isE2eFlow(fragment)) {
-    return fail(
-      `"${target}" is an e2e flow (starts with a launch step); only fragments can be run from another flow`
-    );
   }
 
   // Marker for the composition point, then expand the fragment's steps inline.

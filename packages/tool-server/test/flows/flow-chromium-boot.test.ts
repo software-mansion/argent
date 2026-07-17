@@ -54,6 +54,15 @@ async function writeFlow(yaml: string): Promise<string> {
   return file;
 }
 
+// A run: target must be a sibling named `<name>.yaml` (the runner resolves it
+// against the parent flow's directory), so write it next to `parent` under a
+// caller-chosen name.
+async function writeSiblingFlow(parent: string, name: string, yaml: string): Promise<void> {
+  const file = path.join(path.dirname(parent), `${name}.yaml`);
+  await fs.writeFile(file, yaml, "utf8");
+  writtenFiles.push(file);
+}
+
 function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   if (!("steps" in r)) throw new Error(`expected a FlowRunResult, got a notice: ${r.notice}`);
   return r;
@@ -180,6 +189,87 @@ describe("flow-execute chromium boot", () => {
     expect(refreshViewport).toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(result.steps[0]).toMatchObject({ kind: "launch", status: "pass" });
+  });
+
+  it("errors a nested e2e flow's launch (chromium boots only the top-level app) and keeps the first working", async () => {
+    // Parent chromium e2e flow that runs a nested chromium e2e flow. Chromium
+    // boots exactly one app for the run (the parent's), so the nested launch
+    // can't boot its own instance — it must fail loudly, not silently pass
+    // against the already-launched app. The parent's own launch still works.
+    const parent = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - run: nested-chromium\n"
+    );
+    await writeSiblingFlow(
+      parent,
+      "nested-chromium",
+      "steps:\n  - launch: { chromium: ./app-b }\n  - echo: should never run\n"
+    );
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "parent-chromium",
+      project_root: PROJECT_ROOT,
+      flow_file: parent,
+    });
+
+    // Only the parent's app booted — the nested launch never spawned a second
+    // instance.
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(false);
+    // parent launch passes; run marker passes; nested launch errors; the rest skip.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "run:pass",
+      "launch:error",
+      "echo:skip",
+    ]);
+    const nestedLaunch = result.steps[2];
+    expect(nestedLaunch.flow).toBe("nested-chromium");
+    expect(nestedLaunch.reason).toMatch(/chromium launches only the top-level flow's app/i);
+
+    // The one booted instance is still torn down cleanly on the failing run.
+    expect(killChromiumByPort).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("still honors the first launch when a fragment run:s an e2e flow (the common composition)", async () => {
+    // Fragment B (no leading launch) that run:s e2e flow A (launch + setup).
+    // A's launch is the FIRST launch of the run, so the once-per-run guard does
+    // not fire — it attaches to the pinned instance and passes. Only a *second*
+    // launch is rejected. Uses a pinned device: a fragment top-level means the
+    // runner boots nothing itself, so an already-running instance is required.
+    const fragmentB = await writeFlow("steps:\n  - run: setup-a\n  - echo: B after A\n");
+    await writeSiblingFlow(
+      fragmentB,
+      "setup-a",
+      "steps:\n  - launch: { chromium: ./app }\n  - echo: A setup done\n"
+    );
+    const registry = makeRegistry();
+    const refreshViewport = vi.fn(async () => ({ width: 800, height: 600 }));
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport,
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+
+    const result = await runFlow(registry, {
+      name: "fragment-b",
+      project_root: PROJECT_ROOT,
+      flow_file: fragmentB,
+      device: "chromium-cdp-9999",
+    });
+
+    // Fragment top-level: the runner never boots (nor tears down) an instance;
+    // A's launch attaches to the pinned one instead.
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect(killChromiumByPort).not.toHaveBeenCalled();
+    expect(refreshViewport).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+    // run marker, then A's launch (honored) + echo, then B's trailing echo.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "launch:pass",
+      "echo:pass",
+      "echo:pass",
+    ]);
   });
 
   it("errors the launch step (and skips the rest) when the pinned instance is unreachable", async () => {

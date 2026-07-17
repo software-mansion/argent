@@ -418,7 +418,7 @@ describe("flow-add-step", () => {
     expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login" }]);
   });
 
-  it("keeps the raw flow-execute step when the target is an e2e flow", async () => {
+  it("records a run: directive when the target is an e2e flow", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
     });
@@ -435,17 +435,8 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(result.message).toMatch(/e2e flow/i);
-    // The raw fallback keeps `device` (flow-execute's device param isn't a
-    // udid/device_id key, so it survives stripping) — exactly the
-    // non-portability that the run: rewrite avoids.
-    expect(parseFlow(result.flowFile).steps).toEqual([
-      {
-        kind: "tool",
-        name: "flow-execute",
-        args: { name: "other-e2e", project_root: tmpDir, device: "ABC" },
-      },
-    ]);
+    // e2e flows now compose via run: just like fragments — their launch runs inline.
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "other-e2e" }]);
   });
 
   it("keeps the raw flow-execute step when the target is not a sibling", async () => {
