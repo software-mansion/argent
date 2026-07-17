@@ -616,6 +616,34 @@ describe("parseFlow", () => {
     }
   });
 
+  it("parses snapshot cropOn as a selector (bare-string loose, map strict)", () => {
+    const flow = parseFlow(
+      "steps:\n" +
+        "  - snapshot: { name: home, cropOn: Header }\n" +
+        "  - snapshot: { name: cart, cropOn: { id: cart-total } }\n"
+    );
+    expect(flow.steps).toEqual([
+      { kind: "snapshot", name: "home", cropOn: { text: "Header", loose: true } },
+      { kind: "snapshot", name: "cart", cropOn: { identifier: "cart-total" } },
+    ]);
+  });
+
+  it("serializes snapshot cropOn in the map form and round-trips", () => {
+    const steps = [
+      { kind: "snapshot", name: "home", cropOn: { text: "Header", loose: true } },
+      { kind: "snapshot", name: "cart", maxMismatch: 1.5, cropOn: { identifier: "cart-total" } },
+    ] as FlowFile["steps"];
+    const yaml = serializeFlow({ executionPrerequisite: "", steps });
+    expect(yaml).toContain("cropOn: Header");
+    expect(parseFlow(yaml).steps).toEqual(steps);
+  });
+
+  it("rejects a point-form cropOn — a point has no extent to crop to", () => {
+    expect(() =>
+      parseFlow("steps:\n  - snapshot: { name: home, cropOn: { x: 0.5, y: 0.5 } }\n")
+    ).toThrow(/snapshot\.cropOn: selector has unknown keys `x`, `y`/);
+  });
+
   it("rejects a tap body mixing a selector with coordinates", () => {
     for (const key of ["id", "identifier"]) {
       expect(() => parseFlow(`steps:\n  - tap: { ${key}: box, x: 0.5, y: 0.5 }\n`)).toThrow(
@@ -713,6 +741,12 @@ describe("parseFlow", () => {
     it("rejects a misspelled snapshot.maxMismatch key with a suggestion", () => {
       expect(() => parseFlow("steps:\n  - snapshot: { name: home, maxMissmatch: 1.5 }\n")).toThrow(
         /snapshot has unknown key `maxMissmatch` \(did you mean `maxMismatch`\?\)/
+      );
+    });
+
+    it("rejects a miscased snapshot.cropOn key with a suggestion", () => {
+      expect(() => parseFlow("steps:\n  - snapshot: { name: home, cropon: Header }\n")).toThrow(
+        /snapshot has unknown key `cropon` \(did you mean `cropOn`\?\)/
       );
     });
 

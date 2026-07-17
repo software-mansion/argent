@@ -252,7 +252,7 @@ export type FlowStep =
     }
   | { kind: "wait"; ms: number }
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
-  | { kind: "snapshot"; name: string; maxMismatch?: number };
+  | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector };
 
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
@@ -378,7 +378,7 @@ type YamlStep =
   | { assert: YamlWaitCondition }
   | { wait: number }
   | { "scroll-to": YamlScrollBody }
-  | { snapshot: string | { name: string; maxMismatch?: number } };
+  | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } };
 
 type YamlFlowFile = {
   executionPrerequisite?: string;
@@ -636,11 +636,18 @@ function toYamlStep(step: FlowStep): YamlStep {
         },
       };
     }
-    case "snapshot":
+    case "snapshot": {
       // A name-only snapshot sugars to a bare string.
-      return step.maxMismatch === undefined
-        ? { snapshot: step.name }
-        : { snapshot: { name: step.name, maxMismatch: step.maxMismatch } };
+      if (step.maxMismatch === undefined && step.cropOn === undefined) {
+        return { snapshot: step.name };
+      }
+      const body: { name: string; maxMismatch?: number; cropOn?: YamlSelector } = {
+        name: step.name,
+      };
+      if (step.maxMismatch !== undefined) body.maxMismatch = step.maxMismatch;
+      if (step.cropOn !== undefined) body.cropOn = selectorToYaml(step.cropOn);
+      return { snapshot: body };
+    }
     case "tool":
     default: {
       const y: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
@@ -1260,13 +1267,18 @@ function fromYamlStep(raw: YamlStep): FlowStep {
     const body = (raw as { snapshot: unknown }).snapshot;
     // A misspelled `maxMissmatch` would silently drop the tolerance.
     if (body !== null && typeof body === "object" && !Array.isArray(body)) {
-      rejectUnknownKeys(raw, body as Record<string, unknown>, ["name", "maxMismatch"], "snapshot");
+      rejectUnknownKeys(
+        raw,
+        body as Record<string, unknown>,
+        ["name", "maxMismatch", "cropOn"],
+        "snapshot"
+      );
     }
     // Bare-string sugar: `snapshot: home` ≡ `snapshot: { name: home }`.
     const b =
       typeof body === "string"
         ? { name: body }
-        : (body as { name?: unknown; maxMismatch?: number });
+        : (body as { name?: unknown; maxMismatch?: number; cropOn?: unknown });
     if (!b || typeof b !== "object" || typeof b.name !== "string" || !b.name) {
       badEntry(raw, "snapshot needs a name (bare string or { name })");
     }
@@ -1291,6 +1303,12 @@ function fromYamlStep(raw: YamlStep): FlowStep {
         );
       }
       step.maxMismatch = m;
+    }
+    // `cropOn` narrows the comparison to one element's region. Selector-only —
+    // a point has no extent to crop to — so it takes the standard selector slot
+    // (bare-string loose / map strict), not the tap/long-press target form.
+    if (b.cropOn !== undefined) {
+      step.cropOn = parseSelector(b.cropOn, "snapshot.cropOn");
     }
     return step;
   }

@@ -276,8 +276,11 @@ export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefin
  * undefined once the deadline passes, or "aborted" when the run was cancelled —
  * the two misses must stay distinguishable, or a cancelled `tap`/`type` would
  * be reported as a genuine "element not found" failure.
+ *
+ * Exported for `snapshot: { cropOn }` (flow-visual.ts), which resolves the
+ * crop element's frame with the same settle + auto-wait the directives get.
  */
-async function waitForFrame(
+export async function waitForFrame(
   env: ActionEnv,
   selector: FlowSelector
 ): Promise<DescribeFrame | "aborted" | undefined> {
@@ -535,7 +538,7 @@ async function scrollToVisible(
 // whole page, mutate scroll state even when the step fails, and stretch a
 // failure to the scroll search's worst case. Off-screen targets take an
 // explicit `scroll-to` step — the failure reason points there.
-function offscreenHint(sel: FlowSelector): string {
+export function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
 }
 
