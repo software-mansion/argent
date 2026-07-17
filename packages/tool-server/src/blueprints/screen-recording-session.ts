@@ -51,6 +51,12 @@ export interface ScreenRecordingSessionApi {
   /** iOS: the recordVideo child. Android: the host-side `adb shell` child. */
   captureProcess: ChildProcess | null;
   /**
+   * Child spawned by an in-flight start that has not stamped the session yet
+   * (readiness pending). Tracked separately so dispose() can reap a capture
+   * that is mid-startup at shutdown — `captureProcess` is success-only.
+   */
+  pendingChild: ChildProcess | null;
+  /**
    * Host path of the video. iOS: written there directly by recordVideo.
    * Android: destination `screen-recording-stop` pulls the on-device file to.
    */
@@ -89,6 +95,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.stopPending = false;
   state.pendingRetrieval = false;
   state.captureProcess = null;
+  state.pendingChild = null;
   state.androidOnDeviceFile = null;
   state.androidDevicePid = null;
   state.recordingTimedOut = false;
@@ -140,6 +147,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       stopPending: false,
       pendingRetrieval: false,
       captureProcess: null,
+      pendingChild: null,
       outputFile: null,
       androidOnDeviceFile: null,
       androidDevicePid: null,
@@ -160,6 +168,17 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
+        }
+
+        // A start still mid-readiness at shutdown has a live child that
+        // `captureProcess` (success-only) can't see — reap it here or it
+        // records forever.
+        if (state.pendingChild) {
+          try {
+            state.pendingChild.kill("SIGKILL");
+          } catch {
+            // already dead
+          }
         }
 
         try {

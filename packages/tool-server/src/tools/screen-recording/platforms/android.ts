@@ -142,6 +142,7 @@ export async function startScreenRecordingAndroid(
     return await startScreenRecordingAndroidLocked(api, params);
   } finally {
     api.startPending = false;
+    api.pendingChild = null;
   }
 }
 
@@ -165,16 +166,11 @@ async function startScreenRecordingAndroidLocked(
   }
 
   // A previous capture that ended but was never retrieved (its reminder was
-  // ignored) is superseded by this start — the profiler contract. Its mp4 is
-  // still on the device though, so remove it or every ignored recording leaks
-  // tens of MB of device storage permanently.
+  // ignored) is superseded by this start — the profiler contract. Note the
+  // file now, remove it only AFTER the new capture is live (below): a failed
+  // start must stay side-effect-free so the pending recovery — including the
+  // only copy of that video — survives.
   const staleOnDeviceFile = api.androidOnDeviceFile;
-  if (staleOnDeviceFile && !api.recordingActive) {
-    await adbShell(params.udid, `rm -f ${staleOnDeviceFile}`, {
-      timeoutMs: STOP_PROBE_TIMEOUT_MS,
-    }).catch(() => {});
-    api.androidOnDeviceFile = null;
-  }
 
   const timeLimitSeconds = Math.min(params.timeLimitSeconds, ANDROID_MAX_TIME_LIMIT_SECONDS);
   const timestamp = Date.now();
@@ -192,6 +188,9 @@ async function startScreenRecordingAndroidLocked(
   const child = spawn(adbPath, ["-s", params.udid, "shell", shellCommand], {
     stdio: ["ignore", "pipe", "pipe"],
   });
+  // Visible to dispose() while readiness is pending (captureProcess is
+  // stamped success-only); the wrapper's finally clears it.
+  api.pendingChild = child;
 
   const streams = { stdout: "", stderr: "" };
   child.stdout?.on("data", (chunk: Buffer) => {
@@ -251,6 +250,14 @@ async function startScreenRecordingAndroidLocked(
   api.wallClockEndMs = null;
   api.timeLimitSeconds = timeLimitSeconds;
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, timeLimitSeconds);
+
+  // The new capture is live and owns the session — only now is the superseded
+  // capture's on-device file expendable. Best-effort, off the critical path.
+  if (staleOnDeviceFile) {
+    void adbShell(params.udid, `rm -f ${staleOnDeviceFile}`, {
+      timeoutMs: STOP_PROBE_TIMEOUT_MS,
+    }).catch(() => {});
+  }
 
   api.recordingTimeout = setTimeout(
     () => {

@@ -117,10 +117,23 @@ export async function startScreenRecordingIos(
 ): Promise<StartRecordingResult> {
   assertNoActiveRecording(api, "ios_screen_recording_start");
   // Set synchronously (no await between the assert and here) so an
-  // overlapping start on the same session is rejected instead of racing this
-  // one through the async readiness window below.
+  // overlapping start or stop on the same session is rejected instead of
+  // racing this one through the async readiness window. The wrapper's finally
+  // clears the flag on EVERY exit — including a synchronous throw — so a
+  // failed start can never wedge the session behind a stuck pending flag.
   api.startPending = true;
+  try {
+    return await startScreenRecordingIosLocked(api, params);
+  } finally {
+    api.startPending = false;
+    api.pendingChild = null;
+  }
+}
 
+async function startScreenRecordingIosLocked(
+  api: ScreenRecordingSessionApi,
+  params: { udid: string; timeLimitSeconds: number }
+): Promise<StartRecordingResult> {
   const outputFile = path.join(
     os.tmpdir(),
     `argent-screen-recording-${params.udid.slice(0, 8)}-${Date.now()}.mp4`
@@ -133,6 +146,9 @@ export async function startScreenRecordingIos(
     ["simctl", "io", params.udid, "recordVideo", "--codec=h264", "--force", outputFile],
     { stdio: ["ignore", "pipe", "pipe"] }
   );
+  // Visible to dispose() while readiness is pending (captureProcess is
+  // stamped success-only); the wrapper's finally clears it.
+  api.pendingChild = child;
 
   const stderrRef = { text: "" };
   child.stderr?.on("data", (chunk: Buffer) => {
@@ -157,13 +173,7 @@ export async function startScreenRecordingIos(
     );
   });
 
-  try {
-    await Promise.race([waitForRecordVideoStarted(child, outputFile, stderrRef), spawnError]);
-  } finally {
-    // Stamping below is synchronous, so the pending window can close here on
-    // both the success and the failure path.
-    api.startPending = false;
-  }
+  await Promise.race([waitForRecordVideoStarted(child, outputFile, stderrRef), spawnError]);
   // Keep the handle inert for the session's lifetime: a late exec error after
   // readiness (can't happen in practice, but 'error' unlistened is fatal).
   child.on("error", () => {});

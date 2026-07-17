@@ -60,6 +60,21 @@ export function assertNoActiveRecording(api: ScreenRecordingSessionApi, stage: s
  * concurrent finalize/pull sequences would race into the same host file.
  */
 export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: string): void {
+  if (api.startPending) {
+    // A start is mid-readiness: a stop admitted now (e.g. against a previous
+    // finalized capture) would wipe the superseding capture's session the
+    // moment it stamps, leaving that recording unmanageable forever.
+    throw new FailureError(
+      `A screen-recording-start is currently in flight on device ${api.deviceId}; ` +
+        `wait for it to return, then stop that recording.`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_ALREADY_ACTIVE,
+        failure_stage: stage,
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
   if (api.stopPending) {
     throw new FailureError(
       `A screen-recording-stop is already in progress on device ${api.deviceId}; wait for it to return.`,
