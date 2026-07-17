@@ -11,7 +11,7 @@ Flows store **no device id**: the runner binds a device (the single booted one, 
 
 **Two flow types**
 
-- **e2e** — begins with a `launch:` step, which starts that app from scratch (terminate + relaunch), so the flow controls its own start state. No `executionPrerequisite`. May `run:` fragments; cannot itself be a `run:` target. Record one by adding a `restart-app` of the app under test as the **first** step — it is captured as the `launch` step.
+- **e2e** — begins with a `launch:` step, which starts that app from scratch (terminate + relaunch), so the flow controls its own start state. No `executionPrerequisite`. May `run:` other flows, and (on iOS/Android) may itself be a `run:` target — when nested, its `launch` runs inline, restarting the app for that sub-scenario. **Chromium is the exception:** the runner boots one Electron app per run (the top-level flow's), so a nested chromium e2e flow's `launch` can't boot its own instance and fails the run — keep chromium e2e flows top-level. Record one by adding a `restart-app` of the app under test as the **first** step — it is captured as the `launch` step.
 - **fragment** — doesn't begin with a launch; runs against the device's current state. May declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time.
 
 Both run via `argent flow run <name>` — a fragment simply runs against whatever is on screen (its prerequisite is printed as a reminder). Only e2e flows are meaningful CI/suite entries, since only they give a deterministic verdict from a clean start.
@@ -31,7 +31,7 @@ Beyond raw `tool:` steps and `echo:`, flows support declarative directives inter
 | `wait`       | `- wait: 500`                                                                                            | pause for a fixed number of milliseconds (last resort — prefer `await`) |
 | `assert`     | `- assert: { visible: Welcome }`                                                                         | check a condition, hard-fail if it never holds                          |
 | `snapshot`   | `- snapshot: home` or `- snapshot: { name: home, maxMismatch: 0.5 }`                                     | diff a screenshot against a stored baseline                             |
-| `run`        | `- run: login`                                                                                           | execute a fragment's steps inline                                       |
+| `run`        | `- run: login`                                                                                           | execute another flow's steps inline (fragment or e2e)                   |
 
 ### Selectors
 

@@ -80,10 +80,13 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("rejects running an e2e flow as a fragment", async () => {
+  it("expands a referenced e2e flow inline, launch step and all", async () => {
     await writeFlow("other-e2e", {
       executionPrerequisite: "",
-      steps: [{ kind: "launch", app: "com.acme.app" }],
+      steps: [
+        { kind: "launch", app: "com.acme.app" },
+        { kind: "echo", message: "in nested e2e" },
+      ],
     });
     await writeFlow("main", {
       executionPrerequisite: "",
@@ -93,9 +96,14 @@ describe("flow composition (run:)", () => {
     const result = asRun(
       await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE })
     );
-    expect(result.steps[0]).toMatchObject({ kind: "run", status: "error" });
-    expect(result.steps[0].reason).toMatch(/e2e flow/i);
-    expect(result.ok).toBe(false);
+    // run marker, then the nested e2e's launch + echo expanded inline.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "launch:pass",
+      "echo:pass",
+    ]);
+    expect(result.steps[1].flow).toBe("other-e2e");
+    expect(result.ok).toBe(true);
   });
 
   it("detects a cyclic run reference", async () => {

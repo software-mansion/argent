@@ -263,9 +263,8 @@ export type FlowFile = {
 /**
  * A flow is end-to-end iff it BEGINS by launching an app — its first step
  * (ignoring `echo` narration) is a `launch`. Such a flow controls its own
- * start state, so it is the natural standalone/suite entry point, must not
- * declare an `executionPrerequisite`, and cannot be composed via `run:`.
- * Everything else is a fragment.
+ * start state, so it is the natural standalone/suite entry point and must not
+ * declare an `executionPrerequisite`. Everything else is a fragment.
  */
 export function isE2eFlow(flow: FlowFile): boolean {
   const first = flow.steps.find((s) => s.kind !== "echo");
