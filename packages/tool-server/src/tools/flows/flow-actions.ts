@@ -583,8 +583,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
  */
 async function resolveTargetPoint(
   env: ActionEnv,
-  target: { selector?: FlowSelector; x?: number; y?: number },
-  kind: "tap" | "long-press"
+  target: { selector?: FlowSelector; x?: number; y?: number }
 ): Promise<{ x: number; y: number } | { fail: DirectiveOutcome }> {
   if (target.selector) {
     const frame = await waitForFrame(env, target.selector);
@@ -597,7 +596,7 @@ async function resolveTargetPoint(
   if (typeof target.x === "number" && typeof target.y === "number") {
     return { x: target.x, y: target.y };
   }
-  return { fail: { ok: false, reason: `${kind} needs a selector or x/y coordinates` } };
+  return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };
 }
 
 /**
@@ -609,7 +608,7 @@ async function runTap(
   env: ActionEnv,
   target: { selector?: FlowSelector; x?: number; y?: number; times?: number }
 ): Promise<DirectiveOutcome> {
-  const point = await resolveTargetPoint(env, target, "tap");
+  const point = await resolveTargetPoint(env, target);
   if ("fail" in point) return point.fail;
   await invokeOnDevice(env, "gesture-tap", {
     ...point,
@@ -640,7 +639,7 @@ async function runLongPress(
   env: ActionEnv,
   step: { selector?: FlowSelector; x?: number; y?: number; duration?: number }
 ): Promise<DirectiveOutcome> {
-  const point = await resolveTargetPoint(env, step, "long-press");
+  const point = await resolveTargetPoint(env, step);
   if ("fail" in point) return point.fail;
   const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
   if (env.device.platform === "chromium") {
