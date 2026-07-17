@@ -33,6 +33,21 @@ export interface ScreenRecordingSessionApi {
   platform: "ios" | "android";
   /** True from a successful start until stop / cap / unexpected exit. */
   recordingActive: boolean;
+  /**
+   * True while a start is between its admission check and its session stamp
+   * (spawn + readiness are async). Both flags below serialize the tool pair:
+   * a second start or a stop admitted inside that window would race the
+   * shared session state.
+   */
+  startPending: boolean;
+  /** True while a stop is running; a concurrent start/stop must not interleave. */
+  stopPending: boolean;
+  /**
+   * True once the capture ended (cap, crash, failed pull) but the video has
+   * not been handed over by `screen-recording-stop` yet — the state the
+   * reminder note keeps pointing at.
+   */
+  pendingRetrieval: boolean;
   /** iOS: the recordVideo child. Android: the host-side `adb shell` child. */
   captureProcess: ChildProcess | null;
   /**
@@ -45,6 +60,8 @@ export interface ScreenRecordingSessionApi {
   /** Android-only: on-device screenrecord PID (SIGINT target for stop). */
   androidDevicePid: number | null;
   wallClockStartMs: number | null;
+  /** When the capture stopped producing frames (cap fired, process exited, stop signaled). */
+  wallClockEndMs: number | null;
   /** Cap applied to this capture, after per-platform clamping. */
   timeLimitSeconds: number | null;
   /**
@@ -68,6 +85,9 @@ const ANDROID_DISPOSE_ADB_TIMEOUT_MS = 5_000;
 
 function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.recordingActive = false;
+  state.startPending = false;
+  state.stopPending = false;
+  state.pendingRetrieval = false;
   state.captureProcess = null;
   state.androidOnDeviceFile = null;
   state.androidDevicePid = null;
@@ -116,11 +136,15 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       deviceId: device.id,
       platform: device.platform,
       recordingActive: false,
+      startPending: false,
+      stopPending: false,
+      pendingRetrieval: false,
       captureProcess: null,
       outputFile: null,
       androidOnDeviceFile: null,
       androidDevicePid: null,
       wallClockStartMs: null,
+      wallClockEndMs: null,
       timeLimitSeconds: null,
       recordingTimeout: null,
       recordingTimedOut: false,
@@ -166,11 +190,14 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
             await adbShell(state.deviceId, `kill -INT ${state.androidDevicePid}`, {
               timeoutMs: ANDROID_DISPOSE_ADB_TIMEOUT_MS,
             }).catch(() => {});
-            if (state.androidOnDeviceFile) {
-              await adbShell(state.deviceId, `rm -f ${state.androidOnDeviceFile}`, {
-                timeoutMs: ANDROID_DISPOSE_ADB_TIMEOUT_MS,
-              }).catch(() => {});
-            }
+          }
+          // Remove the on-device file whether the capture is live OR ended but
+          // never retrieved — after shutdown nothing can pull it, so leaving it
+          // would leak a large mp4 on the device's storage.
+          if (state.androidOnDeviceFile) {
+            await adbShell(state.deviceId, `rm -f ${state.androidOnDeviceFile}`, {
+              timeoutMs: ANDROID_DISPOSE_ADB_TIMEOUT_MS,
+            }).catch(() => {});
           }
           const child = state.captureProcess;
           if (child) {

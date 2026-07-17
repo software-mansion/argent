@@ -116,6 +116,10 @@ export async function startScreenRecordingIos(
   params: { udid: string; timeLimitSeconds: number }
 ): Promise<StartRecordingResult> {
   assertNoActiveRecording(api, "ios_screen_recording_start");
+  // Set synchronously (no await between the assert and here) so an
+  // overlapping start on the same session is rejected instead of racing this
+  // one through the async readiness window below.
+  api.startPending = true;
 
   const outputFile = path.join(
     os.tmpdir(),
@@ -153,30 +157,48 @@ export async function startScreenRecordingIos(
     );
   });
 
-  await Promise.race([waitForRecordVideoStarted(child, outputFile, stderrRef), spawnError]);
+  try {
+    await Promise.race([waitForRecordVideoStarted(child, outputFile, stderrRef), spawnError]);
+  } finally {
+    // Stamping below is synchronous, so the pending window can close here on
+    // both the success and the failure path.
+    api.startPending = false;
+  }
   // Keep the handle inert for the session's lifetime: a late exec error after
   // readiness (can't happen in practice, but 'error' unlistened is fatal).
   child.on("error", () => {});
 
   // Capture is live — this recording owns the session now. Stamping only on
   // success keeps a failed start from burning a previous capture's pending
-  // recovery (same contract as the native-profiler start paths).
+  // recovery (same contract as the native-profiler start paths). A superseded
+  // iOS recovery only strands a host tmpdir file, which is benign.
+  if (api.recordingTimeout) {
+    clearTimeout(api.recordingTimeout);
+    api.recordingTimeout = null;
+  }
   api.recordingTimedOut = false;
   api.recordingExitedUnexpectedly = false;
+  api.pendingRetrieval = false;
   api.lastExitInfo = null;
   api.outputFile = outputFile;
   api.captureProcess = child;
   api.recordingActive = true;
   api.wallClockStartMs = Date.now();
+  api.wallClockEndMs = null;
   api.timeLimitSeconds = params.timeLimitSeconds;
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
 
   api.recordingTimeout = setTimeout(() => {
     api.recordingTimeout = null;
+    // Ownership guard: if a newer capture stamped the session, this timer is
+    // stale and must not touch shared state.
+    if (api.captureProcess !== child) return;
     api.recordingTimedOut = true;
     // Flip active BEFORE the SIGINT so the exit handler reads this as the cap,
     // not an unexpected death.
     api.recordingActive = false;
+    api.wallClockEndMs = Date.now();
+    api.pendingRetrieval = true;
     markScreenRecordingFinalized(api.deviceId, `it hit its ${params.timeLimitSeconds}s time limit`);
     try {
       child.kill("SIGINT");
@@ -186,6 +208,9 @@ export async function startScreenRecordingIos(
   }, params.timeLimitSeconds * 1_000);
 
   child.on("exit", (code, signal) => {
+    // Ownership guard: after this capture is superseded, its exit must not
+    // clobber the newer capture's session state.
+    if (api.captureProcess !== child) return;
     api.lastExitInfo = { code, signal };
     api.captureProcess = null;
     if (api.recordingTimeout) {
@@ -196,6 +221,8 @@ export async function startScreenRecordingIos(
       // Died without stop or the cap: simulator shut down, simctl crash, …
       api.recordingActive = false;
       api.recordingExitedUnexpectedly = true;
+      api.wallClockEndMs = Date.now();
+      api.pendingRetrieval = true;
       markScreenRecordingFinalized(api.deviceId, "the recording process exited unexpectedly");
     }
   });
@@ -211,6 +238,9 @@ export async function stopScreenRecordingIos(
   api: ScreenRecordingSessionApi
 ): Promise<StopRecordingFile> {
   assertStoppableSession(api, "ios_screen_recording_stop");
+  // Set synchronously so a concurrent stop or start is rejected while this
+  // one finalizes (see assertStoppableSession / assertNoActiveRecording).
+  api.stopPending = true;
 
   if (api.recordingTimeout) {
     clearTimeout(api.recordingTimeout);
@@ -226,8 +256,11 @@ export async function stopScreenRecordingIos(
     const child = api.captureProcess;
     if (api.recordingActive && child) {
       // Flip active first so the exit handler doesn't classify our own SIGINT
-      // as an unexpected death.
+      // as an unexpected death. The capture stops producing frames at the
+      // SIGINT, so that is the recording's end time (the finalize wait below
+      // is container flushing, not captured footage).
       api.recordingActive = false;
+      api.wallClockEndMs = Date.now();
       const result = await shutdownChild(child, {
         graceMs: STOP_GRACE_MS,
         termMs: STOP_TERM_MS,
@@ -260,16 +293,23 @@ export async function stopScreenRecordingIos(
     }
 
     const size = await statNonEmptyOutput(outputFile, "ios_screen_recording_stop");
-    const durationMs = startedAtMs === null ? null : Date.now() - startedAtMs;
+    // Capture length, not wall-clock-since-start: after the cap fires (or the
+    // process dies) the recording is over even if stop arrives much later.
+    const durationMs =
+      startedAtMs === null ? null : (api.wallClockEndMs ?? Date.now()) - startedAtMs;
     return { outputFile, sizeBytes: size, durationMs, ...(warning ? { warning } : {}) };
   } finally {
     // Always return the session to a startable state — a failed stat must not
     // wedge the next start behind "already active" (same contract as the
-    // Android native-profiler stop).
+    // Android native-profiler stop). The file is host-side, so unlike the
+    // Android pull there is nothing a retried stop could recover.
     api.recordingActive = false;
+    api.stopPending = false;
+    api.pendingRetrieval = false;
     api.captureProcess = null;
     api.outputFile = null;
     api.wallClockStartMs = null;
+    api.wallClockEndMs = null;
     api.timeLimitSeconds = null;
     api.recordingTimedOut = false;
     api.recordingExitedUnexpectedly = false;

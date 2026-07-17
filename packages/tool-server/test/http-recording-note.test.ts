@@ -58,6 +58,17 @@ describe("HTTP screen-recording reminder note", () => {
 
   beforeEach(() => {
     __resetActiveScreenRecordingsForTesting();
+    // Re-assert the no-update default: vi.clearAllMocks() clears call history
+    // but NOT a mockReturnValue installed by a previous test.
+    mockGetUpdateState.mockReturnValue({
+      updateAvailable: false,
+      updateInstallable: false,
+      installableVersion: null,
+      latestVersion: null,
+      latestPublishedAt: null,
+      minReleaseAgeMs: 0,
+      currentVersion: "1.0.0",
+    });
   });
 
   afterEach(() => {
@@ -95,6 +106,9 @@ describe("HTTP screen-recording reminder note", () => {
 
     expect(res.body.note).toContain(`{ "udid": "${UDID}" }`);
     expect(res.body.note).toContain("auto-stops after 60s");
+    // Shared-server caveat: other clients see this note too and must not stop
+    // a capture they don't own.
+    expect(res.body.note).toContain("another agent");
   });
 
   it("switches to the retrieval reminder once the capture finalized on its own", async () => {

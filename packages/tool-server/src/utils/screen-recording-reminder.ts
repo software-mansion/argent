@@ -93,5 +93,11 @@ export function buildScreenRecordingNote(
       `Once you have captured what you need, ${stopCall} to finalize and retrieve the video.`
     );
   });
+  // The tool-server is shared: every connected client sees this note, not just
+  // the one that started the capture. Keep a foreign agent from "helpfully"
+  // killing someone else's recording.
+  lines.push(
+    "(If a recording was started by another agent sharing this tool-server, leave it to them.)"
+  );
   return lines.join("\n");
 }

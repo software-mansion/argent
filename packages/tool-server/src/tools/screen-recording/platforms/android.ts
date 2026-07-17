@@ -31,7 +31,9 @@ const START_FAILFAST_GRACE_MS = 800;
 const HOST_SAFETY_MARGIN_MS = 15_000;
 const STOP_PROBE_TIMEOUT_MS = 5_000;
 const FINALIZE_WAIT_MS = 15_000;
-const PULL_TIMEOUT_MS = 120_000;
+// A 180s capture at screenrecord's default bitrate can reach hundreds of MB;
+// over wireless adb that pull is minutes, not seconds.
+const PULL_TIMEOUT_MS = 600_000;
 
 /**
  * Wait for the device-side `READY:<pid>` echo, then hold a short grace so an
@@ -108,6 +110,9 @@ function waitForScreenrecordStarted(
       const pid = parseInt(match[1]!, 10);
       if (!Number.isFinite(pid) || pid <= 0) return;
       child.stdout?.removeListener("data", onStdout);
+      // The PID is in hand — disarm the overall start timeout so a READY that
+      // lands near the deadline is not SIGKILLed mid-grace as a false timeout.
+      clearTimeout(timer);
       // PID echoed, but screenrecord may still die on its first frame; hold a
       // short grace before declaring the capture live.
       graceTimer = setTimeout(() => {
@@ -129,7 +134,21 @@ export async function startScreenRecordingAndroid(
   params: { udid: string; timeLimitSeconds: number }
 ): Promise<StartRecordingResult> {
   assertNoActiveRecording(api, "android_screen_recording_start");
+  // Set synchronously (no await between the assert and here) so an
+  // overlapping start on the same session is rejected instead of racing this
+  // one through the async spawn/readiness window below.
+  api.startPending = true;
+  try {
+    return await startScreenRecordingAndroidLocked(api, params);
+  } finally {
+    api.startPending = false;
+  }
+}
 
+async function startScreenRecordingAndroidLocked(
+  api: ScreenRecordingSessionApi,
+  params: { udid: string; timeLimitSeconds: number }
+): Promise<StartRecordingResult> {
   const adbPath = await resolveAndroidBinary("adb");
   if (!adbPath) {
     throw new FailureError(
@@ -143,6 +162,18 @@ export async function startScreenRecordingAndroid(
         failure_command: "adb",
       }
     );
+  }
+
+  // A previous capture that ended but was never retrieved (its reminder was
+  // ignored) is superseded by this start — the profiler contract. Its mp4 is
+  // still on the device though, so remove it or every ignored recording leaks
+  // tens of MB of device storage permanently.
+  const staleOnDeviceFile = api.androidOnDeviceFile;
+  if (staleOnDeviceFile && !api.recordingActive) {
+    await adbShell(params.udid, `rm -f ${staleOnDeviceFile}`, {
+      timeoutMs: STOP_PROBE_TIMEOUT_MS,
+    }).catch(() => {});
+    api.androidOnDeviceFile = null;
   }
 
   const timeLimitSeconds = Math.min(params.timeLimitSeconds, ANDROID_MAX_TIME_LIMIT_SECONDS);
@@ -187,12 +218,29 @@ export async function startScreenRecordingAndroid(
     );
   });
 
-  const devicePid = await Promise.race([waitForScreenrecordStarted(child, streams), spawnError]);
+  let devicePid: number;
+  try {
+    devicePid = await Promise.race([waitForScreenrecordStarted(child, streams), spawnError]);
+  } catch (err) {
+    // A failed start may still have spawned a device-side screenrecord (e.g.
+    // READY never parsed but the capture is running). Best-effort reap it and
+    // its file so nothing keeps recording — or keeps 100+ MB — behind a start
+    // the caller was told failed.
+    void adbShell(params.udid, `pkill -INT -f ${onDeviceFile}; rm -f ${onDeviceFile}`, {
+      timeoutMs: STOP_PROBE_TIMEOUT_MS,
+    }).catch(() => {});
+    throw err;
+  }
   child.on("error", () => {});
 
   // Capture is live — stamp the session (success-only, like the iOS path).
+  if (api.recordingTimeout) {
+    clearTimeout(api.recordingTimeout);
+    api.recordingTimeout = null;
+  }
   api.recordingTimedOut = false;
   api.recordingExitedUnexpectedly = false;
+  api.pendingRetrieval = false;
   api.lastExitInfo = null;
   api.outputFile = outputFile;
   api.androidOnDeviceFile = onDeviceFile;
@@ -200,18 +248,23 @@ export async function startScreenRecordingAndroid(
   api.captureProcess = child;
   api.recordingActive = true;
   api.wallClockStartMs = Date.now();
+  api.wallClockEndMs = null;
   api.timeLimitSeconds = timeLimitSeconds;
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, timeLimitSeconds);
 
   api.recordingTimeout = setTimeout(
     () => {
       api.recordingTimeout = null;
+      // Ownership guard: a newer capture may have stamped the session.
+      if (api.captureProcess !== child) return;
       if (!api.recordingActive) return;
       // screenrecord should have self-stopped at the cap; getting here means
       // the adb child hung (device unplugged, daemon wedged). Reap it so the
       // session can't stay "recording" forever.
       api.recordingActive = false;
       api.recordingTimedOut = true;
+      api.wallClockEndMs = Date.now();
+      api.pendingRetrieval = true;
       markScreenRecordingFinalized(
         api.deviceId,
         `it hit its ${timeLimitSeconds}s time limit but the device stopped responding`
@@ -226,6 +279,9 @@ export async function startScreenRecordingAndroid(
   );
 
   child.on("exit", (code, signal) => {
+    // Ownership guard: after this capture is superseded, its exit must not
+    // clobber the newer capture's session state.
+    if (api.captureProcess !== child) return;
     api.lastExitInfo = { code, signal };
     api.captureProcess = null;
     if (api.recordingTimeout) {
@@ -234,8 +290,17 @@ export async function startScreenRecordingAndroid(
     }
     if (api.recordingActive) {
       api.recordingActive = false;
-      if (code === 0) {
-        // `wait $!` returned screenrecord's clean exit: the --time-limit ran out.
+      api.wallClockEndMs = Date.now();
+      api.pendingRetrieval = true;
+      // `wait $!` propagates screenrecord's exit code on shell-v2 adb, but the
+      // legacy shell protocol (old adb/devices) always reports 0 — so require
+      // the clean exit to also LAND at the cap before calling it a time-limit
+      // stop. A clean-looking exit long before the cap is still a death.
+      const elapsedMs =
+        api.wallClockStartMs === null ? null : api.wallClockEndMs - api.wallClockStartMs;
+      const reachedTimeLimit =
+        code === 0 && elapsedMs !== null && elapsedMs >= timeLimitSeconds * 1_000 - 2_000;
+      if (reachedTimeLimit) {
         api.recordingTimedOut = true;
         markScreenRecordingFinalized(api.deviceId, `it hit its ${timeLimitSeconds}s time limit`);
       } else {
@@ -252,6 +317,9 @@ export async function stopScreenRecordingAndroid(
   api: ScreenRecordingSessionApi
 ): Promise<StopRecordingFile> {
   assertStoppableSession(api, "android_screen_recording_stop");
+  // Set synchronously so a concurrent stop (double pull into the same host
+  // file) or start is rejected while this one finalizes.
+  api.stopPending = true;
 
   if (api.recordingTimeout) {
     clearTimeout(api.recordingTimeout);
@@ -263,13 +331,19 @@ export async function stopScreenRecordingAndroid(
   const startedAtMs = api.wallClockStartMs;
   const endedEarly = api.recordingTimedOut || api.recordingExitedUnexpectedly;
   let warning: string | undefined;
+  // Distinguishes "video handed over (or provably gone)" from "video still on
+  // the device": the finally below either fully resets the session, or keeps
+  // it retrievable so this stop can be retried after e.g. a pull timeout.
+  let delivered = false;
 
   try {
     const child = api.captureProcess;
     if (api.recordingActive && api.androidDevicePid) {
       // Flip active first so the exit handler reads the SIGINT-driven exit as
-      // ours, not as an unexpected death.
+      // ours, not as an unexpected death. The capture stops at the SIGINT, so
+      // that is the recording's end time.
       api.recordingActive = false;
+      api.wallClockEndMs = Date.now();
       // SIGINT makes screenrecord stop capturing and write the MP4 trailer;
       // the device-side shell (and with it the host adb child) exits once the
       // file is complete.
@@ -310,6 +384,7 @@ export async function stopScreenRecordingAndroid(
     }
 
     if (!onDeviceFile) {
+      delivered = true; // nothing on the device to preserve for a retry
       throw new FailureError(
         `The screen recording session on ${api.deviceId} lost track of its on-device file — cannot pull the video.`,
         {
@@ -323,27 +398,47 @@ export async function stopScreenRecordingAndroid(
     await runAdb(["-s", api.deviceId, "pull", onDeviceFile, outputFile], {
       timeoutMs: PULL_TIMEOUT_MS,
     });
+    const size = await statNonEmptyOutput(outputFile, "android_screen_recording_stop");
+    // The video is safely on the host — only now is the on-device copy
+    // expendable and the session done.
+    delivered = true;
     await adbShell(api.deviceId, `rm -f ${onDeviceFile}`, {
       timeoutMs: STOP_PROBE_TIMEOUT_MS,
     }).catch(() => {});
 
-    const size = await statNonEmptyOutput(outputFile, "android_screen_recording_stop");
-    const durationMs = startedAtMs === null ? null : Date.now() - startedAtMs;
+    // Capture length, not wall-clock-since-start: after the cap fires the
+    // recording is over even if stop arrives much later.
+    const durationMs =
+      startedAtMs === null ? null : (api.wallClockEndMs ?? Date.now()) - startedAtMs;
     return { outputFile, sizeBytes: size, durationMs, ...(warning ? { warning } : {}) };
   } finally {
-    // Always return the session to a startable state — a failed pull (device
-    // unplugged, disk full) must not wedge the next start behind "already
-    // active" (same contract as the Android native-profiler stop).
     api.recordingActive = false;
+    api.stopPending = false;
     api.captureProcess = null;
-    api.outputFile = null;
-    api.androidOnDeviceFile = null;
     api.androidDevicePid = null;
-    api.wallClockStartMs = null;
-    api.timeLimitSeconds = null;
-    api.recordingTimedOut = false;
-    api.recordingExitedUnexpectedly = false;
-    api.lastExitInfo = null;
-    clearActiveScreenRecording(api.deviceId);
+    if (delivered) {
+      // Return the session to a fully startable state (same contract as the
+      // Android native-profiler stop).
+      api.pendingRetrieval = false;
+      api.outputFile = null;
+      api.androidOnDeviceFile = null;
+      api.wallClockStartMs = null;
+      api.wallClockEndMs = null;
+      api.timeLimitSeconds = null;
+      api.recordingTimedOut = false;
+      api.recordingExitedUnexpectedly = false;
+      api.lastExitInfo = null;
+      clearActiveScreenRecording(api.deviceId);
+    } else {
+      // The pull (or stat) failed but the finished video is still on the
+      // device: keep the session retrievable so this stop can simply be
+      // retried, and keep the reminder pointing at it. A new start remains
+      // possible — it supersedes this capture and removes the on-device file.
+      api.pendingRetrieval = true;
+      markScreenRecordingFinalized(
+        api.deviceId,
+        "its video could not be pulled from the device — retry `screen-recording-stop`"
+      );
+    }
   }
 }

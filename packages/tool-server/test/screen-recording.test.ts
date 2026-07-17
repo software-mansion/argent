@@ -182,6 +182,81 @@ describe("iOS screen recording", () => {
     if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
   });
 
+  it("rejects a start that overlaps another start's readiness window", async () => {
+    const api = await makeSession(iosDevice);
+    const child = fakeChild();
+    const firstStart = startScreenRecordingIos(api, { udid: IOS_UDID, timeLimitSeconds: 180 });
+
+    // First start is still waiting for readiness; a concurrent one must not
+    // pass the admission check and spawn a second recorder.
+    try {
+      await startScreenRecordingIos(api, { udid: IOS_UDID, timeLimitSeconds: 180 });
+      expect.unreachable();
+    } catch (err) {
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_ALREADY_ACTIVE);
+    }
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+    child.stderr.emit("data", Buffer.from("Recording started.\n"));
+    await firstStart;
+    expect(api.startPending).toBe(false);
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
+
+  it("a superseded capture's exit no longer touches the new capture's session", async () => {
+    vi.useFakeTimers();
+    const api = await makeSession(iosDevice);
+    const first = fakeChild();
+    const firstStart = startScreenRecordingIos(api, { udid: IOS_UDID, timeLimitSeconds: 5 });
+    first.stderr.emit("data", Buffer.from("Recording started.\n"));
+    await vi.advanceTimersByTimeAsync(200);
+    await firstStart;
+
+    // Cap fires: capture one is finalized-but-unretrieved.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.pendingRetrieval).toBe(true);
+
+    // A new start supersedes it (burning the recovery, iOS-style).
+    const second = fakeChild();
+    const secondStart = startScreenRecordingIos(api, { udid: IOS_UDID, timeLimitSeconds: 60 });
+    second.stderr.emit("data", Buffer.from("Recording started.\n"));
+    await vi.advanceTimersByTimeAsync(200);
+    await secondStart;
+
+    // The first child's late exit must not null the second capture's handle
+    // or corrupt its state.
+    first.exit(0);
+    expect(api.captureProcess).toBe(second as unknown as ChildProcess);
+    expect(api.recordingActive).toBe(true);
+    expect(api.recordingExitedUnexpectedly).toBe(false);
+    expect(getActiveScreenRecordings()[0]).toMatchObject({ status: "recording" });
+
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
+
+  it("durationMs reflects the capture length, not the idle time after the cap", async () => {
+    vi.useFakeTimers();
+    const api = await makeSession(iosDevice);
+    const child = fakeChild();
+    const startPromise = startScreenRecordingIos(api, { udid: IOS_UDID, timeLimitSeconds: 5 });
+    child.stderr.emit("data", Buffer.from("Recording started.\n"));
+    await vi.advanceTimersByTimeAsync(200);
+    await startPromise;
+    const outputFile = api.outputFile!;
+
+    await vi.advanceTimersByTimeAsync(5_000); // cap fires, SIGINT sent
+    child.exit(0); // recordVideo finalizes
+    await fs.writeFile(outputFile, Buffer.alloc(256, 1));
+    await vi.advanceTimersByTimeAsync(120_000); // agent wanders off for 2 minutes
+
+    const result = await stopScreenRecordingIos(api);
+    expect(result.durationMs).not.toBeNull();
+    expect(result.durationMs!).toBeLessThanOrEqual(6_000);
+
+    vi.useRealTimers();
+    await fs.rm(outputFile, { force: true });
+  });
+
   it("SIGINTs the capture at the time-limit cap and flips the reminder to finalized", async () => {
     vi.useFakeTimers();
     const api = await makeSession(iosDevice);
@@ -370,17 +445,101 @@ describe("Android screen recording", () => {
     expect(getActiveScreenRecordings()).toHaveLength(0);
   });
 
-  it("treats a clean self-exit as the time limit and keeps the retrieval reminder", async () => {
+  it("treats a clean self-exit AT the cap as the time limit and keeps the retrieval reminder", async () => {
     const { api, child } = await startAndroid(60);
 
+    await vi.advanceTimersByTimeAsync(60_000); // run the capture out to its cap
     child.exit(0); // screenrecord hit --time-limit and ended on its own
 
     expect(api.recordingActive).toBe(false);
     expect(api.recordingTimedOut).toBe(true);
+    expect(api.pendingRetrieval).toBe(true);
     expect(getActiveScreenRecordings()[0]).toMatchObject({
       status: "finalized",
       finalizedReason: expect.stringContaining("time limit"),
     });
+  });
+
+  it("classifies a clean exit long BEFORE the cap as unexpected (legacy adb always exits 0)", async () => {
+    const { api, child } = await startAndroid(60);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    child.exit(0); // legacy shell protocol reports 0 even when screenrecord died
+
+    expect(api.recordingActive).toBe(false);
+    expect(api.recordingTimedOut).toBe(false);
+    expect(api.recordingExitedUnexpectedly).toBe(true);
+    expect(getActiveScreenRecordings()[0]).toMatchObject({
+      status: "finalized",
+      finalizedReason: expect.stringContaining("unexpectedly"),
+    });
+  });
+
+  it("accepts a READY that lands near the start deadline (outer timeout disarmed)", async () => {
+    const api = await makeSession(androidDevice);
+    const child = fakeChild();
+    vi.useFakeTimers();
+    const startPromise = startScreenRecordingAndroid(api, {
+      udid: ANDROID_SERIAL,
+      timeLimitSeconds: 60,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(14_500); // just inside the 15s start window
+    child.stdout.emit("data", Buffer.from("READY:4321\n"));
+    await vi.advanceTimersByTimeAsync(1_000); // grace crosses the old deadline
+    await expect(startPromise).resolves.toMatchObject({ status: "recording" });
+    expect(child.kill).not.toHaveBeenCalled();
+    child.exit(0);
+  });
+
+  it("a failed start reaps the device-side capture and file best-effort", async () => {
+    const api = await makeSession(androidDevice);
+    const child = fakeChild();
+    vi.useFakeTimers();
+    const startPromise = startScreenRecordingAndroid(api, {
+      udid: ANDROID_SERIAL,
+      timeLimitSeconds: 60,
+    });
+    const assertion = expect(startPromise).rejects.toSatisfy(
+      (err: unknown) =>
+        getFailureSignal(err)?.error_code === FAILURE_CODES.SCREEN_RECORDING_START_TIMEOUT
+    );
+    await vi.advanceTimersByTimeAsync(16_000); // never emits READY
+    await assertion;
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(mockAdbShell).toHaveBeenCalledWith(
+      ANDROID_SERIAL,
+      expect.stringMatching(/^pkill -INT -f \/sdcard\/argent-screen-recording-\d+\.mp4; rm -f /),
+      expect.anything()
+    );
+    expect(api.startPending).toBe(false);
+  });
+
+  it("a new start over a finalized-but-unretrieved capture removes the superseded on-device file", async () => {
+    const { api, child } = await startAndroid(60);
+    await vi.advanceTimersByTimeAsync(60_000);
+    child.exit(0); // capture finalized on device, never retrieved
+    const staleFile = api.androidOnDeviceFile!;
+
+    const next = fakeChild();
+    const startPromise = startScreenRecordingAndroid(api, {
+      udid: ANDROID_SERIAL,
+      timeLimitSeconds: 60,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    next.stdout.emit("data", Buffer.from("READY:9999\n"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await startPromise;
+
+    expect(mockAdbShell).toHaveBeenCalledWith(
+      ANDROID_SERIAL,
+      `rm -f ${staleFile}`,
+      expect.anything()
+    );
+    expect(api.androidOnDeviceFile).not.toBe(staleFile);
+    expect(api.androidDevicePid).toBe(9999);
+    expect(getActiveScreenRecordings()[0]).toMatchObject({ status: "recording" });
+    next.exit(0);
   });
 
   it("stop SIGINTs the device-side pid, pulls the file, and cleans up", async () => {
@@ -421,8 +580,9 @@ describe("Android screen recording", () => {
 
   it("stop after the time limit pulls the finished file with a warning", async () => {
     const { api, child } = await startAndroid(60);
-    vi.useRealTimers();
+    await vi.advanceTimersByTimeAsync(60_000);
     child.exit(0); // cap reached before stop was called
+    vi.useRealTimers();
 
     const outputFile = api.outputFile!;
     mockRunAdb.mockImplementation(async (args) => {
@@ -439,7 +599,7 @@ describe("Android screen recording", () => {
     await fs.rm(outputFile, { force: true });
   });
 
-  it("a failed pull still returns the session to a startable state", async () => {
+  it("a failed pull keeps the video retrievable and a retried stop delivers it", async () => {
     const { api, child } = await startAndroid(60);
     vi.useRealTimers();
     mockAdbShell.mockImplementation(async (_serial, command) => {
@@ -449,8 +609,63 @@ describe("Android screen recording", () => {
     mockRunAdb.mockRejectedValue(new Error("device offline"));
 
     await expect(stopScreenRecordingAndroid(api)).rejects.toThrow("device offline");
+    // The finished video is still on the device: the session stays retryable
+    // and the reminder keeps pointing at it.
     expect(api.recordingActive).toBe(false);
-    expect(api.androidDevicePid).toBeNull();
+    expect(api.pendingRetrieval).toBe(true);
+    expect(api.androidOnDeviceFile).not.toBeNull();
+    expect(getActiveScreenRecordings()[0]).toMatchObject({
+      status: "finalized",
+      finalizedReason: expect.stringContaining("could not be pulled"),
+    });
+
+    // Retry with the device back: the pull succeeds and the session resets.
+    const outputFile = api.outputFile!;
+    mockRunAdb.mockImplementation(async (args) => {
+      if (args[2] === "pull") await fs.writeFile(args[4]!, Buffer.alloc(512, 1));
+      return { stdout: "", stderr: "" };
+    });
+    const result = await stopScreenRecordingAndroid(api);
+    expect(result.sizeBytes).toBe(512);
+    expect(api.pendingRetrieval).toBe(false);
     expect(getActiveScreenRecordings()).toHaveLength(0);
+
+    await fs.rm(outputFile, { force: true });
+  });
+
+  it("rejects a second stop while one is already finalizing", async () => {
+    const { api, child } = await startAndroid(60);
+    vi.useRealTimers();
+    mockAdbShell.mockImplementation(async (_serial, command) => {
+      if (command.startsWith("kill -INT")) child.exit(0);
+      return "";
+    });
+    let releasePull: (() => void) | undefined;
+    mockRunAdb.mockImplementation(async (args) => {
+      if (args[2] === "pull") {
+        await new Promise<void>((resolve) => {
+          releasePull = resolve;
+        });
+        await fs.writeFile(args[4]!, Buffer.alloc(64, 1));
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const firstStop = stopScreenRecordingAndroid(api);
+    await vi.waitFor(() => expect(releasePull).toBeDefined());
+
+    try {
+      await stopScreenRecordingAndroid(api);
+      expect.unreachable();
+    } catch (err) {
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.SCREEN_RECORDING_STOP_IN_PROGRESS
+      );
+    }
+
+    releasePull!();
+    const result = await firstStop;
+    expect(result.sizeBytes).toBe(64);
+    await fs.rm(result.outputFile, { force: true });
   });
 });
