@@ -79,6 +79,12 @@ afterEach(async () => {
 });
 
 describe("flow-add-step tap selector capture", () => {
+  it("documents that a kept coordinate still needs the replay hierarchy", () => {
+    expect(createFlowAddStepTool(mockRegistry()).description).toContain(
+      "Kept coordinates bypass selector resolution only: replay still requires the full flow hierarchy/devtools"
+    );
+  });
+
   it("captures an identifier selector from the flow tree", async () => {
     setTree([
       n({
@@ -171,6 +177,9 @@ describe("flow-add-step tap selector capture", () => {
     const result = await recordTap({ x: 0.5, y: 0.52 });
 
     expect(result.message).toContain("selector capture failed");
+    expect(result.message).toContain(
+      "kept coordinates, but replay still requires the full flow hierarchy/devtools"
+    );
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
   });
 

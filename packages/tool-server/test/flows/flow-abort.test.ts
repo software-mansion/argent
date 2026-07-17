@@ -237,13 +237,13 @@ describe("run cancellation mid-directive", () => {
 
   it("injects no keyboard input when the run is cancelled during the focus wait", async () => {
     const controller = new AbortController();
-    // Reads 1-2 are the pre-tap settle (field resolves immediately); read 3 is
-    // the focus poll's first look — the field never reports focus, and the run
-    // is cancelled there.
+    // Reads 1-2 are the pre-tap tree settle and read 3 is its post-pixel tree
+    // revalidation; read 4 is the focus poll's first look. The field never
+    // reports focus, and the run is cancelled there.
     let reads = 0;
     currentFetch = () => {
       reads++;
-      if (reads >= 3) controller.abort();
+      if (reads >= 4) controller.abort();
       return {
         tree: screen([
           n({ identifier: "email", frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.06 } }),

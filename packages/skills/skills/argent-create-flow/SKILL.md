@@ -9,6 +9,8 @@ A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` di
 
 Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
 
+Treat raw-point `tap`/`long-press` directives as selector fallbacks, not hierarchy fallbacks. They bypass selector resolution only: those directives still run the same full-hierarchy settle as their selector forms. The other selector directives (`type`, `scroll-to`, `await`, and `assert`) also depend on the full flow hierarchy. By contrast, raw `tool: gesture-*` steps retain the direct tool's semantics and do not implicitly run the flow settle. Direct gestures may use coordinates obtained from a discovery tree; never derive coordinates from a screenshot.
+
 **Two flow types**
 
 - **e2e** — begins with a `launch:` step, which starts that app from scratch (terminate + relaunch), so the flow controls its own start state. No `executionPrerequisite`. May `run:` other flows, and (on iOS/Android) may itself be a `run:` target — when nested, its `launch` runs inline, restarting the app for that sub-scenario. **Chromium is the exception:** the runner boots one Electron app per run (the top-level flow's), so a nested chromium e2e flow's `launch` can't boot its own instance and fails the run — keep chromium e2e flows top-level. Record one by adding a `restart-app` of the app under test as the **first** step — it is captured as the `launch` step.
@@ -131,20 +133,20 @@ Record an `await-ui-element` step to **gate** the next step on a screen transiti
    - A scroll-to-reach-an-element — a `tool: gesture-swipe` (or its chromium analog, `gesture-scroll`) used to bring a specific element on screen before interacting with it (a `tap`, `type`, `assert`, …) → `scroll-to: { target: "<that element>", direction: … }`, dropping the swipe. This is far more robust than a fixed-distance swipe: it scrolls momentum-free and stops exactly when the target appears, so it survives layout and content changes. (`tap`/`type` do not scroll, so a raw swipe whose fling lands differently on another device leaves the following tap unresolved — always prefer the `scroll-to` rewrite.) Keep a `gesture-swipe` as a raw `tool:` step when it isn't scrolling toward a specific element — especially a velocity-dependent gesture like swipe-to-dismiss, edge-swipe-back, or swipe-to-reveal a row action, which a momentum-free `scroll-to` would not reproduce.
    - `tool: gesture-pinch` → `pinch: { on: "<target>", scale: … }`, deriving `scale` as `endDistance / startDistance`. Set `on:` to the element under the pinch center when the pinch was aimed at one (the map or image being zoomed); omit it for a screen-center pinch. Don't carry the recorded distances/angle over — the directive re-derives the geometry (finger placement, system-edge avoidance, chaining of large scales) at run time, so the conversion swaps device-specific coordinates for a portable selector with auto-wait. Keep the raw `tool: gesture-pinch` step when the pinch is anchored at a specific point _inside_ a large element (zooming toward a particular map location, not the map's center) or deliberately pans via `endCenterX`/`endCenterY` — `on:` takes only a selector and re-centers the pinch on the element's frame center, so converting would silently move the zoom anchor.
 
-Every other recorded tool (a velocity-dependent `gesture-swipe`, a fixed-distance `gesture-scroll` not aimed at an element, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, a `restart-app` is captured as a `launch:` step, a `flow-execute` of a sibling fragment is captured as a `run: <name>` composition directive, and device ids are stripped. Captured selectors are emitted in the strict map form (`tap: { text: General }`), never as a loose bare string — the recorder verified the exact element the tap hit, and a bare string would re-parse as loose and route through the identifier-first fallback it was never checked against. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
+Every other recorded tool (a velocity-dependent `gesture-swipe`, a fixed-distance `gesture-scroll` not aimed at an element, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, a `restart-app` is captured as a `launch:` step, a `flow-execute` of a sibling fragment is captured as a `run: <name>` composition directive, and device ids are stripped. If selector capture fails and the recorder keeps coordinates, heed its warning: restore the full flow hierarchy/devtools before replaying that raw-point `tap:` directive; its coordinate form does not bypass that prerequisite. Captured selectors are emitted in the strict map form (`tap: { text: Settings }`), never as a loose bare string — the recorder verified the exact element the tap hit, and a bare string would re-parse as loose and route through the identifier-first fallback it was never checked against. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
 
 ### Example session
 
 ```
-flow-start-recording  { name: "open-about", project_root: "/Users/dev/MyApp" }
-flow-add-echo  { message: "Start Settings from scratch" }
-flow-add-step  { command: "restart-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.apple.Preferences\"}" }   # ⇒ captured as `- launch: com.apple.Preferences` — this is now an e2e flow
-flow-add-echo  { message: "On the Settings root list, tapping the 'General' row" }
-flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.35}" }   # ⇒ captured as `- tap: { text: General }` (portable selector, no udid)
-flow-add-step  { command: "await-ui-element", args: "{\"udid\": \"ABC\", \"condition\": \"visible\", \"selector\": {\"text\": \"About\"}}" }   # gate the transition
-flow-add-echo  { message: "On Settings > General, tapping 'About'" }
-flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.17}" }
-flow-add-step  { command: "await-ui-element", args: "{\"udid\": \"ABC\", \"condition\": \"visible\", \"selector\": {\"text\": \"Model Name\"}}" }
+flow-start-recording  { name: "open-about", project_root: "/Users/dev/ExampleShop" }
+flow-add-echo  { message: "Start Example Shop from scratch" }
+flow-add-step  { command: "restart-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.example.shop\"}" }   # ⇒ captured as `- launch: com.example.shop` — this is now an e2e flow
+flow-add-echo  { message: "On the Example Shop home screen, tapping 'Settings'" }
+flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.84}" }   # ⇒ captured as `- tap: { text: Settings }` (portable selector, no udid)
+flow-add-step  { command: "await-ui-element", args: "{\"udid\": \"ABC\", \"condition\": \"visible\", \"selector\": {\"text\": \"About Example Shop\"}}" }   # gate the transition
+flow-add-echo  { message: "On Example Shop Settings, tapping 'About Example Shop'" }
+flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.26}" }
+flow-add-step  { command: "await-ui-element", args: "{\"udid\": \"ABC\", \"condition\": \"visible\", \"selector\": {\"text\": \"Version 1.0.0\"}}" }
 flow-finish-recording  {}
 ```
 
@@ -168,14 +170,14 @@ The polished result of the example session above:
 
 ```yaml
 steps:
-  - echo: Start Settings from scratch
-  - launch: com.apple.Preferences
-  - echo: On the Settings root list, tapping the 'General' row
-  - tap: { text: General }
-  - await: { visible: About }
-  - echo: On Settings > General, tapping 'About'
-  - tap: { text: About }
-  - await: { visible: Model Name }
+  - echo: Start Example Shop from scratch
+  - launch: com.example.shop
+  - echo: On the Example Shop home screen, tapping 'Settings'
+  - tap: { text: Settings }
+  - await: { visible: "About Example Shop" }
+  - echo: On Example Shop Settings, tapping 'About Example Shop'
+  - tap: { text: "About Example Shop" }
+  - await: { visible: "Version 1.0.0" }
 ```
 
 Note there is **no device id** anywhere in the file — the recorder strips them and the runner injects the bound device.
@@ -261,9 +263,9 @@ After applying a correction, re-run `flow-execute` to verify.
 
 Apply these when recording new flows to reduce future breakage:
 
-- **Echo expected state, not just actions.** Write `"On Settings > General screen, about to tap About"` not `"Tap About"`. During diagnosis these tell you what the screen _should_ look like.
+- **Echo expected state, not just actions.** Write `"On Example Shop Settings, about to tap About"` not `"Tap About"`. During diagnosis these tell you what the screen _should_ look like.
 - **Gate transitions with `await-ui-element`, not fixed delays.** After a tap that triggers a navigation, record an `await-ui-element` step that waits for the next screen's element to be `visible` (or a spinner to be `hidden`) before the following step — converted to an `await:` directive during polish. This removes the **Timing** failure mode in Diagnose (the element is in the tree but the tap fired before the screen settled) and is more reliable than `delayMs` or an extra `screenshot`. An unmet wait stops replay at that step, so a mistimed step can never run blind.
 - **Add screenshot steps after critical navigation.** Insert `screenshot` steps after screen transitions. These produce images in the flow result you can inspect during diagnosis.
 - **Write specific executionPrerequisites.** `"App on home tab, user logged in, simulator UDID is <X>"` — not `"App running"`. Verify with `screenshot` + `describe` before acknowledging.
 - **Prefer launch-app / open-url over navigation chains.** Deep links are more resilient to layout changes than tap sequences.
-- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `describe` to find the element by label and update coordinates. Only use `screenshot` for permission or system overlays when `describe` cannot expose the target reliably.
+- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `describe` to find the element by label and update coordinates. Use a `screenshot` only to inspect a permission or system overlay that `describe` cannot expose; never derive coordinates from the image.

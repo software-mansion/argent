@@ -2,6 +2,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { settleTree, invokeOnDevice, type ActionEnv } from "./flow-actions";
+import { FlowTreeSourceUnavailableError } from "./flow-errors";
+import { settlePixels, type PixelSettleOutcome } from "./flow-pixels";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
@@ -13,9 +15,9 @@ export const DEFAULT_MAX_MISMATCH = 0.5;
  * surface (e.g. inline only `diff` on failure). Artifact handles — not host
  * paths — so a client on another machine can materialize them. Present only
  * when there is something to look at: a failed comparison (all roles), a
- * missing-baseline failure (`current` only), or a baseline write (`baseline`
- * only) — a clean pass carries none, so renderers never fetch full-res PNGs
- * just to print paths nobody needs.
+ * missing-baseline or rejected baseline-update failure (`current` only), or a
+ * baseline write (`baseline` only) — a clean pass carries none, so renderers
+ * never fetch full-res PNGs just to print paths nobody needs.
  */
 export interface SnapshotArtifacts {
   baseline?: ArtifactHandle;
@@ -74,6 +76,41 @@ async function cleanupDiffDir(dir: string, keep?: string): Promise<void> {
   }
 }
 
+type SnapshotSettleOutcome = Exclude<PixelSettleOutcome, "aborted"> | "aborted";
+
+/**
+ * Prefer the full tree + pixel settle. A sustained tree-source outage is the
+ * one failure snapshots can safely work around: they do not resolve selector
+ * coordinates, so a bounded pixel-only settle still establishes visual
+ * stability without weakening the action settler's tree-freshness contract.
+ */
+async function settleSnapshot(env: ActionEnv): Promise<SnapshotSettleOutcome> {
+  try {
+    const settled = await settleTree(env);
+    if (!settled) return "aborted";
+    if (!settled.converged || settled.visual === "timed-out") return "timed-out";
+    if (settled.visual === "unavailable") return "unavailable";
+    return "settled";
+  } catch (err) {
+    if (err instanceof FlowTreeSourceUnavailableError) return settlePixels(env);
+    throw err;
+  }
+}
+
+function degradedReason(outcome: SnapshotSettleOutcome): string | undefined {
+  if (outcome === "timed-out") {
+    return "capture is best-effort/degraded because visual settling timed out";
+  }
+  if (outcome === "unavailable") {
+    return "capture is best-effort/degraded because visual settling was unavailable";
+  }
+  return undefined;
+}
+
+function withDegradation(reason: string, degradation?: string): string {
+  return degradation ? `${reason}; ${degradation}` : reason;
+}
+
 /**
  * Capture the current screen and compare it to a stored baseline keyed by
  * platform + resolution. A missing baseline FAILS the step — adopting one is
@@ -92,20 +129,11 @@ export async function runSnapshot(
     updateBaselines: boolean;
   }
 ): Promise<VisualOutcome> {
-  // Wait for the UI to settle (a transition/reflow finished) so the capture is
-  // stable run-to-run, rather than guessing a fixed delay. `settleTree` returns
-  // undefined only on abort and throws only on a sustained tree-source outage
-  // (e.g. native devtools disconnected). The capture reads pixels, not the
-  // describe tree — so short of an explicit abort, proceed best-effort; a
-  // genuinely dead device still surfaces via the screenshot invoke below.
-  try {
-    await settleTree(env);
-  } catch {
-    // tree-source outage — capture anyway, see above
-  }
-  if (env.signal?.aborted) {
+  const settleOutcome = await settleSnapshot(env);
+  if (settleOutcome === "aborted" || env.signal?.aborted) {
     return { status: "skip", reason: "run aborted during snapshot settle" };
   }
+  const degradation = degradedReason(settleOutcome);
 
   const store = requireArtifacts(env.ctx);
 
@@ -129,13 +157,28 @@ export async function runSnapshot(
     .then(() => true)
     .catch(() => false);
 
+  if (opts.updateBaselines && settleOutcome === "timed-out") {
+    return {
+      status: "fail",
+      reason:
+        `baseline not ${exists ? "updated" : "written"} (${key}) because visual settling ` +
+        `timed out; the ${exists ? "existing" : "missing"} baseline was left untouched and ` +
+        `the current capture is attached for inspection`,
+      snapshotKey,
+      artifacts: { current: shot.image },
+    };
+  }
+
   if (opts.updateBaselines) {
     await fs.mkdir(dir, { recursive: true });
     await fs.copyFile(currentPath, baselinePath);
     const baseline = await store.register(baselinePath, { mimeType: "image/png" });
     return {
       status: "pass",
-      reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
+      reason: withDegradation(
+        exists ? `baseline updated (${key})` : `baseline written (${key})`,
+        degradation
+      ),
       snapshotKey,
       artifacts: { baseline },
     };
@@ -147,10 +190,12 @@ export async function runSnapshot(
     // persists baselines (ephemeral CI) would gate nothing forever.
     return {
       status: "fail",
-      reason:
+      reason: withDegradation(
         `no baseline for "${opts.name}" on this device class — expected ${baselinePath}, ` +
-        `nothing was compared. Run with updateBaselines (--update-baselines) to adopt the ` +
-        `current screen, then review and commit it`,
+          `nothing was compared. Run with updateBaselines (--update-baselines) to adopt the ` +
+          `current screen, then review and commit it`,
+        degradation
+      ),
       snapshotKey,
       artifacts: { current: shot.image },
     };
@@ -174,9 +219,11 @@ export async function runSnapshot(
       const { expected, actual } = result.dimensionMismatch;
       return {
         status: "fail",
-        reason:
+        reason: withDegradation(
           `baseline is ${expected.width}x${expected.height} but the capture is ` +
-          `${actual.width}x${actual.height} (${key}) — nothing was compared`,
+            `${actual.width}x${actual.height} (${key}) — nothing was compared`,
+          degradation
+        ),
         snapshotKey,
         artifacts: {
           baseline: await store.register(baselinePath, { mimeType: "image/png" }),
@@ -186,7 +233,10 @@ export async function runSnapshot(
     }
 
     const within = result.mismatchPercentage <= opts.maxMismatch;
-    const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
+    const reason = withDegradation(
+      `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`,
+      degradation
+    );
     if (within) {
       return { status: "pass", reason };
     }

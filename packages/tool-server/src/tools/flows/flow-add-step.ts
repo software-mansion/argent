@@ -61,7 +61,8 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
- * describing why coordinates were kept.
+ * describing why coordinates were kept. Keeping coordinates bypasses selector
+ * resolution only: replay still settles against the full flow hierarchy.
  *
  * The lookup reads `fetchFlowTree` — the same tree source the runner resolves
  * selectors against at replay — NOT the agent-facing describe tree. The two
@@ -108,7 +109,9 @@ async function captureTapSelector(
     return { selector, warning: fallbackSourceWarning(source, device.platform) };
   } catch (err) {
     return {
-      warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,
+      warning:
+        `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates, ` +
+        "but replay still requires the full flow hierarchy/devtools",
     };
   }
 }
@@ -168,7 +171,7 @@ export function createFlowAddStepTool(
 > {
   return {
     id: "flow-add-step",
-    description: `Execute a tool call and record it as a step in the active flow. Use when recording a flow with flow-start-recording and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow). Returns { message, toolResult, flowFile } on success. If it fails an error is returned and nothing is recorded.
+    description: `Execute a tool call and record it as a step in the active flow. Use when recording a flow with flow-start-recording and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning). Kept coordinates bypass selector resolution only: replay still requires the full flow hierarchy/devtools to settle before dispatch. A \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow). Returns { message, toolResult, flowFile } on success. If it fails an error is returned and nothing is recorded.
 If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
     zodSchema,
     services: () => ({}),
@@ -234,7 +237,8 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
-        // directive so every tap reads uniformly.
+        // directive so every tap reads uniformly. This bypasses selector
+        // resolution, not the runner's full-hierarchy settle prerequisite.
         step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };
         warning = captured?.warning;
       } else if (isLaunch) {
