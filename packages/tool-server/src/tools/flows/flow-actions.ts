@@ -36,7 +36,9 @@ import {
   describeTextExpectation,
   type FlowSelector,
   type FlowStep,
+  type GestureTarget,
   type ScrollDirection,
+  type SwipeDirection,
 } from "./flow-utils";
 
 /** Everything a directive needs to act on the run's device. */
@@ -80,7 +82,7 @@ export const ABORTED_OUTCOME: DirectiveOutcome = {
 /** The selector-acting steps {@link runDirective} handles. */
 export type DirectiveStep = Extract<
   FlowStep,
-  { kind: "tap" | "long-press" | "type" | "await" | "assert" | "scroll-to" | "pinch" }
+  { kind: "tap" | "long-press" | "swipe" | "type" | "await" | "assert" | "scroll-to" | "pinch" }
 >;
 
 /** Dispatch a tool with the run's resolved device id bound into its args. */
@@ -595,6 +597,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     env.device.platform === "vega" &&
     (step.kind === "tap" ||
       step.kind === "long-press" ||
+      step.kind === "swipe" ||
       step.kind === "type" ||
       step.kind === "scroll-to" ||
       step.kind === "pinch")
@@ -618,6 +621,8 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
       return runTap(env, step);
     case "long-press":
       return runLongPress(env, step);
+    case "swipe":
+      return runSwipe(env, step);
     case "type":
       return runType(env, step);
     case "await":
@@ -779,6 +784,152 @@ async function runPinch(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     await invokeOnDevice(env, "gesture-pinch", args);
     if (i < n - 1 && !(await sleepOrAbort(PINCH_SETTLE_MS, env.signal))) return ABORTED_OUTCOME;
+  }
+  return { ok: true };
+}
+
+/**
+ * Per-direction swipe geometry, byte-for-byte Maestro's table. The
+ * asymmetries are deliberate edge-gesture avoidance, not noise: a `down`
+ * swipe starting at the very top would grab the notification shade /
+ * Notification Center, and an `up` swipe starting near the bottom lands in
+ * the home-indicator gesture zone — so `down` starts at 20% height and `up`
+ * at the centre. Direction is the FINGER's travel: each entry is a default
+ * start point and a fixed end line on the travel axis; an explicit `from`
+ * replaces the start and keeps its own cross-axis coordinate. Those preset
+ * margins are defaults, not constraints: an authored anchor is used verbatim
+ * once its resolved centre is confirmed to be physically on-screen, even when
+ * it lies inside an OS gesture zone.
+ */
+const SWIPE_GEOMETRY: Record<
+  SwipeDirection,
+  { start: { x: number; y: number }; axis: "x" | "y"; end: number }
+> = {
+  left: { start: { x: 0.9, y: 0.5 }, axis: "x", end: 0.1 },
+  right: { start: { x: 0.1, y: 0.5 }, axis: "x", end: 0.9 },
+  down: { start: { x: 0.5, y: 0.2 }, axis: "y", end: 0.9 },
+  up: { start: { x: 0.5, y: 0.5 }, axis: "y", end: 0.1 },
+};
+
+/**
+ * One semantic finger travel (dismiss a card, page a carousel, open a
+ * drawer), distinct from goal-seeking `scroll-to`. The start is `from`
+ * (target → same resolution as tap) or the travel spec's default; the end
+ * comes from exactly one of `direction` (Maestro-compatible preset —
+ * {@link SWIPE_GEOMETRY}), `by` (relative delta, screen-clamped), or `to`
+ * (explicit target). Touch dispatches one `gesture-swipe` (natural fling;
+ * `settle` opts into the engine's momentum-free variant); Chromium has no
+ * touch, so a swipe is a mouse drag (`gesture-drag`) — swipe-as-scroll is
+ * already `scroll-to`'s job there, and a drag has no momentum for `settle`
+ * to remove.
+ */
+async function runSwipe(
+  env: ActionEnv,
+  step: {
+    from?: GestureTarget;
+    direction?: SwipeDirection;
+    to?: GestureTarget;
+    by?: { x?: number; y?: number };
+    settle?: boolean;
+    duration?: number;
+  }
+): Promise<DirectiveOutcome> {
+  let start: { x: number; y: number };
+  if (step.from) {
+    const p = await resolveTargetPoint(env, step.from);
+    if ("fail" in p) return p.fail;
+    start = p;
+  } else if (step.direction) {
+    start = SWIPE_GEOMETRY[step.direction].start;
+  } else {
+    start = { x: 0.5, y: 0.5 };
+  }
+
+  // Selector frames come from the platform's layout tree rather than the
+  // parser, so their centres are not covered by parseTarget's [0, 1] point
+  // validation. Never dispatch an off-screen touch-down (including a
+  // direction swipe whose unchanged cross-axis coordinate is off-screen), and
+  // don't silently move an element anchor to make the gesture valid.
+  if (
+    !Number.isFinite(start.x) ||
+    start.x < 0 ||
+    start.x > 1 ||
+    !Number.isFinite(start.y) ||
+    start.y < 0 ||
+    start.y > 1
+  ) {
+    return {
+      ok: false,
+      reason: `swipe.from resolved outside the normalized screen: (${start.x}, ${start.y}); both coordinates must be between 0 and 1`,
+    };
+  }
+
+  let end: { x: number; y: number };
+  if (step.direction) {
+    const g = SWIPE_GEOMETRY[step.direction];
+    end = g.axis === "x" ? { x: g.end, y: start.y } : { x: start.x, y: g.end };
+    const startOnTravelAxis = start[g.axis];
+    if (startOnTravelAxis === g.end) {
+      return {
+        ok: false,
+        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: the preset endpoint is also ${g.axis}=${g.end}, so the gesture would have zero travel`,
+      };
+    }
+    const actualDirection: SwipeDirection =
+      g.axis === "x"
+        ? g.end > startOnTravelAxis
+          ? "right"
+          : "left"
+        : g.end > startOnTravelAxis
+          ? "down"
+          : "up";
+    if (actualDirection !== step.direction) {
+      return {
+        ok: false,
+        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: the preset endpoint is ${g.axis}=${g.end}, so the gesture would travel ${actualDirection}`,
+      };
+    }
+  } else if (step.by) {
+    const clamp = (v: number) => Math.min(1, Math.max(0, v));
+    // An absent axis travels nothing — and is never clamped, so an anchor
+    // at an edge doesn't pick up movement on an axis the author left out.
+    end = {
+      x: step.by.x !== undefined ? clamp(start.x + step.by.x) : start.x,
+      y: step.by.y !== undefined ? clamp(start.y + step.by.y) : start.y,
+    };
+    for (const axis of ["x", "y"] as const) {
+      const requested = step.by[axis];
+      if (requested === undefined) continue;
+      const effective = end[axis] - start[axis];
+      if (effective === 0 || Math.sign(effective) !== Math.sign(requested)) {
+        const direction = requested > 0 ? "positive" : "negative";
+        const result = effective === 0 ? "no travel" : "travel in the opposite direction";
+        return {
+          ok: false,
+          reason: `swipe.by.${axis} requests ${direction} travel from ${axis}=${start[axis]}, but clamping the endpoint to [0, 1] leaves ${result}; choose a start point with room in that direction`,
+        };
+      }
+    }
+  } else {
+    const p = await resolveTargetPoint(env, step.to!);
+    if ("fail" in p) return p.fail;
+    end = p;
+  }
+
+  const travel = {
+    fromX: start.x,
+    fromY: start.y,
+    toX: end.x,
+    toY: end.y,
+    ...(step.duration !== undefined ? { durationMs: step.duration } : {}),
+  };
+  if (env.device.platform === "chromium") {
+    await invokeOnDevice(env, "gesture-drag", travel);
+  } else {
+    await invokeOnDevice(env, "gesture-swipe", {
+      ...travel,
+      ...(step.settle ? { settle: true } : {}),
+    });
   }
   return { ok: true };
 }

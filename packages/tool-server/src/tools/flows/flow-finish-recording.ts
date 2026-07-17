@@ -12,6 +12,7 @@ import {
   selectorToYaml,
   type FlowSavedTo,
   type FlowSelector,
+  type GestureTarget,
 } from "./flow-utils";
 import type { TextMatchMode } from "../../utils/ui-tree-match";
 
@@ -39,6 +40,10 @@ function textConditionLabel(
     : textMatch === "equals"
       ? `text ${selector} == ${JSON.stringify(expected)}`
       : `text ${selector} contains ${JSON.stringify(expected)}`;
+}
+
+function targetLabel(target: GestureTarget): string {
+  return "selector" in target ? selectorLabel(target.selector) : `(${target.x}, ${target.y})`;
 }
 
 const zodSchema = z.object({});
@@ -90,7 +95,19 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
           return `${n}. run: ${step.flow}`;
         case "tap":
         case "long-press":
-          return `${n}. ${step.kind}: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
+          return `${n}. ${step.kind}: ${targetLabel(
+            step.selector
+              ? { selector: step.selector }
+              : { x: step.x as number, y: step.y as number }
+          )}`;
+        case "swipe": {
+          const travel =
+            step.direction ??
+            (step.by
+              ? `by ${JSON.stringify(step.by)}`
+              : `to ${targetLabel(step.to as GestureTarget)}`);
+          return `${n}. swipe: ${travel}${step.from ? ` from ${targetLabel(step.from)}` : ""}`;
+        }
         case "type":
           return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
         case "await":
