@@ -754,6 +754,9 @@ async function execSteps(
         status: "skip",
         flow: sourceFlow,
         target: stepTarget(step),
+        // Carry the echo's message so a skipped narration renders as a skip
+        // line rather than vanishing — matching reportBlockSkipped.
+        ...(step.kind === "echo" ? { message: step.message } : {}),
       });
       // A when block's literal steps are known — expand them so the report
       // keeps one line per authored step no matter where the stop landed.
@@ -769,6 +772,7 @@ async function execSteps(
         reason: "run aborted",
         flow: sourceFlow,
         target: stepTarget(step),
+        ...(step.kind === "echo" ? { message: step.message } : {}),
       });
       if (step.kind === "when") reportBlockSkipped(state, step.steps, sourceFlow, "run aborted");
       continue;

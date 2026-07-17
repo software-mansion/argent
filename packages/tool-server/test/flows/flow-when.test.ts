@@ -251,6 +251,9 @@ describe("when: execution", () => {
     ]);
     expect(result.steps[0].reason).toMatch(/condition not met .*block skipped \(2 steps\)/);
     expect(result.steps[1].reason).toBe("when block skipped");
+    // The skipped nested echo keeps its message so the renderer marks it
+    // skipped rather than printing it as if it had run.
+    expect(result.steps[3].message).toBe("nested");
     expect(result.taps).toHaveLength(0);
     expect(result.ok).toBe(true);
   });
@@ -290,6 +293,10 @@ describe("when: execution", () => {
       "assert:fail",
       "echo:skip",
     ]);
+    // The trailing top-level echo is skipped by the hard stop but keeps its
+    // message, so the renderer can mark it skipped instead of dropping the
+    // line (or, worse, printing it as if it had run).
+    expect(result.steps[2].message).toBe("never reached");
     expect(result.ok).toBe(false);
   });
 
