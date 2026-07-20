@@ -225,7 +225,14 @@ export async function runSnapshot(
   const currentArtifact = async (): Promise<ArtifactHandle> => {
     if (cropDir === undefined) return shot.image;
     keepCropped = true;
-    return store.register(currentPath, { mimeType: "image/png" });
+    // Explicit filename: the crop file's basename IS the baseline's `key`, and
+    // a remote client materializes downloads by filename — defaulting to the
+    // basename would land `current` on the same cache path as `baseline` and
+    // clobber it (the diff artifact below disambiguates the same way).
+    return store.register(currentPath, {
+      mimeType: "image/png",
+      filename: `${snapshotKey}-current.png`,
+    });
   };
 
   try {
