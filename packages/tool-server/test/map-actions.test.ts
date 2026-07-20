@@ -38,6 +38,26 @@ describe("enumerateActions — role/clickable filter", () => {
     expect(labels).toEqual(["Compose", "Learn more", "Row"]);
   });
 
+  it("iOS: 'tab' role match is precise — an AXTable grid is not tappable, real tab items are", () => {
+    const tree = root(
+      // "axtable" contains "tab" as a substring but is a static content grid;
+      // only its cells (and any true tab item) are targets.
+      n("AXTable", [0.05, 0.1, 0.9, 0.6], { label: "Feed" }, [
+        n("AXCell", [0.05, 0.1, 0.9, 0.1], { label: "Row 1" }),
+      ]),
+      n("AXTab", [0.1, 0.75, 0.3, 0.06], { label: "Tab item" }),
+      n("AXTabBar", [0, 0.9, 1, 0.1], { label: "Bar" }, [
+        n("AXButton", [0, 0.92, 0.5, 0.06], { label: "Tab A" }),
+      ])
+    );
+    const labels = enumerateActions(tree, IOS).map((a) => a.label);
+    expect(labels).not.toContain("Feed"); // the AXTable container is skipped
+    expect(labels).toContain("Row 1"); // its cell is a real target
+    expect(labels).toContain("Tab item"); // the "tab" role branch still matches
+    expect(labels).toContain("Tab A"); // tab-bar item survives
+    expect(labels).not.toContain("Bar"); // the tab BAR container is skipped
+  });
+
   it("Android: takes clickable=true nodes regardless of class, skips non-clickable ones", () => {
     const tree = root(
       n("android.widget.Button", [0.1, 0.1, 0.3, 0.08], { label: "Send", clickable: true }),
@@ -130,6 +150,35 @@ describe("enumerateActions — list collapse, cap, ordering", () => {
     );
     const actions = enumerateActions(root(...buttons), { platform: "ios", maxActions: 2 });
     expect(actions.map((a) => a.label)).toEqual(["B1", "B2"]);
+  });
+
+  it("reserves budget for bottom-anchored nav so a top-heavy feed can't truncate the tab bar", () => {
+    // A feed of 8 rows, each a distinct AXGroup holding an Avatar button + a
+    // post link (16 candidates, none collapsing — distinct parents), plus a
+    // 5-item tab bar anchored at the bottom. maxActions = 12: the plain
+    // top-down cap would take 12 feed items and drop every tab.
+    const feedRows: DescribeNode[] = [];
+    for (let i = 0; i < 8; i++) {
+      const y = 0.1 + i * 0.08;
+      feedRows.push(
+        n("AXGroup", [0.05, y, 0.9, 0.07], {}, [
+          n("AXButton", [0.06, y, 0.1, 0.06], { label: `Avatar ${i}` }),
+          n("AXLink", [0.2, y, 0.7, 0.06], { label: `Post ${i}` }),
+        ])
+      );
+    }
+    const tabLabels = ["Home", "Search", "Notifications", "Messages", "Profile"];
+    const tabs = tabLabels.map((label, i) => n("AXButton", [i * 0.2, 0.92, 0.2, 0.06], { label }));
+    const tree = root(...feedRows, n("AXTabBar", [0, 0.9, 1, 0.1], { label: "Tab bar" }, tabs));
+
+    const labels = enumerateActions(tree, IOS).map((a) => a.label);
+    expect(labels).toHaveLength(12);
+    // Every top-level section survives the cap...
+    for (const tab of tabLabels) expect(labels).toContain(tab);
+    // ...and the remaining seven slots go to the feed in reading order.
+    expect(labels.filter((l) => l.startsWith("Avatar") || l.startsWith("Post"))).toHaveLength(7);
+    // Output stays in reading order (feed above the bottom bar).
+    expect(labels.slice(-5).sort()).toEqual([...tabLabels].sort());
   });
 
   it("orders top-to-bottom, then left-to-right", () => {

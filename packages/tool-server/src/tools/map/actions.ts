@@ -33,6 +33,19 @@ const COLLAPSE_TOLERANCE = 0.01;
 // How many of a repeated run of list items to keep.
 const COLLAPSE_KEEP = 3;
 
+// Primary navigation — a tab bar / bottom toolbar — is anchored to the bottom
+// edge of the screen. An element whose vertical CENTRE falls in this band is
+// treated as top-level navigation: each item is a distinct app section, and
+// dropping one strands its whole subtree from the crawl. So the action cap
+// reserves a share of its budget for these before filling the rest in reading
+// order, instead of the plain top-down truncation that a tall feed would use to
+// crowd a bottom bar out entirely.
+const NAV_BAND_MIN_CENTRE_Y = 0.85;
+// Ceiling on the budget share the bottom band may reserve, so a screen that is
+// mostly a bottom sheet can't starve the reading-order content the other way.
+// Half the budget comfortably holds a typical 3-5 item tab bar.
+const NAV_RESERVE_RATIO = 0.5;
+
 /**
  * iOS tappable roles: Button / Link / Cell / Tab / MenuItem-ish, matched as
  * role substrings (the describe adapters emit `AXButton`, `AXLink`, …). The
@@ -43,7 +56,11 @@ const COLLAPSE_KEEP = 3;
  */
 function isTappableIosRole(role: string): boolean {
   const r = role.toLowerCase();
-  if (r.includes("tabbar")) return false;
+  // Drop the containers whose role merely *contains* "tab" before the "tab"
+  // match below: the tab BAR holds the targets rather than being one, and an
+  // AXTable is a static content grid whose AXCells are the real targets.
+  // (`"axtable".includes("tab")` is the substring trap this guards against.)
+  if (r.includes("tabbar") || r.includes("table")) return false;
   return (
     r.includes("button") ||
     r.includes("link") ||
@@ -160,6 +177,12 @@ function toAction(node: DescribeNode): MapAction {
  * Enumerate the actions the crawler will try on a screen, top-to-bottom then
  * left-to-right, capped at `maxActions`. The synthetic root itself is never a
  * candidate.
+ *
+ * When the candidates overflow the cap, bottom-anchored primary navigation (a
+ * tab bar / bottom toolbar — see {@link NAV_BAND_MIN_CENTRE_Y}) is reserved a
+ * capped share of the budget so a top-heavy feed can never truncate the app's
+ * top-level sections out of the crawl; the rest of the budget then fills in
+ * reading order. The returned actions stay in reading order regardless.
  */
 export function enumerateActions(root: DescribeNode, opts: EnumerateActionsOptions): MapAction[] {
   const candidates: Array<{ node: DescribeNode; parent: DescribeNode }> = [];
@@ -171,5 +194,25 @@ export function enumerateActions(root: DescribeNode, opts: EnumerateActionsOptio
 
   const kept = collapseRepeats(candidates);
   kept.sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x);
-  return kept.slice(0, opts.maxActions).map(toAction);
+  if (kept.length <= opts.maxActions) return kept.map(toAction);
+
+  const isBottomNav = (n: DescribeNode): boolean =>
+    n.frame.y + n.frame.height / 2 >= NAV_BAND_MIN_CENTRE_Y;
+  const nav = kept.filter(isBottomNav);
+  const rest = kept.filter((n) => !isBottomNav(n));
+  const reserved = Math.min(nav.length, Math.ceil(opts.maxActions * NAV_RESERVE_RATIO));
+
+  // Guaranteed navigation, then reading-order content, then any leftover budget
+  // back to the remaining nav items. Membership is by node identity; the final
+  // `kept.filter` restores reading order for the output.
+  const chosen = new Set<DescribeNode>(nav.slice(0, reserved));
+  for (const node of rest) {
+    if (chosen.size >= opts.maxActions) break;
+    chosen.add(node);
+  }
+  for (const node of nav.slice(reserved)) {
+    if (chosen.size >= opts.maxActions) break;
+    chosen.add(node);
+  }
+  return kept.filter((n) => chosen.has(n)).map(toAction);
 }
