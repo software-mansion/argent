@@ -46,8 +46,14 @@ export interface MapScreenNode {
   key: string;
   /** Best-effort human title (nav-bar/header text), falls back to "Screen N". */
   title: string;
-  /** Number of tap steps from the root screen when first discovered. */
-  depth: number;
+  /**
+   * True when this screen is an ENTRY POINT — the app's launch screen, or a
+   * screen reached by a deep link (`--deep-link`). An app is a graph with
+   * potentially several ways in, so entries are a set, not a single root; a
+   * node is not stamped with a "depth" because a screen has no intrinsic
+   * distance from anywhere — it is reachable by many paths of differing length.
+   */
+  entry: boolean;
   /** True for the synthetic "left the app" node (home screen / other app). */
   outside: boolean;
   /** Actionable elements enumerated on this screen (after caps/dedup). */
@@ -103,13 +109,22 @@ export interface MapCrawlState {
   error: string | null;
   limits: MapCrawlLimits | null;
   stats: MapCrawlStats;
-  rootId: string | null;
+  /**
+   * Entry-point node ids in discovery order (`nodes[i].entry === true` for
+   * exactly these). The launch screen is the first; deep-link seeds add more.
+   * Empty until the first screen is recorded. Replaces the former single
+   * `rootId` — an app graph can have several entries.
+   */
+  entryPoints: string[];
   nodes: MapScreenNode[];
   edges: MapEdge[];
 }
 
 /** Progress events the tool emits (NDJSON `progress` lines to the CLI). */
 export type MapProgressEvent =
+  // `depth` here is live TRAVERSAL feedback — how many taps deep the crawl is
+  // standing right now — not a property of the screen (screens have no depth;
+  // see MapScreenNode). It is shown in the CLI's progress line only.
   | { kind: "screen"; nodeId: string; title: string; depth: number; screens: number }
   | { kind: "action"; nodeId: string; label: string; explored: number; total: number }
   | { kind: "restart"; reason: string }
