@@ -5,6 +5,7 @@ import {
   renderEchoLine,
   renderSummary,
   renderArtifactLines,
+  renderUnderStepLine,
   type FlowReport,
   type StepReport,
 } from "../src/flow.js";
@@ -144,6 +145,101 @@ describe("flow report rendering", () => {
     );
     expect(out).toContain("  · › THIS MUST NOT RUN — when block skipped");
     expect(out).not.toContain("  › THIS MUST NOT RUN");
+  });
+
+  it("indents step and echo labels by depth, keeping the glyph/number columns", () => {
+    const tap: StepReport = {
+      index: 2,
+      kind: "tap",
+      status: "pass",
+      target: '"Dismiss"',
+      depth: 1,
+    };
+    expect(renderStepLine(tap, 3, "checkout")).toBe('  ✓  3   tap "Dismiss"');
+    expect(renderStepLine({ ...tap, depth: 2 }, 3, "checkout")).toBe('  ✓  3     tap "Dismiss"');
+    // Absent depth (a pre-depth tool-server) and explicit 0 both render flat.
+    expect(renderStepLine({ ...tap, depth: undefined }, 3, "checkout")).toBe(
+      '  ✓  3 tap "Dismiss"'
+    );
+    expect(renderStepLine({ ...tap, depth: 0 }, 3, "checkout")).toBe('  ✓  3 tap "Dismiss"');
+
+    const echo: StepReport = {
+      index: 3,
+      kind: "echo",
+      status: "pass",
+      message: "inside",
+      depth: 1,
+    };
+    expect(renderEchoLine(echo)).toBe("    › inside");
+    const skippedEcho: StepReport = {
+      ...echo,
+      status: "skip",
+      reason: "when block skipped",
+      depth: 2,
+    };
+    expect(renderEchoLine(skippedEcho)).toBe("  ·     › inside — when block skipped");
+  });
+
+  it("clamps a hostile wire depth instead of throwing or exploding", () => {
+    // depth arrives over the wire: a negative value must not throw
+    // (String.repeat rejects it) and a huge one must not allocate a huge line.
+    const tap: StepReport = { index: 0, kind: "tap", status: "pass", target: '"A"', depth: -3 };
+    expect(renderStepLine(tap, 1, "f")).toBe('  ✓  1 tap "A"');
+    expect(renderStepLine({ ...tap, depth: 1.5 }, 1, "f")).toBe('  ✓  1 tap "A"');
+    // The cap clamps, it does not discard: legitimate depth can exceed it
+    // (the producer's run-chain and when-nesting limits accumulate), so a
+    // too-deep step keeps the maximum indent rather than snapping back flat.
+    const atCap = renderStepLine({ ...tap, depth: 20 }, 1, "f");
+    expect(atCap).toBe(`  ✓  1 ${"  ".repeat(20)}tap "A"`);
+    expect(renderStepLine({ ...tap, depth: 21 }, 1, "f")).toBe(atCap);
+    expect(renderStepLine({ ...tap, depth: 1e9 }, 1, "f")).toBe(atCap);
+  });
+
+  it("buffered report shifts under-step lines (warnings, artifacts) with the step", () => {
+    const out = renderReport(
+      mkReport([
+        {
+          index: 0,
+          kind: "when",
+          status: "pass",
+          reason: 'condition met (visible "Promo")',
+          target: 'visible "Promo"',
+        },
+        {
+          index: 1,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 2.10% > 1%",
+          target: '"home"',
+          depth: 1,
+          warning: "baseline seeded",
+          artifacts: { baseline: "/tmp/b.png" },
+        },
+      ])
+    );
+    expect(out).toContain('  ✗  2   snapshot "home" — diff 2.10% > 1%');
+    expect(out).toContain("         ⚠ baseline seeded");
+    expect(out).toContain("         baseline: /tmp/b.png");
+  });
+
+  it("the live tail's warning line (renderUnderStepLine) shifts with depth too", () => {
+    // The live path prints warnings through the same helper as the buffered
+    // renderer — pin the helper so the two can't drift apart.
+    const step: StepReport = { index: 0, kind: "snapshot", status: "pass", depth: 1 };
+    expect(renderUnderStepLine(step, 3, "⚠ baseline seeded")).toBe("         ⚠ baseline seeded");
+    expect(renderUnderStepLine({ ...step, depth: undefined }, 3, "⚠ w")).toBe("       ⚠ w");
+  });
+
+  it("under-step lines stay under the label when the step number grows past 99", () => {
+    // padStart(2) widens the number column at 100+; the under-step pad must
+    // widen with it, at any depth.
+    for (const n of [9, 99, 100, 1000]) {
+      for (const depth of [undefined, 1]) {
+        const step: StepReport = { index: 0, kind: "snapshot", status: "pass", depth };
+        const labelCol = renderStepLine(step, n, "f").indexOf("snapshot");
+        expect(renderUnderStepLine(step, n, "⚠ w").indexOf("⚠")).toBe(labelCol);
+      }
+    }
   });
 
   it("renderSummary carries the device only when asked (live tail)", () => {
