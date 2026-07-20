@@ -495,6 +495,40 @@ test("division is not mistaken for a regex literal", () => {
   );
 });
 
+test("a TS postfix non-null assertion before a division is not read as a regex opener", () => {
+  // `a!` is a postfix non-null assertion that ENDS a value, so the following `/`
+  // is division, not a regex opener. If it were mis-read as a regex, the quote
+  // in the divisor (`"x/y"`) would open a fake string that hides this tool's
+  // description: AND swallows the next tool - both dropping out of the scan. A
+  // PREFIX logical-NOT (`!/re/`) is the opposite case and must stay a regex.
+  const src = `
+    export const first = defineTool({
+      id: "bang-division-tool",
+      w: a! / "x/y".length,
+      description: "First: postfix ! then division.",
+      handler: async () => {},
+    });
+    export const second = defineTool({
+      id: "tool-after-bang",
+      check: (x) => !/["']/.test(x),
+      description: "Second: survives, and its prefix-! regex is not division.",
+      handler: async () => {},
+    });
+  `;
+  const { result: tools } = captureWarnings(() => extractToolsFromSource(src, "fixture.ts"));
+  const byId = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  assert.equal(
+    byId["bang-division-tool"],
+    "First: postfix ! then division.",
+    "a postfix non-null assertion was mis-lexed as a regex position, hiding the description"
+  );
+  assert.equal(
+    byId["tool-after-bang"],
+    "Second: survives, and its prefix-! regex is not division.",
+    "the tool after the desync was dropped, or its prefix-! regex was read as division"
+  );
+});
+
 test("a non-static description (concatenation / interpolation / method suffix) is dropped loudly, not emitted wrong", () => {
   // The captured literal is only the description if nothing extends it. A `+`
   // concatenation, a template `${...}` interpolation, or a method/operator
@@ -584,6 +618,51 @@ test("a balanced nested object (with a deep inner id:) between id: and descripti
   assert.equal(byId["native-thing"], "Does a native thing.");
   assert.ok(!("cap-1" in byId), "a deeply nested id: key was emitted as a spurious tool");
   assert.equal(tools.length, 1);
+});
+
+test("a *description: sibling (subdescription:) before the real description: is not captured", () => {
+  // findOwnDescriptionValue matches `description:` only on a word boundary, so a
+  // sibling key that merely ENDS in `description` (`subdescription:`) appearing
+  // first must not be read as the tool's own description - that would feed the
+  // wrong text into the security scan. The real `description:` after it wins.
+  const src = `
+    export const t = defineTool({
+      id: "subdescription-tool",
+      subdescription: "WRONG - a sibling ending in 'description'.",
+      description: "RIGHT - the tool's own description.",
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.equal(
+    tools.find((t) => t.name === "subdescription-tool")?.description,
+    "RIGHT - the tool's own description.",
+    "a `subdescription:` sibling was captured instead of the real description"
+  );
+  assert.equal(tools.length, 1);
+});
+
+test("a *id: sibling (uuid:, grid:) is not mistaken for a tool id", () => {
+  // findIdLiteralsInCode matches `id:` only on a word boundary, so sibling keys
+  // that merely END in `id` (`uuid:`, `grid:`) must not be discovered as tool
+  // ids - that would fabricate spurious tools into the scan. Only the real
+  // `id:` is a tool.
+  const src = `
+    export const t = defineTool({
+      uuid: "11111111-2222-3333-4444-555555555555",
+      grid: "10x10",
+      id: "real-id-tool",
+      description: "The only real tool here.",
+      handler: async () => {},
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  const names = tools.map((t) => t.name);
+  assert.deepEqual(
+    names,
+    ["real-id-tool"],
+    `spurious tools fabricated from *id: siblings: ${names}`
+  );
 });
 
 test("a line comment with an apostrophe between id: and description: keeps the tool", () => {

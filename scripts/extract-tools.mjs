@@ -194,6 +194,16 @@ function isRegexPosition(src, prevSig, prevSigIdx) {
     // `+`/`-` is a binary/unary operator, after which `/` starts a regex.
     return src[prevSigIdx - 1] !== prevSig;
   }
+  if (prevSig === "!") {
+    // Prefix logical-NOT (`!/re/.test(x)`) is a regex position; a TS postfix
+    // non-null assertion (`x!`) ends a value, so a following `/` is division.
+    // `!=`/`!==` never reach here (their `=` is the last significant char).
+    // Distinguish by what precedes the `!`: a value-ending char (identifier,
+    // digit, `)`, `]`, or a string/template close) makes it postfix.
+    let before = prevSigIdx - 1;
+    while (before >= 0 && /\s/.test(src[before])) before--;
+    return before < 0 || !/[A-Za-z0-9_$)\]"'`]/.test(src[before]);
+  }
   if (REGEX_PREV_CHARS.has(prevSig)) return true;
   if (/[A-Za-z0-9_$]/.test(prevSig)) {
     let start = prevSigIdx;
