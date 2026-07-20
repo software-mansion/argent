@@ -133,6 +133,34 @@ describe("diffPngFiles", () => {
     expect(diff.height).toBe(20);
   });
 
+  it("hard-fails same-aspect resolution differences when normalizeSizes is false", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    // Exactly 2x with the same aspect ratio — the default path (test above)
+    // resamples and compares; normalizeSizes: false must bail instead, since
+    // for images whose dimensions carry meaning the drift IS the failure.
+    await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
+    await writePng(currentPath, 20, 40, { r: 30, g: 60, b: 90 });
+
+    const result = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      normalizeSizes: false,
+    });
+
+    expect(result).toMatchObject({
+      mismatchPercentage: 0,
+      dimensionMismatch: {
+        expected: { width: 10, height: 20 },
+        actual: { width: 20, height: 40 },
+      },
+    });
+    expect(result.diffPath).toBeUndefined();
+    expect(result.contextDiffPath).toBeUndefined();
+  });
+
   it("merges same-line fragments but keeps separate rows distinct", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");

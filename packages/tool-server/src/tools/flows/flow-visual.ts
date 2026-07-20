@@ -266,14 +266,17 @@ export async function runSnapshot(
         currentPath,
         outputDir,
         topMask: cropFrame === undefined ? "status-bar" : "none",
+        // Crop dimensions track the element — size drift must hard-fail below
+        // instead of being resampled away like a full-screen scale difference.
+        ...(cropFrame !== undefined && { normalizeSizes: false }),
       });
 
-      // The differ reports an aspect-ratio bail as mismatchPercentage 0, which
-      // the threshold below would read as a clean pass — but nothing was
-      // compared. Unreachable for a full-screen snapshot while the key embeds
-      // the capture's dimensions; load-bearing under cropOn, where the crop's
-      // dimensions track the element, not the device class — an element that
-      // moved or resized lands here instead of producing a bogus pixel diff.
+      // The differ reports a dimension bail as mismatchPercentage 0, which the
+      // threshold below would read as a clean pass — but nothing was compared.
+      // Under cropOn the differ hard-fails ANY size difference (normalizeSizes:
+      // false), so proportional element drift lands here too; full-screen
+      // snapshots keep normalization, and this branch stays unreachable for
+      // them since the key embeds the capture's dimensions.
       if (result.dimensionMismatch) {
         const { expected, actual } = result.dimensionMismatch;
         return {
