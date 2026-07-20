@@ -443,8 +443,9 @@ holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare
 \`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`await\` waits
 for a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
-diffs a screenshot against a stored baseline (a missing baseline fails the step — set updateBaselines
-to adopt the current screen); \`echo\` annotates; \`run\` executes a referenced fragment inline.
+diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
+baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
+cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes a referenced fragment inline.
 A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
