@@ -34,6 +34,8 @@ const h = vi.hoisted(() => ({
     | undefined
     | "aborted"
     | { x: number; y: number; width: number; height: number },
+  /** When set, the waitForFrame mock rejects with this (a tree-source outage). */
+  cropFrameError: null as null | Error,
   dimensionMismatch: null as null | {
     expected: { width: number; height: number };
     actual: { width: number; height: number };
@@ -47,14 +49,13 @@ vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
     .offscreenHint,
   settleTree: vi.fn(async () => ({})),
   invokeOnDevice: vi.fn(async () => ({ image: { hostPath: h.shotPath } })),
-  waitForFrame: vi.fn(async () => h.cropFrame),
+  waitForFrame: vi.fn(async () => {
+    if (h.cropFrameError) throw h.cropFrameError;
+    return h.cropFrame;
+  }),
 }));
 
-vi.mock("../../src/tools/screenshot-diff/screenshot-diff", async (importOriginal) => ({
-  // The real band constant: runSnapshot derives the crop top mask from it.
-  DEFAULT_IGNORE_TOP_NORMALIZED_Y: (
-    await importOriginal<typeof import("../../src/tools/screenshot-diff/screenshot-diff")>()
-  ).DEFAULT_IGNORE_TOP_NORMALIZED_Y,
+vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
   diffPngFiles: vi.fn(async (options: DiffPngFilesOptions) => {
     h.outputDir = options.outputDir;
     h.diffCurrentPath = options.currentPath;
@@ -107,6 +108,32 @@ async function pngSize(file: string): Promise<{ w: number; h: number }> {
   return { w: png.width, h: png.height };
 }
 
+/**
+ * Coordinate-encoded PNG: every pixel's channels name its own position
+ * (r = x, g = y, b = x + y), so a test can assert exactly WHICH region of the
+ * capture a crop contains — a transposed or shifted rect carries the wrong
+ * coordinates, where a uniform fill would make wrong pixels look right.
+ */
+async function writeCoordPng(file: string, w: number, h_: number): Promise<void> {
+  const png = new PNG({ width: w, height: h_ });
+  for (let y = 0; y < h_; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      png.data[i] = x & 0xff;
+      png.data[i + 1] = y & 0xff;
+      png.data[i + 2] = (x + y) & 0xff;
+      png.data[i + 3] = 255;
+    }
+  }
+  await fs.writeFile(file, PNG.sync.write(png));
+}
+
+async function pngPixel(file: string, x: number, y: number): Promise<[number, number, number]> {
+  const png = PNG.sync.read(await fs.readFile(file));
+  const i = (y * png.width + x) * 4;
+  return [png.data[i], png.data[i + 1], png.data[i + 2]];
+}
+
 function opts(overrides: Partial<Parameters<typeof runSnapshot>[1]> = {}) {
   return {
     flowsDir: tmpDir,
@@ -131,6 +158,7 @@ beforeEach(async () => {
   h.diffTopMask = "";
   h.diffNormalizeSizes = undefined;
   h.cropFrame = undefined;
+  h.cropFrameError = null;
   h.dimensionMismatch = null;
   await writeFakePng(h.shotPath);
 });
@@ -379,8 +407,8 @@ describe("runSnapshot cropOn", () => {
     // The differ compared the cropped scratch file, not the full capture…
     expect(h.diffCurrentPath).not.toBe(h.shotPath);
     expect(path.basename(h.diffCurrentPath)).toBe(`${cropKey}.png`);
-    // A crop fully below the status-bar band (y ≥ 0.06) gets no top mask —
-    // its top is element content, not the full screen's status bar.
+    // Crops are never top-masked — the top of a crop is element content, not
+    // the full screen's status bar.
     expect(h.diffTopMask).toBe("none");
     // Crop dims carry meaning — the differ must hard-fail any size drift.
     expect(h.diffNormalizeSizes).toBe(false);
@@ -388,9 +416,10 @@ describe("runSnapshot cropOn", () => {
     await expect(fs.access(path.dirname(h.diffCurrentPath))).rejects.toThrow();
   });
 
-  it("masks the crop's overlap with the screen's status-bar band", async () => {
-    // y 0.02–0.10 overlaps the top band (0–0.06) by 0.04 — half the crop's
-    // 0.08 height. On the 100×200 capture that crop is 50×16 pixels.
+  it("never masks a crop, even one overlapping the status-bar band", async () => {
+    // y 0.02–0.10 overlaps the top band — but masking a crop's overlap would
+    // degenerate into comparing NOTHING for an element fully inside the band
+    // (a vacuous pass), so a crop compares every pixel wherever it sits.
     h.cropFrame = { x: 0, y: 0.02, width: 0.5, height: 0.08 };
     await fs.mkdir(path.dirname(cropBaselinePath()), { recursive: true });
     await writeRealPng(cropBaselinePath(), 50, 16);
@@ -398,8 +427,36 @@ describe("runSnapshot cropOn", () => {
     const r = await runSnapshot(env, opts({ cropOn }));
 
     expect(r.status).toBe("pass");
-    expect(h.diffTopMask).toHaveProperty("topFraction");
-    expect((h.diffTopMask as { topFraction: number }).topFraction).toBeCloseTo(0.5);
+    expect(h.diffTopMask).toBe("none");
+  });
+
+  it("crops exactly the frame's pixel rect from the capture", async () => {
+    await writeCoordPng(h.shotPath, 100, 200);
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
+
+    expect(r.status).toBe("pass");
+    // frame {x: 0.25, y: 0.25, w: 0.5, h: 0.25} on 100×200 → rect x 25–75,
+    // y 50–100. The corner pixels' coordinate encoding pins the exact rect.
+    await expect(pngPixel(cropBaselinePath(), 0, 0)).resolves.toEqual([25, 50, 75]);
+    await expect(pngPixel(cropBaselinePath(), 49, 0)).resolves.toEqual([74, 50, 124]);
+    await expect(pngPixel(cropBaselinePath(), 0, 49)).resolves.toEqual([25, 99, 124]);
+    await expect(pngPixel(cropBaselinePath(), 49, 49)).resolves.toEqual([74, 99, 173]);
+  });
+
+  it("propagates a tree-source outage while resolving cropOn as an error", async () => {
+    // Deliberate asymmetry with the full-screen path's swallowed settle
+    // outage: without a tree there is no frame, and degrading to a full-screen
+    // capture would "compare" the whole screen against a cropped baseline.
+    // flow-run's snapshot arm turns the throw into a step error.
+    h.cropFrameError = new Error("native devtools disconnected");
+    vi.mocked(invokeOnDevice).mockClear();
+
+    await expect(runSnapshot(env, opts({ cropOn }))).rejects.toThrow(
+      "native devtools disconnected"
+    );
+    // Failed before capturing — no screenshot was taken.
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
   });
 
   it("returns the cropped image as `current` on a missing baseline", async () => {
