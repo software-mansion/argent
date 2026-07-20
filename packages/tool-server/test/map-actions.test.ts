@@ -179,3 +179,25 @@ describe("selector derivation", () => {
     expect(action.role).toBe("AXButton");
   });
 });
+
+describe("enumerateActions — scroll-bar overlays", () => {
+  it("never taps a transient scroll indicator, even when Android marks it clickable", () => {
+    // iOS exposes the fading scroll indicator as a large right-edge AXGroup;
+    // tapping it does nothing and its transience already excludes it from the
+    // screen fingerprint — actions must skip it for the same reason.
+    const ios = root(
+      n("AXButton", [0.1, 0.3, 0.8, 0.05], { label: "General" }),
+      n("AXButton", [0.916, 0.121, 0.076, 0.821], { label: "Vertical scroll bar, 2 pages" })
+    );
+    expect(enumerateActions(ios, IOS).map((a) => a.label)).toEqual(["General"]);
+
+    const android = root(
+      n("android.widget.Button", [0.1, 0.3, 0.8, 0.05], { label: "General", clickable: true }),
+      n("android.view.View", [0.95, 0.1, 0.05, 0.8], {
+        label: "Horizontal scroll bar, 3 pages",
+        clickable: true,
+      })
+    );
+    expect(enumerateActions(android, ANDROID).map((a) => a.label)).toEqual(["General"]);
+  });
+});

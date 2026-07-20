@@ -369,6 +369,43 @@ describe("crawlApp — replay and backtracking", () => {
     expect(snap.status).toBe("completed");
   });
 
+  it("iOS: adopts the known screen the back tap landed on instead of restarting", async () => {
+    // Closing a sheet drops to its presenter, not to the page the crawler
+    // asked to return to. When the landed screen still has unexplored
+    // actions the crawler must continue from there — a restart-replay per
+    // sheet would eat the whole time budget (observed live on Settings).
+    const b = n("AXGroup", [0, 0, 1, 1], {}, [
+      n("AXHeading", [0.1, 0.02, 0.8, 0.05], { label: "Screen B", identifier: "hdr-B" }),
+      n("AXButton", [0.02, 0.03, 0.1, 0.04], { label: "Back" }),
+    ]);
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A", "To C"]),
+        a: screenTree("Screen A", ["To B"]),
+        b,
+        c: screenTree("Screen C", []),
+      },
+      { home: { "To A": "a", "To C": "c" }, a: { "To B": "b" }, b: { Back: "home" } },
+      "home"
+    );
+    const store = makeStore();
+    await crawl(app, store, { maxDepth: 2 });
+    const snap = store.snapshot();
+
+    // B hit the depth cap; the Back tap landed on Home (known, work left),
+    // which was adopted — so C was still discovered with zero restarts.
+    expect(snap.nodes.map((x) => x.title).sort()).toEqual([
+      "Home",
+      "Screen A",
+      "Screen B",
+      "Screen C",
+    ]);
+    expect(snap.edges).toHaveLength(3);
+    expect(snap.stats.restarts).toBe(0);
+    expect(app.restartCount).toBe(0);
+    expect(snap.status).toBe("completed");
+  });
+
   it("Android: returns from a revisited screen via hardware back without restarting", async () => {
     const app = new FakeApp(
       {

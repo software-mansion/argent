@@ -1,10 +1,13 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { fetchTree } from "../../utils/ui-tree-match";
 import type { DescribeNode } from "../describe/contract";
 import type { CrawlDriver } from "./crawler";
+import { screenKey } from "./fingerprint";
+import { fetchStableTree } from "./stable-tree";
 
 /**
  * The real {@link CrawlDriver}: every primitive dispatches an existing Argent
@@ -35,8 +38,15 @@ export function createMapDriver(opts: MapDriverOptions): CrawlDriver {
   const udid = device.id;
   return {
     async fetchTree(): Promise<DescribeNode> {
-      const data = await fetchTree(registry, device, { bundleId });
-      return data.tree;
+      // Sampled, not single-shot: iOS AX trees oscillate on an idle screen
+      // (content nodes appear late and can drop out again), and one arbitrary
+      // sample would flip the screen fingerprint between visits — see
+      // stable-tree.ts.
+      return fetchStableTree({
+        fetch: async () => (await fetchTree(registry, device, { bundleId })).tree,
+        keyOf: screenKey,
+        sleep: (ms) => delay(ms),
+      });
     },
 
     async tap(x: number, y: number): Promise<void> {

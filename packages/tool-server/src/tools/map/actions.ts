@@ -1,5 +1,6 @@
 import type { DescribeNode } from "../describe/contract";
 import { hasVisibleText } from "../../utils/ui-tree-match";
+import { isScrollDecoration } from "./fingerprint";
 import type { MapAction, MapSelector } from "./contract";
 
 /**
@@ -70,6 +71,7 @@ function isCandidate(node: DescribeNode, platform: "ios" | "android"): boolean {
   if (node.disabled === true) return false;
   if (node.frame.width * node.frame.height < MIN_TAP_AREA) return false;
   if (isTextInput(node)) return false;
+  if (isScrollDecoration(node)) return false;
   const text = [node.label, node.value].filter(Boolean).join(" ");
   if (DESTRUCTIVE_LABEL.test(text)) return false;
   // Android marks interactivity explicitly; iOS only through roles.

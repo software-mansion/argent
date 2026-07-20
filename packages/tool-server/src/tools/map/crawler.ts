@@ -293,9 +293,19 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   /**
    * Get from the screen we're standing on (`hereTree`) back to `current`:
    * back heuristic first (Android hardware back; iOS leading top-left button),
-   * verified by key; restart-replay when that fails.
+   * verified by key; restart-replay when that fails. Returns the node we end
+   * up standing on, or null when even the replay diverged (or we aborted).
+   *
+   * The back tap often lands on a *different* known screen than the one asked
+   * for — closing a sheet drops to its presenter, not to the sheet page we
+   * came from. When that screen still has unexplored actions, it is adopted
+   * as the new position instead of paying a restart: `current`'s remaining
+   * actions stay pending, and the frontier backtrack returns to it later.
    */
-  async function returnToCurrent(current: CrawlNode, hereTree: DescribeNode): Promise<boolean> {
+  async function returnToCurrent(
+    current: CrawlNode,
+    hereTree: DescribeNode
+  ): Promise<CrawlNode | null> {
     let backTried = false;
     if (platform === "android") {
       backTried = await driver.pressBack();
@@ -309,10 +319,21 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
     if (backTried) {
       await driver.awaitSettle();
       const tree = await readTree();
-      if (tree && screenKey(tree) === current.key) return true;
+      if (tree) {
+        const key = screenKey(tree);
+        if (key === current.key) return current;
+        const landed = byKey.get(key);
+        if (landed && !landed.exhausted && landed.nextAction < landed.actions.length) {
+          return landed;
+        }
+      }
     }
-    if (aborted()) return false;
-    return replayTo(current, `back navigation did not reach ${current.id}; replaying its path`);
+    if (aborted()) return null;
+    const ok = await replayTo(
+      current,
+      `back navigation did not reach ${current.id}; replaying its path`
+    );
+    return ok ? current : null;
   }
 
   // ── Launch and root discovery ─────────────────────────────────────────
@@ -427,15 +448,17 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
 
     const known = byKey.get(key);
     if (known) {
-      // Revisit of an already-mapped screen: record the edge, then return to
-      // finish exploring `current`.
+      // Revisit of an already-mapped screen: record the edge, then get back
+      // to unexplored work — ideally `current`, or whatever known screen the
+      // back navigation dropped us on.
       store.addEdge(current.id, known.id, action);
-      const ok = await returnToCurrent(current, tree);
+      const landed = await returnToCurrent(current, tree);
       if (aborted()) {
         store.cancel();
         return "cancelled";
       }
-      if (!ok) markExhausted(current);
+      if (landed) current = landed;
+      else markExhausted(current);
       continue;
     }
 
@@ -445,12 +468,13 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
     if (child.depth >= limits.maxDepth) {
       // Depth cap: record the screen but never descend into it.
       markExhausted(child);
-      const ok = await returnToCurrent(current, tree);
+      const landed = await returnToCurrent(current, tree);
       if (aborted()) {
         store.cancel();
         return "cancelled";
       }
-      if (!ok) markExhausted(current);
+      if (landed) current = landed;
+      else markExhausted(current);
       continue;
     }
     current = child; // DFS descent
