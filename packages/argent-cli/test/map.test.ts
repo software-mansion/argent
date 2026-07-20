@@ -123,6 +123,23 @@ describe("parseMapArgs", () => {
     );
   });
 
+  it("rejects over-cap numeric values here, not as a server-side ZodError blob", () => {
+    expect(() => parseMapArgs(["com.example.app", "--max-screens", "200"])).toThrow(
+      /--max-screens must be at most 100/
+    );
+    expect(() => parseMapArgs(["com.example.app", "--max-actions", "50"])).toThrow(
+      /--max-actions must be at most 30/
+    );
+    expect(() => parseMapArgs(["com.example.app", "--max-depth", "20"])).toThrow(
+      /--max-depth must be at most 10/
+    );
+    expect(() => parseMapArgs(["com.example.app", "--budget", "3600"])).toThrow(
+      /--budget must be at most 1800/
+    );
+    // The cap is inclusive — the boundary value is accepted.
+    expect(parseMapArgs(["com.example.app", "--max-screens", "100"]).maxScreens).toBe(100);
+  });
+
   it("rejects unknown flags and extra positionals", () => {
     expect(() => parseMapArgs(["com.example.app", "--frobnicate"])).toThrow(/Unknown flag/);
     expect(() => parseMapArgs(["com.example.app", "com.other.app"])).toThrow(/extra argument/);
@@ -229,6 +246,26 @@ describe("formatProgressLine", () => {
     expect(formatProgressLine("screen", 30)).toBeNull();
     expect(formatProgressLine({ no: "kind" }, 30)).toBeNull();
     expect(formatProgressLine({ kind: "novel-event" }, 30)).toBeNull();
+  });
+
+  it("strips control bytes from device-sourced titles and labels (terminal-injection guard)", () => {
+    // A crawled app's accessibility text is untrusted; an ESC/OSC payload must
+    // not reach the terminal. \x1b]52 is a clipboard-write, \x1b[2J a screen
+    // clear, \x07 the BEL that terminates an OSC.
+    const evilTitle = "Home\x1b]52;c;cGF5bG9hZA==\x07\x1b[2J";
+    const screen = formatProgressLine(
+      { kind: "screen", nodeId: "s0", title: evilTitle, depth: 0, screens: 1 },
+      30
+    );
+    // Exact equality pins that every ESC/BEL byte is gone (the visible tail of
+    // each sequence remains as inert text).
+    expect(screen!.text).toBe("[1/30] Home]52;c;cGF5bG9hZA==[2J (depth 0)");
+
+    const action = formatProgressLine(
+      { kind: "action", nodeId: "s0", label: "Tap\x1b[31mme", explored: 1, total: 2 },
+      30
+    );
+    expect(action!.text).toBe("    · Tap[31mme (1/2)");
   });
 });
 

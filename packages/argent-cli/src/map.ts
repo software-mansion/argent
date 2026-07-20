@@ -36,6 +36,27 @@ export interface MapCommandOptions {
 // for display: the `[n/max]` progress prefix and the --help text.
 const DEFAULT_MAX_SCREENS = 30;
 
+// Upper bounds, mirroring the tool-server's zod schema (map/index.ts). Enforced
+// client-side so an over-cap flag fails with a one-line message here instead of
+// the server bouncing it back as a multi-line ZodError blob.
+const FLAG_MAX = {
+  "--max-screens": 100,
+  "--max-actions": 30,
+  "--max-depth": 10,
+  "--budget": 1800,
+} as const;
+
+// Device-sourced text (screen titles, element labels) comes from an arbitrary,
+// untrusted app and is printed to the user's terminal. Strip C0/C1 control
+// bytes and DEL so a crafted accessibility label can't smuggle ANSI/OSC escape
+// sequences (screen-clear, clipboard-write, title-set) through stdout. The
+// --json path is already safe — JSON.stringify escapes these.
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g;
+function sanitizeDeviceText(text: string): string {
+  return text.replace(CONTROL_CHARS, "");
+}
+
 /** Minimal mirror of the tool-server's MapProgressEvent contract. */
 type MapProgressEvent =
   | { kind: "screen"; nodeId: string; title: string; depth: number; screens: number }
@@ -108,11 +129,15 @@ export function parseMapArgs(argv: string[]): MapArgs {
     }
     return v;
   };
-  const readPositiveInt = (flag: string, i: number): number => {
+  const readPositiveInt = (flag: keyof typeof FLAG_MAX, i: number): number => {
     const raw = readValue(flag, i);
     const n = Number(raw);
     if (!Number.isInteger(n) || n <= 0) {
       throw new FlagParseException(`${flag} expects a positive integer, got "${raw}"`);
+    }
+    const max = FLAG_MAX[flag];
+    if (n > max) {
+      throw new FlagParseException(`${flag} must be at most ${max}, got ${n}`);
     }
     return n;
   };
@@ -211,10 +236,15 @@ export function formatProgressLine(
   if (!event || typeof event !== "object" || !("kind" in event)) return null;
   const e = event as MapProgressEvent;
   switch (e.kind) {
+    // `title`/`label` are device-sourced (an untrusted app's accessibility
+    // text) — strip control bytes before they reach the terminal.
     case "screen":
-      return { text: `[${e.screens}/${maxScreens}] ${e.title} (depth ${e.depth})`, dim: false };
+      return {
+        text: `[${e.screens}/${maxScreens}] ${sanitizeDeviceText(e.title)} (depth ${e.depth})`,
+        dim: false,
+      };
     case "action":
-      return { text: `    · ${e.label} (${e.explored}/${e.total})`, dim: true };
+      return { text: `    · ${sanitizeDeviceText(e.label)} (${e.explored}/${e.total})`, dim: true };
     case "restart":
       return { text: `    ↻ restart: ${e.reason}`, dim: true };
     case "phase":
@@ -291,10 +321,10 @@ function printHelp(): void {
       `Options:\n` +
       `      --udid <id>         Target device (iOS simulator UDID or Android adb serial).\n` +
       `                          Defaults to the single booted device.\n` +
-      `      --max-screens <n>   Stop after discovering this many screens (default ${DEFAULT_MAX_SCREENS})\n` +
-      `      --max-actions <n>   Tappable elements explored per screen (default 12)\n` +
-      `      --max-depth <n>     Maximum taps away from the start screen (default 5)\n` +
-      `      --budget <seconds>  Overall time budget for the crawl (default 300)\n` +
+      `      --max-screens <n>   Stop after discovering this many screens (default ${DEFAULT_MAX_SCREENS}, max ${FLAG_MAX["--max-screens"]})\n` +
+      `      --max-actions <n>   Tappable elements explored per screen (default 12, max ${FLAG_MAX["--max-actions"]})\n` +
+      `      --max-depth <n>     Maximum taps away from the start screen (default 5, max ${FLAG_MAX["--max-depth"]})\n` +
+      `      --budget <seconds>  Overall time budget for the crawl (default 300, max ${FLAG_MAX["--budget"]})\n` +
       `      --no-window         Do not open the preview window\n` +
       `      --json[=path]       Also write the full graph JSON (default ./argent-map.json)\n` +
       `  -h, --help              Show this help\n`

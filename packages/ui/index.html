@@ -1562,6 +1562,14 @@
         inset: 0;
         background: var(--color-bg);
       }
+      /* While the node-detail modal is open, raise the whole map view above the
+         fixed tab strip and theme toggle (both z-overlay in the root context)
+         so the modal scrim covers them. The map view's own children already
+         layer the scrim/detail above the canvas via --z-modal. Scoped to the
+         open state so the tab strip stays clickable the rest of the time. */
+      body.map-detail-open .map-view {
+        z-index: var(--z-modal);
+      }
       /* Window-drag band along the top — the canvas below is no-drag because
          dragging it PANS the graph. Same inset trick as .drag-region so the
          window's top resize edge keeps working. */
@@ -6311,12 +6319,17 @@
       // ── Map node detail overlay ─────────────────────────────────────────
       function openMapDetail(id) {
         mv.detailId = id;
+        // Lift the map view above the tab strip / theme toggle so the modal
+        // scrim covers them (see the `.map-detail-open` rule) — otherwise those
+        // fixed, root-context chrome elements paint over the scrim.
+        document.body.classList.add("map-detail-open");
         renderMapDetail();
       }
       function closeMapDetail() {
         mv.detailId = null;
         mv.detailShotFor = null;
         mapDetailEl.hidden = true;
+        document.body.classList.remove("map-detail-open");
       }
       function renderMapDetail() {
         const s = mv.state;
