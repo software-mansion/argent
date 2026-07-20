@@ -367,7 +367,10 @@ describe("crawlApp — replay and backtracking", () => {
     expect(snap.nodes.some((x) => x.title === "Screen X")).toBe(false);
     // B was still discovered after the divergence.
     expect(snap.nodes.some((x) => x.title === "Screen B")).toBe(true);
-    expect(snap.stats.restarts).toBeGreaterThanOrEqual(2);
+    // Exactly one recovery restart: A's "Revisit" tap lands on Home, which
+    // still has "To B" pending, so the crawler continues from there for free;
+    // the only restart is the frontier backtrack to A — the one that diverges.
+    expect(snap.stats.restarts).toBe(1);
     expect(snap.status).toBe("completed");
   });
 
