@@ -1,0 +1,249 @@
+import { describe, it, expect, vi } from "vitest";
+import { getFailureSignal, FAILURE_CODES } from "@argent/registry";
+import { MapSessionStore } from "../src/utils/map-session";
+import type { MapAction, MapCrawlLimits } from "../src/tools/map/contract";
+
+const LIMITS: MapCrawlLimits = {
+  maxScreens: 30,
+  maxActionsPerScreen: 12,
+  maxDepth: 5,
+  timeBudgetMs: 300_000,
+};
+
+function begin(store: MapSessionStore, openWindow = false): { crawlId: string } {
+  return store.begin({
+    udid: "TEST-UDID",
+    bundleId: "com.example.app",
+    platform: "ios",
+    limits: LIMITS,
+    openWindow,
+  });
+}
+
+const action = (label = "Go"): MapAction => ({
+  label,
+  role: "AXButton",
+  selector: { by: "label", value: label },
+  frame: { x: 0.1, y: 0.2, w: 0.8, h: 0.08 },
+});
+
+const nodeInput = (over: Partial<Parameters<MapSessionStore["addNode"]>[0]> = {}) => ({
+  key: "key-0",
+  title: "Home" as string | null,
+  depth: 0,
+  outside: false,
+  actionsTotal: 2,
+  screenshotPath: null,
+  ...over,
+});
+
+describe("MapSessionStore — session lifecycle", () => {
+  it("begin opens a running session and returns a crawl id", () => {
+    const s = new MapSessionStore();
+    expect(s.snapshot().status).toBe("idle");
+    const { crawlId } = begin(s, true);
+    expect(crawlId).toMatch(/[0-9a-f-]{36}/);
+    expect(s.sessionScreenshotDir()).toContain(crawlId);
+    const snap = s.snapshot();
+    expect(snap.status).toBe("running");
+    expect(snap.udid).toBe("TEST-UDID");
+    expect(snap.bundleId).toBe("com.example.app");
+    expect(snap.platform).toBe("ios");
+    expect(snap.limits).toEqual(LIMITS);
+    expect(snap.stats).toMatchObject({ screens: 0, edges: 0, actionsExplored: 0, restarts: 0 });
+    expect(snap.startedAt).not.toBeNull();
+    expect(snap.finishedAt).toBeNull();
+    expect(s.sessionScreenshotDir()).toMatch(/argent-map/);
+    expect(s.openWindowRequested()).toBe(true);
+  });
+
+  it("begin while a crawl is running throws MAP_CRAWL_ALREADY_RUNNING", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    let thrown: unknown;
+    try {
+      begin(s);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/already running/);
+    expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.MAP_CRAWL_ALREADY_RUNNING);
+    // The running session was not disturbed.
+    expect(s.snapshot().status).toBe("running");
+  });
+
+  it("a new begin after finalize resets the previous graph and mints a new session dir", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    s.addNode(nodeInput());
+    s.complete();
+    const firstDir = s.sessionScreenshotDir();
+
+    begin(s);
+    const snap = s.snapshot();
+    expect(snap.status).toBe("running");
+    expect(snap.nodes).toEqual([]);
+    expect(snap.edges).toEqual([]);
+    expect(snap.rootId).toBeNull();
+    expect(snap.error).toBeNull();
+    expect(s.sessionScreenshotDir()).not.toBe(firstDir);
+  });
+
+  it("finalize is a one-way, running-only transition (complete/cancel/fail)", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    s.complete();
+    expect(s.snapshot().status).toBe("completed");
+    expect(s.snapshot().finishedAt).not.toBeNull();
+    // A late fail/cancel (e.g. the tool's defensive finally) must not regress.
+    s.fail("too late");
+    s.cancel();
+    expect(s.snapshot().status).toBe("completed");
+    expect(s.snapshot().error).toBeNull();
+
+    begin(s);
+    s.fail("boom");
+    const snap = s.snapshot();
+    expect(snap.status).toBe("failed");
+    expect(snap.error).toBe("boom");
+
+    begin(s);
+    s.cancel();
+    expect(s.snapshot().status).toBe("cancelled");
+  });
+
+  it("emits mapSessionChanged(true) on begin and (false) exactly once on finalize", () => {
+    const s = new MapSessionStore();
+    const seen: boolean[] = [];
+    s.events.on("mapSessionChanged", (active) => seen.push(active));
+    begin(s);
+    s.complete();
+    s.cancel(); // guarded no-op — must not re-emit
+    expect(seen).toEqual([true, false]);
+  });
+});
+
+describe("MapSessionStore — graph mutations", () => {
+  it("addNode mints ids in discovery order, sets rootId, counts screens (outside excluded)", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    const first = s.addNode(nodeInput());
+    const second = s.addNode(nodeInput({ key: "key-1", depth: 1 }));
+    const outside = s.addNode(nodeInput({ key: "__outside__", outside: true, title: "Outside" }));
+
+    expect(first.id).toBe("s0");
+    expect(second.id).toBe("s1");
+    expect(outside.id).toBe("s2");
+    const snap = s.snapshot();
+    expect(snap.rootId).toBe("s0");
+    expect(snap.stats.screens).toBe(2); // outside not counted
+    expect(snap.nodes[0]!.discoveredAt).toBeGreaterThan(0);
+  });
+
+  it("addNode falls back to 'Screen N' when no title was derived", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    expect(s.addNode(nodeInput({ title: null })).title).toBe("Screen 1");
+    expect(s.addNode(nodeInput({ key: "key-1", title: "  " })).title).toBe("Screen 2");
+    expect(s.addNode(nodeInput({ key: "key-2", title: "Profile" })).title).toBe("Profile");
+  });
+
+  it("addEdge mints ids and counts edges", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    s.addNode(nodeInput());
+    s.addNode(nodeInput({ key: "key-1" }));
+    const edge = s.addEdge("s0", "s1", action("To A"));
+    expect(edge.id).toBe("e0");
+    expect(s.snapshot().stats.edges).toBe(1);
+    expect(s.snapshot().edges[0]).toMatchObject({ from: "s0", to: "s1" });
+  });
+
+  it("patchNode updates a node; unknown ids are ignored", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    s.addNode(nodeInput());
+    s.patchNode("s0", { actionsExplored: 2, exhausted: true, screenshotPath: "/tmp/x.png" });
+    s.patchNode("s99", { exhausted: true });
+    const node = s.snapshot().nodes[0]!;
+    expect(node.actionsExplored).toBe(2);
+    expect(node.exhausted).toBe(true);
+    expect(node.screenshotPath).toBe("/tmp/x.png");
+  });
+
+  it("bumpStats is additive", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    s.bumpStats({ actionsExplored: 1 });
+    s.bumpStats({ actionsExplored: 1, restarts: 1 });
+    expect(s.snapshot().stats).toMatchObject({ actionsExplored: 2, restarts: 1 });
+  });
+
+  it("screenshotPathFor resolves recorded paths and null otherwise", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    s.addNode(nodeInput({ screenshotPath: "/tmp/shot.png" }));
+    s.addNode(nodeInput({ key: "key-1" }));
+    expect(s.screenshotPathFor("s0")).toBe("/tmp/shot.png");
+    expect(s.screenshotPathFor("s1")).toBeNull();
+    expect(s.screenshotPathFor("nope")).toBeNull();
+  });
+});
+
+describe("MapSessionStore — snapshot isolation", () => {
+  it("mutating a snapshot never corrupts the store", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    s.addNode(nodeInput());
+    s.addEdge("s0", "s0", action());
+
+    const snap = s.snapshot();
+    snap.nodes.push({ ...snap.nodes[0]!, id: "s99" });
+    snap.nodes[0]!.title = "Hacked";
+    snap.edges[0]!.action.label = "Hacked";
+    snap.edges[0]!.action.selector.value = "Hacked";
+    snap.stats.screens = 999;
+    snap.limits!.maxScreens = 999;
+
+    const clean = s.snapshot();
+    expect(clean.nodes).toHaveLength(1);
+    expect(clean.nodes[0]!.title).toBe("Home");
+    expect(clean.edges[0]!.action.label).toBe("Go");
+    expect(clean.edges[0]!.action.selector.value).toBe("Go");
+    expect(clean.stats.screens).toBe(1);
+    expect(clean.limits!.maxScreens).toBe(LIMITS.maxScreens);
+  });
+
+  it("addNode returns a copy and addEdge deep-copies the caller's action", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    const returned = s.addNode(nodeInput());
+    returned.title = "Mutated";
+    expect(s.snapshot().nodes[0]!.title).toBe("Home");
+
+    const callerAction = action("Original");
+    s.addNode(nodeInput({ key: "key-1" }));
+    s.addEdge("s0", "s1", callerAction);
+    callerAction.label = "Mutated";
+    callerAction.frame.x = 0.999;
+    expect(s.snapshot().edges[0]!.action.label).toBe("Original");
+    expect(s.snapshot().edges[0]!.action.frame.x).toBe(0.1);
+  });
+
+  it("elapsedMs is live while running and frozen after finalize", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(1_000_000));
+      const s = new MapSessionStore();
+      begin(s);
+      vi.setSystemTime(new Date(1_005_000));
+      expect(s.snapshot().stats.elapsedMs).toBe(5_000);
+      s.complete();
+      vi.setSystemTime(new Date(1_060_000));
+      expect(s.snapshot().stats.elapsedMs).toBe(5_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
