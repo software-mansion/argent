@@ -448,11 +448,23 @@ describe("runSnapshot cropOn", () => {
 
   it("fails a sub-pixel crop region instead of writing an empty PNG", async () => {
     h.cropFrame = { x: 0.5, y: 0.5, width: 0.001, height: 0.001 };
+    const preexistingCropDirs = new Set(
+      (await fs.readdir(os.tmpdir())).filter((e) => e.startsWith("argent-flow-crop-"))
+    );
 
     const r = await runSnapshot(env, opts({ cropOn }));
 
     expect(r.status).toBe("fail");
     expect(r.reason).toContain("empty at this resolution");
+    // The key still names the failure for an exporter (CLI --output), and the
+    // FULL capture is attached as `current` — no crop exists to show.
+    expect(r.snapshotKey).toBe(cropKey);
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    // The crop scratch dir (which never received a file) was swept.
+    const leftoverCropDirs = (await fs.readdir(os.tmpdir())).filter(
+      (e) => e.startsWith("argent-flow-crop-") && !preexistingCropDirs.has(e)
+    );
+    expect(leftoverCropDirs).toEqual([]);
   });
 
   it("keys same-name snapshots with different cropOn selectors to distinct baselines", async () => {
