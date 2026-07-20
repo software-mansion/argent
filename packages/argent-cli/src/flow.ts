@@ -147,6 +147,24 @@ export function parseRunArgs(argv: string[]): {
   return out;
 }
 
+/**
+ * Render an echo step. Echo is narration, not a pass/fail step — one that RAN
+ * prints as a plain `› message` header with no index or glyph. A SKIPPED echo
+ * (its `when:` block didn't run, or a hard stop / cancellation reached it) must
+ * not print identically to one that ran, so it carries the skip glyph and its
+ * reason: one honest line per authored step, still unindexed so it keeps
+ * reading as narration rather than a numbered step. Returns undefined when
+ * there is no message to show.
+ */
+export function renderEchoLine(s: StepReport): string | undefined {
+  if (!s.message) return undefined;
+  if (s.status === "skip") {
+    const reason = s.reason ? ` — ${s.reason}` : "";
+    return `  ${STATUS_GLYPH.skip} › ${s.message}${reason}`;
+  }
+  return `  › ${s.message}`;
+}
+
 export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
   const what = s.tool ?? s.target;
@@ -324,10 +342,11 @@ export function renderReport(report: FlowReport): string {
   // Number only real steps so echo narration doesn't leave gaps in the sequence.
   let n = 0;
   for (const s of report.steps) {
-    // Echo is narration, not a pass/fail step — render its message as a plain
-    // line with no index or status glyph so it reads as a header between steps.
+    // Echo is narration, not a pass/fail step — render it as a header between
+    // steps (a skipped one is marked so it can't be mistaken for having run).
     if (s.kind === "echo") {
-      if (s.message) lines.push(`  › ${s.message}`);
+      const line = renderEchoLine(s);
+      if (line) lines.push(line);
       continue;
     }
     n++;
@@ -418,7 +437,8 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     if (liveSteps === 0) console.log(`Flow "${flowName}"`);
     liveSteps++;
     if (s.kind === "echo") {
-      if (s.message) console.log(`  › ${s.message}`);
+      const line = renderEchoLine(s);
+      if (line) console.log(line);
       return;
     }
     liveIndex++;

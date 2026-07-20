@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   renderReport,
   renderStepLine,
+  renderEchoLine,
   renderSummary,
   renderArtifactLines,
   type FlowReport,
@@ -71,7 +72,8 @@ describe("flow report rendering", () => {
     let n = 0;
     for (const s of report.steps) {
       if (s.kind === "echo") {
-        if (s.message) live.push(`  › ${s.message}`);
+        const line = renderEchoLine(s);
+        if (line) live.push(line);
         continue;
       }
       n++;
@@ -91,6 +93,57 @@ describe("flow report rendering", () => {
       warning: "baseline seeded",
     };
     expect(renderStepLine(step, 1, "checkout")).toBe("  ⚠  1 snapshot");
+  });
+
+  it("renders a skipped echo distinctly from one that ran", () => {
+    // A `when:` block that didn't run reports its echo as skipped. It must not
+    // print identically to an echo that executed, or the report lies about
+    // what happened.
+    const ran: StepReport = { index: 0, kind: "echo", status: "pass", message: "entering block" };
+    const skipped: StepReport = {
+      index: 1,
+      kind: "echo",
+      status: "skip",
+      reason: "when block skipped",
+      message: "entering block",
+    };
+    expect(renderEchoLine(ran)).toBe("  › entering block");
+    expect(renderEchoLine(skipped)).toBe("  · › entering block — when block skipped");
+    // The two must be visually distinguishable.
+    expect(renderEchoLine(ran)).not.toBe(renderEchoLine(skipped));
+  });
+
+  it("a hard-stopped echo (skip, no reason) still renders instead of vanishing", () => {
+    const stopped: StepReport = { index: 5, kind: "echo", status: "skip", message: "cleanup note" };
+    expect(renderEchoLine(stopped)).toBe("  · › cleanup note");
+  });
+
+  it("an echo without a message renders nothing", () => {
+    expect(renderEchoLine({ index: 0, kind: "echo", status: "pass" })).toBeUndefined();
+  });
+
+  it("a skipped echo appears in the buffered report as a marked line", () => {
+    const out = renderReport(
+      mkReport([
+        { index: 0, kind: "launch", status: "pass" },
+        {
+          index: 1,
+          kind: "when",
+          status: "skip",
+          reason: 'condition not met (visible "Promo") — block skipped (1 step)',
+          target: 'visible "Promo"',
+        },
+        {
+          index: 2,
+          kind: "echo",
+          status: "skip",
+          reason: "when block skipped",
+          message: "THIS MUST NOT RUN",
+        },
+      ])
+    );
+    expect(out).toContain("  · › THIS MUST NOT RUN — when block skipped");
+    expect(out).not.toContain("  › THIS MUST NOT RUN");
   });
 
   it("renderSummary carries the device only when asked (live tail)", () => {
