@@ -239,6 +239,9 @@ export async function runSnapshot(
           reason:
             `cropOn matched ${describeSelector(opts.cropOn!)} but its on-screen region is ` +
             `empty at this resolution — nothing was compared`,
+          snapshotKey,
+          // No crop exists to show, so attach the full capture (already registered).
+          artifacts: { current: shot.image },
         };
       }
       currentPath = croppedPath;
