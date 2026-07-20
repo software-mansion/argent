@@ -63,6 +63,12 @@ export const NON_INJECTABLE_NATIVE_WARNING =
  * description). `describe` reads these apps via the ax-service without injection
  * and `screenshot` is always available, so both are safe next steps here.
  *
+ * The `native-devtools-status` description INLINES this text rather than
+ * interpolating the constant: tool descriptions must be plain literals so
+ * scripts/extract-tools.mjs can read them statically for the spidershield scan.
+ * The verbatim match is pinned by native-devtools-status.test.ts — edit both
+ * together.
+ *
  * The `describe` iOS fallback hint (`NON_INJECTABLE_HINT`) deliberately does NOT
  * reuse this string: it is reached only after `describe`'s own ax-service path
  * already returned empty, so re-recommending `describe` there would be circular.
