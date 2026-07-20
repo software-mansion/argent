@@ -337,8 +337,12 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   }
 
   // ── Launch and root discovery ─────────────────────────────────────────
-  emit({ kind: "phase", message: `Launching ${bundleId}` });
-  await driver.launchApp();
+  // Restart, never resume: a plain launch foregrounds whatever screen a
+  // previous session left the app on, and a crawl rooted in leftover state
+  // walks backwards through a stack its replay can never re-enter. The
+  // restart tools tolerate a not-running app.
+  emit({ kind: "phase", message: `Restarting ${bundleId} for a clean crawl root` });
+  await driver.restartApp();
   await driver.awaitSettle();
   const rootTree = await readTree();
   if (!rootTree) {

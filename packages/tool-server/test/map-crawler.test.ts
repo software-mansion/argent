@@ -329,7 +329,7 @@ describe("crawlApp — leaving the app", () => {
     expect(snap.stats.restarts).toBeGreaterThanOrEqual(1);
     // The crawl continued after the exit: "To A" was still explored.
     expect(snap.nodes.some((x) => x.title === "Screen A")).toBe(true);
-    expect(app.launchCount).toBeGreaterThanOrEqual(2); // initial + relaunch
+    expect(app.launchCount).toBeGreaterThanOrEqual(1); // the resume relaunch
   });
 });
 
@@ -402,7 +402,7 @@ describe("crawlApp — replay and backtracking", () => {
     ]);
     expect(snap.edges).toHaveLength(3);
     expect(snap.stats.restarts).toBe(0);
-    expect(app.restartCount).toBe(0);
+    expect(app.restartCount).toBe(1); // only the clean-root restart at launch
     expect(snap.status).toBe("completed");
   });
 
@@ -423,9 +423,10 @@ describe("crawlApp — replay and backtracking", () => {
     expect(snap.nodes).toHaveLength(2);
     expect(snap.edges).toHaveLength(2);
     // First dead-end backtrack needs one restart-replay; the second revisit
-    // returns via pressBack, so no further restart happens.
+    // returns via pressBack, so no further restart happens. (The app-level
+    // count is one higher: the clean-root restart at launch.)
     expect(snap.stats.restarts).toBe(1);
-    expect(app.restartCount).toBe(1);
+    expect(app.restartCount).toBe(2);
   });
 });
 
