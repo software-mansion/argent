@@ -187,10 +187,9 @@
   /* Map tab (screen-graph crawler view) */
   --map-node-w: 148px; /* screen card */
   --map-node-h: 184px;
-  --map-col-gap: 90px; /* between depth columns — leaves room for the edge curves */
-  --map-row-gap: 26px; /* between cards within a column */
-  --map-world-pad: 56px; /* graph inset from the world's top-left origin */
-  --map-edge-reach: 54px; /* horizontal pull of an edge bezier's control points */
+  --map-world-pad: 56px; /* graph inset from the world's outer edge */
+  --map-entry-ring-w: 2.5px; /* accent ring drawn around an entry-point card */
+  --map-entry-marker: 14px; /* corner start-pin badge on an entry-point card */
   --map-drag-band-h: 52px; /* top window-drag band; the pannable canvas starts below it */
   --map-outside-glyph: 26px; /* placeholder glyph on the synthetic "left the app" card */
   --map-spinner-size: 12px;
@@ -264,6 +263,22 @@
   --map-zoom-max: 2.5;
   --map-zoom-intensity: 0.0015; /* wheel-px → zoom-factor exponent (cursor-anchored) */
   --map-elapsed-tick-ms: 1000; /* elapsed-clock refresh while a crawl runs */
+
+  /* Force-directed graph layout (a one-shot synchronous settle, read by JS at
+     boot; see mapLayout). NOT a live simulation — these tune the single relax
+     that runs only when the graph gains nodes; between polls nothing moves. */
+  --map-spring-len: 208px; /* target centre-to-centre length of an edge */
+  --map-spring-k: 0.09; /* edge-spring stiffness (fraction of length error per iter) */
+  --map-repulsion: 46000; /* node-node inverse-square repulsion strength (px³/iter) */
+  --map-repulsion-cap: 540px; /* beyond this separation repulsion is ignored (keeps it O(N²)-cheap) */
+  --map-center-pull: 0.013; /* mild pull of movable nodes toward the graph centroid per iter */
+  --map-max-step: 62px; /* per-iteration displacement clamp at the start of the cool */
+  --map-min-step: 0.5px; /* displacement clamp at the end of the cool (exponential schedule) */
+  --map-iters: 170; /* relaxation iterations run when new nodes were seeded */
+  --map-freeze-polls: 1; /* structural revisions a node stays movable before it freezes for good */
+  --map-grow-margin: 620px; /* world base offset — headroom so growth stays in positive space */
+  --map-edge-bow: 30px; /* perpendicular bow of an edge curve (separates A→B from B→A) */
+  --map-edge-clip: 5px; /* gap between an arrowhead and the target card's edge */
   --map-activity-dot-size: 6px; /* Map-tab dot marking an unseen running crawl */
   --map-activity-pulse-dur: 1.6s; /* that dot's pulse cadence */
 }
