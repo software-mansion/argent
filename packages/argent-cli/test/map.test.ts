@@ -1,9 +1,13 @@
-import { describe, it, expect } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, it, expect } from "vitest";
 import {
   parseMapArgs,
   bootedMapCandidates,
   formatProgressLine,
   formatMapSummary,
+  writeMapJson,
 } from "../src/map.js";
 import { FlagParseException } from "../src/flag-parser.js";
 
@@ -37,8 +41,7 @@ describe("parseMapArgs", () => {
       "--budget",
       "120",
       "--no-window",
-      "--json",
-      "out/graph.json",
+      "--json=out/graph.json",
     ]);
     expect(args).toEqual({
       bundleId: "com.example.app",
@@ -68,12 +71,35 @@ describe("parseMapArgs", () => {
   });
 
   it("--json before the bundle id treats the next token as the bundle id", () => {
-    // The optional path is only consumed once the positional has been seen, so
-    // `argent map --json com.example.app` still targets the app.
+    // Bare `--json` never consumes a following token (the path must be attached
+    // as `--json=<path>`), so `argent map --json com.example.app` targets the
+    // app regardless of ordering.
     const args = parseMapArgs(["--json", "com.example.app"]);
     expect(args.json).toBe(true);
     expect(args.jsonPath).toBeNull();
     expect(args.bundleId).toBe("com.example.app");
+  });
+
+  // Finding 1 [M]: the explicit `--json=<path>` form must set the output path
+  // regardless of where it sits relative to the positional bundle id. The old
+  // parser only consumed a space-separated path *after* the positional and
+  // rejected `--json=...` outright as an unknown flag.
+  it("--json=<path> sets the output path before the bundle id", () => {
+    const args = parseMapArgs(["--json=out.json", "com.example.app"]);
+    expect(args.json).toBe(true);
+    expect(args.jsonPath).toBe("out.json");
+    expect(args.bundleId).toBe("com.example.app");
+  });
+
+  it("--json=<path> sets the output path after the bundle id", () => {
+    const args = parseMapArgs(["com.example.app", "--json=out/graph.json"]);
+    expect(args.json).toBe(true);
+    expect(args.jsonPath).toBe("out/graph.json");
+    expect(args.bundleId).toBe("com.example.app");
+  });
+
+  it("--json= with an empty path fails loudly", () => {
+    expect(() => parseMapArgs(["com.example.app", "--json="])).toThrow(/expects a path/);
   });
 
   it("sets help for --help and -h", () => {
@@ -100,6 +126,23 @@ describe("parseMapArgs", () => {
   it("rejects unknown flags and extra positionals", () => {
     expect(() => parseMapArgs(["com.example.app", "--frobnicate"])).toThrow(/Unknown flag/);
     expect(() => parseMapArgs(["com.example.app", "com.other.app"])).toThrow(/extra argument/);
+  });
+
+  // Finding 3 [L]: a value-taking flag must not swallow a following flag token
+  // as its value. Previously `--udid --max-screens` set udid to "--max-screens"
+  // (and `--udid --max-screens` alone silently parsed with no bundle id at all).
+  it("rejects a following flag token as a flag's value", () => {
+    expect(() => parseMapArgs(["--udid", "--max-screens"])).toThrow(/expects a value/);
+    expect(() => parseMapArgs(["--udid", "--max-screens", "5", "com.foo"])).toThrow(
+      /expects a value/
+    );
+  });
+
+  // The guard above must still let a legitimate negative number reach the
+  // numeric flags, which reject it with the clearer "positive integer" message
+  // rather than a misleading "expects a value".
+  it("still routes a negative numeric value to the positive-integer check", () => {
+    expect(() => parseMapArgs(["com.example.app", "--budget", "-5"])).toThrow(/positive integer/);
   });
 });
 
@@ -214,5 +257,50 @@ describe("formatMapSummary", () => {
     expect(
       formatMapSummary("completed", { screens: 1, edges: 1, restarts: 1, elapsedMs: 1000 })
     ).toBe("Mapped 1 screen, 1 edge, 1 restart in 1.0s");
+  });
+});
+
+// Finding 2 [M]: cancelling a crawl must still write the requested --json
+// output. Both the normal-finish and cancel paths now route through this shared
+// writer (which took no fetched-state argument before the fix — the cancel path
+// simply returned before reaching the write block, discarding the artifact).
+describe("writeMapJson", () => {
+  let dir: string;
+  let cwd: string;
+
+  beforeEach(() => {
+    cwd = process.cwd();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-map-json-"));
+  });
+
+  afterEach(() => {
+    process.chdir(cwd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("writes the state as pretty JSON with a trailing newline to the given path", () => {
+    const state = { nodes: [{ id: "a" }], edges: [] };
+    const outPath = path.join(dir, "graph.json");
+    const written = writeMapJson(state, outPath);
+    expect(written).toBe(outPath);
+    const text = fs.readFileSync(outPath, "utf8");
+    expect(text.endsWith("}\n")).toBe(true);
+    expect(JSON.parse(text)).toEqual(state);
+  });
+
+  it("creates missing parent directories", () => {
+    const outPath = path.join(dir, "nested", "deep", "graph.json");
+    writeMapJson({ ok: true }, outPath);
+    expect(fs.existsSync(outPath)).toBe(true);
+  });
+
+  it("defaults to ./argent-map.json when no path is given", () => {
+    process.chdir(dir);
+    const written = writeMapJson({ ok: true }, null);
+    // Resolve the expected path against the same cwd writeMapJson used — on
+    // macOS os.tmpdir() is a /var → /private/var symlink, so comparing against
+    // the raw `dir` would spuriously differ.
+    expect(written).toBe(path.resolve("argent-map.json"));
+    expect(fs.existsSync(written)).toBe(true);
   });
 });
