@@ -1510,6 +1510,40 @@
         outline: var(--border-strong) solid var(--color-accent);
         outline-offset: var(--border-strong);
       }
+      /* Unseen-crawl indicator: a small accent dot on the Map tab when a crawl
+         is running and the user is on another tab. `position: relative` on the
+         button anchors it; the dot never affects layout. Suppressed on the
+         active tab (you're already looking at it) and honours reduced-motion. */
+      .tab-btn {
+        position: relative;
+      }
+      .tab-btn.has-activity:not(.active)::after {
+        content: "";
+        position: absolute;
+        top: calc(var(--map-activity-dot-size) * -0.25);
+        right: calc(var(--map-activity-dot-size) * -0.15);
+        width: var(--map-activity-dot-size);
+        height: var(--map-activity-dot-size);
+        border-radius: var(--radius-pill);
+        background: var(--color-accent);
+        animation: tab-activity-pulse var(--map-activity-pulse-dur) var(--ease-out) infinite;
+      }
+      @keyframes tab-activity-pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.45;
+          transform: scale(0.7);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .tab-btn.has-activity:not(.active)::after {
+          animation: none;
+        }
+      }
 
       /* ── Map tab (screen-graph crawler view) ─────────────────────────── */
       /* The Map tab hides #main with `visibility` (NOT display): Lens keeps
@@ -3194,6 +3228,14 @@
       // and focus is not on a toolbar control. We forward raw keydown/keyup so
       // the simulator sees modifier keys (Shift, Ctrl, etc.) as real key events.
       function shouldForwardKey(ev) {
+        // Key forwarding is a Lens-tab concern only. The Map tab deliberately
+        // keeps the stream alive underneath (`.tab-map .main { visibility:
+        // hidden }`), so `wsOpen` stays true while a crawl is on screen — but a
+        // keystroke typed there (or Escape closing the map overlay) must NEVER
+        // reach the crawled device. Gate here, in the single forwarding
+        // decision both key listeners funnel through, so a future tab can't
+        // reintroduce the leak by forgetting a per-call-site guard.
+        if (activeTab !== "lens") return false;
         if (!wsOpen) return false;
         const ae = document.activeElement;
         if (
@@ -5932,6 +5974,8 @@
         worldH: 0,
         detailId: null, // node id the detail overlay is open for
         detailShotFor: null, // node id the big screenshot was last loaded for
+        activitySeen: null, // startedAt of the last crawl the user viewed on Map
+        activityPending: false, // an unseen crawl is running → dot the Map tab
       };
 
       function mapShotUrl(id) {
@@ -5939,9 +5983,12 @@
       }
 
       async function pollMap(force) {
-        // Poll while the Map tab is showing, and keep polling in the background
-        // while a crawl runs so switching over lands on a warm, current graph.
-        if (!force && activeTab !== "map" && !(mv.state && mv.state.status === "running")) return;
+        // Poll regardless of the active tab: a crawl no longer yanks an in-use
+        // Lens window over to Map (see index.ts), so the page must notice a
+        // crawl STARTING on its own to raise the Map-tab activity dot — and
+        // keep the graph warm so switching over lands on a current map. `GET
+        // /preview/map` is a cheap in-memory snapshot, so the steady poll is
+        // negligible. `force` is retained for the land-now call in `setTab`.
         try {
           const res = await fetch(`${TOOL_SERVER}/preview/map`, { cache: "no-store" });
           if (!res.ok) return;
@@ -6026,6 +6073,25 @@
           }
         }
         if (mv.detailId) renderMapDetail(); // keep the open overlay's counts live
+        mapUpdateTabActivity();
+      }
+
+      // Reflect unseen crawl activity on the Map tab. The tool-server no longer
+      // pulls an in-use Lens window over to the Map tab when a crawl begins (it
+      // would discard staged picks / typed comments — see index.ts); instead a
+      // small dot on the Map tab tells the user a crawl is running so they can
+      // switch on their own terms. Cleared the instant they land on Map — that
+      // crawl is now "seen" and never re-dots (a genuinely new crawl, with a
+      // fresh startedAt, dots again).
+      function mapUpdateTabActivity() {
+        const s = mv.state;
+        if (activeTab === "map") {
+          if (s) mv.activitySeen = s.startedAt;
+          mv.activityPending = false;
+        } else if (s && s.status === "running" && s.startedAt !== mv.activitySeen) {
+          mv.activityPending = true;
+        }
+        tabButtons.map.classList.toggle("has-activity", mv.activityPending);
       }
 
       const MAP_STATE_LABEL = {
@@ -6337,6 +6403,7 @@
           btn.setAttribute("aria-selected", String(name === tab));
         }
         if (isMap) {
+          mapUpdateTabActivity(); // clear the activity dot now — this crawl is seen
           pollMap(true); // land on a current graph now, not a poll-tick later
         } else {
           closeMapDetail();

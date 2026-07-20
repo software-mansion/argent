@@ -88,6 +88,23 @@ function initializeStdioTimestampWrapper(): void {
   }
 }
 
+/**
+ * Whether a beginning `map-app` crawl should OPEN a fresh preview window, given
+ * the live Lens store snapshot. False when a window is already in use for Lens
+ * — a running `argent lens` session (`cliSession`) or a parked
+ * `await_user_selection` (`agentWaiting`): pointing that window at the Map URL
+ * would `foreground`+reload it, discarding the human's staged, never-persisted
+ * variant picks and typed comments and repointing the stream to the crawl's
+ * device. Exported for regression tests; the caller (`onMapSessionChanged`) is
+ * a private closure inside `start()`.
+ */
+export function shouldOpenMapWindowForCrawl(lens: {
+  cliSession: boolean;
+  agentWaiting: boolean;
+}): boolean {
+  return !lens.cliSession && !lens.agentWaiting;
+}
+
 export function start(): void {
   initializeStdioTimestampWrapper();
 
@@ -299,7 +316,8 @@ export function start(): void {
   };
   // A `map-app` crawl began: open the preview window on its Map tab so the
   // graph is visible as it grows — unless the caller asked not to
-  // (openWindow: false). Crawl end (active=false) deliberately does NOT close
+  // (openWindow: false) or a window is already in use for Lens (see
+  // onMapSessionChanged). Crawl end (active=false) deliberately does NOT close
   // the window: the human is reading the finished map. Mirrors the Lens
   // wiring above but with its own URL builder — the Map tab streams the
   // crawl's device and selects itself via `tab=map`.
@@ -314,6 +332,22 @@ export function start(): void {
   };
   const onMapSessionChanged = (active: boolean): void => {
     if (!active || !mapSessionStore.openWindowRequested()) return;
+    // A crawl beginning must never squeeze away a window a just-submitted
+    // variant round scheduled to close (onSelectionSubmitted) — it would vanish
+    // out from under the map seconds later. Cancel that pending close, exactly
+    // as onAwaitParked does when a fresh round opens on the heels of a submit.
+    cancelPendingClose();
+    // Never reload or repoint an IN-USE Lens window. A live `argent lens`
+    // session (cliSession) or a parked await_user_selection (agentWaiting) has
+    // the human mid-decision, with staged variant picks and typed comments that
+    // live only in the page — never persisted. The Map URL differs from the
+    // Lens URL, so ensureOpen would send `foreground` + loadURL and fully
+    // reload the window (discarding that work) and repoint the stream to the
+    // crawl's device. Leave it alone: both tabs live in one page and the Map
+    // tab polls /preview/map on its own, so the user switches over when they
+    // choose (the tab strip raises an activity dot to signal the crawl). Only
+    // spawn a window when none is in use — that path is unchanged.
+    if (!shouldOpenMapWindowForCrawl(variantProposalStore.snapshot())) return;
     const url = mapPreviewUrl();
     if (url) previewWindow.ensureOpen(url);
   };
