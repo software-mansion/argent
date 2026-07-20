@@ -753,7 +753,7 @@ function stepTarget(step: FlowStep): string | undefined {
       return step.selector ? `${selectorLabel(step.selector)} (${scale})` : scale;
     }
     case "snapshot":
-      return `"${step.name}"`;
+      return step.cropOn ? `"${step.name}" cropOn ${selectorLabel(step.cropOn)}` : `"${step.name}"`;
     default:
       return undefined;
   }
@@ -1058,6 +1058,7 @@ async function execLeafStep(
           name: step.name,
           maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
           updateBaselines: state.updateBaselines,
+          cropOn: step.cropOn,
         });
         return {
           ...base,
