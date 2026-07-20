@@ -1664,6 +1664,29 @@
           transform: scale(var(--card-gone-scale));
         }
       }
+      /* Entry-point cards — the launch screen or a deep-link seed. An app graph
+         has a SET of ways in, not one root, so entries are flagged in place with
+         an accent ring plus a small corner start-pin (no column/hierarchy is
+         used to imply "the top"). The ring is a box-shadow, so overflow:hidden
+         does not clip it; the pin sits just inside the clipped corner. */
+      .map-node.entry {
+        border-color: var(--color-accent);
+        box-shadow:
+          var(--shadow-card),
+          0 0 0 var(--map-entry-ring-w) var(--color-accent);
+      }
+      .map-node.entry::after {
+        content: "";
+        position: absolute;
+        top: calc(var(--map-entry-marker) * 0.4);
+        left: calc(var(--map-entry-marker) * 0.4);
+        width: var(--map-entry-marker);
+        height: var(--map-entry-marker);
+        border-radius: var(--radius-round);
+        background: var(--color-accent);
+        border: var(--border-strong) solid var(--color-surface);
+        z-index: 1;
+      }
       /* The synthetic "left the app" node: same shape, deliberately unlike the
          real screens — dashed, flat, muted. */
       .map-node.outside {
@@ -2128,10 +2151,19 @@
         successToastShowMs: cssNum("--success-toast-show-ms", 1200),
         mapNodeW: cssNum("--map-node-w", 148),
         mapNodeH: cssNum("--map-node-h", 184),
-        mapColGap: cssNum("--map-col-gap", 90),
-        mapRowGap: cssNum("--map-row-gap", 26),
         mapWorldPad: cssNum("--map-world-pad", 56),
-        mapEdgeReach: cssNum("--map-edge-reach", 54),
+        mapSpringLen: cssNum("--map-spring-len", 208),
+        mapSpringK: cssNum("--map-spring-k", 0.09),
+        mapRepulsion: cssNum("--map-repulsion", 46000),
+        mapRepulsionCap: cssNum("--map-repulsion-cap", 540),
+        mapCenterPull: cssNum("--map-center-pull", 0.013),
+        mapMaxStep: cssNum("--map-max-step", 62),
+        mapMinStep: cssNum("--map-min-step", 0.5),
+        mapIters: cssNum("--map-iters", 170),
+        mapFreezePolls: cssNum("--map-freeze-polls", 1),
+        mapGrowMargin: cssNum("--map-grow-margin", 620),
+        mapEdgeBow: cssNum("--map-edge-bow", 30),
+        mapEdgeClip: cssNum("--map-edge-clip", 5),
         mapZoomMin: cssNum("--map-zoom-min", 0.25),
         mapZoomMax: cssNum("--map-zoom-max", 2.5),
         mapZoomIntensity: cssNum("--map-zoom-intensity", 0.0015),
@@ -5946,12 +5978,16 @@
       });
 
       // ── Map tab (screen-graph crawler view) ─────────────────────────────
-      // Renders the live `argent map` crawl from GET /preview/map: a layered
-      // directed graph — columns by depth, discovery order within a column —
-      // nodes keyed by id and updated INCREMENTALLY each poll (the crawl
-      // mutates the graph under us; rebuilding the DOM every tick would drop
-      // in-flight hovers and thumbnail loads). Positions are deterministic
-      // functions of depth/index — no force simulation, nothing ever jitters.
+      // Renders the live `argent map` crawl from GET /preview/map: a real
+      // directed GRAPH (cross-edges, back-edges, cycles — an app is not a
+      // tree), laid out by a DETERMINISTIC, STABLE, INCREMENTAL force settle
+      // (see mapLayout). Nodes are keyed by id and updated INCREMENTALLY each
+      // poll (the crawl mutates the graph under us; rebuilding the DOM every
+      // tick would drop in-flight hovers and thumbnail loads). Layout is a
+      // one-shot synchronous settle computed ONLY when the graph gains
+      // nodes/edges; a string-hash PRNG of the node id seeds new nodes so the
+      // same graph → identical coords, and nodes present through one structural
+      // revision FREEZE — the skeleton never drifts, so nothing ever jitters.
       const mapViewEl = document.getElementById("map-view");
       const mapCanvasEl = document.getElementById("map-canvas");
       const mapWorldEl = document.getElementById("map-world");
@@ -5974,8 +6010,16 @@
       const mv = {
         state: null, // last GET /preview/map snapshot (MapCrawlState JSON)
         crawlStartedAt: undefined, // startedAt of the graph currently in the DOM
-        nodes: new Map(), // node id -> { el, img, titleEl, badgeEl, x, y, title, badge, shot }
+        nodes: new Map(), // node id -> { el, img, titleEl, badgeEl, x, y, title, badge, shot, entry }
         edges: new Map(), // edge id -> { el, hit, line, d } reused SVG nodes
+        // Persistent force-layout state (survives polls, wiped per crawl). `pos`
+        // holds each node's settled world-space CENTRE + the structural revision
+        // it was first placed in; `layoutSig` is the last graph structure we laid
+        // out and `layoutPoll` counts structural revisions (NOT poll ticks) so a
+        // node freezes after the revision it appears in. See mapLayout.
+        pos: new Map(), // node id -> { cx, cy, placedAt }
+        layoutSig: null, // signature of the last laid-out node/edge structure
+        layoutPoll: 0, // structural-revision counter (increments only on change)
         pan: { x: 0, y: 0 },
         zoom: 1,
         worldW: 0,
@@ -6017,6 +6061,9 @@
       function mapClearGraph() {
         mv.nodes.clear();
         mv.edges.clear();
+        mv.pos.clear();
+        mv.layoutSig = null;
+        mv.layoutPoll = 0;
         mapNodesEl.textContent = "";
         mapEdgeLayer.textContent = "";
         closeMapDetail();
@@ -6038,21 +6085,20 @@
         mapEmptyEl.hidden = !idle;
         mapStatusEl.hidden = idle;
         if (!idle) mapRenderStatus(s);
-        // Deterministic layout: column = depth, row = discovery order within
-        // it (s.nodes is discovery-ordered, so rows only ever append and an
-        // existing card never moves).
-        const pos = new Map();
-        const rows = new Map();
+        // Settle the force layout — a no-op unless the graph structure changed
+        // (see mapLayout) — then read each node's persisted world-space CENTRE.
+        mapLayout(s);
+        const halfW = THEME.mapNodeW / 2;
+        const halfH = THEME.mapNodeH / 2;
+        const pos = new Map(); // id -> world-space centre, consumed by the edge curves
         let worldW = 0;
         let worldH = 0;
         for (const n of s.nodes) {
-          const row = rows.get(n.depth) || 0;
-          rows.set(n.depth, row + 1);
-          const x = THEME.mapWorldPad + n.depth * (THEME.mapNodeW + THEME.mapColGap);
-          const y = THEME.mapWorldPad + row * (THEME.mapNodeH + THEME.mapRowGap);
-          pos.set(n.id, { x, y });
-          worldW = Math.max(worldW, x + THEME.mapNodeW + THEME.mapWorldPad);
-          worldH = Math.max(worldH, y + THEME.mapNodeH + THEME.mapWorldPad);
+          const p = mv.pos.get(n.id);
+          if (!p) continue; // seeded on the next poll if somehow absent
+          pos.set(n.id, { x: p.cx, y: p.cy });
+          worldW = Math.max(worldW, p.cx + halfW + THEME.mapWorldPad);
+          worldH = Math.max(worldH, p.cy + halfH + THEME.mapWorldPad);
         }
         if (worldW !== mv.worldW || worldH !== mv.worldH) {
           mv.worldW = worldW;
@@ -6063,12 +6109,16 @@
           mapEdgesSvg.setAttribute("height", worldH);
           mapEdgesSvg.setAttribute("viewBox", `0 0 ${worldW} ${worldH}`);
         }
+        // Entry points (accent ring/pin). The per-node `entry` flag and the
+        // `entryPoints` list agree by contract; union them defensively.
+        const entryIds = new Set(s.entryPoints || []);
         // Upsert by id; prune whatever the snapshot no longer carries.
         const nodeIds = new Set();
         for (const n of s.nodes) {
           nodeIds.add(n.id);
-          const p = pos.get(n.id);
-          mapUpsertNode(n, p.x, p.y);
+          const p = mv.pos.get(n.id);
+          if (!p) continue;
+          mapUpsertNode(n, p.cx - halfW, p.cy - halfH, n.entry || entryIds.has(n.id));
         }
         for (const [id, rec] of mv.nodes) {
           if (!nodeIds.has(id)) {
@@ -6089,6 +6139,266 @@
         }
         if (mv.detailId) renderMapDetail(); // keep the open overlay's counts live
         mapUpdateTabActivity();
+      }
+
+      // ── Force-directed graph layout ─────────────────────────────────────
+      // Deterministic, stable, incremental. A bounded synchronous relaxation
+      // runs ONLY when the node/edge structure changes; otherwise mapLayout
+      // early-outs and every node keeps its stored centre — no drift, no
+      // per-frame physics, no jitter. New nodes are seeded from a string-hash
+      // PRNG of their id (never Math.random), so an identical graph settles to
+      // identical coordinates regardless of poll timing; a node that has lived
+      // through its freeze window FREEZES, so the existing skeleton is pinned
+      // as the graph grows and only freshly-seeded nodes move, relaxing around
+      // the frozen set. O(N²) repulsion is fine for the crawler's screen budget
+      // (≤~200 nodes) and the distance cap keeps each pass cheap.
+      const MAP_TAU = Math.PI * 2;
+      const MAP_GOLDEN_ANGLE = 2.399963229728653; // radians — spreads spiral seeds evenly
+
+      // Mulberry32 seeded by an FNV-1a hash of the string: a pure function of
+      // the node id, so seeding is reproducible across pages, polls and reloads.
+      function mapHashRng(str) {
+        let h = 2166136261 >>> 0;
+        for (let i = 0; i < str.length; i++) {
+          h ^= str.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+        }
+        let a = h >>> 0;
+        return function () {
+          a = (a + 0x6d2b79f5) | 0;
+          let t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      // Only node ids + edge endpoints define the LAYOUT; volatile fields
+      // (title, action counts, screenshotPath, status) must not re-settle it.
+      function mapStructureSig(s) {
+        const nodes = s.nodes.map((n) => n.id).sort();
+        const edges = s.edges.map((e) => `${e.from}>${e.to}`).sort();
+        return nodes.join(",") + "|" + edges.join(",");
+      }
+
+      // Undirected neighbour sets — seeding and springs pull regardless of edge
+      // direction (direction is a render concern, not a layout one).
+      function mapAdjacency(s) {
+        const adj = new Map();
+        for (const n of s.nodes) adj.set(n.id, new Set());
+        for (const e of s.edges) {
+          adj.get(e.from)?.add(e.to);
+          adj.get(e.to)?.add(e.from);
+        }
+        return adj;
+      }
+
+      function mapLayout(s) {
+        if (!s.nodes.length) return;
+        const sig = mapStructureSig(s);
+        if (sig === mv.layoutSig) return; // structure unchanged — reuse positions
+        mv.layoutSig = sig;
+        const poll = mv.layoutPoll++; // this structural revision's index
+        const adj = mapAdjacency(s);
+        const base = THEME.mapGrowMargin;
+        const springLen = THEME.mapSpringLen;
+
+        // Centroid of nodes placed BEFORE this revision — the anchor a new,
+        // neighbourless node (e.g. a fresh deep-link entry) spirals around.
+        let priorN = 0;
+        let priorCx = 0;
+        let priorCy = 0;
+        for (const p of mv.pos.values()) {
+          priorN++;
+          priorCx += p.cx;
+          priorCy += p.cy;
+        }
+        const anchorCx = priorN ? priorCx / priorN : base;
+        const anchorCy = priorN ? priorCy / priorN : base;
+
+        // Seed each new node deterministically, in discovery order so an earlier
+        // new node is already placed when a later one anchors to it.
+        let unanchored = 0;
+        for (const n of s.nodes) {
+          if (mv.pos.has(n.id)) continue;
+          const rng = mapHashRng(n.id);
+          const placed = [];
+          for (const m of adj.get(n.id) || []) {
+            const p = mv.pos.get(m);
+            if (p) placed.push(p);
+          }
+          let cx;
+          let cy;
+          if (placed.length) {
+            let sx = 0;
+            let sy = 0;
+            for (const p of placed) {
+              sx += p.cx;
+              sy += p.cy;
+            }
+            const ang = rng() * MAP_TAU;
+            const r = springLen * (0.45 + rng() * 0.5);
+            cx = sx / placed.length + Math.cos(ang) * r;
+            cy = sy / placed.length + Math.sin(ang) * r;
+          } else {
+            // No placed neighbour: a deterministic golden-angle spiral around
+            // the existing centroid (the very first node → radius 0 at `base`).
+            const ang = unanchored * MAP_GOLDEN_ANGLE + rng() * 0.5;
+            const r = priorN ? springLen * (1.3 + unanchored * 0.7) : springLen * unanchored * 0.9;
+            cx = anchorCx + Math.cos(ang) * r;
+            cy = anchorCy + Math.sin(ang) * r;
+            unanchored++;
+          }
+          mv.pos.set(n.id, { cx, cy, placedAt: poll });
+        }
+
+        // Movable = nodes still inside their freeze window. Frozen nodes exert
+        // forces but never move, so the skeleton is pinned as the graph grows.
+        const movable = [];
+        for (const n of s.nodes) {
+          if (poll - mv.pos.get(n.id).placedAt < THEME.mapFreezePolls) movable.push(n.id);
+        }
+        if (movable.length) mapRelax(s, movable);
+      }
+
+      // One bounded relaxation pass. Only `movableIds` are integrated; every
+      // other node is a fixed obstacle. Iteration order is fixed (discovery
+      // order + the snapshot's edge order) so the float sums are bit-stable and
+      // the settle is reproducible.
+      function mapRelax(s, movableIds) {
+        const movable = new Set(movableIds);
+        const ids = s.nodes.map((n) => n.id);
+        const springLen = THEME.mapSpringLen;
+        const springK = THEME.mapSpringK;
+        const rep = THEME.mapRepulsion;
+        const repCap2 = THEME.mapRepulsionCap * THEME.mapRepulsionCap;
+        const centerPull = THEME.mapCenterPull;
+        const iters = Math.max(1, Math.round(THEME.mapIters));
+        let temp = THEME.mapMaxStep;
+        const cool = Math.pow(
+          Math.max(THEME.mapMinStep, 0.01) / Math.max(THEME.mapMaxStep, 0.02),
+          1 / iters
+        );
+        const disp = new Map();
+        for (const id of movableIds) disp.set(id, { x: 0, y: 0 });
+        for (let it = 0; it < iters; it++) {
+          for (const d of disp.values()) {
+            d.x = 0;
+            d.y = 0;
+          }
+          // Pairwise inverse-square repulsion (accumulated onto movable nodes
+          // only; a frozen node still pushes, it just does not receive).
+          for (let i = 0; i < ids.length; i++) {
+            const ai = movable.has(ids[i]);
+            const a = mv.pos.get(ids[i]);
+            for (let j = i + 1; j < ids.length; j++) {
+              const bj = movable.has(ids[j]);
+              if (!ai && !bj) continue;
+              const b = mv.pos.get(ids[j]);
+              let dx = a.cx - b.cx;
+              let dy = a.cy - b.cy;
+              let d2 = dx * dx + dy * dy;
+              if (d2 > repCap2) continue;
+              if (d2 < 1e-3) {
+                // Coincident — deterministic hair of separation from id order.
+                dx = i < j ? 0.13 : -0.13;
+                dy = 0.017;
+                d2 = dx * dx + dy * dy;
+              }
+              const d = Math.sqrt(d2);
+              const f = rep / d2;
+              const fx = (dx / d) * f;
+              const fy = (dy / d) * f;
+              if (ai) {
+                const p = disp.get(ids[i]);
+                p.x += fx;
+                p.y += fy;
+              }
+              if (bj) {
+                const p = disp.get(ids[j]);
+                p.x -= fx;
+                p.y -= fy;
+              }
+            }
+          }
+          // Edge springs toward the target length.
+          for (const e of s.edges) {
+            if (e.from === e.to) continue;
+            const a = mv.pos.get(e.from);
+            const b = mv.pos.get(e.to);
+            if (!a || !b) continue;
+            const dx = b.cx - a.cx;
+            const dy = b.cy - a.cy;
+            const d = Math.hypot(dx, dy) || 0.01;
+            const f = (d - springLen) * springK;
+            const fx = (dx / d) * f;
+            const fy = (dy / d) * f;
+            if (movable.has(e.from)) {
+              const p = disp.get(e.from);
+              p.x += fx;
+              p.y += fy;
+            }
+            if (movable.has(e.to)) {
+              const p = disp.get(e.to);
+              p.x -= fx;
+              p.y -= fy;
+            }
+          }
+          // Mild centering toward the centroid of ALL nodes so chains and
+          // disconnected components do not drift away forever.
+          let cx = 0;
+          let cy = 0;
+          for (const id of ids) {
+            const p = mv.pos.get(id);
+            cx += p.cx;
+            cy += p.cy;
+          }
+          cx /= ids.length;
+          cy /= ids.length;
+          for (const id of movableIds) {
+            const p = mv.pos.get(id);
+            const d = disp.get(id);
+            d.x += (cx - p.cx) * centerPull;
+            d.y += (cy - p.cy) * centerPull;
+          }
+          // Integrate with a cooling per-node step clamp.
+          for (const id of movableIds) {
+            const d = disp.get(id);
+            const len = Math.hypot(d.x, d.y);
+            const scale = len > temp ? temp / len : 1;
+            const p = mv.pos.get(id);
+            p.cx += d.x * scale;
+            p.cy += d.y * scale;
+          }
+          temp *= cool;
+        }
+      }
+
+      // Directed BFS hop-distance from the nearest entry point (honest
+      // shortest-path over the current graph, not a tree level). Feeds the
+      // detail overlay; ids with no forward path from any entry are absent.
+      function mapEntryDistances(s) {
+        const out = new Map();
+        for (const n of s.nodes) out.set(n.id, []);
+        for (const e of s.edges) out.get(e.from)?.push(e.to);
+        const dist = new Map();
+        const q = [];
+        for (const id of s.entryPoints || []) {
+          if (out.has(id) && !dist.has(id)) {
+            dist.set(id, 0);
+            q.push(id);
+          }
+        }
+        for (let i = 0; i < q.length; i++) {
+          const cur = q[i];
+          const d = dist.get(cur);
+          for (const nx of out.get(cur) || []) {
+            if (!dist.has(nx)) {
+              dist.set(nx, d + 1);
+              q.push(nx);
+            }
+          }
+        }
+        return dist;
       }
 
       // Reflect unseen crawl activity on the Map tab. The tool-server no longer
@@ -6147,7 +6457,7 @@
         if (activeTab === "map" && mv.state && mv.state.status === "running") mapRenderElapsed();
       }
 
-      function mapUpsertNode(n, x, y) {
+      function mapUpsertNode(n, x, y, isEntry) {
         let rec = mv.nodes.get(n.id);
         if (!rec) {
           const el = document.createElement("div");
@@ -6185,8 +6495,15 @@
             title: null,
             badge: null,
             shot: false,
+            entry: null,
           };
           mv.nodes.set(n.id, rec);
+        }
+        // Entry status can flip mid-crawl (a deep link seeds an existing screen
+        // as an entry), so toggle it every upsert, not just on create.
+        if (rec.entry !== isEntry) {
+          rec.entry = isEntry;
+          rec.el.classList.toggle("entry", !!isEntry);
         }
         if (rec.x !== x || rec.y !== y) {
           rec.x = x;
@@ -6230,7 +6547,7 @@
           rec = { el: g, hit, line, d: null };
           mv.edges.set(e.id, rec);
         }
-        const d = mapEdgePathD(a, b);
+        const d = mapEdgePathD(a, b, e.from === e.to);
         if (rec.d !== d) {
           rec.d = d;
           rec.hit.setAttribute("d", d);
@@ -6238,32 +6555,44 @@
         }
       }
 
-      // Cubic bezier between two card frames, anchored to the side facing the
-      // other card: forward edges run right-edge → left-edge, back-edges the
-      // mirror, same-column edges bulge out past the right edges.
-      function mapEdgePathD(a, b) {
-        const w = THEME.mapNodeW;
-        const r = THEME.mapEdgeReach;
-        const y1 = a.y + THEME.mapNodeH / 2;
-        const y2 = b.y + THEME.mapNodeH / 2;
-        let x1, x2, c1, c2;
-        if (b.x > a.x) {
-          x1 = a.x + w;
-          x2 = b.x;
-          c1 = x1 + r;
-          c2 = x2 - r;
-        } else if (b.x < a.x) {
-          x1 = a.x;
-          x2 = b.x + w;
-          c1 = x1 - r;
-          c2 = x2 + r;
-        } else {
-          x1 = a.x + w;
-          x2 = b.x + w;
-          c1 = x1 + r;
-          c2 = x2 + r;
+      // Cubic bezier between two node CENTRES, clipped to each card's rectangle
+      // and bowed to one side so a back-edge (B→A) separates cleanly from its
+      // forward twin (A→B) — a 2-cycle draws as two visible arcs. The arrowhead
+      // (marker-end) lands just off the target's edge, preserving direction;
+      // cross-edges, back-edges and cycles are all just curves, no hierarchy.
+      function mapEdgePathD(a, b, selfLoop) {
+        const halfW = THEME.mapNodeW / 2;
+        const halfH = THEME.mapNodeH / 2;
+        if (selfLoop) {
+          // A small loop off the top edge back down into the card.
+          const r = THEME.mapSpringLen * 0.34;
+          const sx = a.x + halfW * 0.4;
+          const ex = a.x - halfW * 0.4;
+          const ty = a.y - halfH;
+          return `M ${sx} ${ty} C ${sx + r} ${ty - r}, ${ex - r} ${ty - r}, ${ex} ${ty}`;
         }
-        return `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const ux = dx / dist;
+        const uy = dy / dist;
+        // Ray→rectangle exit distance from a centre along the a→b direction.
+        const exit = () => {
+          const tx = Math.abs(ux) > 1e-4 ? halfW / Math.abs(ux) : Infinity;
+          const ty = Math.abs(uy) > 1e-4 ? halfH / Math.abs(uy) : Infinity;
+          return Math.min(tx, ty);
+        };
+        const t = exit();
+        const sx = a.x + ux * t;
+        const sy = a.y + uy * t;
+        const ex = b.x - ux * (t + THEME.mapEdgeClip);
+        const ey = b.y - uy * (t + THEME.mapEdgeClip);
+        // Control point bowed perpendicular to the a→b line; the reverse edge
+        // has an opposite (ux,uy), so it bows the other way and never overlaps.
+        const bow = THEME.mapEdgeBow;
+        const mx = (sx + ex) / 2 - uy * bow;
+        const my = (sy + ey) / 2 + ux * bow;
+        return `M ${sx} ${sy} C ${mx} ${my}, ${mx} ${my}, ${ex} ${ey}`;
       }
 
       // ── Map pan & zoom ──────────────────────────────────────────────────
@@ -6361,8 +6690,17 @@
           }
         }
         mapDetailTitleEl.textContent = node.title;
+        // A screen has no intrinsic "depth" (it is reachable by many paths); show
+        // its honest shortest-path distance from the nearest entry instead.
+        const isEntry = node.entry || (s.entryPoints || []).includes(node.id);
+        const dist = mapEntryDistances(s).get(node.id);
+        const reach = isEntry
+          ? "entry point"
+          : dist === undefined
+            ? "not yet reached from an entry"
+            : `${dist} ${dist === 1 ? "step" : "steps"} from nearest entry`;
         mapDetailSubEl.textContent =
-          `depth ${node.depth} · ${node.actionsExplored}/${node.actionsTotal} actions explored` +
+          `${reach} · ${node.actionsExplored}/${node.actionsTotal} actions explored` +
           (node.outside ? " · outside the app" : "");
         const titles = new Map();
         for (const n of s.nodes) titles.set(n.id, n.title);
