@@ -346,10 +346,12 @@ describe("crawlApp — replay and backtracking", () => {
       { home: { "To A": "a", "To B": "b" }, a: { "Revisit": "home", "To C": "c" } },
       "home"
     );
-    // After the first restart the app changes: "To A" now leads to X, so the
-    // recorded path to A no longer reproduces it.
+    // After the first RECOVERY restart the app changes: "To A" now leads to
+    // X, so the recorded path to A no longer reproduces it. (Restart #1 is
+    // the clean-root restart at launch — the app must still be pristine
+    // then, or A is never discovered at all.)
     app.onRestart = () => {
-      app.transitions.home!["To A"] = "x";
+      if (app.restartCount >= 2) app.transitions.home!["To A"] = "x";
     };
     const store = makeStore();
     await crawl(app, store);
@@ -469,7 +471,8 @@ describe("crawlApp — cancellation and failure", () => {
   it("rejects with MAP_APP_NOT_VISIBLE when the app never becomes readable", async () => {
     const app = new FakeApp({ home: screenTree("Home", []) }, {}, "home");
     app.current = "outside"; // fetchTree always throws
-    app.launchApp = async () => {}; // launch does not bring it back
+    app.launchApp = async () => {}; // neither launch...
+    app.restartApp = async () => {}; // ...nor the clean-root restart helps
     const store = makeStore();
 
     await expect(crawl(app, store)).rejects.toThrow(/never became readable/);
