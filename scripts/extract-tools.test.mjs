@@ -500,8 +500,14 @@ test("a TS postfix non-null assertion before a division is not read as a regex o
   // is division, not a regex opener. If it were mis-read as a regex, the quote
   // in the divisor (`"x/y"`) would open a fake string that hides this tool's
   // description: AND swallows the next tool - both dropping out of the scan. A
-  // PREFIX logical-NOT (`!/re/`) is the opposite case and must stay a regex.
+  // PREFIX logical-NOT (`!/re/`) is the opposite case and must stay a regex -
+  // both at operator position (`=> !/re/`) and after a keyword (`return !/re/`),
+  // where the char before the `!` is an identifier char but the `!` is still
+  // prefix.
   const src = `
+    export const helpers = {
+      needsQuote: (x) => { return !/["']/.test(x); },
+    };
     export const first = defineTool({
       id: "bang-division-tool",
       w: a! / "x/y".length,
@@ -525,7 +531,7 @@ test("a TS postfix non-null assertion before a division is not read as a regex o
   assert.equal(
     byId["tool-after-bang"],
     "Second: survives, and its prefix-! regex is not division.",
-    "the tool after the desync was dropped, or its prefix-! regex was read as division"
+    "a return-! or operator-! prefix regex was read as division, dropping a later tool"
   );
 });
 
