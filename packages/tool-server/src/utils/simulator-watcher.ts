@@ -1,21 +1,15 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { Registry } from "@argent/registry";
 import {
   NATIVE_DEVTOOLS_NAMESPACE,
   nativeDevtoolsRef,
   type NativeDevtoolsApi,
 } from "../blueprints/native-devtools";
-
-const execFileAsync = promisify(execFile);
+import { readSimctlDevices } from "./ios-devices";
 
 const POLL_INTERVAL_MS = 10_000;
 
 async function getBootedUdids(): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"]);
-  const data = JSON.parse(stdout) as {
-    devices: Record<string, Array<{ udid: string; state: string }>>;
-  };
+  const data = await readSimctlDevices();
   const udids = new Set<string>();
   for (const devices of Object.values(data.devices)) {
     for (const device of devices) {

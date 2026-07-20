@@ -6,6 +6,10 @@ import {
 } from "../src/utils/vega-devices";
 import { VVD_PS_PROBE_TIMEOUT_MS } from "../src/utils/vega-process";
 import { ADB_DEVICES_TIMEOUT_MS, ENRICH_TIMEOUT_MS } from "../src/utils/adb";
+import {
+  SIMCTL_LIST_DEVICES_LOCK_WAIT_MS,
+  SIMCTL_LIST_DEVICES_TIMEOUT_MS,
+} from "../src/utils/simctl-config";
 
 // Guards the timeout/backstop ordering: the backstop must sit ABOVE every branch's
 // FULL per-call worst case, or it stops being a last-resort and starts truncating a
@@ -38,6 +42,12 @@ describe("discovery timeout vs backstop invariant", () => {
     const androidWorstCase = ADB_DEVICES_TIMEOUT_MS + ENRICH_TIMEOUT_MS;
     expect(androidWorstCase).toBeLessThan(BRANCH_DEADLINE_MS);
     expect(BRANCH_DEADLINE_MS - androidWorstCase).toBeGreaterThanOrEqual(MIN_MARGIN_MS);
+  });
+
+  it("the iOS branch's lock wait plus simctl timeout stays under the branch deadline", () => {
+    const iosWorstCase = SIMCTL_LIST_DEVICES_LOCK_WAIT_MS + SIMCTL_LIST_DEVICES_TIMEOUT_MS;
+    expect(iosWorstCase).toBeLessThan(BRANCH_DEADLINE_MS);
+    expect(BRANCH_DEADLINE_MS - iosWorstCase).toBeGreaterThanOrEqual(MIN_MARGIN_MS);
   });
 });
 

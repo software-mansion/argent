@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const execFileMock = vi.fn();
+const realSetImmediate = setImmediate;
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -30,6 +31,10 @@ import {
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailure,
 } from "../src/blueprints/native-devtools";
+import {
+  __resetSimctlListDevicesLockPathForTesting,
+  __setSimctlListDevicesLockPathForTesting,
+} from "../src/utils/ios-devices";
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
 
 const UDID = "11111111-1111-1111-1111-111111111111";
@@ -109,12 +114,24 @@ function makeRegistry(api: NativeDevtoolsApi): {
   };
 }
 
+function waitForRealIo(): Promise<void> {
+  return new Promise((resolve) => realSetImmediate(resolve));
+}
+
+async function waitForMockCall(mock: ReturnType<typeof vi.fn>): Promise<void> {
+  for (let i = 0; i < 10 && mock.mock.calls.length === 0; i += 1) {
+    await waitForRealIo();
+  }
+}
+
 beforeEach(() => {
   execFileMock.mockReset();
+  __setSimctlListDevicesLockPathForTesting(null);
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 });
 
 afterEach(() => {
+  __resetSimctlListDevicesLockPathForTesting();
   vi.restoreAllMocks();
 });
 
@@ -218,6 +235,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
 
       bootedUdids = [];
       await vi.advanceTimersByTimeAsync(10_000);
+      await waitForMockCall(disposeService);
 
       expect(disposeService).toHaveBeenCalledWith(`NativeDevtools:${UDID}`);
       stop();
