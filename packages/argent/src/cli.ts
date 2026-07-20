@@ -20,6 +20,7 @@
  *   argent server start [flags]   Spawn a long-lived tool-server (foreground by default)
  *   argent server status|stop|logs   Manage the shared tool-server
  *   argent lens                   Open Argent Lens bound to a fresh coding-agent session (macOS)
+ *   argent map <bundleId> [flags] Crawl an app into a graph of reachable screens
  *   argent link [flags]           Route client requests to a remote tool-server
  *   argent unlink                 Remove the persisted remote link
  *   argent enable <flag>          Enable a feature flag (global by default)
@@ -90,6 +91,7 @@ Commands:
   flow        Run a saved flow (use \`argent flow --help\` for options)
   server      Manage the shared tool-server (start / status / stop / logs)
   lens        Open Argent Lens bound to a fresh coding-agent session (macOS)
+  map         Crawl an app into a screen map (use \`argent map --help\` for flags)
   link        Route client requests to a remote tool-server
   unlink      Remove the persisted remote tool-server link
   enable      Enable a feature flag (global by default, --scope project for project)
@@ -153,6 +155,8 @@ async function main(): Promise<void> {
       return (await loadCli()).server(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "lens":
       return (await loadCli()).lens(rest, { paths: BUNDLED_RUNTIME_PATHS });
+    case "map":
+      return (await loadCli()).map(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "link":
       return (await loadCli()).link(rest);
     case "unlink":

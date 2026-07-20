@@ -1,0 +1,218 @@
+import { describe, it, expect } from "vitest";
+import {
+  parseMapArgs,
+  bootedMapCandidates,
+  formatProgressLine,
+  formatMapSummary,
+} from "../src/map.js";
+import { FlagParseException } from "../src/flag-parser.js";
+
+describe("parseMapArgs", () => {
+  it("parses the bare positional bundle id with defaults", () => {
+    expect(parseMapArgs(["com.example.app"])).toEqual({
+      bundleId: "com.example.app",
+      udid: null,
+      maxScreens: null,
+      maxActions: null,
+      maxDepth: null,
+      budgetS: null,
+      window: true,
+      json: false,
+      jsonPath: null,
+      help: false,
+    });
+  });
+
+  it("parses every flag", () => {
+    const args = parseMapArgs([
+      "com.example.app",
+      "--udid",
+      "ABC-123",
+      "--max-screens",
+      "40",
+      "--max-actions",
+      "8",
+      "--max-depth",
+      "3",
+      "--budget",
+      "120",
+      "--no-window",
+      "--json",
+      "out/graph.json",
+    ]);
+    expect(args).toEqual({
+      bundleId: "com.example.app",
+      udid: "ABC-123",
+      maxScreens: 40,
+      maxActions: 8,
+      maxDepth: 3,
+      budgetS: 120,
+      window: false,
+      json: true,
+      jsonPath: "out/graph.json",
+      help: false,
+    });
+  });
+
+  it("--json without a path keeps the default output", () => {
+    const args = parseMapArgs(["com.example.app", "--json"]);
+    expect(args.json).toBe(true);
+    expect(args.jsonPath).toBeNull();
+  });
+
+  it("--json does not swallow a trailing flag as its path", () => {
+    const args = parseMapArgs(["com.example.app", "--json", "--no-window"]);
+    expect(args.json).toBe(true);
+    expect(args.jsonPath).toBeNull();
+    expect(args.window).toBe(false);
+  });
+
+  it("--json before the bundle id treats the next token as the bundle id", () => {
+    // The optional path is only consumed once the positional has been seen, so
+    // `argent map --json com.example.app` still targets the app.
+    const args = parseMapArgs(["--json", "com.example.app"]);
+    expect(args.json).toBe(true);
+    expect(args.jsonPath).toBeNull();
+    expect(args.bundleId).toBe("com.example.app");
+  });
+
+  it("sets help for --help and -h", () => {
+    expect(parseMapArgs(["--help"]).help).toBe(true);
+    expect(parseMapArgs(["-h"]).help).toBe(true);
+  });
+
+  it("rejects a missing flag value", () => {
+    expect(() => parseMapArgs(["com.example.app", "--udid"])).toThrow(FlagParseException);
+    expect(() => parseMapArgs(["com.example.app", "--max-screens"])).toThrow(/requires a value/);
+  });
+
+  it("rejects non-positive and non-integer numeric values", () => {
+    expect(() => parseMapArgs(["com.example.app", "--max-screens", "abc"])).toThrow(
+      /positive integer/
+    );
+    expect(() => parseMapArgs(["com.example.app", "--max-depth", "0"])).toThrow(/positive integer/);
+    expect(() => parseMapArgs(["com.example.app", "--budget", "-5"])).toThrow(/positive integer/);
+    expect(() => parseMapArgs(["com.example.app", "--max-actions", "2.5"])).toThrow(
+      /positive integer/
+    );
+  });
+
+  it("rejects unknown flags and extra positionals", () => {
+    expect(() => parseMapArgs(["com.example.app", "--frobnicate"])).toThrow(/Unknown flag/);
+    expect(() => parseMapArgs(["com.example.app", "com.other.app"])).toThrow(/extra argument/);
+  });
+});
+
+describe("bootedMapCandidates", () => {
+  const devices = [
+    { platform: "ios", udid: "IOS-BOOTED", name: "iPhone 16 Pro", state: "Booted" },
+    { platform: "ios", udid: "IOS-OFF", name: "iPhone 16", state: "Shutdown" },
+    {
+      platform: "ios",
+      udid: "TV-BOOTED",
+      name: "Apple TV",
+      state: "Booted",
+      runtimeKind: "tv",
+    },
+    {
+      platform: "android",
+      serial: "emulator-5554",
+      state: "device",
+      avdName: "Pixel_8",
+      model: "sdk_gphone64",
+      kind: "emulator",
+    },
+    { platform: "android", serial: "emulator-5556", state: "offline", avdName: "Pixel_7" },
+    {
+      platform: "android",
+      serial: "adb-tv",
+      state: "device",
+      avdName: "TV_AVD",
+      runtimeKind: "tv",
+    },
+    { platform: "chromium", id: "chromium-9222", state: "running" },
+    { platform: "vega", serial: "vega-1", state: "running" },
+  ];
+
+  it("keeps only booted iOS simulators and ready Android devices", () => {
+    expect(bootedMapCandidates(devices)).toEqual([
+      { id: "IOS-BOOTED", label: "IOS-BOOTED  iPhone 16 Pro (ios)" },
+      { id: "emulator-5554", label: "emulator-5554  Pixel_8 (android)" },
+    ]);
+  });
+
+  it("labels an Android physical device by model when it has no AVD name", () => {
+    const [candidate] = bootedMapCandidates([
+      { platform: "android", serial: "R5CT1", state: "device", avdName: null, model: "Pixel 9" },
+    ]);
+    expect(candidate).toEqual({ id: "R5CT1", label: "R5CT1  Pixel 9 (android)" });
+  });
+
+  it("tolerates junk shapes", () => {
+    expect(bootedMapCandidates(undefined)).toEqual([]);
+    expect(bootedMapCandidates("nope")).toEqual([]);
+    expect(bootedMapCandidates([null, 42, {}, { platform: "ios", state: "Booted" }])).toEqual([]);
+  });
+});
+
+describe("formatProgressLine", () => {
+  it("renders a discovered screen prominently", () => {
+    const line = formatProgressLine(
+      { kind: "screen", nodeId: "s3", title: "Settings", depth: 2, screens: 4 },
+      30
+    );
+    expect(line).toEqual({ text: "[4/30] Settings (depth 2)", dim: false });
+  });
+
+  it("renders action / restart / phase events as dim one-liners", () => {
+    expect(
+      formatProgressLine(
+        { kind: "action", nodeId: "s1", label: "Log in", explored: 2, total: 9 },
+        30
+      )
+    ).toEqual({ text: "    · Log in (2/9)", dim: true });
+    expect(formatProgressLine({ kind: "restart", reason: "replay diverged" }, 30)).toEqual({
+      text: "    ↻ restart: replay diverged",
+      dim: true,
+    });
+    expect(formatProgressLine({ kind: "phase", message: "launching app" }, 30)).toEqual({
+      text: "    launching app",
+      dim: true,
+    });
+  });
+
+  it("returns null for unknown shapes", () => {
+    expect(formatProgressLine(null, 30)).toBeNull();
+    expect(formatProgressLine("screen", 30)).toBeNull();
+    expect(formatProgressLine({ no: "kind" }, 30)).toBeNull();
+    expect(formatProgressLine({ kind: "novel-event" }, 30)).toBeNull();
+  });
+});
+
+describe("formatMapSummary", () => {
+  const stats = { screens: 12, edges: 18, restarts: 2, elapsedMs: 93_400 };
+
+  it("words a completed crawl", () => {
+    expect(formatMapSummary("completed", stats)).toBe(
+      "Mapped 12 screens, 18 edges, 2 restarts in 93.4s"
+    );
+  });
+
+  it("words a cancelled crawl as a partial map", () => {
+    expect(formatMapSummary("cancelled", stats)).toBe(
+      "Cancelled — partial map: 12 screens, 18 edges, 2 restarts in 93.4s"
+    );
+  });
+
+  it("words a failed crawl as a partial map", () => {
+    expect(formatMapSummary("failed", stats)).toBe(
+      "Failed — partial map: 12 screens, 18 edges, 2 restarts in 93.4s"
+    );
+  });
+
+  it("singularizes counts of one", () => {
+    expect(
+      formatMapSummary("completed", { screens: 1, edges: 1, restarts: 1, elapsedMs: 1000 })
+    ).toBe("Mapped 1 screen, 1 edge, 1 restart in 1.0s");
+  });
+});

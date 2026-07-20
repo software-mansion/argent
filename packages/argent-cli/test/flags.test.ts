@@ -245,6 +245,13 @@ describe("flags (list) CLI", () => {
     expect(out.stdout).not.toContain("No feature flags are defined.");
   });
 
+  it("ships the argent-map flag in the production registry", () => {
+    // Guards the gate: `argent map` reads isFlagEnabled("argent-map"), so that
+    // exact name must stay registered (and discoverable via `argent flags`).
+    const out = captureConsole(() => flagsCmd([]));
+    expect(out.stdout).toContain("argent-map");
+  });
+
   it("lists every registry flag with its description and effective scope", () => {
     setFlag("a", true, "global");
     setFlag("b", true, "global");
