@@ -130,6 +130,12 @@ export class MapSessionStore {
         /* best-effort: a vanished dir must not block a new crawl */
       }
     }
+    // The line above only ever knows THIS process's own previous dir (null on
+    // the first begin of a process), so a tool-server that crashed or restarted
+    // leaks a directory per run. Sweep the stale siblings too — but age-based,
+    // so a *concurrently running* tool-server's active crawl dir (its mtime
+    // stays fresh as it writes screenshots) is never deleted out from under it.
+    sweepStaleScreenshotDirs(path.join(os.tmpdir(), "argent-map"));
 
     const crawlId = randomUUID();
     this.status = "running";
@@ -286,6 +292,42 @@ export class MapSessionStore {
   /** Whether the current session asked for the preview window to open. */
   openWindowRequested(): boolean {
     return this.openWindow;
+  }
+}
+
+// A crawl runs for at most the maximum time budget (30 min) plus settle slack,
+// and its screenshot dir's mtime is bumped every time a screen thumbnail lands
+// in it — so a dir untouched for an hour belongs to a process that is gone.
+// One hour is a comfortable margin above the longest possible live crawl.
+const STALE_SCREENSHOT_DIR_MS = 60 * 60 * 1000;
+
+/**
+ * Delete orphaned per-crawl screenshot directories under the shared
+ * `argent-map` parent whose mtime is older than {@link STALE_SCREENSHOT_DIR_MS}
+ * — leftovers from tool-servers that exited without finalizing. Age-based on
+ * purpose: an active crawl (this process's or another's) keeps writing into its
+ * dir, so its mtime stays recent and it is spared. Fully best-effort: a missing
+ * parent, an unreadable entry, or a racing delete must never throw into
+ * `begin()` / the crawl path.
+ */
+function sweepStaleScreenshotDirs(parent: string): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(parent, { withFileTypes: true });
+  } catch {
+    return; // no argent-map parent yet (no crawl ever ran) — nothing to sweep
+  }
+  const cutoff = Date.now() - STALE_SCREENSHOT_DIR_MS;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(parent, entry.name);
+    try {
+      if (fs.statSync(dir).mtimeMs < cutoff) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    } catch {
+      /* best-effort: a vanished or in-use dir must not block a new crawl */
+    }
   }
 }
 
