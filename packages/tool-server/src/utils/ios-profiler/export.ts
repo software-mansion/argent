@@ -1,5 +1,5 @@
 import * as path from "path";
-import { execAsyncWithTimeout } from "./run-with-timeout";
+import { execFileAsyncWithTimeout } from "./run-with-timeout";
 
 /**
  * Known xctrace schema names that contain CPU time-profile data.
@@ -38,9 +38,12 @@ async function discoverTraceSchemas(
   diagnostics?: ExportDiagnostics
 ): Promise<string[]> {
   try {
-    const { stdout: toc } = await execAsyncWithTimeout(
-      `xctrace export --input "${traceFile}" --toc`
-    );
+    const { stdout: toc } = await execFileAsyncWithTimeout("xctrace", [
+      "export",
+      "--input",
+      traceFile,
+      "--toc",
+    ]);
     const schemas: string[] = [];
     const schemaRe = /schema="([^"]+)"/g;
     let m;
@@ -99,9 +102,15 @@ async function tryCpuExportFallback(
   for (const candidate of CPU_SCHEMA_CANDIDATES) {
     const xpath = `/trace-toc/run[@number="1"]/data/table[@schema="${candidate}"]`;
     try {
-      await execAsyncWithTimeout(
-        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${xpath}'`
-      );
+      await execFileAsyncWithTimeout("xctrace", [
+        "export",
+        "--input",
+        traceFile,
+        "--output",
+        outPath,
+        "--xpath",
+        xpath,
+      ]);
       diagnostics.cpuSchemaUsed = candidate;
       return true;
     } catch {
@@ -136,9 +145,15 @@ export async function exportIosTraceData(traceFile: string): Promise<{
 
       if (resolvedXpath) {
         try {
-          await execAsyncWithTimeout(
-            `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${resolvedXpath}'`
-          );
+          await execFileAsyncWithTimeout("xctrace", [
+            "export",
+            "--input",
+            traceFile,
+            "--output",
+            outPath,
+            "--xpath",
+            resolvedXpath,
+          ]);
           exportedFiles[key] = outPath;
           continue;
         } catch (err) {
@@ -168,9 +183,15 @@ export async function exportIosTraceData(traceFile: string): Promise<{
     // export` does not accept; the first attempt always failed and fell back to
     // this same plain export, so it has been removed.)
     try {
-      await execAsyncWithTimeout(
-        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`
-      );
+      await execFileAsyncWithTimeout("xctrace", [
+        "export",
+        "--input",
+        traceFile,
+        "--output",
+        outPath,
+        "--xpath",
+        config.xpath,
+      ]);
       exportedFiles[key] = outPath;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

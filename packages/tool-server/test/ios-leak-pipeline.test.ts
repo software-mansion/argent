@@ -94,6 +94,143 @@ describe("aggregateLeaks", () => {
     expect(unattributed.every((l) => l.severity === "YELLOW")).toBe(true);
   });
 
+  it("keeps distinct responsible frames as separate rows (same type, different call sites)", () => {
+    // Attribution is the feature's whole point: the same object type leaked from
+    // two different call sites must NOT collapse into one row attributed to
+    // whichever was parsed first (that hides the second site). Group by
+    // (type, frame).
+    const rows = aggregateLeaks([
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: "-[SiteA make]",
+        responsibleLibrary: "App",
+        count: 3,
+      },
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: "-[SiteB make]",
+        responsibleLibrary: "App",
+        count: 2,
+      },
+    ]);
+    expect(rows).toHaveLength(2);
+    const bySite = new Map(rows.map((r) => [r.responsibleFrame, r]));
+    expect(bySite.get("-[SiteA make]")?.count).toBe(3);
+    expect(bySite.get("-[SiteB make]")?.count).toBe(2);
+  });
+
+  it("still merges same type + same frame (unattributed sentinel case unaffected)", () => {
+    const rows = aggregateLeaks([
+      {
+        objectType: "Malloc 16 Bytes",
+        sizeBytes: 16,
+        responsibleFrame: "<Call stack limit reached>",
+        responsibleLibrary: "",
+        count: 2,
+      },
+      {
+        objectType: "Malloc 16 Bytes",
+        sizeBytes: 16,
+        responsibleFrame: "<Call stack limit reached>",
+        responsibleLibrary: "",
+        count: 1,
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.count).toBe(3);
+    expect(rows[0]?.attributed).toBe(false);
+  });
+
+  it("does not collide distinct (type, frame) pairs that share a space-joined key", () => {
+    // The group key joins objectType and responsibleFrame with a NUL delimiter
+    // precisely so it can't collide. These two leaks are distinct sites, but a
+    // space (or any character that can appear in the fields) as the delimiter
+    // would map both to the same key "Malloc 48 Bytes make" and silently merge
+    // them — hiding a real leak. Pin the collision-safety so nobody "simplifies"
+    // the delimiter back to a printable character.
+    const rows = aggregateLeaks([
+      {
+        objectType: "Malloc 48",
+        sizeBytes: 48,
+        responsibleFrame: "Bytes make",
+        responsibleLibrary: "App",
+        count: 1,
+      },
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: "make",
+        responsibleLibrary: "App",
+        count: 1,
+      },
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.objectType))).toEqual(
+      new Set(["Malloc 48", "Malloc 48 Bytes"])
+    );
+  });
+
+  it("merges every unattributed frame spelling of one object type into one group", () => {
+    // The exporter is not consistent about how "no stack" is spelled: a missing
+    // responsible-frame attribute parses as "Unknown" (xml-parser default) while
+    // recorded-but-truncated stacks emit the "<Call stack limit reached>"
+    // sentinel, and isLeakAttributed() trims before matching. All of those are
+    // one attribution state, so they must be one group — keying on the verbatim
+    // frame would split them and inflate the "N unattributed leak group(s)"
+    // count in the report.
+    const rows = aggregateLeaks([
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: "<Call stack limit reached>",
+        responsibleLibrary: "",
+        count: 2,
+      },
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: "Unknown",
+        responsibleLibrary: "",
+        count: 1,
+      },
+      {
+        objectType: "Malloc 48 Bytes",
+        sizeBytes: 48,
+        responsibleFrame: " <Call stack limit reached> ",
+        responsibleLibrary: "",
+        count: 1,
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.count).toBe(4);
+    expect(rows[0]?.totalSizeBytes).toBe(192);
+    expect(rows[0]?.attributed).toBe(false);
+  });
+
+  it("merges attributed frames that differ only by surrounding whitespace", () => {
+    const rows = aggregateLeaks([
+      {
+        objectType: "MyModel",
+        sizeBytes: 128,
+        responsibleFrame: "-[SiteA make]",
+        responsibleLibrary: "App",
+        count: 1,
+      },
+      {
+        objectType: "MyModel",
+        sizeBytes: 128,
+        responsibleFrame: "-[SiteA make] ",
+        responsibleLibrary: "App",
+        count: 1,
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.count).toBe(2);
+    expect(rows[0]?.attributed).toBe(true);
+  });
+
   it("returns [] for no leaks", () => {
     expect(aggregateLeaks([])).toEqual([]);
   });

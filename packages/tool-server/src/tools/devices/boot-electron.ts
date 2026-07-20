@@ -2,9 +2,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
+import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { ensureCdpReachable } from "../../blueprints/chromium-cdp";
 import { chromiumIdFromPort } from "../../utils/device-info";
 import { trackChromiumPort } from "../../utils/chromium-discovery";
+import { electronGuiChildEnv } from "../../utils/electron-env";
 
 // Booting an Electron app is one way to produce a Chromium/CDP device: the
 // launched process is a Chromium runtime exposing a CDP endpoint, so the
@@ -60,7 +62,12 @@ async function pickFreePort(): Promise<number> {
 function resolveLauncher(appPath: string): { command: string; args: string[] } {
   const abs = path.resolve(appPath);
   if (!fs.existsSync(abs)) {
-    throw new Error(`Electron boot: path does not exist: ${abs}`);
+    throw new FailureError(`Electron boot: path does not exist: ${abs}`, {
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
+      failure_stage: "electron_app_path_missing",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   const stat = fs.statSync(abs);
   if (stat.isDirectory()) {
@@ -69,14 +76,25 @@ function resolveLauncher(appPath: string): { command: string; args: string[] } {
       // for the real binary name; fall back to the basename.
       const macOsDir = path.join(abs, "Contents", "MacOS");
       if (!fs.existsSync(macOsDir)) {
-        throw new Error(
+        throw new FailureError(
           `Electron boot: ${abs} is a .app bundle but has no Contents/MacOS. ` +
-            `Pass the inner binary directly, or use the project directory of an unpackaged app.`
+            `Pass the inner binary directly, or use the project directory of an unpackaged app.`,
+          {
+            error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
+            failure_stage: "electron_app_bundle_invalid",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          }
         );
       }
       const entries = fs.readdirSync(macOsDir).filter((name) => !name.startsWith("."));
       if (entries.length === 0) {
-        throw new Error(`Electron boot: ${macOsDir} is empty.`);
+        throw new FailureError(`Electron boot: ${macOsDir} is empty.`, {
+          error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
+          failure_stage: "electron_app_bundle_empty",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
       }
       // Prefer one matching the .app folder name, otherwise take the first.
       const bundleName = path.basename(abs, ".app");
@@ -108,8 +126,15 @@ async function waitForCdpReady(port: number, deadlineMs: number): Promise<void> 
     }
   }
   const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
-  throw new Error(
-    `Electron CDP never became reachable on port ${port} within ${deadlineMs}ms. ${detail}`
+  throw new FailureError(
+    `Electron CDP never became reachable on port ${port} within ${deadlineMs}ms. ${detail}`,
+    {
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_CDP_TIMEOUT,
+      failure_stage: "electron_cdp_ready",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    },
+    { cause: lastErr instanceof Error ? lastErr : undefined }
   );
 }
 
@@ -160,6 +185,63 @@ function killChildEscalating(child: ChildProcess): void {
   }, 2000).unref();
 }
 
+/**
+ * ChildProcess handles for the Electron apps this tool-server booted, keyed by
+ * CDP port. Retained so teardown can kill through the handle: its
+ * exitCode/signalCode guard lets {@link killChildEscalating} skip the delayed
+ * SIGKILL once the child has exited, so the kill can never land on a recycled
+ * pid — a raw pid offers no such guard. Entries are dropped when the child
+ * exits or a kill consumes them. Holding the handle does not re-ref the
+ * unref'd child, so the tool-server's event loop still isn't kept alive by it.
+ */
+const liveChildren = new Map<number, ChildProcess>();
+
+/**
+ * Terminate a Chromium/Electron app this tool-server booted on `port`.
+ * Prefers the retained ChildProcess handle ({@link liveChildren}) and kills it
+ * with {@link killChildEscalating}, whose exit-status guard makes the delayed
+ * SIGKILL safe against pid recycling. Only when no handle is held (the child
+ * already exited, or it was booted by an earlier tool-server process) does it
+ * fall back to best-effort raw-pid signalling. An already-exited process is a
+ * no-op, not an error.
+ */
+export function killChromiumByPort(port: number, pid?: number): void {
+  const child = liveChildren.get(port);
+  if (child) {
+    liveChildren.delete(port);
+    killChildEscalating(child);
+    return;
+  }
+  if (pid !== undefined) killChromiumByPidFallback(pid);
+}
+
+/**
+ * Raw-pid fallback: SIGTERM, then SIGKILL after a grace period. Unlike
+ * {@link killChildEscalating} there is no exit-status guard here — only a
+ * liveness re-probe (signal 0) right before the SIGKILL, which skips it when
+ * the process already exited during the grace window. A process exiting
+ * between that probe and the kill could still hand its pid to a newcomer
+ * (an inherent raw-pid TOCTOU); that residual window is why the handle path in
+ * {@link killChromiumByPort} is preferred whenever a handle exists.
+ */
+function killChromiumByPidFallback(pid: number): void {
+  if (signalPid(pid, "SIGTERM") === "gone") return; // already exited, nothing to escalate
+  setTimeout(() => {
+    if (signalPid(pid, 0) === "gone") return; // exited during the grace period — don't SIGKILL a recycled pid
+    signalPid(pid, "SIGKILL");
+  }, 2000).unref();
+}
+
+/** Send a signal (or the 0 liveness probe) to a pid, reporting "gone" on ESRCH (no such process). */
+function signalPid(pid: number, signal: NodeJS.Signals | 0): "sent" | "gone" {
+  try {
+    process.kill(pid, signal);
+    return "sent";
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ESRCH" ? "gone" : "sent";
+  }
+}
+
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
   const port = options.port ?? (await pickFreePort());
   const launcher = resolveLauncher(options.appPath);
@@ -172,12 +254,24 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     child = spawn(launcher.command, args, {
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ELECTRON_ENABLE_LOGGING: "1" },
+      // Strip ELECTRON_RUN_AS_NODE (see electronGuiChildEnv): if the tool-server
+      // inherited it from an Electron-based MCP host, the Electron binary would
+      // run in Node mode with no CDP endpoint — so boot-device fails below (the
+      // child exits early, or the readiness probe times out) instead of the app
+      // coming up.
+      env: electronGuiChildEnv({ ELECTRON_ENABLE_LOGGING: "1" }),
     });
   } catch (err) {
-    throw new Error(
+    throw new FailureError(
       `Electron boot: failed to spawn ${launcher.command}: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err }
+      {
+        error_code: FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED,
+        failure_stage: "electron_spawn",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata(err, "electron"),
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   }
 
@@ -192,9 +286,17 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   const onSpawnError = (err: NodeJS.ErrnoException, reject: (e: Error) => void) => {
     const codeSuffix = err.code ? ` (${err.code})` : "";
     reject(
-      new Error(
+      new FailureError(
         `Electron boot: failed to launch ${launcher.command}${codeSuffix}: ${err.message}. ` +
-          `Make sure 'electron' is installed (npm i electron in the app dir, or globally) and on PATH.`
+          `Make sure 'electron' is installed (npm i electron in the app dir, or globally) and on PATH.`,
+        {
+          error_code: FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED,
+          failure_stage: "electron_spawn_error",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          ...subprocessFailureMetadata(err, "electron"),
+        },
+        { cause: err }
       )
     );
   };
@@ -216,7 +318,16 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     // — crash the tool-server).
     child.removeListener("error", spawnErrorListener);
     spawnErrorReject = null;
-    throw new Error(`Electron boot: spawn returned without a pid (binary: ${launcher.command}).`);
+    throw new FailureError(
+      `Electron boot: spawn returned without a pid (binary: ${launcher.command}).`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED,
+        failure_stage: "electron_spawn_no_pid",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "electron",
+      }
+    );
   }
 
   // Forward Electron stderr to our stderr so launch failures are visible to
@@ -246,8 +357,15 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     if (!earlyExitReject) return;
     const reason = signal ? `signal ${signal}` : `code ${code ?? "?"}`;
     earlyExitReject(
-      new Error(
-        `Electron boot: child process exited with ${reason} before CDP was ready. Inspect [chromium-cdp-${port}] stderr above for the cause.`
+      new FailureError(
+        `Electron boot: child process exited with ${reason} before CDP was ready. Inspect [chromium-cdp-${port}] stderr above for the cause.`,
+        {
+          error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
+          failure_stage: "electron_early_exit",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          ...subprocessFailureMetadata({ code, signal }, "electron"),
+        }
       )
     );
   };
@@ -283,6 +401,17 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // The child is intentionally long-lived; any later exit / error belongs
   // to whatever code subsequently manages the session, not to this boot fn.
   detachBootListeners();
+
+  // Retain the handle so a later teardown (killChromiumByPort) can kill via
+  // the ChildProcess instead of a recyclable raw pid — see liveChildren.
+  // Unlike the boot-time onExit just detached, this listener only clears the
+  // map entry; it can't reject anything, so a natural exit long after boot
+  // stays inert. The identity check keeps a stale child's exit from evicting
+  // a newer boot that reused the same fixed port.
+  liveChildren.set(port, child);
+  child.once("exit", () => {
+    if (liveChildren.get(port) === child) liveChildren.delete(port);
+  });
 
   trackChromiumPort(port);
 

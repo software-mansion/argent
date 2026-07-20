@@ -87,6 +87,24 @@ describe("Authorization gate", () => {
     expect(res.status).toBe(401);
   });
 
+  it("blocks POST /upload without auth", async () => {
+    const res = await request(handle.app)
+      .post("/upload")
+      .set("Content-Type", "application/gzip")
+      .send(Buffer.from("gz"));
+    expect(res.status).toBe(401);
+  });
+
+  it("accepts POST /upload with the correct Bearer token", async () => {
+    const res = await request(handle.app)
+      .post("/upload")
+      .set("Authorization", `Bearer ${TOKEN}`)
+      .set("Content-Type", "application/gzip")
+      .send(Buffer.from("gz"));
+    expect(res.status).toBe(200);
+    expect(typeof res.body.uploadId).toBe("string");
+  });
+
   it("exempts the /preview UI subtree from auth", async () => {
     // The browser-loaded preview UI has no token; /preview and /preview/* must
     // stay reachable. (stub registry has no UI html → not 200, but must not 401.)

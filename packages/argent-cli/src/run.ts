@@ -72,13 +72,21 @@ async function readStdin(): Promise<string> {
 
 function printToolHelp(meta: ToolMeta): void {
   const description = meta.description?.trim() ?? "";
+  const schema = meta.inputSchema as JsonSchema | undefined;
+  // A tool may declare its own `args` field (e.g. flow-add-step). In that case
+  // `--args` is a per-field flag shown in the schema block above, so don't also
+  // advertise the whole-payload `--args` escape hatch — it no longer applies and
+  // would contradict the per-field flag.
+  const hasOwnArgsField = schema?.properties?.args !== undefined;
   console.log(`argent run ${meta.name} [flags]`);
   if (description) console.log(`\n${description}\n`);
   console.log("Flags:");
-  console.log(formatSchemaUsage(meta.inputSchema as JsonSchema));
+  console.log(formatSchemaUsage(schema));
   console.log("\nGlobal flags:");
-  console.log("  --args <json>          Pass the entire payload as JSON (overrides flags)");
-  console.log("  --args -               Read the entire payload as JSON from stdin");
+  if (!hasOwnArgsField) {
+    console.log("  --args <json>          Pass the entire payload as JSON (overrides flags)");
+    console.log("  --args -               Read the entire payload as JSON from stdin");
+  }
   console.log("  --<field>-json <json>  Pass a single field as JSON (objects/nested arrays)");
   console.log("  --json                 Print the raw JSON result");
   console.log("  --out <path>           For image results, save to <path> instead of fetching URL");

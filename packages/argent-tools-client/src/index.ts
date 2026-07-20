@@ -1,6 +1,9 @@
 export {
   ensureToolsServer,
   killToolServer,
+  killToolServerForInstallDir,
+  readAllToolsServerStates,
+  stateFileForBundle,
   buildToolsServerEnv,
   spawnToolsServer,
   findFreePort,
@@ -26,6 +29,7 @@ export {
   type ToolsClient,
   type ToolMeta,
   type ToolInvocationResult,
+  type CallToolOptions,
   type CreateToolsClientOptions,
 } from "./tools-client.js";
 

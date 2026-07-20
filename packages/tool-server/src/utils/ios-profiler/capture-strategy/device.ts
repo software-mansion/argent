@@ -7,7 +7,7 @@ import type { IosCaptureStrategy, RecordArgsInput, CaptureTarget } from "./types
  * Time-Profiler path with the simulator as the Instruments device.
  *
  * It is the correct choice on Xcode versions where the `--device` recording
- * handshake works (≤ 26.3). On 26.4–27.0 it deadlocks at startup — see
+ * handshake works (≤ 26.3). On 26.4 and later it deadlocks at startup — see
  * ./all-processes and ./select.
  */
 export const deviceStrategy: IosCaptureStrategy = {

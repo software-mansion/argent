@@ -113,6 +113,51 @@ else
   echo "  Skipping tvos-hid-daemon: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
 fi
 
+# TCP-transport iOS binaries (sim-remote / ios-remote support). The remote
+# (ios-remote) code path spawns the ax-service and injects the native-devtools
+# dylibs over a TCP socket tunnelled by sim-remote, rather than the AF_UNIX
+# sockets the local path uses — so it needs -DARGENT_USE_TCP=1 builds kept in a
+# separate tcp/ slot (axServiceBinaryPathTcp()/bootstrapDylibPathTcp() read from
+# bin/darwin/tcp/ and dylibs/tcp/). Like the tvOS dylibs, the three TCP dylibs
+# share basenames with the flat iOS dylibs, so they ship as a tarball extracted
+# into dylibs/tcp/; tcp-ax-service has a unique release name and lands flat as
+# bin/darwin/tcp/ax-service.
+#
+# These assets only exist on releases built with TCP support. A pre-sim-remote
+# tag simply has no TCP artifacts, so a missing asset is skipped with a warning
+# rather than aborting the whole download (`gh release download` exits non-zero
+# on no match, which under `set -e` would otherwise leave a half-populated tree).
+TCP_DYLIBS_DIR="${DYLIBS_DIR}/tcp"
+TCP_BIN_DIR="${IOS_BIN_DIR}/tcp"
+mkdir -p "${TCP_DYLIBS_DIR}" "${TCP_BIN_DIR}"
+
+echo "  Downloading TCP dylibs..."
+TMP_TCP_DYLIBS="$(mktemp -t native-devtools-ios-tcp-dylibs.XXXXXX.tar.gz)"
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "native-devtools-ios-tcp-dylibs.tar.gz" \
+  --output "${TMP_TCP_DYLIBS}" \
+  --clobber; then
+  tar -xzf "${TMP_TCP_DYLIBS}" -C "${TCP_DYLIBS_DIR}"
+else
+  echo "  Skipping TCP dylibs: not present on '${TAG}' (pre-sim-remote-support release)." >&2
+fi
+rm -f "${TMP_TCP_DYLIBS}"
+
+echo "  Downloading tcp-ax-service..."
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "tcp-ax-service" \
+  --dir "${TCP_BIN_DIR}" \
+  --clobber; then
+  # Uploaded under a unique name to avoid colliding with the iOS ax-service in
+  # the flattened release dir; restore the basename the runtime resolver expects.
+  mv -f "${TCP_BIN_DIR}/tcp-ax-service" "${TCP_BIN_DIR}/ax-service"
+  chmod +x "${TCP_BIN_DIR}/ax-service"
+else
+  echo "  Skipping tcp-ax-service: not present on '${TAG}' (pre-sim-remote-support release)." >&2
+fi
+
 echo "  Downloading argent-android-devtools.apk..."
 # The release publishes the APK under a stable name (no versioning in the
 # filename) so this script doesn't have to know the version ahead of time;
@@ -134,13 +179,54 @@ trap - EXIT
 
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
+# Verify the downloaded injection dylibs carry the expected Mach-O platform.
+# This is the exact failure a mis-built release can reintroduce: a tvOS-built
+# libArgentInjectionBootstrap.dylib landing in the flat iOS slot. dyld silently
+# skips a DYLD_INSERT_LIBRARIES library whose LC_BUILD_VERSION platform does not
+# match the process, so native-devtools never injects on an iOS simulator and
+# every native-* tool returns restart_required — with no error at download,
+# sign, or pack time. Fail loudly here rather than bundle a dead dylib.
+# vtool is macOS-only; on hosts without it (non-macOS) the check is skipped.
+if command -v vtool &>/dev/null; then
+  echo "Verifying dylib platforms..."
+  dylib_verify_failed=0
+  assert_dylib_platform() { # <file> <expected-platform>
+    local f="$1" want="$2" arch got
+    [ -f "$f" ] || return 0  # tvOS dylibs are absent on pre-Apple-TV tags
+    for arch in arm64 x86_64; do
+      got="$(vtool -arch "$arch" -show-build "$f" 2>/dev/null | awk '/platform/{print $2}')"
+      if [ "$got" != "$want" ]; then
+        echo "  ERROR: ${f} (${arch}) is '${got:-<none>}', expected ${want}" >&2
+        dylib_verify_failed=1
+      fi
+    done
+  }
+  for d in libNativeDevtoolsIos libKeyboardPatch libArgentInjectionBootstrap; do
+    assert_dylib_platform "${DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
+    assert_dylib_platform "${TVOS_DYLIBS_DIR}/${d}.dylib" TVOSSIMULATOR
+    # TCP dylibs are iOS-simulator Mach-Os (same SDK, -DARGENT_USE_TCP=1), so a
+    # tvOS slice leaking into dylibs/tcp/ is the same dyld-silent-skip failure.
+    assert_dylib_platform "${TCP_DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
+  done
+  if [ "${dylib_verify_failed}" -ne 0 ]; then
+    echo "Dylib platform verification failed for release '${TAG}'. The release" >&2
+    echo "shipped a mis-platformed dylib (see above) — refusing to use it. Fix" >&2
+    echo "the build-native-binaries workflow / re-publish the release, then retry." >&2
+    exit 1
+  fi
+  echo "Dylib platforms OK (iOS/TCP=IOSSIMULATOR, tvOS=TVOSSIMULATOR where present)."
+fi
+
 if command -v codesign &>/dev/null; then
   for f in \
     "${DYLIBS_DIR}"/*.dylib \
     "${TVOS_DYLIBS_DIR}"/*.dylib \
+    "${TCP_DYLIBS_DIR}"/*.dylib \
     "${IOS_BIN_DIR}/ax-service" \
     "${IOS_BIN_DIR}/tvos-ax-service" \
-    "${IOS_BIN_DIR}/tvos-hid-daemon"; do
+    "${IOS_BIN_DIR}/tvos-hid-daemon" \
+    "${TCP_BIN_DIR}/ax-service"; do
+    [ -f "$f" ] || continue
     codesign -dvv "$f" 2>&1 || echo "Warning: signature verification failed for $f"
   done
 fi

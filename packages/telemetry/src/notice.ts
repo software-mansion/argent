@@ -5,7 +5,7 @@
 // cleared on uninstall (see resetFirstRunNotice), so a later reinstall shows it
 // again rather than staying silently suppressed.
 
-import { readConfigObject, updateConfig } from "./config-file.js";
+import { readConfigObject, updateConfig } from "@argent/configuration-core";
 import { isEnabled } from "./consent.js";
 
 /** The command users run to opt out — callers may highlight it on their surface. */
@@ -20,8 +20,8 @@ export const TELEMETRY_DETAILS_URL = "https://swmansion.com/legal/argent/privacy
  * match its own conventions (e.g. cyan in the installer TUI).
  */
 export const FIRST_RUN_NOTICE_BODY_LINES: readonly string[] = [
-  "Argent collects anonymous usage data to help us improve the tool. We never",
-  "collect your source code, file paths, tool inputs, or error contents.",
+  "Argent collects usage data to help us improve the tool.",
+  "We never collect your source code, file paths, tool inputs, or error contents.",
 ];
 
 /** The whole notice as a plain string, for surfaces without a renderer (mcp stderr). */

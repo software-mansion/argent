@@ -1,0 +1,1104 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { EventEmitter } from "events";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import type { NativeProfilerSessionApi } from "../../src/blueprints/native-profiler-session";
+
+// Exercises the malloc_stack_logging launch path in startNativeProfilerIos
+// directly (no blueprint/native-devtools imports) so we can assert the exact
+// xctrace argv. Default mode must still `--attach`; malloc_stack_logging mode
+// must cold-`--launch` the resolved .app with `--env MallocStackLogging=1`.
+
+class StartFakeChild extends EventEmitter {
+  pid = 4242;
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+  kill = vi.fn();
+}
+
+const LISTAPPS_JSON = JSON.stringify({
+  "com.example.myapp": {
+    CFBundleExecutable: "MyApp",
+    CFBundleIdentifier: "com.example.myapp",
+    ApplicationType: "User",
+  },
+});
+
+function fakeApi(): NativeProfilerSessionApi {
+  return {
+    deviceId: "DEVICE-UDID",
+    platform: "ios",
+    appProcess: null,
+    capturePid: null,
+    captureProcess: null,
+    cpuFilterPid: null,
+    recordingMallocStackLogging: null,
+    mallocStackLogging: null,
+    traceFile: null,
+    exportedFiles: null,
+    profilingActive: false,
+    wallClockStartMs: null,
+    parsedData: null,
+    recordingTimeout: null,
+    recordingTimedOut: false,
+    recordingExitedUnexpectedly: false,
+    lastExitInfo: null,
+    androidOnDeviceTracePath: null,
+  };
+}
+
+// Every simctl/xcode subprocess the profiler runs goes through execFileSync (discrete
+// argv, shell-injection-hardened) — launchctl and `xcodebuild -version` included, since
+// the capture-strategy selector reads the Xcode version the same hardened way. So the
+// mock keys off the bin/argv rather than a command string. `simctl listapps` returns a
+// plist that `plutil` converts to JSON; `xcodebuild` defaults to unmocked ("") so the
+// version reads as undetermined unless a caller opts in via the `xcodebuild` option.
+interface ExecFileSyncOpts {
+  maxBuffer?: number;
+  input?: string;
+  encoding?: string;
+  timeout?: number;
+}
+function makeExecFileSyncFn(opts?: { xcodebuild?: string; listappsJson?: string }) {
+  return vi.fn((bin: string, args: string[] = [], _opts?: ExecFileSyncOpts) => {
+    if (bin === "xcodebuild") return opts?.xcodebuild ?? ""; // capture-strategy reads `xcodebuild -version`
+    if (bin === "plutil") return opts?.listappsJson ?? LISTAPPS_JSON; // plutil converts the listapps plist to JSON
+    if (args.includes("listapps")) return "<plist/>"; // raw plist, piped into plutil
+    if (args.includes("launchctl"))
+      return "1\t0\tUIKitApplication:com.example.myapp[abcd][rb-legacy]\n"; // `simctl spawn <udid> launchctl list`
+    if (args.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
+    if (args.includes("terminate")) return "";
+    return "";
+  });
+}
+
+function mockChildProcess() {
+  const spawnFn = vi.fn(() => new StartFakeChild());
+  // Nothing routes through execSync anymore (launchctl/xcodebuild are hardened to
+  // execFileSync); keep a stub so a stray call no-ops rather than crashing.
+  const execSyncFn = vi.fn(() => "");
+  const execFileSyncFn = makeExecFileSyncFn();
+  return { spawnFn, execSyncFn, execFileSyncFn };
+}
+
+async function importStart() {
+  const mod = await import("../../src/tools/profiler/native-profiler/platforms/ios");
+  return mod.startNativeProfilerIos;
+}
+
+// startNativeProfilerIos reads ARGENT_IOS_CAPTURE (via the capture-strategy
+// resolver), and exporting it globally is a documented operator setup for
+// degraded Xcodes — scrub it for every test so an ambient value can't flip the
+// resolved strategy (=all-processes would refuse every malloc start here), and
+// restore the ambient value afterwards. Tests that exercise the override still
+// set it themselves after the scrub.
+const AMBIENT_IOS_CAPTURE = process.env.ARGENT_IOS_CAPTURE;
+
+describe("native-profiler-start malloc_stack_logging", () => {
+  beforeEach(() => {
+    delete process.env.ARGENT_IOS_CAPTURE;
+    vi.resetModules();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    if (AMBIENT_IOS_CAPTURE === undefined) {
+      delete process.env.ARGENT_IOS_CAPTURE;
+    } else {
+      process.env.ARGENT_IOS_CAPTURE = AMBIENT_IOS_CAPTURE;
+    }
+    vi.useRealTimers();
+    vi.doUnmock("child_process");
+    vi.doUnmock("../../src/utils/react-profiler/debug/dump");
+    vi.doUnmock("../../src/utils/ios-profiler/notify");
+    vi.doUnmock("../../src/utils/ios-profiler/startup");
+  });
+
+  function applyCommonMocks(spawnFn: unknown, execSyncFn: unknown, execFileSyncFn: unknown) {
+    vi.doMock("child_process", () => ({
+      spawn: spawnFn,
+      execSync: execSyncFn,
+      execFile: vi.fn(),
+      execFileSync: execFileSyncFn,
+    }));
+    vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+      getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+      listenForDarwinNotification: vi.fn(() => {
+        throw new Error("notifyutil unavailable in tests");
+      }),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+      waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
+    }));
+  }
+
+  it("cold-launches the .app with MallocStackLogging when malloc_stack_logging is true", async () => {
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    const result = await startNativeProfilerIos(api, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      malloc_stack_logging: true,
+    });
+
+    expect(result.status).toBe("recording");
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    const [bin, args] = spawnFn.mock.calls[0] as unknown as [string, string[]];
+    expect(bin).toBe("xctrace");
+
+    // launch + env, not attach
+    expect(args).toContain("--launch");
+    expect(args).toContain("--env");
+    expect(args[args.indexOf("--env") + 1]).toBe("MallocStackLogging=1");
+    expect(args).not.toContain("--attach");
+    // --device with the correct udid is the whole premise of the degraded-Xcode
+    // guard (the cold launch can only run on the device path), so assert it is
+    // present and threaded through — a regression that dropped it or passed the
+    // wrong device would otherwise slip past.
+    expect(args).toContain("--device");
+    expect(args[args.indexOf("--device") + 1]).toBe("DEVICE-UDID");
+    // the launched target is the resolved .app bundle, and must be the LAST args
+    // (everything after `--` is the launched command).
+    const dashIdx = args.indexOf("--");
+    expect(dashIdx).toBeGreaterThan(args.indexOf("--launch"));
+    expect(args[dashIdx + 1]).toBe("/Users/x/Library/.../MyApp.app");
+    expect(dashIdx + 1).toBe(args.length - 1);
+    // the malloc branch hand-rolls its argv apart from the strategy builder, so
+    // --no-prompt must be asserted here separately or a regression dropping it
+    // (xctrace then blocks on an interactive prompt) would slip past.
+    expect(args).toContain("--no-prompt");
+
+    // the running instance is terminated first for a clean cold start
+    const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+    expect(efsArgs.some((a) => a.includes("terminate") && a.includes("com.example.myapp"))).toBe(
+      true
+    );
+    expect(efsArgs.some((a) => a.includes("get_app_container"))).toBe(true);
+  });
+
+  it("a failed start leaves the previous capture's descriptors fully intact", async () => {
+    // Per-capture descriptors (appProcess, traceFile, cpuFilterPid, capture
+    // mode) are stamped only on a SUCCESSFUL start. A failed attempt must not
+    // clobber them: the previous capture's exports are still loaded, and
+    // analyze pairs them with these fields — nulling cpuFilterPid would render
+    // a host-wide all-processes capture unfiltered, and nulling traceFile
+    // would strip the report's label and file.
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    vi.doMock("child_process", () => ({
+      spawn: spawnFn,
+      execSync: execSyncFn,
+      execFile: vi.fn(),
+      execFileSync: execFileSyncFn,
+    }));
+    vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+      getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+      listenForDarwinNotification: vi.fn(() => {
+        throw new Error("notifyutil unavailable in tests");
+      }),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+      waitForXctraceReady: vi.fn(async () => {
+        throw new Error("xctrace failed to start");
+      }),
+    }));
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    api.appProcess = "PrevApp";
+    api.traceFile = "/tmp/argent-profiler-cwd/previous.trace";
+    api.cpuFilterPid = 777; // previous capture ran via the all-processes fallback
+    api.mallocStackLogging = true;
+    api.exportedFiles = { cpu: "/tmp/prev_cpu.xml", hangs: null, leaks: null };
+
+    await expect(
+      startNativeProfilerIos(api, { device_id: "DEVICE-UDID", app_process: "MyApp" })
+    ).rejects.toThrow(/xctrace failed to start/);
+
+    expect(api.appProcess).toBe("PrevApp");
+    expect(api.traceFile).toBe("/tmp/argent-profiler-cwd/previous.trace");
+    expect(api.cpuFilterPid).toBe(777);
+    expect(api.mallocStackLogging).toBe(true);
+    expect(api.capturePid).toBeNull();
+    expect(api.captureProcess).toBeNull();
+  });
+
+  it("a failed start leaves a pending partial-trace recovery intact", async () => {
+    // Capture A ended abnormally (timeout / unexpected xctrace exit): stop's
+    // recovery branch gates on `(recovery flags) && traceFile` to export the
+    // partial trace. Nothing in a start attempt reads those flags, so a FAILED
+    // restart must not burn them — clearing them forfeits up to 10 minutes of
+    // captured data (the .trace bundle cannot be re-ingested by profiler-load).
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    vi.doMock("child_process", () => ({
+      spawn: spawnFn,
+      execSync: execSyncFn,
+      execFile: vi.fn(),
+      execFileSync: execFileSyncFn,
+    }));
+    vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+      getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+      listenForDarwinNotification: vi.fn(() => {
+        throw new Error("notifyutil unavailable in tests");
+      }),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+      waitForXctraceReady: vi.fn(async () => {
+        throw new Error("xctrace failed to start");
+      }),
+    }));
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    api.recordingExitedUnexpectedly = true;
+    api.lastExitInfo = { code: 1, signal: null };
+    api.traceFile = "/tmp/argent-profiler-cwd/native-profiler-A.trace";
+
+    await expect(
+      startNativeProfilerIos(api, { device_id: "DEVICE-UDID", app_process: "MyApp" })
+    ).rejects.toThrow(/xctrace failed to start/);
+
+    expect(api.recordingExitedUnexpectedly).toBe(true);
+    expect(api.lastExitInfo).toEqual({ code: 1, signal: null });
+    expect(api.traceFile).toBe("/tmp/argent-profiler-cwd/native-profiler-A.trace");
+  });
+
+  it("malloc mode prefers the exact CFBundleExecutable match over an earlier display-name match", async () => {
+    // Two installed apps can share a display name (dev + prod builds both
+    // shown as "MyApp"). The malloc path TERMINATES the resolved app before
+    // cold-launching it, so first-match-in-plist-order is not acceptable: an
+    // exact executable match must win regardless of enumeration order.
+    const twoApps = JSON.stringify({
+      "com.example.staging": {
+        CFBundleExecutable: "MyAppStaging",
+        CFBundleIdentifier: "com.example.staging",
+        CFBundleDisplayName: "MyApp",
+        ApplicationType: "User",
+      },
+      "com.example.myapp": {
+        CFBundleExecutable: "MyApp",
+        CFBundleIdentifier: "com.example.myapp",
+        ApplicationType: "User",
+      },
+    });
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execSyncFn = vi.fn(() => "");
+    const execFileSyncFn = makeExecFileSyncFn({ listappsJson: twoApps });
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    const result = await startNativeProfilerIos(fakeApi(), {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      malloc_stack_logging: true,
+    });
+
+    expect(result.status).toBe("recording");
+    const terminateCalls = execFileSyncFn.mock.calls
+      .map((c) => (c[1] as string[]) ?? [])
+      .filter((a) => a.includes("terminate"));
+    expect(terminateCalls).toHaveLength(1);
+    expect(terminateCalls[0]).toContain("com.example.myapp");
+    expect(terminateCalls[0]).not.toContain("com.example.staging");
+  });
+
+  it("malloc mode refuses an app_process that matches several installed apps ambiguously", async () => {
+    // Display-name-only ambiguity (no exact executable match): terminating an
+    // arbitrary one of them would kill the wrong app. Refuse before touching
+    // anything, naming the candidates.
+    const twoApps = JSON.stringify({
+      "com.example.staging": {
+        CFBundleExecutable: "MyAppStaging",
+        CFBundleIdentifier: "com.example.staging",
+        CFBundleDisplayName: "MyApp",
+        ApplicationType: "User",
+      },
+      "com.example.prod": {
+        CFBundleExecutable: "MyAppProd",
+        CFBundleIdentifier: "com.example.prod",
+        CFBundleDisplayName: "MyApp",
+        ApplicationType: "User",
+      },
+    });
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execSyncFn = vi.fn(() => "");
+    const execFileSyncFn = makeExecFileSyncFn({ listappsJson: twoApps });
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    await expect(
+      startNativeProfilerIos(fakeApi(), {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      })
+    ).rejects.toThrow(/matches multiple installed user apps/);
+
+    const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+    expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  // Dev + prod builds of one Xcode target share CFBundleExecutable "MyApp"
+  // (exact.length === 2). Advising "pass the exact CFBundleExecutable" would be a
+  // dead end — the user already passed it. The refusal must point at the
+  // globally-unique CFBundleIdentifier, and passing one must actually resolve.
+  const SHARED_EXECUTABLE_BUILDS = JSON.stringify({
+    "com.example.dev": {
+      CFBundleExecutable: "MyApp",
+      CFBundleIdentifier: "com.example.dev",
+      CFBundleDisplayName: "MyApp Dev",
+      ApplicationType: "User",
+    },
+    "com.example.prod": {
+      CFBundleExecutable: "MyApp",
+      CFBundleIdentifier: "com.example.prod",
+      CFBundleDisplayName: "MyApp",
+      ApplicationType: "User",
+    },
+  });
+
+  it("refusal for a shared CFBundleExecutable names the bundle id as the disambiguator", async () => {
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execFileSyncFn = makeExecFileSyncFn({ listappsJson: SHARED_EXECUTABLE_BUILDS });
+    applyCommonMocks(
+      spawnFn,
+      vi.fn(() => ""),
+      execFileSyncFn
+    );
+    const startNativeProfilerIos = await importStart();
+
+    await expect(
+      startNativeProfilerIos(fakeApi(), {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      })
+    ).rejects.toThrow(/CFBundleIdentifier/);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("passing the exact CFBundleIdentifier resolves and cold-launches that specific build", async () => {
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execFileSyncFn = makeExecFileSyncFn({ listappsJson: SHARED_EXECUTABLE_BUILDS });
+    applyCommonMocks(
+      spawnFn,
+      vi.fn(() => ""),
+      execFileSyncFn
+    );
+    const startNativeProfilerIos = await importStart();
+
+    const result = await startNativeProfilerIos(fakeApi(), {
+      device_id: "DEVICE-UDID",
+      app_process: "com.example.prod",
+      malloc_stack_logging: true,
+    });
+    expect(result.status).toBe("recording");
+    const terminateCalls = execFileSyncFn.mock.calls
+      .map((c) => (c[1] as string[]) ?? [])
+      .filter((a) => a.includes("terminate"));
+    expect(terminateCalls).toHaveLength(1);
+    expect(terminateCalls[0]).toContain("com.example.prod");
+    expect(terminateCalls[0]).not.toContain("com.example.dev");
+  });
+
+  it("stamps only the in-flight capture mode — never the report-facing flag", async () => {
+    // api.mallocStackLogging describes the data in exportedFiles/parsedData
+    // and is stamped at STOP; a new start stamping it directly would re-label
+    // the previous capture's still-loaded data with the new capture's mode
+    // (e.g. an attach start flipping a malloc capture's report to "--attach").
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    api.mallocStackLogging = true; // previous capture (stop-stamped) was malloc-mode
+
+    await startNativeProfilerIos(api, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      // default attach mode
+    });
+
+    expect(api.recordingMallocStackLogging).toBe(false);
+    expect(api.mallocStackLogging).toBe(true); // untouched until the next stop
+  });
+
+  it("keeps `--launch -- <app>` last when --notify-tracing-started is present", async () => {
+    // Every other test lets the notify mock throw, so registerStartupNotify
+    // returns null and the argv never contains --notify-tracing-started — on a
+    // real host it IS present. Exercise that argv shape: the notify args must
+    // precede --launch (xctrace treats everything after `--` as the launched
+    // command plus ITS args, so a notify arg ordered after it would be handed
+    // to the app instead of xctrace).
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    vi.doMock("child_process", () => ({
+      spawn: spawnFn,
+      execSync: execSyncFn,
+      execFile: vi.fn(),
+      execFileSync: execFileSyncFn,
+    }));
+    vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+      getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+      listenForDarwinNotification: vi.fn(() => ({
+        ready: Promise.resolve(),
+        fired: new Promise<void>(() => {}),
+        cancel: vi.fn(),
+      })),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+      waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
+    }));
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    const result = await startNativeProfilerIos(api, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      malloc_stack_logging: true,
+    });
+
+    expect(result.status).toBe("recording");
+    const [bin, args] = spawnFn.mock.calls[0] as unknown as [string, string[]];
+    expect(bin).toBe("xctrace");
+
+    const notifyIdx = args.indexOf("--notify-tracing-started");
+    expect(notifyIdx).toBeGreaterThan(-1);
+    expect(args[notifyIdx + 1]).toMatch(/^com\.argent\.ios-profiler\.started\./);
+    expect(notifyIdx).toBeLessThan(args.indexOf("--launch"));
+    expect(args).toContain("--no-prompt");
+    // `--launch -- <app>` must be the final three args even with the notify
+    // pair in the argv.
+    expect(args.slice(-3)).toEqual(["--launch", "--", "/Users/x/Library/.../MyApp.app"]);
+  });
+
+  it("captures the listapps plist with a large buffer so a big simulator can't overflow it", async () => {
+    // getInstalledApps buffers the FULL plist into Node (it's larger than the JSON
+    // plutil emits), so the listapps capture must raise maxBuffer well above Node's
+    // 1 MiB default — otherwise a well-populated simulator throws ENOBUFS where the
+    // old shell pipe (which only buffered the smaller JSON) worked.
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    await startNativeProfilerIos(api, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      malloc_stack_logging: true,
+    });
+
+    const listappsCall = execFileSyncFn.mock.calls.find(
+      (c) => Array.isArray(c[1]) && c[1].includes("listapps")
+    );
+    expect(listappsCall).toBeTruthy();
+    expect(listappsCall?.[2]?.maxBuffer).toBeGreaterThan(8 * 1024 * 1024);
+  });
+
+  it("does not terminate the app if the debug dir can't be created (malloc mode)", async () => {
+    // getDebugDir()'s mkdir runs BEFORE the terminate, so a failure (e.g. ENOSPC)
+    // must leave the running app untouched — never killed-without-relaunch.
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    vi.doMock("child_process", () => ({
+      spawn: spawnFn,
+      execSync: execSyncFn,
+      execFile: vi.fn(),
+      execFileSync: execFileSyncFn,
+    }));
+    vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+      getDebugDir: vi.fn(async () => {
+        throw new Error("ENOSPC: no space left on device");
+      }),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+      listenForDarwinNotification: vi.fn(() => {
+        throw new Error("notifyutil unavailable in tests");
+      }),
+    }));
+    vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+      waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
+    }));
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    await expect(
+      startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      })
+    ).rejects.toThrow(/ENOSPC/);
+
+    const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+    expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("does not terminate the app if the .app bundle path can't be resolved (malloc mode)", async () => {
+    // getAppBundlePath (simctl get_app_container) runs BEFORE the destructive terminate,
+    // exactly like the debug-dir mkdir guard above — so a failed container resolution must
+    // leave the running app untouched, never killed-without-relaunch. Also pins the
+    // FailureError code so a reachable user-facing failure stays telemetry-classified.
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      const execSyncFn = vi.fn(() => "");
+      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
+        // resolveAppForLaunch succeeds (valid listapps) so we reach getAppBundlePath...
+        if (bin === "plutil") return LISTAPPS_JSON;
+        if (args.includes("listapps")) return "<plist/>";
+        // ...where get_app_container fails BEFORE any terminate.
+        if (args.includes("get_app_container")) throw new Error("No such file or directory");
+        if (args.includes("terminate")) return "";
+        return "";
+      });
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_APP_BUNDLE_PATH_FAILED
+      );
+      // Bundle-path resolution failed BEFORE the destructive terminate → app untouched.
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("rejects an empty resolved .app bundle path before terminating (malloc mode)", async () => {
+    // simctl returning a blank container path must be refused up front (otherwise the argv
+    // becomes `xctrace --launch -- ""`), and — like the throw case — before the terminate.
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      const execSyncFn = vi.fn(() => "");
+      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
+        if (bin === "plutil") return LISTAPPS_JSON;
+        if (args.includes("listapps")) return "<plist/>";
+        // Whitespace-only container path → empty after the .trim() in getAppBundlePath.
+        if (args.includes("get_app_container")) return "  \n";
+        if (args.includes("terminate")) return "";
+        return "";
+      });
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_APP_BUNDLE_PATH_FAILED
+      );
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("attaches (no launch/env) by default", async () => {
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+    await startNativeProfilerIos(api, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+    });
+
+    const [, args] = spawnFn.mock.calls[0] as unknown as [string, string[]];
+    expect(args).toContain("--attach");
+    // default mode attaches by host PID (Xcode 26.5 compat); the mock's launchctl yields pid 1
+    expect(args[args.indexOf("--attach") + 1]).toBe("1");
+    expect(args).not.toContain("--launch");
+    expect(args).not.toContain("--env");
+    // default attach mode never terminates the running app
+    const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+    expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+  });
+
+  // A degraded Xcode (26.4 and later) is reported by `xcodebuild -version`, which the
+  // capture-strategy selector reads. The malloc cold launch needs `--device`, which is
+  // broken on those versions, so the start must be refused UP FRONT — before the running
+  // app is terminated and before any xctrace spawn.
+  function mockChildProcessDegraded() {
+    const spawnFn = vi.fn(() => new StartFakeChild());
+    const execSyncFn = vi.fn(() => "");
+    // A degraded Xcode (26.4 and later) as reported by the hardened `xcodebuild -version`
+    // read (execFileSync) that the capture-strategy selector performs.
+    const execFileSyncFn = makeExecFileSyncFn({
+      xcodebuild: "Xcode 26.5\nBuild version 17F42",
+    });
+    return { spawnFn, execSyncFn, execFileSyncFn };
+  }
+
+  it("refuses malloc_stack_logging on a degraded Xcode before terminating the app", async () => {
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    // The guard must not first emit the "using the all-processes capture fallback"
+    // stderr line (that fallback never runs here — the block throws instead), which
+    // would read as though the fallback is about to run, directly followed by an abort.
+    const stderrWrites: string[] = [];
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderrWrites.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+        return true;
+      });
+    try {
+      const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcessDegraded();
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      // It must fail, with the degraded-Xcode failure code (telemetry-classified).
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_MALLOC_DEGRADED_XCODE
+      );
+      // And critically: it never touched the app or xctrace — no terminate, no
+      // bundle-path resolution, no spawn. The app the user had running is intact.
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(efsArgs.some((a) => a.includes("get_app_container"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+      // No misleading "fallback is about to run" log preceded the refusal.
+      expect(stderrWrites.some((w) => w.includes("capture fallback"))).toBe(false);
+    } finally {
+      stderrSpy.mockRestore();
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("ARGENT_IOS_CAPTURE=device forces the malloc cold launch through on a degraded Xcode", async () => {
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    process.env.ARGENT_IOS_CAPTURE = "device";
+    try {
+      const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcessDegraded();
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const result = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      });
+
+      // The override bypasses the guard, so the cold launch proceeds as usual.
+      expect(result.status).toBe("recording");
+      const [, args] = spawnFn.mock.calls[0] as unknown as [string, string[]];
+      expect(args).toContain("--launch");
+      expect(args).toContain("--env");
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("warns about an unrecognised ARGENT_IOS_CAPTURE in malloc mode instead of dropping it silently", async () => {
+    // The malloc guard resolves the strategy via the side-effect-free resolver, so a
+    // typo'd override would previously vanish without a word — unlike the normal record
+    // flow, which warns. On a healthy Xcode the typo is ignored and malloc still runs,
+    // but the user must be told their value was dropped (otherwise a later degraded-Xcode
+    // refusal can even advise "set ARGENT_IOS_CAPTURE=device" while the typo sits ignored).
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    process.env.ARGENT_IOS_CAPTURE = "devise"; // typo for "device"
+    const stderrWrites: string[] = [];
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderrWrites.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+        return true;
+      });
+    try {
+      // Default mock leaves `xcodebuild` unmocked → version undetermined → device
+      // strategy, so the guard proceeds (does not refuse) despite the bad override.
+      const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const result = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      });
+
+      // The typo neither blocks the healthy device path nor passes silently.
+      expect(result.status).toBe("recording");
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+      expect(
+        stderrWrites.some((w) => w.includes('ignoring unrecognised ARGENT_IOS_CAPTURE="devise"'))
+      ).toBe(true);
+    } finally {
+      stderrSpy.mockRestore();
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("best-effort relaunches the app when the malloc cold launch fails after terminate", async () => {
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      // Nothing routes through execSync anymore (xcodebuild/listapps/launchctl are all
+      // hardened to execFileSync); a bare stub is all that's needed.
+      const execSyncFn = vi.fn(() => "");
+      // A non-degraded Xcode, read via the hardened execFileSync `xcodebuild -version`
+      // (NOT execSync), so the guard genuinely passes and the path reaches the cold
+      // launch. terminate succeeds (empty return) → the app was running → relaunch armed.
+      const execFileSyncFn = makeExecFileSyncFn({ xcodebuild: "Xcode 16.4\nBuild version 16F6" });
+      vi.doMock("child_process", () => ({
+        spawn: spawnFn,
+        execSync: execSyncFn,
+        execFile: vi.fn(),
+        execFileSync: execFileSyncFn,
+      }));
+      vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+        getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+      }));
+      vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+        listenForDarwinNotification: vi.fn(() => {
+          throw new Error("notifyutil unavailable in tests");
+        }),
+      }));
+      // Force the capture start to fail *after* the app has been terminated.
+      vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+        waitForXctraceReady: vi.fn(async () => {
+          throw new Error("xctrace exited before recording started");
+        }),
+      }));
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      // The start failed (error surfaced) AND the terminated app was relaunched.
+      expect(err).toBeTruthy();
+      const relaunch = execFileSyncFn.mock.calls.find(
+        (c) => Array.isArray(c[1]) && (c[1] as string[]).includes("launch")
+      );
+      expect(relaunch).toBeTruthy();
+      expect(relaunch![1]).toEqual(["simctl", "launch", "DEVICE-UDID", "com.example.myapp"]);
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("does NOT relaunch a not-running named app when the malloc cold launch fails", async () => {
+    // resolveAppForLaunch accepts an installed-but-not-running app_process, so the
+    // preceding `simctl terminate` is a no-op. A failed start must then NOT foreground
+    // an app the user never had open — only an app we actually killed gets restored.
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      const execSyncFn = vi.fn(() => "");
+      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
+        // Non-degraded Xcode (execFileSync `xcodebuild -version`) so the guard passes
+        // and the path actually reaches app resolution + terminate.
+        if (bin === "xcodebuild") return "Xcode 16.4\nBuild version 16F6";
+        // getInstalledApps buffers the listapps plist and runs it through plutil → JSON,
+        // so resolveAppForLaunch finds the installed-but-not-running MyApp and the path
+        // REACHES terminate. Returning "" for listapps/plutil would make getInstalledApps
+        // hit JSON.parse("") and throw SyntaxError before terminate ever ran — which is
+        // exactly the illusory-coverage bug this test must avoid.
+        if (bin === "plutil") return LISTAPPS_JSON;
+        if (args.includes("listapps")) return "<plist/>";
+        if (args.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
+        // Installed but NOT running → terminate fails exactly like real simctl does, so
+        // mallocRelaunchBundleId is never armed.
+        if (args.includes("terminate")) throw new Error("found nothing to terminate");
+        return "";
+      });
+      vi.doMock("child_process", () => ({
+        spawn: spawnFn,
+        execSync: execSyncFn,
+        execFile: vi.fn(),
+        execFileSync: execFileSyncFn,
+      }));
+      vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
+        getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
+      }));
+      vi.doMock("../../src/utils/ios-profiler/notify", () => ({
+        listenForDarwinNotification: vi.fn(() => {
+          throw new Error("notifyutil unavailable in tests");
+        }),
+      }));
+      // Cold launch fails AFTER the (no-op) terminate.
+      vi.doMock("../../src/utils/ios-profiler/startup", () => ({
+        waitForXctraceReady: vi.fn(async () => {
+          throw new Error("xctrace exited before recording started");
+        }),
+      }));
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      // The start failure still surfaces — and it is the cold-launch failure, NOT an
+      // earlier resolution error. (With an empty listapps mock, getInstalledApps used to
+      // throw "SyntaxError: Unexpected end of JSON input" before terminate ran, so the
+      // no-op-terminate → no-relaunch scenario named here was never actually exercised.)
+      expect(err).toBeTruthy();
+      expect(err).not.toBeInstanceOf(SyntaxError);
+      // The path genuinely reached the (no-op) terminate for the not-running app...
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(true);
+      // ...but no best-effort relaunch fired, because we never actually killed it.
+      const relaunched = execFileSyncFn.mock.calls.some(
+        (c) => Array.isArray(c[1]) && (c[1] as string[]).includes("launch")
+      );
+      expect(relaunched).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("attributes the malloc refusal to a forced override, not a degraded Xcode, under ARGENT_IOS_CAPTURE=all-processes", async () => {
+    // On a perfectly healthy Xcode, the only reason the strategy isn't `device` is
+    // the forced override — so the refusal must say so (and carry a distinct code),
+    // not blame a --device deadlock that isn't present.
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    process.env.ARGENT_IOS_CAPTURE = "all-processes";
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      // ARGENT_IOS_CAPTURE=all-processes short-circuits before any `xcodebuild -version`
+      // read, so the Xcode version is irrelevant here; execSync is unused (every
+      // subprocess goes through execFileSync), so a bare stub suffices.
+      const execSyncFn = vi.fn(() => "");
+      const execFileSyncFn = makeExecFileSyncFn();
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(err).toBeTruthy();
+      // Distinct telemetry code for the forced-override cause, not degraded-Xcode.
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_MALLOC_STRATEGY_OVERRIDE
+      );
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).toContain("ARGENT_IOS_CAPTURE");
+      expect(msg).not.toMatch(/deadlock|26\.4/);
+      // Refused up front — the healthy app is untouched.
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(efsArgs.some((a) => a.includes("get_app_container"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("quotes the operator's literal ARGENT_IOS_CAPTURE value (alias/mixed-case) in the override refusal", async () => {
+    // parseEnvOverride accepts the `all_processes`/`allprocesses` aliases and lower-cases
+    // input, so the canonical strategy name ("all-processes") diverges from what the user
+    // set. The refusal must echo the LITERAL value they configured, not the canonical name,
+    // otherwise it tells them to fix a variable that reads differently from what they typed.
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    process.env.ARGENT_IOS_CAPTURE = "All_Processes"; // alias + mixed case
+    try {
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      const execSyncFn = vi.fn(() => "");
+      const execFileSyncFn = makeExecFileSyncFn();
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_MALLOC_STRATEGY_OVERRIDE
+      );
+      const msg = err instanceof Error ? err.message : String(err);
+      // Echoes the operator's literal value (case preserved, trimmed)...
+      expect(msg).toContain(`ARGENT_IOS_CAPTURE="All_Processes"`);
+      // ...while still naming the canonical strategy it resolved to.
+      expect(msg).toContain(`forces the "all-processes" capture`);
+      // Regression guard: must NOT quote the canonical name as if it were the env value.
+      expect(msg).not.toContain(`ARGENT_IOS_CAPTURE="all-processes"`);
+      // Refused up front — the healthy app is untouched.
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("throws LAUNCH_APP_NOT_FOUND when a malloc app_process matches no installed user app", async () => {
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      // Default mock leaves `xcodebuild` unmocked → version undetermined → device
+      // strategy, so the degraded-Xcode guard passes and we reach app resolution.
+      const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        app_process: "GhostApp", // not present in LISTAPPS_JSON
+        malloc_stack_logging: true,
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_LAUNCH_APP_NOT_FOUND
+      );
+      // Resolution failed before any destructive/side-effecting action.
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(efsArgs.some((a) => a.includes("get_app_container"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+
+  it("throws MULTIPLE_RUNNING_USER_APPS in malloc mode when no app_process and several apps run", async () => {
+    const prev = process.env.ARGENT_IOS_CAPTURE;
+    delete process.env.ARGENT_IOS_CAPTURE;
+    try {
+      const twoApps = JSON.stringify({
+        "com.example.myapp": {
+          CFBundleExecutable: "MyApp",
+          CFBundleIdentifier: "com.example.myapp",
+          ApplicationType: "User",
+        },
+        "com.example.other": {
+          CFBundleExecutable: "OtherApp",
+          CFBundleIdentifier: "com.example.other",
+          ApplicationType: "User",
+        },
+      });
+      const spawnFn = vi.fn(() => new StartFakeChild());
+      const execSyncFn = vi.fn(() => "");
+      // getInstalledApps resolves the installed set via execFileSync(listapps) piped
+      // through plutil; the running set comes from execFileSync(launchctl list). Both the
+      // two-app plist and the two running PIDs are delivered through the execFileSync mock.
+      const execFileSyncFn = vi.fn((bin: string, args: string[] = []) => {
+        if (bin === "plutil") return twoApps;
+        if (args.includes("listapps")) return "<plist/>";
+        if (args.includes("launchctl"))
+          return (
+            "1\t0\tUIKitApplication:com.example.myapp[a][rb]\n" +
+            "2\t0\tUIKitApplication:com.example.other[b][rb]\n"
+          );
+        if (args.includes("get_app_container")) return "/Users/x/Library/.../MyApp.app\n";
+        if (args.includes("terminate")) return "";
+        return "";
+      });
+      applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+      const startNativeProfilerIos = await importStart();
+      const api = fakeApi();
+      const err = await startNativeProfilerIos(api, {
+        device_id: "DEVICE-UDID",
+        malloc_stack_logging: true, // no app_process → auto-detect → ambiguous
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(err).toBeTruthy();
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_MULTIPLE_RUNNING_USER_APPS
+      );
+      const efsArgs = execFileSyncFn.mock.calls.map((c) => (c[1] as string[]) ?? []);
+      expect(efsArgs.some((a) => a.includes("terminate"))).toBe(false);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_IOS_CAPTURE;
+      else process.env.ARGENT_IOS_CAPTURE = prev;
+    }
+  });
+});

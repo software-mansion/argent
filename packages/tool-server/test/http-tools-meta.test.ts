@@ -13,6 +13,25 @@ vi.mock("../src/utils/update-checker", () => ({
   suppressUpdateNote: vi.fn(),
 }));
 
+// Drive the synchronous, cache-only runtime-kind readers that http.ts consults
+// to split a TV target out of its base mobile platform. Real code warms these
+// caches via simctl/adb; here we mock only the two getters so a case can pretend
+// the cache is cold ("mobile"/undefined → coarse platform) or warm for TV.
+const tvKinds = vi.hoisted(() => ({
+  ios: undefined as "mobile" | "tv" | undefined,
+  android: undefined as "mobile" | "tv" | undefined,
+}));
+
+vi.mock("../src/utils/ios-devices", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/ios-devices")>();
+  return { ...actual, getCachedSimulatorRuntimeKind: () => tvKinds.ios };
+});
+
+vi.mock("../src/utils/adb", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/adb")>();
+  return { ...actual, getCachedAndroidRuntimeKind: () => tvKinds.android };
+});
+
 function stubRegistry(): Registry {
   return {
     getSnapshot: vi.fn(() => ({
@@ -82,6 +101,8 @@ describe("GET /tools progressive-loading metadata", () => {
   const request = supertest;
 
   beforeEach(async () => {
+    tvKinds.ios = undefined;
+    tvKinds.android = undefined;
     handle = createHttpApp(stubRegistry());
   });
 
@@ -167,6 +188,103 @@ describe("GET /tools progressive-loading metadata", () => {
     await request(handle.app).post("/tools/boot-tool").send({ avdName: "Pixel_9" }).expect(200);
 
     expect(recordInvocation).toHaveBeenCalledWith(expect.any(String), { platform: "android" });
+  });
+
+  it("refines an iOS device to `tvos` when its cached runtime kind is tv", async () => {
+    tvKinds.ios = "tv";
+    let seenMeta: Record<string, unknown> | undefined;
+    const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
+      seenMeta = meta;
+      return vi.fn();
+    });
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .send({ udid: "11111111-1111-1111-1111-111111111111" })
+      .expect(200);
+
+    // Same UDID shape as an iPhone sim, but the warm cache splits it out as tvOS.
+    expect(seenMeta).toEqual({ platform: "tvos" });
+  });
+
+  it("refines an Android device to `android-tv` when its cached runtime kind is tv", async () => {
+    tvKinds.android = "tv";
+    let seenMeta: Record<string, unknown> | undefined;
+    const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
+      seenMeta = meta;
+      return vi.fn();
+    });
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .send({ udid: "emulator-5554" })
+      .expect(200);
+
+    expect(seenMeta).toEqual({ platform: "android-tv" });
+  });
+
+  it("keeps the coarse `ios` platform when the cached kind is mobile (not tv)", async () => {
+    tvKinds.ios = "mobile";
+    let seenMeta: Record<string, unknown> | undefined;
+    const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
+      seenMeta = meta;
+      return vi.fn();
+    });
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .send({ udid: "11111111-1111-1111-1111-111111111111" })
+      .expect(200);
+
+    expect(seenMeta).toEqual({ platform: "ios" });
+  });
+
+  it("keeps the coarse platform when the cache is cold (first call before warm-up)", async () => {
+    // tvKinds default to undefined → the reader can't yet tell TV from mobile, so
+    // the first tool call on a device reports the base platform. A later call,
+    // once describe/streaming has warmed the cache, would report the TV variant.
+    let seenMeta: Record<string, unknown> | undefined;
+    const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
+      seenMeta = meta;
+      return vi.fn();
+    });
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .send({ udid: "11111111-1111-1111-1111-111111111111" })
+      .expect(200);
+
+    expect(seenMeta).toEqual({ platform: "ios" });
+  });
+
+  it("re-derives a child sub-tool's TV platform from its own device arg", async () => {
+    tvKinds.android = "tv";
+    const recordInvocation = vi.fn((_id: string, _meta: Record<string, unknown>) => vi.fn());
+    const registry = stubRegistry();
+    handle.dispose();
+    handle = createHttpApp(registry, { recordInvocation });
+
+    // Parent targets an Android TV device.
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .send({ udid: "emulator-5554" })
+      .expect(200);
+
+    const { recordChildInvocation } = vi.mocked(registry.invokeTool).mock.calls[0]![2] as {
+      recordChildInvocation: (id: string, childArgs?: unknown) => () => void;
+    };
+
+    // A sub-tool targeting the same TV device is attributed to android-tv too.
+    recordChildInvocation("tv-child", { udid: "emulator-5554" });
+    expect(recordInvocation).toHaveBeenCalledWith("tv-child", { platform: "android-tv" });
   });
 
   it("records the AI client from request headers alongside platform", async () => {

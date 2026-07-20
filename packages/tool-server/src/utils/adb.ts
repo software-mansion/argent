@@ -493,6 +493,36 @@ export async function isAndroidTv(serial: string): Promise<boolean> {
 }
 
 /**
+ * Synchronous, cache-only view of a serial's runtime kind: returns the memoized
+ * "mobile"/"tv" verdict if a prior probe resolved it, otherwise undefined. It
+ * NEVER runs `adb` — callers on a latency-sensitive hot path (telemetry platform
+ * inference) use this to distinguish Android TV from a phone/tablet only when the
+ * kind is already known, falling back to the coarse `android` platform otherwise
+ * rather than paying a `pm list features` round-trip per call. The cache is
+ * warmed by the describe/launch/keyboard/tv-control paths any real Android TV
+ * session exercises.
+ *
+ * The verdict is returned regardless of the caller supplying an avdName: unlike
+ * the async path this can't cheaply re-read `ro.boot.qemu.avd_name` to detect a
+ * reclaimed `emulator-NNNN` slot, so if a TV AVD's slot is later reclaimed by a
+ * phone AVD (or the reverse) within one tool-server lifetime, this can report the
+ * prior occupant's kind. Acceptable for best-effort coarse telemetry — no crash,
+ * and no dispatch impact since dispatch stays TV-agnostic: the TV→phone direction
+ * mislabels a phone as `android-tv`, the phone→TV direction only falls back to
+ * the coarse `android`. The stale entry is corrected only when an async path
+ * re-touches the serial: `getAndroidRuntimeKind`/`isAndroidTv` (via
+ * describe/launch/restart/keyboard/tv-control) delete it when the serial has gone
+ * offline and re-probe it on an avdName mismatch, while the `list-devices`
+ * enrichment re-probes on an avdName mismatch too (so a live reclaiming AVD fixes
+ * it) but does not evict a merely-offline entry. A session that triggers none of
+ * these (e.g. a describe-free, gesture-only replay) keeps the stale verdict — so
+ * the mislabel is bounded to that process, not guaranteed transient.
+ */
+export function getCachedAndroidRuntimeKind(serial: string): "mobile" | "tv" | undefined {
+  return androidRuntimeKindCache.get(serial)?.kind;
+}
+
+/**
  * List all Android devices + emulators known to adb, enriched with model,
  * AVD name, and SDK level via `getprop`. Use `listAndroidSerials` when you
  * only need the state-scoped serial list — it avoids the extra round-trips.
@@ -578,7 +608,14 @@ const TERMINAL_ADB_ERROR_PATTERNS: RegExp[] = [
   /device(?: '[^']*')? offline/i,
 ];
 
-function isTerminalAdbError(message: string): boolean {
+/**
+ * True when an adb error message names a device state no retry can fix
+ * (unauthorized / not found / offline / no devices). Callers that probe or
+ * fan out `adb` calls use this to tell a genuine transport/device failure —
+ * which should propagate with adb's own cause — apart from a command-level
+ * rejection they can classify themselves (e.g. `pm` refusing a permission).
+ */
+export function isTerminalAdbError(message: string): boolean {
   return TERMINAL_ADB_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 

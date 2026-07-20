@@ -12,6 +12,15 @@ vi.mock("../src/utils/device-info", () => ({
 }));
 vi.mock("../src/tools/describe/platforms/ios", () => ({ describeIos: vi.fn() }));
 vi.mock("../src/tools/describe/platforms/android", () => ({ describeAndroid: vi.fn() }));
+// captureElementFrame probes isTvOsSimulator() — a real `xcrun simctl list`
+// that never caches for a fake UDID, so it re-runs per call and takes seconds
+// under the parallel suite load. Pin it; the rest of the module stays real.
+vi.mock("../src/utils/ios-devices", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/ios-devices")>(
+    "../src/utils/ios-devices"
+  );
+  return { ...actual, isTvOsSimulator: async () => false };
+});
 
 import { captureElementFrame, findElementMatch } from "../src/utils/match-element-frame";
 import { describeIos } from "../src/tools/describe/platforms/ios";

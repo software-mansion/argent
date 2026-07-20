@@ -85,6 +85,12 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe("Shut down and re-boot the device even if already running."),
+  headless: z
+    .boolean()
+    .optional()
+    .describe(
+      "iOS only: boot the simulator core WITHOUT opening the Simulator.app GUI window. The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega/Electron, which have no equivalent GUI step."
+    ),
   electronAppPath: z
     .string()
     .optional()
@@ -222,6 +228,19 @@ function selectGpuMode(): string {
 function selectExtraEmulatorArgs(): string[] {
   const trimmed = (process.env.ARGENT_EMULATOR_NO_WINDOW ?? "").trim().toLowerCase();
   return ["1", "true", "yes"].includes(trimmed) ? ["-no-window"] : [];
+}
+
+// iOS analog of ARGENT_EMULATOR_NO_WINDOW: force local simulator boots headless
+// (skip the `open -a Simulator.app` GUI attach in bootIos) without the caller
+// having to pass `headless: true` on every boot-device call. Meant for
+// CI/containers and Argent Lens hosts that stream the device via
+// simulator-server and never want the Simulator.app window to pop.
+// `simctl boot` itself is already headless, so this only gates the GUI attach.
+// Accepted truthy values: "1", "true", "yes" (case-insensitive). Anything else
+// — including "false", "no", "0", or empty — is treated as disabled.
+function iosHeadlessFromEnv(): boolean {
+  const trimmed = (process.env.ARGENT_SIMULATOR_NO_WINDOW ?? "").trim().toLowerCase();
+  return ["1", "true", "yes"].includes(trimmed);
 }
 
 // Poll cadences for the boot state machine. These intervals only pace how
@@ -441,7 +460,8 @@ async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
 async function bootIos(
   udid: string,
   registry: Registry,
-  force?: boolean
+  force?: boolean,
+  headless?: boolean
 ): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
   // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
   // gets "iOS requires macOS" rather than a misleading "install xcode-select".
@@ -560,8 +580,21 @@ async function bootIos(
     "com.apple.iphonesimulator",
     "CurrentDeviceUDID",
     udid,
-  ]);
-  await execFileAsync("open", ["-a", "Simulator.app"]);
+  ]).catch(() => {});
+  // `simctl boot` above already booted the device CORE (headless). Opening
+  // Simulator.app only attaches the GUI window — surfaces that stream the
+  // device through simulator-server (e.g. Argent Lens) don't need it, so
+  // `headless` skips it to avoid popping a window the user didn't ask for.
+  // ARGENT_SIMULATOR_NO_WINDOW forces the same skip host-wide (the iOS analog
+  // of ARGENT_EMULATOR_NO_WINDOW) so CI/Lens hosts never have to pass the flag.
+  if (!headless && !iosHeadlessFromEnv()) {
+    // Xcode 27 drops Simulator.app in favour of Device Hub.app
+    // (com.apple.dt.Devices); fall back to it, and keep the GUI attach
+    // best-effort so a missing app never fails a boot whose core is already up.
+    await execFileAsync("open", ["-a", "Simulator.app"])
+      .catch(() => execFileAsync("open", ["-b", "com.apple.dt.Devices"]))
+      .catch(() => {});
+  }
   return { platform: "ios", udid, booted: true };
 }
 
@@ -1247,9 +1280,15 @@ async function bootVegaImpl(params: {
   const image = images.find((i) => i.name === params.vvdImage);
   if (!image) {
     const available = images.map((i) => i.name).join(", ") || "(none found)";
-    throw new Error(
+    throw new FailureError(
       `Vega VVD image "${params.vvdImage}" not found. Available: ${available}. ` +
-        "Image names come from `list-devices` → the `vvdImage` field on a Vega device."
+        "Image names come from `list-devices` → the `vvdImage` field on a Vega device.",
+      {
+        error_code: FAILURE_CODES.VEGA_IMAGE_NOT_FOUND,
+        failure_stage: "boot_vega_image_lookup",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
 
@@ -1270,11 +1309,17 @@ async function bootVegaImpl(params: {
     // and every later tool would silently drive that other device.
     if (runningImage !== params.vvdImage) {
       const which = runningImage ? `("${runningImage}")` : "(its image could not be confirmed)";
-      throw new Error(
+      throw new FailureError(
         `A Vega VVD ${which} is already running; argent v1 supports a single running VVD. ` +
           `To boot "${params.vvdImage}", re-run boot-device with force:true, which stops the ` +
           "current VVD first (by process, since the `vega` CLI does not reliably stop a VVD " +
-          "argent booted) and then boots the requested image."
+          "argent booted) and then boots the requested image.",
+        {
+          error_code: FAILURE_CODES.VEGA_ALREADY_RUNNING,
+          failure_stage: "boot_vega_already_running",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
       );
     }
     return {
@@ -1316,7 +1361,7 @@ function bootVega(params: {
   // restart, so it must NOT join an in-flight non-force boot (which would skip
   // the restart and hand back the stale device). Two same-mode boots of the same
   // image still share one promise.
-  const key = `${params.vvdImage} ${params.force ? "force" : "normal"}`;
+  const key = `${params.vvdImage}${params.force ? "force" : "normal"}`;
   const existing = inFlightVegaBoots.get(key);
   if (existing) return existing;
   const promise = bootVegaImpl(params).finally(() => {
@@ -1371,7 +1416,7 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         if (classifyDevice(params.udid!) === "ios-remote") {
           return bootIosRemote(params.udid!, registry, params.force);
         }
-        return bootIos(params.udid!, registry, params.force);
+        return bootIos(params.udid!, registry, params.force, params.headless);
       }
       if (hasAvd) {
         return bootAndroid({

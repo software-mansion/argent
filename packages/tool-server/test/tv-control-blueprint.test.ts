@@ -150,8 +150,10 @@ vi.mock("@argent/native-devtools-ios", () => ({
 }));
 
 const listIosSimulatorsMock = vi.fn();
+const cacheSimulatorRuntimeKindMock = vi.fn();
 vi.mock("../src/utils/ios-devices", () => ({
   listIosSimulators: () => listIosSimulatorsMock(),
+  cacheSimulatorRuntimeKind: (...args: unknown[]) => cacheSimulatorRuntimeKindMock(...args),
 }));
 
 import { tvControlBlueprint, typeTimeoutMs } from "../src/blueprints/tv-control";
@@ -179,6 +181,7 @@ beforeEach(() => {
   h.state.hidSpawnError = false;
   h.state.axConnectHook = null;
   listIosSimulatorsMock.mockReset();
+  cacheSimulatorRuntimeKindMock.mockReset();
   listIosSimulatorsMock.mockResolvedValue([
     { udid: UDID, name: "Apple TV", runtime: "tvOS 17.0", runtimeKind: "tv", state: "Booted" },
   ]);
@@ -371,6 +374,20 @@ describe("tvControlBlueprint — target validation", () => {
     );
     expect(err).toBeInstanceOf(UnsupportedOperationError);
     expect(err.message).toMatch(/tvOS-only/);
+    // The warm runs BEFORE this reject, so a misrouted iPhone caches its true
+    // `mobile` kind (keeping its telemetry coarse `ios`, never mislabeled tvOS).
+    // Pins the warm-before-reject ordering: moving the warm below the throw would
+    // silently regress refinement for this path with no other test catching it.
+    expect(cacheSimulatorRuntimeKindMock).toHaveBeenCalledWith(UDID, "mobile");
+  });
+
+  it("warms the telemetry runtime-kind cache with the resolved tvOS kind", async () => {
+    // The factory already fetched the simulator list to validate the target, so it
+    // seeds the synchronous cache the telemetry hot path reads — without this, a
+    // tv-remote-only Apple TV session never warms the cache and stays coarse `ios`,
+    // asymmetric with the Android TV factory. Refinement lands from the next call.
+    await buildService();
+    expect(cacheSimulatorRuntimeKindMock).toHaveBeenCalledWith(UDID, "tv");
   });
 
   it("rejects a tvOS simulator that isn't booted", async () => {
@@ -383,5 +400,7 @@ describe("tvControlBlueprint — target validation", () => {
   it("rejects when no simulator matches the udid", async () => {
     listIosSimulatorsMock.mockResolvedValue([]);
     await expect(buildService()).rejects.toThrow(/no available simulator/);
+    // The no-match throw is before the warm call, so nothing is cached.
+    expect(cacheSimulatorRuntimeKindMock).not.toHaveBeenCalled();
   });
 });

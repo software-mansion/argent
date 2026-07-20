@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   _resetConsentCacheForTest,
   getConsentState,
   markDisabled,
   markEnabled,
-  forget,
+  writeConsentFlag,
+  warmTelemetryIdentity,
+  warmTelemetryIdentitySync,
+  resetLocalTelemetryState,
   init,
   isEnabled,
   status,
@@ -13,6 +17,7 @@ import {
   track,
 } from "../src/index.js";
 import { resetClient } from "../src/posthog.js";
+import { _resetIdentityCacheForTest } from "../src/identity.js";
 import { _resetBasePropsCacheForTest } from "../src/base-props.js";
 import { scopeHome, snapshotEnv } from "./helpers.js";
 import { configFilePath } from "../src/paths.js";
@@ -25,6 +30,16 @@ const posthogMock = vi.hoisted(() => ({
     opts: unknown;
   }>,
   flushImpl: () => Promise.resolve(),
+}));
+
+// Telemetry resolves the host fingerprint internally for every entry point.
+// Stub both the sync and async resolvers to a fixed 64-hex value so track() uses
+// a deterministic id without spawning the real simulator-server binary. (The
+// async resolver backs the background upgrade / warm-up; with the fingerprint
+// resolved synchronously here it is a no-op, but the export must exist.)
+vi.mock("../src/fingerprint.js", () => ({
+  resolveHostFingerprint: () => "f".repeat(64),
+  resolveHostFingerprintAsync: () => Promise.resolve("f".repeat(64)),
 }));
 
 vi.mock("posthog-node", () => {
@@ -43,7 +58,7 @@ vi.mock("posthog-node", () => {
 });
 
 describe("telemetry public surface", () => {
-  scopeHome();
+  const { tmp } = scopeHome();
 
   beforeEach(() => {
     posthogMock.instances.length = 0;
@@ -52,10 +67,27 @@ describe("telemetry public surface", () => {
     // is_ci and friends are memoized per process; reset so a test that sets CI
     // env vars sees them recomputed rather than a value cached by a prior test.
     _resetBasePropsCacheForTest();
+    // Isolate the module-level id / fingerprint / consent caches between tests.
+    _resetIdentityCacheForTest();
+    _resetConsentCacheForTest();
     (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "phc_real";
     init("tool_server");
     markEnabled();
   });
+
+  // Helpers for the identity-wiring tests below.
+  const idFile = () => path.join(tmp(), ".argent", "telemetry-id");
+  const readId = () => {
+    try {
+      return fs.readFileSync(idFile(), "utf8").trim();
+    } catch {
+      return null;
+    }
+  };
+  const flushUpgrade = async () => {
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  };
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST;
@@ -118,6 +150,134 @@ describe("telemetry public surface", () => {
     expect(client.opts).toEqual(expect.objectContaining({ flushAt: 20, flushInterval: 10_000 }));
   });
 
+  it("uses the host fingerprint verbatim as the distinctId", () => {
+    // The fingerprint module is stubbed (top of file) to a fixed 64-hex value,
+    // so the id is that fingerprint rather than a random v4.
+    track("toolserver:start", {});
+
+    const client = posthogMock.instances[0]!;
+    expect(client.capture).toHaveBeenCalledTimes(1);
+    const { distinctId } = client.capture.mock.calls[0]![0] as { distinctId: string };
+    // The distinctId is the fingerprint hash itself, not a random v4 UUID.
+    expect(distinctId).toBe("f".repeat(64));
+    // Persisted to disk as the migrated id.
+    expect(status().anonIdPrefix).toBe(distinctId.slice(0, 8));
+    // Migration is local-only: no alias/$identify event is ever emitted.
+    expect(client.capture).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "$identify" })
+    );
+    expect(client.capture).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "$create_alias" })
+    );
+  });
+
+  it("self-heals a fallback id to the fingerprint via the background upgrade wired into track()", async () => {
+    // Regression guard for the reviewer's C2: a legacy random id on disk. The
+    // first event emits under it (no blocking migrate), then buildPayload's
+    // scheduleFingerprintUpgrade (fed the async resolver, mocked to the
+    // fingerprint) migrates the on-disk id so subsequent events converge. If the
+    // scheduleFingerprintUpgrade call in buildPayload were removed, the on-disk
+    // id would never migrate and the second event would still be the legacy id.
+    const LEGACY = "11111111-1111-4111-8111-111111111111";
+    const FP = "f".repeat(64);
+    fs.mkdirSync(path.join(tmp(), ".argent"), { recursive: true });
+    fs.writeFileSync(idFile(), LEGACY, { mode: 0o600 });
+
+    track("toolserver:start", {});
+    const client = posthogMock.instances[0]!;
+    expect((client.capture.mock.calls[0]![0] as { distinctId: string }).distinctId).toBe(LEGACY);
+
+    await flushUpgrade();
+    expect(readId()).toBe(FP); // background upgrade migrated the file
+
+    track("toolserver:start", {});
+    expect((client.capture.mock.calls[1]![0] as { distinctId: string }).distinctId).toBe(FP);
+  });
+
+  it("warmTelemetryIdentity establishes the fingerprint id off the hot path", async () => {
+    expect(status().hasAnonIdOnDisk).toBe(false);
+    await warmTelemetryIdentity();
+    // The async resolver (mocked) yields the fingerprint, persisted before any event.
+    expect(readId()).toBe("f".repeat(64));
+    // A subsequent event then finds it on disk (no truly-fresh sync resolve).
+    track("toolserver:start", {});
+    const client = posthogMock.instances[0]!;
+    expect((client.capture.mock.calls[0]![0] as { distinctId: string }).distinctId).toBe(
+      "f".repeat(64)
+    );
+  });
+
+  it("warmTelemetryIdentity mints no identity when telemetry is disabled", async () => {
+    writeConsentFlag(false);
+    _resetConsentCacheForTest();
+    expect(isEnabled()).toBe(false);
+    await warmTelemetryIdentity();
+    // A disabled machine must not have a persistent identifier provisioned.
+    expect(readId()).toBeNull();
+    expect(status().hasAnonIdOnDisk).toBe(false);
+  });
+
+  it("warmTelemetryIdentity provisions no identity when the PostHog key is unusable", async () => {
+    // Consent-enabled but an unusable key: like track()/buildPayload, warm-up must
+    // resolve the client first and bail before spawning the fingerprint binary or
+    // writing a durable per-machine id for events that can never be transmitted.
+    // The async resolver is mocked to a fingerprint, so without the getClient()
+    // gate warmIdentity would persist "f".repeat(64); asserting no id proves the
+    // short-circuit.
+    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "";
+    resetClient();
+    _resetConsentCacheForTest();
+    expect(isEnabled()).toBe(true);
+
+    await warmTelemetryIdentity();
+
+    expect(readId()).toBeNull();
+    expect(status().hasAnonIdOnDisk).toBe(false);
+  });
+
+  // The SHORT-LIVED-CLI (installer) counterpart of warmTelemetryIdentity, wired
+  // into `argent init`/`update` so the very first event (cli_init_start) carries
+  // the stable fingerprint instead of a random fallback the background upgrade
+  // would only migrate to afterward.
+  it("warmTelemetryIdentitySync migrates a legacy fallback to the fingerprint before the first event (the cli_init_start fix)", () => {
+    const LEGACY = "11111111-1111-4111-8111-111111111111";
+    const FP = "f".repeat(64);
+    fs.mkdirSync(path.join(tmp(), ".argent"), { recursive: true });
+    fs.writeFileSync(idFile(), LEGACY, { mode: 0o600 });
+
+    // Without the sync warm, track() would serve the legacy fallback (hot-path
+    // contract). The warm forces the resolve+migrate up front...
+    warmTelemetryIdentitySync();
+    expect(readId()).toBe(FP);
+
+    // ...so the first tracked event already carries the fingerprint.
+    track("installation:cli_init_start", {
+      package_manager: "npm",
+      is_non_interactive: false,
+    });
+    const client = posthogMock.instances[0]!;
+    expect((client.capture.mock.calls[0]![0] as { distinctId: string }).distinctId).toBe(FP);
+  });
+
+  it("warmTelemetryIdentitySync mints no identity when telemetry is disabled", () => {
+    writeConsentFlag(false);
+    _resetConsentCacheForTest();
+    expect(isEnabled()).toBe(false);
+    warmTelemetryIdentitySync();
+    expect(readId()).toBeNull();
+    expect(status().hasAnonIdOnDisk).toBe(false);
+  });
+
+  it("warmTelemetryIdentitySync provisions no identity when the PostHog key is unusable", () => {
+    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "";
+    resetClient();
+    _resetConsentCacheForTest();
+    expect(isEnabled()).toBe(true);
+    warmTelemetryIdentitySync();
+    expect(readId()).toBeNull();
+    expect(status().hasAnonIdOnDisk).toBe(false);
+  });
+
   it("captures events in CI and annotates payloads with is_ci", () => {
     const restore = snapshotEnv(["CI"]);
     try {
@@ -153,11 +313,11 @@ describe("telemetry public surface", () => {
     expect(client.shutdown).toHaveBeenCalledTimes(1);
   });
 
-  it("forget does not send delete-person and performs local cleanup by default", async () => {
+  it("resetLocalTelemetryState removes local state without a delete-person event and leaves consent untouched", async () => {
     track("toolserver:start", {});
     expect(status().hasAnonIdOnDisk).toBe(true);
 
-    const result = await forget();
+    const result = await resetLocalTelemetryState();
     const client = posthogMock.instances[0]!;
 
     expect(posthogMock.instances).toHaveLength(1);
@@ -167,55 +327,63 @@ describe("telemetry public surface", () => {
     expect(client.flush).not.toHaveBeenCalled();
     expect(client.shutdown).not.toHaveBeenCalled();
     expect(result.localIdRemoved).toBe(true);
-    expect(result.consentDisabled).toBe(true);
+    expect(result.noticeReset).toBe(true);
     expect(status().hasAnonIdOnDisk).toBe(false);
-    expect(isEnabled()).toBe(false);
+    // Consent is deliberately left untouched — a lasting opt-out is `markDisabled()`.
+    expect(isEnabled()).toBe(true);
   });
 
-  it("forget can erase telemetry identity without creating consent config", async () => {
+  it("removes the local telemetry id file but the deterministic id re-derives on the next event while consent stays enabled", async () => {
     fs.unlinkSync(configFilePath());
     _resetConsentCacheForTest();
     track("toolserver:start", {});
+    const derivedId = readId();
 
-    const result = await forget({ disableConsent: false });
+    const result = await resetLocalTelemetryState();
 
     const client = posthogMock.instances[0]!;
     expect(client.capture).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "$delete_person" })
     );
     expect(result.localIdRemoved).toBe(true);
-    expect(result.consentDisabled).toBe(false);
     expect(status().hasAnonIdOnDisk).toBe(false);
+    // No config file is created just to clear a marker that was never set.
     expect(fs.existsSync(configFilePath())).toBe(false);
     expect(isEnabled()).toBe(true);
+
+    // Deleting the id file with consent still enabled is a LOCAL removal, not a
+    // permanent erasure: the fingerprint-derived id is re-created identically on
+    // the next tracked event. A genuine reset comes from the opt-out path
+    // (`markDisabled()` / `argent telemetry disable`).
+    track("toolserver:start", {});
+    expect(status().hasAnonIdOnDisk).toBe(true);
+    expect(readId()).toBe(derivedId);
   });
 
-  it("forget without consent changes preserves an explicit opt-out", async () => {
+  it("leaves an explicit opt-out untouched", async () => {
     fs.writeFileSync(configFilePath(), JSON.stringify({ telemetry: { enabled: false } }) + "\n");
     _resetConsentCacheForTest();
 
-    const result = await forget({ disableConsent: false });
+    await resetLocalTelemetryState();
 
-    expect(result.consentDisabled).toBe(false);
     expect(getConsentState({}).enabled).toBe(false);
     expect(getConsentState({}).source.source).toBe("config_file");
   });
 
-  it("forget without consent changes preserves an explicit opt-in", async () => {
+  it("leaves an explicit opt-in untouched", async () => {
     markEnabled();
 
-    const result = await forget({ disableConsent: false });
+    await resetLocalTelemetryState();
 
-    expect(result.consentDisabled).toBe(false);
     expect(getConsentState({}).enabled).toBe(true);
     expect(getConsentState({}).source.source).toBe("config_file");
   });
 
-  it("forget without consent changes still removes the local telemetry id", async () => {
+  it("removes the local telemetry id", async () => {
     track("toolserver:start", {});
     expect(status().hasAnonIdOnDisk).toBe(true);
 
-    const result = await forget({ disableConsent: false });
+    const result = await resetLocalTelemetryState();
 
     expect(result.localIdRemoved).toBe(true);
     expect(status().hasAnonIdOnDisk).toBe(false);

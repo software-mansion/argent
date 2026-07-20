@@ -89,3 +89,64 @@ describe("renderLeakStacksIos — attributed-first ordering", () => {
     expect(rows[2]).toContain("Malloc");
   });
 });
+
+describe("renderLeakStacksIos — capture-mode-aware unattributed note", () => {
+  // Same contract as the analyze/combined reports: the "captured under
+  // `xctrace --attach`" framing is only apt when the capture actually attached.
+  // A malloc_stack_logging capture (flag threaded from the session) or a
+  // capture that attributed ANY group (a frame is only ever recorded under
+  // malloc stack logging) must not blame --attach for the unattributed rest.
+  it("does not claim --attach for a malloc capture with zero attributed groups", () => {
+    const out = renderLeakStacksIos([noise(0)], undefined, 10, true);
+    expect(out).toContain("unattributed");
+    expect(out).not.toContain("--attach");
+    expect(out).toContain("malloc stack logging");
+  });
+
+  it("infers malloc mode from attributed groups when the capture mode is unknown", () => {
+    const out = renderLeakStacksIos([ATTRIBUTED_SMALL, noise(0)], undefined, 10, null);
+    expect(out).not.toContain("--attach");
+  });
+
+  it("infers from the FULL capture, not the filtered slice", () => {
+    // The filter matches only unattributed noise, but the capture DID attribute
+    // MyModel — so malloc logging was on and --attach must not be blamed.
+    const out = renderLeakStacksIos([ATTRIBUTED_SMALL, noise(0)], "Malloc", 10, null);
+    expect(out).toContain("unattributed");
+    expect(out).not.toContain("--attach");
+  });
+
+  it("keeps the --attach note for an attach capture", () => {
+    const out = renderLeakStacksIos([noise(0)], undefined, 10, false);
+    expect(out).toContain("xctrace --attach");
+  });
+
+  it("attribution evidence outranks an explicit attach flag", () => {
+    // The flag says how ARGENT captured; a recorded frame proves the target
+    // process itself ran under malloc stack logging (e.g. launched with the
+    // Xcode scheme diagnostic, then attached to). The note must not claim "no
+    // malloc-stack history" right above a row with a full responsible frame.
+    const out = renderLeakStacksIos([ATTRIBUTED_SMALL, noise(0)], undefined, 10, false);
+    expect(out).toContain("unattributed");
+    expect(out).not.toContain("--attach");
+  });
+
+  it("escapes '|' in table cells so demangled operator frames can't break the row", () => {
+    const pipeLeak = leak({
+      objectType: "LeakySpan",
+      totalSizeBytes: 3072,
+      count: 3,
+      responsibleFrame: "folly::operator|(folly::Range<char const*>, folly::Range<char const*>)",
+      responsibleLibrary: "folly",
+      attributed: true,
+      severity: "RED",
+    });
+    const out = renderLeakStacksIos([pipeLeak], undefined, 10, true);
+    const header = out.split("\n").find((l) => l.startsWith("| Object Type"));
+    const row = out.split("\n").find((l) => l.includes("folly::operator"));
+    expect(row).toBeDefined();
+    expect(row).toContain("operator\\|");
+    const unescapedPipes = (s: string) => s.split(/(?<!\\)\|/).length;
+    expect(unescapedPipes(row!)).toBe(unescapedPipes(header!));
+  });
+});

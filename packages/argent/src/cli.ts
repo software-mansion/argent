@@ -19,6 +19,7 @@
  *   argent run <tool> [flags]     Invoke a tool by name
  *   argent server start [flags]   Spawn a long-lived tool-server (foreground by default)
  *   argent server status|stop|logs   Manage the shared tool-server
+ *   argent lens                   Open Argent Lens bound to a fresh coding-agent session (macOS)
  *   argent link [flags]           Route client requests to a remote tool-server
  *   argent unlink                 Remove the persisted remote link
  *   argent enable <flag>          Enable a feature flag (global by default)
@@ -33,6 +34,12 @@ import type * as Mcp from "@argent/mcp";
 import type * as Cli from "@argent/cli";
 import { BUNDLED_RUNTIME_PATHS } from "./bundled-paths.js";
 import { installFatalHandlers } from "./fatal-handlers.js";
+import {
+  INSTALLER_COMMAND_META,
+  installerHelpRequested,
+  printInstallerHelp,
+  type InstallerCommand,
+} from "./installer-help.js";
 
 const PACKAGE_NAME = "@swmansion/argent";
 
@@ -53,6 +60,17 @@ const isMcpServer = command === "mcp";
 
 installFatalHandlers({ isMcpServer });
 
+// One installer row of the command table: the command's one-line summary plus
+// its indented detail lines, both from INSTALLER_COMMAND_META. The summary is
+// shared with the per-command `--help`, so the two can't drift; the details
+// are table-only prose kept in the meta so each command's help text lives in
+// one place.
+function installerHelpEntry(command: InstallerCommand): string {
+  const meta = INSTALLER_COMMAND_META[command];
+  const details = (meta.details ?? []).map((line) => `\n              ${line}`).join("");
+  return `${meta.summary}${details}`;
+}
+
 function printHelp(): void {
   const version = getInstalledVersion() ?? "unknown";
   console.log(`
@@ -62,20 +80,22 @@ Usage: argent <command> [options]
 
 Commands:
   mcp         Start the MCP stdio server (used by editors)
-  init        Initialize argent in the current workspace (MCP server + skills)
-  install     Alias for init
-  update      Check for updates and refresh configuration
-  uninstall   Remove argent configuration from the workspace
-  remove      Alias for uninstall
+  init        ${installerHelpEntry("init")}
+  install     ${installerHelpEntry("install")}
+  update      ${installerHelpEntry("update")}
+  uninstall   ${installerHelpEntry("uninstall")}
+  remove      ${installerHelpEntry("remove")}
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
+  flow        Run a saved flow (use \`argent flow --help\` for options)
   server      Manage the shared tool-server (start / status / stop / logs)
+  lens        Open Argent Lens bound to a fresh coding-agent session (macOS)
   link        Route client requests to a remote tool-server
   unlink      Remove the persisted remote tool-server link
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
-  telemetry   Manage anonymous opt-out telemetry (status / enable / disable)
+  telemetry   Manage opt-out telemetry (status / enable / disable)
 
 Options:
   --help, -h     Show this help message
@@ -101,6 +121,17 @@ async function loadCli(): Promise<typeof Cli> {
 }
 
 async function main(): Promise<void> {
+  // The installer subcommands (init / install / update / uninstall / remove)
+  // forward their argv straight to the side-effecting installer functions,
+  // which do not short-circuit on `--help` — so `argent uninstall --help`
+  // would run the real (destructive) command. Intercept help for exactly that
+  // set before dispatching. All other subcommands handle `--help` themselves.
+  if (installerHelpRequested(command, rest)) {
+    // installerHelpRequested only returns true for an InstallerCommand.
+    printInstallerHelp(command as Parameters<typeof printInstallerHelp>[0]);
+    return;
+  }
+
   switch (command) {
     case "mcp":
       return (await loadMcp()).startMcpServer({ paths: BUNDLED_RUNTIME_PATHS });
@@ -116,8 +147,12 @@ async function main(): Promise<void> {
       return (await loadCli()).tools(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "run":
       return (await loadCli()).run(rest, { paths: BUNDLED_RUNTIME_PATHS });
+    case "flow":
+      return (await loadCli()).flow(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "server":
       return (await loadCli()).server(rest, { paths: BUNDLED_RUNTIME_PATHS });
+    case "lens":
+      return (await loadCli()).lens(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "link":
       return (await loadCli()).link(rest);
     case "unlink":

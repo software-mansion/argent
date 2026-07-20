@@ -118,6 +118,21 @@ export async function simctlOpenUrl(udid: string, url: string): Promise<void> {
   await run(["simctl", "openurl", stripRemotePrefix(udid), url]);
 }
 
+/**
+ * Remote analogue of `xcrun simctl privacy <udid> <action> <service> <bundleId>`
+ * — edits the remote simulator's TCC store. Throws (via `run`) on a non-zero
+ * exit; the settings-permissions iOS handler wraps that into its classified
+ * FailureError with the same boot / list-services hints as the local path.
+ */
+export async function simctlPrivacy(
+  udid: string,
+  action: string,
+  service: string,
+  bundleId: string
+): Promise<void> {
+  await run(["simctl", "privacy", stripRemotePrefix(udid), action, service, bundleId]);
+}
+
 /** Copy the given text into the simulator's pasteboard (sim-remote streams stdin). */
 export async function simctlPbcopy(udid: string, text: string): Promise<void> {
   await run(["simctl", "pbcopy", stripRemotePrefix(udid)], { stdin: text });
@@ -232,6 +247,7 @@ export async function proxyStop(udid: string, port: number): Promise<void> {
 export interface MoqInfo {
   url: string;
   fingerprint: string;
+  token: string;
 }
 
 export async function moqInfo(udid: string): Promise<MoqInfo> {

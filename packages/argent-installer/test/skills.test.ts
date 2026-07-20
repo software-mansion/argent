@@ -63,6 +63,39 @@ afterEach(() => {
 });
 
 describe("refreshArgentSkills", () => {
+  it("skips the refresh entirely when the bundled set is unreadable", () => {
+    // listBundledSkills returns [] when SKILLS_DIR is gone — a pruned pnpm
+    // store dir mid-update, a broken install. Treating that as "argent ships
+    // zero skills" would classify EVERY tracked skill as orphaned and prune
+    // them all from both scopes.
+    listBundledSkillsMock.mockReturnValue([]);
+    writeLock(path.join(tmpDir, "skills-lock.json"), {
+      "argent-create-flow": {},
+      "argent-device-interact": {},
+    });
+
+    const results = refreshArgentSkills(tmpDir);
+
+    expect(results).toEqual([]);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("pins every skills CLI run to the project root", () => {
+    // The refresh can run as a detached updater whose inherited cwd is the
+    // tool-server's editor-chosen one; project-scope `skills` commands act on
+    // their cwd.
+    listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
+    writeLock(path.join(tmpDir, "skills-lock.json"), { "argent-create-flow": {} });
+
+    refreshArgentSkills(tmpDir);
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "npx",
+      expect.any(Array),
+      expect.objectContaining({ cwd: tmpDir })
+    );
+  });
+
   it("returns an empty array when no scope tracks argent skills", () => {
     listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
 

@@ -23,6 +23,7 @@ import { createBootDeviceTool } from "../tools/devices/boot-device";
 import { createLaunchAppTool } from "../tools/launch-app";
 import { createRestartAppTool } from "../tools/restart-app";
 import { reinstallAppTool } from "../tools/reinstall-app";
+import { settingsPermissionsTool } from "../tools/settings-permissions";
 import { openUrlTool } from "../tools/open-url";
 import { createScreenshotTool } from "../tools/screenshot";
 import { gestureTapTool } from "../tools/gesture-tap";
@@ -48,6 +49,7 @@ import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
 import { createDescribeTool } from "../tools/describe";
 import { createAwaitUiElementTool } from "../tools/await-ui-element";
+import { createAwaitScreenIdleTool } from "../tools/await-screen-idle";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
 import { createReactProfilerStatusTool } from "../tools/profiler/react/react-profiler-status";
@@ -109,6 +111,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createLaunchAppTool(registry));
   registry.registerTool(createRestartAppTool(registry));
   registry.registerTool(reinstallAppTool);
+  registry.registerTool(settingsPermissionsTool);
   registry.registerTool(openUrlTool);
   registry.registerTool(createScreenshotTool(registry));
   registry.registerTool(screenshotDiffTool);
@@ -138,6 +141,7 @@ export function createRegistry(): Registry {
   registry.registerTool(networkRequestTool);
   registry.registerTool(createDescribeTool(registry));
   registry.registerTool(createAwaitUiElementTool(registry));
+  registry.registerTool(createAwaitScreenIdleTool(registry));
   registry.registerTool(createReactProfilerStartTool(registry));
   registry.registerTool(createReactProfilerStopTool(registry));
   registry.registerTool(createReactProfilerStatusTool(registry));
@@ -180,15 +184,20 @@ export function createRegistry(): Registry {
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
 
-  // Variant proposal tools (non-blocking propose + single blocking await).
-  // Both declare `featureFlag: "argent-lens"`, so the HTTP layer
-  // (http.ts) hides them from GET /tools and rejects invocation when the flag
-  // is off — re-checked on every request, so `argent enable/disable
-  // argent-lens` takes effect on the next tools/list WITHOUT restarting
-  // the long-lived tool-server. Registered unconditionally; the flag gates at
-  // the exposure boundary, not at registration.
-  registry.registerTool(createProposeVariantTool(registry));
-  registry.registerTool(awaitUserSelectionTool);
+  // Variant proposal tools (non-blocking propose + single blocking await) —
+  // the Argent Lens surface. macOS-only: the Lens preview window + `argent lens`
+  // drive Terminal/iTerm and the simulator stream through macOS-only paths, so
+  // the tools are not registered off-darwin at all (they vanish from GET /tools
+  // and any invocation is rejected as unknown). On darwin they additionally
+  // declare `featureFlag: "argent-lens"`, so the HTTP layer (http.ts) hides them
+  // until the flag is enabled — re-checked on every request, so `argent
+  // enable/disable argent-lens` takes effect on the next tools/list WITHOUT
+  // restarting the long-lived tool-server. Platform gates at registration; the
+  // flag gates at the exposure boundary.
+  if (process.platform === "darwin") {
+    registry.registerTool(createProposeVariantTool(registry));
+    registry.registerTool(awaitUserSelectionTool);
+  }
 
   return registry;
 }

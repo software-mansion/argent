@@ -147,6 +147,70 @@ describe("boot-device — iOS path", () => {
     expect(reverifyEnv).toHaveBeenCalledOnce();
   });
 
+  it("with headless:true boots the sim core but does NOT open Simulator.app", async () => {
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const registry = { resolveService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await expect(
+      tool.execute!({}, { udid: "11111111-1111-1111-1111-111111111111", headless: true })
+    ).resolves.toEqual({
+      platform: "ios",
+      udid: "11111111-1111-1111-1111-111111111111",
+      booted: true,
+    });
+
+    const calls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
+    // The core still boots (simctl boot + bootstatus) and the default device is
+    // set, but `open -a Simulator.app` is skipped — the GUI window never opens.
+    expect(calls).toEqual([
+      ["xcrun", ["simctl", "boot", "11111111-1111-1111-1111-111111111111"]],
+      ["xcrun", ["simctl", "bootstatus", "11111111-1111-1111-1111-111111111111", "-b"]],
+      [
+        "defaults",
+        [
+          "write",
+          "com.apple.iphonesimulator",
+          "CurrentDeviceUDID",
+          "11111111-1111-1111-1111-111111111111",
+        ],
+      ],
+    ]);
+    expect(calls).not.toContainEqual(["open", ["-a", "Simulator.app"]]);
+  });
+
+  it("with ARGENT_SIMULATOR_NO_WINDOW set does NOT open Simulator.app even without headless:true", async () => {
+    // Host-wide iOS analog of ARGENT_EMULATOR_NO_WINDOW: the env var forces the
+    // GUI-attach skip so CI/Lens hosts don't pass `headless` on every call.
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const registry = { resolveService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    const prev = process.env.ARGENT_SIMULATOR_NO_WINDOW;
+    process.env.ARGENT_SIMULATOR_NO_WINDOW = "1";
+    try {
+      await expect(
+        tool.execute!({}, { udid: "11111111-1111-1111-1111-111111111111" })
+      ).resolves.toEqual({
+        platform: "ios",
+        udid: "11111111-1111-1111-1111-111111111111",
+        booted: true,
+      });
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_SIMULATOR_NO_WINDOW;
+      else process.env.ARGENT_SIMULATOR_NO_WINDOW = prev;
+    }
+
+    const calls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
+    expect(calls).not.toContainEqual(["open", ["-a", "Simulator.app"]]);
+  });
+
   it("skips pre-boot plist write when the sim is already Booted and falls back to ensureAutomationEnabled", async () => {
     const resolveService = vi.fn(async () => ({
       getInitFailure: () => null,
