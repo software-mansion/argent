@@ -408,8 +408,8 @@ export async function update(args: string[]): Promise<void> {
 
       // Stop only tool-server(s) spawned from the install we're replacing — a
       // DIFFERENT install's server may be serving another editor session and
-      // must be left alone (same invariant as the postinstall kill and the
-      // launcher's reuse gate). An unresolvable install dir (fresh install,
+      // must be left alone (same invariant as the launcher's reuse gate and
+      // dead-bundle sweep). An unresolvable install dir (fresh install,
       // Yarn PnP) means nothing of ours to stop; the launcher's version-aware
       // reuse gate retires a stale server on the next call.
       const installDirToStop =
@@ -448,6 +448,9 @@ export async function update(args: string[]): Promise<void> {
       const { landed: reachedTarget, exitError: installError } = await runTrustingDisk(
         () => {
           execShellCommandSync(cmd, {
+            // Older versions still ship a postinstall script that honors this
+            // (current ones have none); keep it so downgrades and pinned
+            // installs of those versions stay quiet and don't double-kill.
             env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
             // Local installs must rewrite the project's manifest/lockfile.
             ...(mode === "local" ? { cwd: projectRoot } : {}),

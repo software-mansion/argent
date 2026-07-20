@@ -2,7 +2,6 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
   isInjectableBundleId,
-  NON_INJECTABLE_RECOVERY,
   nativeDevtoolsRef,
   precheckNativeDevtools,
   type NativeDevtoolsApi,
@@ -31,6 +30,10 @@ type Result =
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
   capability: { apple: { simulator: true, device: false }, appleRemote: { simulator: true } },
+  // The "injectable is false" recovery sentence inlines NON_INJECTABLE_RECOVERY
+  // verbatim: the description must stay a plain literal so scripts/extract-tools.mjs
+  // can read it statically for the spidershield scan. The verbatim match is pinned
+  // by native-devtools-status.test.ts.
   description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
 Use when you need to verify native devtools readiness before calling native-full-hierarchy, native-describe-screen, or native-network-logs.
 
@@ -43,7 +46,7 @@ Returns { envSetup, appRunning, connected, requiresRestart, nextLaunchWillBeInje
 - injectable: whether native devtools can ever be injected into this app. Apple system apps (bundle ids under com.apple.) are platform binaries with library validation, so the dylib can never load into them.
 
 Call this before using app-scoped native hierarchy tools or native-network-logs.
-If injectable is false: this is a TERMINAL state — the app can never be injected. Do NOT restart/retry. ${NON_INJECTABLE_RECOVERY}
+If injectable is false: this is a TERMINAL state — the app can never be injected. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point) — they run the same injection precheck and fail with the same non-injectable error.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app, then proceed with the native feature.
 Returns { status: "init_failed", message, attempts } instead when the simulator's native-devtools environment failed to initialize.

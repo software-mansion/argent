@@ -20,6 +20,7 @@ import {
   clearActiveProjectRoot,
   parseFlow,
   serializeFlow,
+  type FlowStep,
 } from "../../src/tools/flows/flow-utils";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -418,7 +419,7 @@ describe("flow-add-step", () => {
     expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login" }]);
   });
 
-  it("keeps the raw flow-execute step when the target is an e2e flow", async () => {
+  it("records a run: directive when the target is an e2e flow", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
     });
@@ -435,17 +436,8 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(result.message).toMatch(/e2e flow/i);
-    // The raw fallback keeps `device` (flow-execute's device param isn't a
-    // udid/device_id key, so it survives stripping) — exactly the
-    // non-portability that the run: rewrite avoids.
-    expect(parseFlow(result.flowFile).steps).toEqual([
-      {
-        kind: "tool",
-        name: "flow-execute",
-        args: { name: "other-e2e", project_root: tmpDir, device: "ABC" },
-      },
-    ]);
+    // e2e flows now compose via run: just like fragments — their launch runs inline.
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "other-e2e" }]);
   });
 
   it("keeps the raw flow-execute step when the target is not a sibling", async () => {
@@ -584,6 +576,118 @@ describe("flow-finish-recording", () => {
 
     const result = await flowFinishRecordingTool.execute({}, {});
     expect(result.summary).toEqual(["1. echo: Before tap", '2. tool: tap {"x":0.5}']);
+  });
+
+  it("distinguishes contains, equals, and regex text comparisons in the summary", async () => {
+    const name = "text-comparison-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [
+          {
+            kind: "await",
+            condition: "text",
+            selector: { identifier: "status" },
+            expectedText: 'Ready "now"\nnext',
+            textMatch: "contains",
+          },
+          {
+            kind: "assert",
+            condition: "text",
+            selector: { identifier: "status" },
+            expectedText: "Ready",
+            textMatch: "equals",
+          },
+          {
+            kind: "assert",
+            condition: "text",
+            selector: { identifier: "total" },
+            expectedText: "^Total: \\$\\d+\\.\\d{2}$",
+            textMatch: "matches",
+          },
+          {
+            kind: "assert",
+            condition: "text",
+            selector: { identifier: "legacy-status" },
+            expectedText: "Still running",
+          },
+        ],
+      })
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, {});
+
+    expect(result.summary).toEqual([
+      '1. await: text {"id":"status"} contains "Ready \\"now\\"\\nnext"',
+      '2. assert: text {"id":"status"} == "Ready"',
+      '3. assert: text {"id":"total"} matches /^Total: \\$\\d+\\.\\d{2}$/',
+      '4. assert: text {"id":"legacy-status"} contains "Still running"',
+    ]);
+  });
+
+  it("renders when text guards with the same comparator spelling as await/assert", async () => {
+    const name = "when-text-guard-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const guarded: FlowStep[] = [{ kind: "echo", message: "guarded" }];
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [
+          {
+            kind: "when",
+            condition: {
+              kind: "ui",
+              condition: "text",
+              selector: { identifier: "status" },
+              expectedText: 'Ready "now"\nnext',
+              textMatch: "contains",
+            },
+            steps: guarded,
+          },
+          {
+            kind: "when",
+            condition: {
+              kind: "ui",
+              condition: "text",
+              selector: { identifier: "status" },
+              expectedText: "Ready",
+              textMatch: "equals",
+            },
+            steps: guarded,
+          },
+          {
+            kind: "when",
+            condition: {
+              kind: "ui",
+              condition: "text",
+              selector: { identifier: "total" },
+              expectedText: "^Total: \\$\\d+\\.\\d{2}$",
+              textMatch: "matches",
+            },
+            steps: [...guarded, { kind: "echo", message: "and again" }],
+          },
+        ],
+      })
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, {});
+
+    expect(result.summary).toEqual([
+      '1. when: text {"id":"status"} contains "Ready \\"now\\"\\nnext" (1 step)',
+      '2. when: text {"id":"status"} == "Ready" (1 step)',
+      '3. when: text {"id":"total"} matches /^Total: \\$\\d+\\.\\d{2}$/ (2 steps)',
+    ]);
   });
 });
 

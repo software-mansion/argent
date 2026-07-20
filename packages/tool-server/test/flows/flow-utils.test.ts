@@ -58,6 +58,22 @@ describe("serializeFlow", () => {
     expect(result).toContain("- tool: screenshot");
     expect(result).not.toContain("args:");
   });
+
+  it("rejects gesture targets that cannot round-trip through the parser", () => {
+    const serializeStep = (step: FlowFile["steps"][number]) =>
+      serializeFlow({ executionPrerequisite: "", steps: [step] });
+
+    expect(() => serializeStep({ kind: "tap", x: 1.5, y: 0.5 })).toThrow(
+      /normalized 0–1 fractions/i
+    );
+    expect(() => serializeStep({ kind: "long-press", x: Number.NaN, y: 0.5 })).toThrow(
+      /normalized 0–1 fractions/i
+    );
+    expect(() => serializeStep({ kind: "tap", x: 0.5 })).toThrow(/needs numeric x and y/i);
+    expect(() =>
+      serializeStep({ kind: "long-press", selector: { text: "Row" }, x: 0.5, y: 0.5 })
+    ).toThrow(/selector or x\/y coordinates, not both/i);
+  });
 });
 
 // ── describeSelector ─────────────────────────────────────────────────
@@ -195,6 +211,88 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
   });
 
+  it.each([
+    [
+      "selector",
+      "steps:\n  - tap: { text: { matches: '^Order #\\d+$' } }\n",
+      { kind: "tap", selector: { textMatches: "^Order #\\d+$" } },
+    ],
+    [
+      "text condition",
+      "steps:\n  - assert: { text: { in: total, matches: '^Total: \\$\\d+$' } }\n",
+      {
+        kind: "assert",
+        condition: "text",
+        selector: { text: "total", loose: true },
+        expectedText: "^Total: \\$\\d+$",
+        textMatch: "matches",
+      },
+    ],
+  ] as const)("accepts a valid regex pattern at the %s ingress", (_ingress, yaml, expected) => {
+    expect(parseFlow(yaml).steps).toEqual([expected]);
+  });
+
+  it("accepts a regex selector combined with id and role", () => {
+    expect(
+      parseFlow(
+        "steps:\n  - tap: { text: { matches: '^Order #\\d+$' }, id: order-row, role: button }\n"
+      ).steps
+    ).toEqual([
+      {
+        kind: "tap",
+        selector: {
+          textMatches: "^Order #\\d+$",
+          identifier: "order-row",
+          role: "button",
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    ["id", "''"],
+    ["id", "42"],
+    ["role", "''"],
+    ["role", "42"],
+  ])(
+    "validates an invalid regex-selector %s through the same schema as a literal selector (%s)",
+    (field, value) => {
+      const validationDetail = (text: string | { matches: string }): string => {
+        const yamlText = typeof text === "string" ? text : `{ matches: '${text.matches}' }`;
+        try {
+          parseFlow(`steps:\n  - tap: { text: ${yamlText}, ${field}: ${value} }\n`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const detail = /^Unrecognized flow entry \((.*)\): /.exec(message)?.[1];
+          expect(detail).toBeDefined();
+          return detail!;
+        }
+        throw new Error("expected selector validation to fail");
+      };
+
+      const literalDetail = validationDetail("Order");
+      const regexDetail = validationDetail({ matches: "^Order #\\d+$" });
+
+      expect(literalDetail).toMatch(/^tap: /);
+      expect(regexDetail).toBe(literalDetail);
+    }
+  );
+
+  it.each([
+    [
+      "selector",
+      "steps:\n  - assert: { visible: { text: { matches: '(' } } }\n",
+      "assert.visible: text",
+    ],
+    [
+      "text condition",
+      "steps:\n  - assert: { text: { in: total, matches: '(' } }\n",
+      "assert text",
+    ],
+  ])("reports invalid regex syntax consistently at the %s ingress", (_ingress, yaml, where) => {
+    expect(() => parseFlow(yaml)).toThrow(`${where} \`matches\` is not a valid regular expression`);
+  });
+
   it("parses the map form's `id` as the internal identifier field (strict)", () => {
     const flow = parseFlow("steps:\n  - tap: { id: submit-btn }\n");
     expect(flow.steps).toEqual([{ kind: "tap", selector: { identifier: "submit-btn" } }]);
@@ -268,7 +366,7 @@ describe("parseFlow", () => {
   it("rejects text sugar with both contains and equals", () => {
     expect(() =>
       parseFlow("steps:\n  - assert: { text: { in: counter, contains: a, equals: b } }\n")
-    ).toThrow(/exactly one of `contains` or `equals`/);
+    ).toThrow(/exactly one of `contains`, `equals`, or `matches`/);
   });
 
   it("rejects the explicit { condition, selector, expectedText } form (sugar only)", () => {
@@ -293,7 +391,7 @@ describe("parseFlow", () => {
 
   it("rejects text sugar with neither contains nor equals", () => {
     expect(() => parseFlow("steps:\n  - assert: { text: { in: counter } }\n")).toThrow(
-      /exactly one of `contains` or `equals`/
+      /exactly one of `contains`, `equals`, or `matches`/
     );
   });
 
@@ -333,6 +431,25 @@ describe("parseFlow", () => {
     expect(yaml).not.toContain("identifier:");
     // An assert never emits a `timeout` key (the parser would reject it back).
     expect(yaml).not.toContain("timeout");
+  });
+
+  it.each([
+    ["contains", "contains: Expected"],
+    ["equals", "equals: Expected"],
+    ["matches", "matches: Expected"],
+  ] as const)("serializes and round-trips the %s text comparator", (textMatch, yamlComparator) => {
+    const step = {
+      kind: "assert" as const,
+      condition: "text" as const,
+      selector: { identifier: "status" },
+      expectedText: "Expected",
+      textMatch,
+    };
+
+    const yaml = serializeFlow({ executionPrerequisite: "", steps: [step] });
+
+    expect(yaml).toContain(yamlComparator);
+    expect(parseFlow(yaml).steps).toEqual([step]);
   });
 
   it("roundtrips the sugared step kinds through YAML", () => {
@@ -525,10 +642,10 @@ describe("parseFlow", () => {
 
   it("rejects a coordinate tap with a missing or non-numeric x/y", () => {
     expect(() => parseFlow("steps:\n  - tap: { x: 0.5 }\n")).toThrow(
-      "a coordinate tap needs numeric x and y"
+      "tap: a coordinate target needs numeric x and y"
     );
     expect(() => parseFlow('steps:\n  - tap: { x: "0.5", y: 0.5 }\n')).toThrow(
-      "a coordinate tap needs numeric x and y"
+      "tap: a coordinate target needs numeric x and y"
     );
   });
 
@@ -617,7 +734,7 @@ describe("parseFlow", () => {
 
     it("rejects an unknown key on a selector map", () => {
       expect(() => parseFlow("steps:\n  - tap: { text: Save, roel: button }\n")).toThrow(
-        /tap has unknown key `roel` \(did you mean `role`\?\)/
+        /tap: selector has unknown key `roel` \(did you mean `role`\?\)/
       );
       expect(() => parseFlow("steps:\n  - await: { visible: { txt: Save } }\n")).toThrow(
         /await.visible: selector has unknown key `txt` \(did you mean `text`\?\)/
@@ -643,7 +760,7 @@ describe("parseFlow", () => {
 
     it("rejects a stray key on a coordinate tap", () => {
       expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, why: 0.6 }\n")).toThrow(
-        /tap has unknown key `why`/
+        /tap: a coordinate target takes only \{ x, y \}/
       );
     });
 

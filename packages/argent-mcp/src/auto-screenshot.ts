@@ -60,6 +60,33 @@ export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
   return !isFlagEnabled("disable-auto-screenshot", options);
 }
 
+/**
+ * Marker of a server-side secret placeholder (`{{secret:NAME}}`, resolved by
+ * the tool-server from `ARGENT_SECRET_*` env vars). Mirrors
+ * SECRET_PLACEHOLDER_MARKER in the tool-server's secrets util — duplicated
+ * rather than imported because argent-mcp must keep working against older
+ * tool-servers and shares no runtime package with it.
+ */
+export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
+
+/**
+ * Deep-scan tool args for a secret placeholder. When one is present the
+ * auto-screenshot must be skipped: the tool-server types the *resolved* value,
+ * and for a non-secure-entry field the follow-up screenshot would hand the
+ * plaintext straight back to the model as pixels. JSON.stringify covers nested
+ * shapes (run-sequence steps, flow-execute args) without knowing each tool's
+ * schema.
+ */
+export function containsSecretPlaceholder(args: unknown): boolean {
+  try {
+    return JSON.stringify(args)?.includes(SECRET_PLACEHOLDER_MARKER) ?? false;
+  } catch {
+    // Unserializable args can't have come from an MCP request — be safe and
+    // treat them as secret-bearing rather than risk screenshotting a secret.
+    return true;
+  }
+}
+
 export function getUdidFromArgs(args: unknown): string | undefined {
   if (
     args &&

@@ -7,7 +7,6 @@ import {
   getRecordingSession,
   appendStepToActiveFlow,
   parseFlow,
-  isE2eFlow,
   assertSafeFlowName,
   describeSelector,
   type FlowSavedTo,
@@ -123,14 +122,14 @@ const RUN_TARGET_COMMAND = "flow-execute";
 
 /**
  * For a recorded `flow-execute` call, decide whether to record it as a
- * `run: <name>` directive. Returns the fragment name to compose, or a warning
+ * `run: <name>` directive. Returns the flow name to compose, or a warning
  * explaining why the raw `flow-execute` step was kept.
  *
- * `run:` only composes **fragments** (no `launch`) resolved as **siblings** of
- * the recording in its `.argent/flows` dir (host-resolved composition, design
- * §12). So we keep the raw step when the target is an e2e flow, can't be
- * resolved as a sibling, or the recording is remote (the host can't read the
- * client's sibling files to validate).
+ * `run:` composes any sibling flow — fragment or e2e — resolved in the
+ * recording's `.argent/flows` dir (host-resolved composition, design §12). An
+ * e2e target's `launch` simply runs inline. So we keep the raw step only when
+ * the target can't be resolved as a sibling, or the recording is remote (the
+ * host can't read the client's sibling files to validate).
  */
 async function captureRunTarget(
   session: RecordingSession | null,
@@ -149,13 +148,10 @@ async function captureRunTarget(
     assertSafeFlowName(name);
     // Resolve against the recording's own flows dir (the running flow-execute
     // may have mutated the active-project-root global), not getFlowsDir().
+    // Parsing validates the sibling exists and is a well-formed flow; a failure
+    // falls through to keeping the raw step.
     const fragPath = path.join(path.dirname(session.filePath), `${name}.yaml`);
-    const fragment = parseFlow(await fs.readFile(fragPath, "utf8"));
-    if (isE2eFlow(fragment)) {
-      return {
-        warning: `"${name}" is an e2e flow (starts with a launch step); only fragments compose via run: — kept the raw flow-execute step`,
-      };
-    }
+    parseFlow(await fs.readFile(fragPath, "utf8"));
     return { flow: name };
   } catch (err) {
     return {
@@ -222,15 +218,24 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         typeof strippedArgs.bundleId === "string" &&
         Object.keys(strippedArgs).length === 1;
 
+      // A multi-tap (`clickCount: 2` = double-tap) must survive the rewrite as
+      // `times`, or replay would silently fire a single tap for a recorded
+      // double. Bounds match the tool's clickCount; 1 is the default (absent).
+      const cc = args.clickCount;
+      const tapTimes =
+        isTap && typeof cc === "number" && Number.isInteger(cc) && cc >= 2 && cc <= 10
+          ? { times: cc }
+          : {};
+
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
-        step = { kind: "tap", selector: captured.selector };
+        step = { kind: "tap", selector: captured.selector, ...tapTimes };
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
         // directive so every tap reads uniformly.
-        step = { kind: "tap", x: args.x as number, y: args.y as number };
+        step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };
         warning = captured?.warning;
       } else if (isLaunch) {
         step = { kind: "launch", app: strippedArgs.bundleId as string };

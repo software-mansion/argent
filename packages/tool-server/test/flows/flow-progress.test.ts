@@ -159,6 +159,7 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
         { kind: "tool", name: "boom", args: {} },
         { kind: "tap", selector: { text: "Clear logs", loose: true } },
         { kind: "tap", x: 0.5, y: 0.25 },
+        { kind: "long-press", selector: { text: "Row 3", loose: true }, duration: 1200 },
         {
           kind: "assert",
           condition: "hidden",
@@ -186,6 +187,7 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
       undefined,
       '"Clear logs"',
       "(0.5, 0.25)",
+      '"Row 3"',
       'hidden "] outer Touchable"',
       'id=total contains "Total"',
       '"Nested touchables" (up)',

@@ -95,6 +95,8 @@ export class CDPClient {
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
   private pendingBindings = new Map<string, PendingBinding>();
+  /** Set by addBinding when the runtime ACKs the command but installs nothing. */
+  private bindingUnavailable = false;
   private scripts = new Map<string, ScriptInfo>();
   private enabledDomains = new Set<string>();
   private wsUrl: string;
@@ -275,6 +277,18 @@ export class CDPClient {
 
   async addBinding(name: string): Promise<void> {
     await this.send("Runtime.addBinding", { name });
+
+    // The legacy Hermes inspector (RN <= 0.72 — what Vega/Kepler serves, but also
+    // any older iOS/Android project) ACKs Runtime.addBinding and never installs
+    // the binding: no Runtime.bindingCalled ever fires, so anything waiting on one
+    // would hang for the full timeout. Probe once, here, so evaluateWithBinding
+    // can say so immediately instead.
+    //
+    // Only a POSITIVE observation of absence disables it. A probe that throws, or
+    // answers anything unexpected, leaves the binding assumed working — a healthy
+    // runtime must never lose these tools to a flaky probe.
+    const probe = await this.evaluate(`typeof ${name}`).catch(() => undefined);
+    this.bindingUnavailable = probe === "undefined";
   }
 
   /**
@@ -288,6 +302,23 @@ export class CDPClient {
   ): Promise<Record<string, unknown>> {
     const id = requestId ?? crypto.randomUUID();
     const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
+
+    if (this.bindingUnavailable) {
+      return Promise.reject(
+        new FailureError(
+          "This JS runtime acknowledges Runtime.addBinding but never installs the binding " +
+            "(legacy Hermes, React Native <= 0.72), so it cannot deliver a result over the " +
+            "binding channel. Tools that read the React tree this way are unavailable here; " +
+            "use `describe` to read on-screen structure.",
+          {
+            error_code: FAILURE_CODES.DEBUGGER_CDP_BINDING_UNAVAILABLE,
+            failure_stage: "debugger_cdp_binding",
+            failure_area: "tool_server",
+            error_kind: "unsupported",
+          }
+        )
+      );
+    }
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

@@ -120,6 +120,22 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Volume" } }]);
   });
 
+  it("carries a recorded clickCount into the tap step's times", async () => {
+    // A recorded double-tap must not silently replay as a single tap.
+    setTree([n({ label: "Photo", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]);
+
+    const tool = createFlowAddStepTool(mockRegistry());
+    await tool.execute(
+      {},
+      {
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.52, clickCount: 2 }),
+      }
+    );
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Photo" }, times: 2 }]);
+  });
+
   it("keeps coordinates when the selector would retarget to another element", async () => {
     // Two "Add" labels: replay's selectorToFrame ranking (exact → smallest
     // frame) elects the smaller node at the top, not the tapped one — so the
@@ -156,5 +172,12 @@ describe("flow-add-step tap selector capture", () => {
 
     expect(result.message).toContain("selector capture failed");
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
+  });
+
+  it("does not persist a raw point that replay would reject", async () => {
+    setTree([]);
+
+    await expect(recordTap({ x: 1.5, y: 0.52 })).rejects.toThrow(/normalized 0–1 fractions/i);
+    expect(await recordedSteps()).toEqual([]);
   });
 });

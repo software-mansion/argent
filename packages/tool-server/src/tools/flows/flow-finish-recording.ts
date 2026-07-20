@@ -13,12 +13,32 @@ import {
   type FlowSavedTo,
   type FlowSelector,
 } from "./flow-utils";
+import type { TextMatchMode } from "../../utils/ui-tree-match";
 
 // Quote selectors in the step summary the way the flow FILE spells them
 // (`id`, bare string for loose, no internal `loose` flag) — the summary is what
 // gets read before hand-editing the YAML, so the spellings must agree.
 function selectorLabel(sel: FlowSelector): string {
   return JSON.stringify(selectorToYaml(sel));
+}
+
+// Render a text condition for the summary, one spelling for every step kind
+// that carries one (await/assert/when): the comparator is preserved — regex
+// patterns as `matches /…/`, exact text as `== "…"`, substrings as
+// `contains "…"` — and literals use JSON quoting so embedded quotes and
+// control characters stay unambiguous.
+function textConditionLabel(
+  sel: FlowSelector,
+  expectedText: string | undefined,
+  textMatch: TextMatchMode | undefined
+): string {
+  const selector = selectorLabel(sel);
+  const expected = expectedText ?? "";
+  return textMatch === "matches"
+    ? `text ${selector} matches /${expected}/`
+    : textMatch === "equals"
+      ? `text ${selector} == ${JSON.stringify(expected)}`
+      : `text ${selector} contains ${JSON.stringify(expected)}`;
 }
 
 const zodSchema = z.object({});
@@ -69,19 +89,37 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         case "run":
           return `${n}. run: ${step.flow}`;
         case "tap":
-          return `${n}. tap: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
+        case "long-press":
+          return `${n}. ${step.kind}: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
         case "type":
           return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
         case "await":
         case "assert": {
           const tail =
             step.condition === "text"
-              ? `text ${selectorLabel(step.selector)} == "${step.expectedText ?? ""}"`
+              ? textConditionLabel(step.selector, step.expectedText, step.textMatch)
               : `${step.condition} ${selectorLabel(step.selector)}`;
           return `${n}. ${step.kind}: ${tail}`;
         }
         case "wait":
           return `${n}. wait: ${step.ms}ms`;
+        case "when": {
+          // Mirror the await/assert rendering above — selectorLabel spelling,
+          // same comparator tail for text guards.
+          const cond =
+            step.condition.kind === "platform"
+              ? `platform ${step.condition.platform}`
+              : step.condition.condition === "text"
+                ? textConditionLabel(
+                    step.condition.selector,
+                    step.condition.expectedText,
+                    step.condition.textMatch
+                  )
+                : `${step.condition.condition} ${selectorLabel(step.condition.selector)}`;
+          // Pluralize like flow-run's skip reason so the two surfaces agree.
+          const count = step.steps.length;
+          return `${n}. when: ${cond} (${count} step${count === 1 ? "" : "s"})`;
+        }
         case "scroll-to":
           return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
         case "snapshot":

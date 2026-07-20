@@ -25,6 +25,7 @@ import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
 import {
   describeSelector,
+  describeTextExpectation,
   type FlowSelector,
   type FlowStep,
   type ScrollDirection,
@@ -44,6 +45,15 @@ export interface DirectiveOutcome {
   reason?: string;
   /** The run was cancelled mid-step — reported as a skip, not a step failure. */
   aborted?: boolean;
+  /**
+   * The condition could not be evaluated — unknown, not false: the window
+   * never produced a trustworthy read (every fetch threw or returned a
+   * blind/degraded tree), or a `hidden` check ended on a blind or failed
+   * read after the element had matched. Read by the `when:` guard probe,
+   * which must error rather than silently skip a block a broken tree source
+   * can't vouch for; a plain `assert` reports it as an ordinary failure.
+   */
+  indeterminate?: boolean;
 }
 
 /**
@@ -62,7 +72,7 @@ export const ABORTED_OUTCOME: DirectiveOutcome = {
 /** The selector-acting steps {@link runDirective} handles. */
 export type DirectiveStep = Extract<
   FlowStep,
-  { kind: "tap" | "type" | "await" | "assert" | "scroll-to" }
+  { kind: "tap" | "long-press" | "type" | "await" | "assert" | "scroll-to" }
 >;
 
 /** Dispatch a tool with the run's resolved device id bound into its args. */
@@ -176,6 +186,36 @@ function axisFullyInside(
 // Playwright's web-first assertions, assert retries for a short grace window so
 // it absorbs that latency; a genuinely-false assertion still fails quickly.
 const DEFAULT_ASSERT_TIMEOUT_MS = 1000;
+
+// Evidence-gap bound for `waitForCondition`'s post-timeout verdict: how far
+// behind the loop's exit the last TRUSTED read may lie before a determinate
+// "condition false" verdict stops being honest. Two poll intervals budgets
+// the worst genuine last-poll blip — up to one interval of sleep since the
+// last clean read, plus an interval's worth of latency for the deadline poll
+// and its back-to-back final retry both failing.
+// Anything longer means consecutive polls went dark, and a verdict narrated
+// from the reads before the darkness would describe a screen nobody saw at
+// the deadline.
+const CONDITION_DARK_TAIL_TOLERANCE_MS = POLL_INTERVAL_MS * 2;
+
+/**
+ * Evaluate a `when:` block's UI guard — the same engine as `assert`, on the
+ * same assert grace window: a skipped block must not add an await-sized dead
+ * wait to every clean run. `ok` is "condition met"; `indeterminate`
+ * distinguishes an unreadable tree (the caller errors — unknown is not false)
+ * from a plainly unmet condition (the caller skips).
+ */
+export function probeWhenCondition(
+  env: ActionEnv,
+  cond: {
+    condition: WaitCondition;
+    selector: FlowSelector;
+    expectedText?: string;
+    textMatch?: TextMatchMode;
+  }
+): Promise<DirectiveOutcome> {
+  return waitForCondition(env, cond, DEFAULT_ASSERT_TIMEOUT_MS);
+}
 
 /**
  * The strict selectors a flow selector resolves through, in order. A loose
@@ -538,14 +578,17 @@ function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
 }
 
-/** Execute one selector-acting directive (`tap` / `type` / `await` / `assert` / `scroll-to`). */
+/** Execute one selector-acting directive (`tap` / `long-press` / `type` / `await` / `assert` / `scroll-to`). */
 export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
   // Vega is remote-driven — there is no touch input, so the touch directives
   // can never act on it. Fail upfront with authoring guidance instead of a
   // low-level gesture dispatch error after the selector resolves.
   if (
     env.device.platform === "vega" &&
-    (step.kind === "tap" || step.kind === "type" || step.kind === "scroll-to")
+    (step.kind === "tap" ||
+      step.kind === "long-press" ||
+      step.kind === "type" ||
+      step.kind === "scroll-to")
   ) {
     return {
       ok: false,
@@ -555,6 +598,8 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
   switch (step.kind) {
     case "tap":
       return runTap(env, step);
+    case "long-press":
+      return runLongPress(env, step);
     case "type":
       return runType(env, step);
     case "await":
@@ -570,28 +615,88 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
 }
 
 /**
- * Tap either an element (resolve a selector → frame, auto-waiting) or a raw
- * normalized point. Coordinate taps are the fallback for elements with no
- * stable selector (e.g. an unlabeled view).
+ * Resolve a gesture target (`tap`/`long-press`) to a normalized point: a
+ * selector resolves to its frame centre (settled tree + auto-wait); raw
+ * coordinates pass through untouched. Coordinate targets are the fallback for
+ * elements with no stable selector (e.g. an unlabeled view).
+ */
+async function resolveTargetPoint(
+  env: ActionEnv,
+  target: { selector?: FlowSelector; x?: number; y?: number }
+): Promise<{ x: number; y: number } | { fail: DirectiveOutcome }> {
+  if (target.selector) {
+    const frame = await waitForFrame(env, target.selector);
+    if (frame === "aborted") return { fail: ABORTED_OUTCOME };
+    if (!frame) {
+      return { fail: { ok: false, reason: offscreenHint(target.selector) } };
+    }
+    return getDescribeTapPoint(frame);
+  }
+  if (typeof target.x === "number" && typeof target.y === "number") {
+    return { x: target.x, y: target.y };
+  }
+  return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };
+}
+
+/**
+ * Tap a resolved target point. `times` rides the gesture-tap tool's
+ * `clickCount`: one resolution, one dispatched multi-tap gesture — never N
+ * separate calls, whose RPC gaps could fall outside the OS double-tap window.
  */
 async function runTap(
   env: ActionEnv,
-  target: { selector?: FlowSelector; x?: number; y?: number }
+  target: { selector?: FlowSelector; x?: number; y?: number; times?: number }
 ): Promise<DirectiveOutcome> {
-  let point: { x: number; y: number };
-  if (target.selector) {
-    const frame = await waitForFrame(env, target.selector);
-    if (frame === "aborted") return ABORTED_OUTCOME;
-    if (!frame) {
-      return { ok: false, reason: offscreenHint(target.selector) };
-    }
-    point = getDescribeTapPoint(frame);
-  } else if (typeof target.x === "number" && typeof target.y === "number") {
-    point = { x: target.x, y: target.y };
+  const point = await resolveTargetPoint(env, target);
+  if ("fail" in point) return point.fail;
+  await invokeOnDevice(env, "gesture-tap", {
+    ...point,
+    ...(target.times !== undefined ? { clickCount: target.times } : {}),
+  });
+  return { ok: true };
+}
+
+/**
+ * Long-press defaults comfortably past both platforms' recognizers — iOS
+ * UILongPressGestureRecognizer's 500ms minimum and Android's ~400ms
+ * long-press timeout (RN's Pressable uses 500ms) — without dragging every
+ * step out.
+ */
+const DEFAULT_LONG_PRESS_MS = 800;
+
+/**
+ * Press-and-hold on a target (same resolution as tap: selector → frame
+ * centre, or a raw point) for `duration` ms. Touch platforms dispatch ONE
+ * `gesture-custom` train (Down, then Up delayed by the duration) so the hold
+ * length is exact; Chromium has no touch, so the closest honest mapping is a
+ * mouse press-hold-release (`gesture-drag` with from == to) — apps
+ * implementing pointer-based long-press respond, anything else sees a slow
+ * click. A desktop context menu is a *right*-click, deliberately not aliased
+ * here.
+ */
+async function runLongPress(
+  env: ActionEnv,
+  step: { selector?: FlowSelector; x?: number; y?: number; duration?: number }
+): Promise<DirectiveOutcome> {
+  const point = await resolveTargetPoint(env, step);
+  if ("fail" in point) return point.fail;
+  const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
+  if (env.device.platform === "chromium") {
+    await invokeOnDevice(env, "gesture-drag", {
+      fromX: point.x,
+      fromY: point.y,
+      toX: point.x,
+      toY: point.y,
+      durationMs: duration,
+    });
   } else {
-    return { ok: false, reason: "tap needs a selector or x/y coordinates" };
+    await invokeOnDevice(env, "gesture-custom", {
+      events: [
+        { type: "Down", x: point.x, y: point.y, delayMs: 0 },
+        { type: "Up", x: point.x, y: point.y, delayMs: duration },
+      ],
+    });
   }
-  await invokeOnDevice(env, "gesture-tap", point);
   return { ok: true };
 }
 
@@ -670,7 +775,14 @@ async function waitForCondition(
   let lastMatches: ReturnType<typeof findAll> = [];
   let fetchError: string | undefined;
   let everMatched = false;
-  let everTrustedRead = false;
+  // Date.now() of the most recent TRUSTED read — undefined until one lands.
+  // Post-loop it anchors the dark-tail measurement: how long the window's
+  // final stretch went without a trustworthy look at the screen.
+  let lastTrustedReadAt: number | undefined;
+  // Whether the LAST completed read attempt was trusted — assigned on every
+  // pass through the loop (true on a trusted fetch, false on a blind one or a
+  // throw), so post-loop it describes the final poll.
+  let lastReadTrusted: boolean;
   let finalPoll = false;
 
   for (;;) {
@@ -682,7 +794,8 @@ async function waitForCondition(
       everMatched ||= lastMatches.length > 0;
       const blind =
         data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
-      everTrustedRead ||= !blind;
+      if (!blind) lastTrustedReadAt = Date.now();
+      lastReadTrusted = !blind;
       if (
         !blind &&
         evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)
@@ -691,6 +804,9 @@ async function waitForCondition(
       }
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
+      // A throw is as blind as an empty tree — `lastMatches` still holds the
+      // previous successful read, which must not pass for current evidence.
+      lastReadTrusted = false;
     }
     if (Date.now() >= deadline) {
       if (finalPoll) break;
@@ -703,22 +819,79 @@ async function waitForCondition(
     }
   }
 
-  if (fetchError) return { ok: false, reason: `could not read the UI tree: ${fetchError}` };
-  if (step.condition === "hidden" && !everTrustedRead) {
+  // Post-timeout verdict — unknown must not masquerade as false. Three tiers
+  // of evidence quality:
+  //
+  // 1. No trusted read in the whole window: every fetch either threw or
+  //    returned a blind tree (empty + degraded hint, or empty after the
+  //    selector had matched). A probe that never got a trustworthy look at
+  //    the screen cannot vouch for "condition false" for ANY condition.
+  // 2. Trusted reads existed but the window went dark at the end: the FINAL
+  //    read attempt was blind or threw AND the last trusted read lies more
+  //    than {@link CONDITION_DARK_TAIL_TOLERANCE_MS} behind the loop's exit.
+  //    The condition becoming true is exactly the transition being waited on,
+  //    so a "condition false" observation from before the reads went dark
+  //    says nothing about the deadline — a determinate verdict built from it
+  //    would let a dying tree source fake a clean report (and green-skip a
+  //    `when:` guard whose dismissal target may well be on screen). `hidden`
+  //    is held to a stricter bar: there "condition false" means the element
+  //    was VISIBLE, and the element leaving is the transition itself — so ANY
+  //    untrusted final read, however short the tail, leaves gone-ness
+  //    unconfirmable.
+  // 3. Dark tail within the tolerance — a genuine last-poll blip: trusted
+  //    reads showed the condition false until at most ~one poll interval
+  //    before the deadline, so they still describe the window and a transient
+  //    fetch error on the trailing poll must not flip a clean skip into a
+  //    hard error. The determinate verdict stands, with the failed final read
+  //    appended so the error is not silently dropped from the report.
+  if (lastTrustedReadAt === undefined) {
     return {
       ok: false,
-      reason: "could not confirm the element is hidden — the UI tree was empty or unreadable",
+      indeterminate: true,
+      reason: fetchError
+        ? `could not read the UI tree: ${fetchError}`
+        : "could not evaluate the condition — every read of the UI tree was empty or degraded",
     };
   }
+  if (!lastReadTrusted) {
+    // `hidden` with an evidence gap: the element matched on an earlier
+    // trusted read and the FINAL read attempt was blind or threw, so
+    // gone-ness can't be confirmed — no blip tolerance here (tier 2's
+    // stricter bar). (A trusted read WITHOUT a visible match would have
+    // satisfied `hidden` inside the loop, so a trusted final read implies it
+    // saw the element — that falls through to the determinate "still
+    // visible" below with `lastMatches` fresh from that read.)
+    if (step.condition === "hidden") {
+      return {
+        ok: false,
+        indeterminate: true,
+        reason: fetchError
+          ? `could not confirm the element is hidden — it was visible earlier, but the last UI read failed: ${fetchError}`
+          : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
+      };
+    }
+    const darkTailMs = Date.now() - lastTrustedReadAt;
+    if (darkTailMs > CONDITION_DARK_TAIL_TOLERANCE_MS) {
+      return {
+        ok: false,
+        indeterminate: true,
+        reason: fetchError
+          ? `could not evaluate the condition — the UI tree was unreadable for the final ${darkTailMs}ms of the window: ${fetchError}`
+          : `could not evaluate the condition — the UI tree reads were empty or degraded for the final ${darkTailMs}ms of the window`,
+      };
+    }
+  }
+  // Tier 3 (or a trusted final read): the verdict is determinate; a blip's
+  // failed final read is appended, not dropped.
+  const blipNote =
+    !lastReadTrusted && fetchError
+      ? ` (the final poll could not read the UI tree: ${fetchError})`
+      : "";
   return {
     ok: false,
-    reason: assertReason(
-      step.condition,
-      step.selector,
-      step.expectedText,
-      step.textMatch,
-      lastMatches
-    ),
+    reason:
+      assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
+      blipNote,
   };
 }
 
@@ -738,24 +911,22 @@ function assertReason(
         ? `element(s) matched ${sel} but none was visible (zero-area frame)`
         : `no element matched selector ${sel}`;
     case "hidden":
-      // No visible match on the final read means the deadline was spent on
-      // blind reads (blank trees the poll refuses to trust once the element
-      // has matched — see waitForCondition): the element may well be gone,
-      // but that can't be confirmed, so don't claim it was still on screen.
-      return matches.some(isVisible)
-        ? `an element matching ${sel} was still visible`
-        : `could not confirm the element is hidden — it was visible earlier, but the last UI reads returned an empty tree`;
+      // Reached only when the final read was trusted (waitForCondition
+      // returns indeterminate when it was blind or threw), and a trusted read
+      // without a visible match satisfies `hidden` inside the poll loop — so
+      // `matches` holds what that read saw: the element, still on screen.
+      return `an element matching ${sel} was still visible`;
     case "text": {
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       if (!first) return `no element matched selector ${sel}`;
-      const wanted = textMatch === "equals" ? "equal" : "contain";
+      const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted
       // subtree text (see evaluateCondition), so when they differ quote both —
       // the author may have been asserting against either.
       const shown = assertText(first);
       const own = nodeText(first);
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
-      return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted} "${expectedText}")`;
+      return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;
     }
     default:
       return `assertion failed for selector ${sel}`;

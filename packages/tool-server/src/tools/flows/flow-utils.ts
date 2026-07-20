@@ -4,11 +4,14 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import { CLIENT_FILE_MARKER, type ClientFileDirective } from "@argent/registry";
 import {
+  hasVisibleText,
+  selectorFieldsSchema,
   selectorSchema,
   type Selector,
   type WaitCondition,
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
+import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
@@ -225,12 +228,37 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
  */
 export type FlowSelector = Selector & { loose?: boolean };
 
+/**
+ * The platforms a `when: { platform: … }` condition can name — derived from
+ * {@link LAUNCH_PLATFORMS} so the parser's runtime check and this type cannot
+ * drift (flow-device's `FlowPlatform` is the same union, aliased there).
+ */
+export type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
+
+/**
+ * The guard of a `when:` block. Either a UI condition — the await/assert
+ * condition-as-key shapes, evaluated at run time with the short assert grace
+ * (a skipped block must not add an await-sized dead wait to every clean run) —
+ * or `platform`, a static per-run test against the resolved device.
+ */
+export type WhenCondition =
+  | {
+      kind: "ui";
+      condition: WaitCondition;
+      selector: FlowSelector;
+      expectedText?: string;
+      textMatch?: TextMatchMode;
+    }
+  | { kind: "platform"; platform: WhenPlatform };
+
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
   | { kind: "echo"; message: string }
   | { kind: "launch"; app: Launch }
   | { kind: "run"; flow: string }
-  | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number }
+  | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
+  | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
+  | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
   | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
   | {
       kind: "await";
@@ -260,9 +288,8 @@ export type FlowFile = {
 /**
  * A flow is end-to-end iff it BEGINS by launching an app — its first step
  * (ignoring `echo` narration) is a `launch`. Such a flow controls its own
- * start state, so it is the natural standalone/suite entry point, must not
- * declare an `executionPrerequisite`, and cannot be composed via `run:`.
- * Everything else is a fragment.
+ * start state, so it is the natural standalone/suite entry point and must not
+ * declare an `executionPrerequisite`. Everything else is a fragment.
  */
 export function isE2eFlow(flow: FlowFile): boolean {
   const first = flow.steps.find((s) => s.kind !== "echo");
@@ -308,18 +335,46 @@ export function chromiumLaunchSpec(
  * for identifier/role locators. The map form spells the internal `identifier`
  * field `id`; `identifier` is accepted on parse as an alias (so existing flow
  * files keep working) but serialization always emits `id`.
+ *
+ * In any selector slot, `text` may also be a regex matcher map —
+ * `{ text: { matches: '<pattern>' } }` — matched against each node's own
+ * label/value (internal `textMatches`; see the `Selector` type). It follows
+ * the same doctrine as the `text` condition's `matches`: unanchored,
+ * case-sensitive, validated at parse. In action ranking a pattern that
+ * consumes a node's whole label/value counts as an exact match.
  */
-type YamlSelector = string | (Omit<Selector, "identifier"> & { id?: string });
+type YamlSelector =
+  | string
+  | (Omit<Selector, "identifier" | "text" | "textMatches"> & {
+      id?: string;
+      text?: string | { matches: string };
+    });
 
-/** A tap targets an element (selector, possibly a bare string) or a raw point. */
-type TapBody = YamlSelector | { x: number; y: number };
+/**
+ * A gesture target: an element (selector, possibly a bare string) or a raw
+ * normalized point `{ x, y }`. Only the point-acting directives (`tap`,
+ * `long-press`) accept the point form — a point can be acted on but not
+ * observed, so the selector-only directives (`type`, `await`, `assert`,
+ * `scroll-to`) keep taking {@link YamlSelector}.
+ */
+type YamlTarget = YamlSelector | { x: number; y: number };
+
+/**
+ * A tap targets an element or a raw point. The options form nests the target
+ * under `on` so option keys never mix with target fields:
+ * `{ on: <target>, times: 2 }` is a double-tap (`on` carries the usual
+ * bare-string-loose / map-strict selector sugar).
+ */
+type TapBody = YamlTarget | { on: YamlTarget; times?: number };
 
 /**
  * The condition of an `await`/`assert` step. The condition is the key, not a
  * separate `condition:` field:
  *   - `{ visible: "Account" }`            ← exists/visible/hidden take a selector
+ *   - `{ visible: { text: { matches: '^x: \d+$' } } }`  ← regex text selector
  *   - `{ text: { in: "Taps:", contains: "Taps: 0" } }`  ← substring check
  *   - `{ text: { in: "Taps:", equals: "Taps: 0" } }`    ← exact-text check
+ *   - `{ text: { in: "total", matches: 'Total: \$\d+' } }` ← regex check
  * Only `await` takes an optional `timeout` sibling key (milliseconds):
  *   - `{ visible: "Account", timeout: 10000 }`
  * An `assert` carrying one is rejected at parse — an assert is an immediate
@@ -330,19 +385,34 @@ type YamlWaitCondition =
   | { visible: YamlSelector }
   | { hidden: YamlSelector }
   | { text: { in: YamlSelector; contains: string } }
-  | { text: { in: YamlSelector; equals: string } };
+  | { text: { in: YamlSelector; equals: string } }
+  | { text: { in: YamlSelector; matches: string } };
+
+type YamlTextWaitCondition = Extract<YamlWaitCondition, { text: unknown }>;
 
 /** `scroll-to` body: a bare target (scrolls down), or a map with options. */
 type YamlScrollBody =
   | YamlSelector
   | { target: YamlSelector; direction?: ScrollDirection; within?: YamlSelector };
 
+/**
+ * A `when:` guard body: exactly one UI condition key (the await/assert shapes,
+ * no `timeout` — evaluation always uses the assert grace) or `{ platform }`.
+ * Deriving the UI arm from {@link YamlWaitCondition} keeps the two in lockstep:
+ * the guard is parsed by the same parseWaitFields as await/assert, so a
+ * condition shape added there is a when-guard shape too. `timeout` stays out
+ * by construction — the await step type adds it as a sibling key, not here.
+ */
+type YamlWhenBody = YamlWaitCondition | { platform: WhenPlatform };
+
 type YamlStep =
   | { echo: string }
   | { launch: Launch }
   | { run: string }
+  | { when: YamlWhenBody; steps: YamlStep[] }
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
+  | { "long-press": YamlTarget | { on: YamlTarget; duration?: number } }
   | { type: { into: YamlSelector; text: string; submit?: boolean } }
   | { await: YamlWaitCondition & { timeout?: number } }
   | { assert: YamlWaitCondition }
@@ -369,6 +439,58 @@ type YamlFlowFile = {
  * `testID="save"` elsewhere on screen.
  */
 export function selectorToYaml(sel: FlowSelector): YamlSelector {
+  // YAML has a single `text` slot: it is either a literal string or a
+  // `{ matches }` map. Emitting one would overwrite/drop the other, changing
+  // the selector's AND semantics. Reject this internal-only combination at
+  // the serialization boundary instead of quietly weakening the selector.
+  if (sel.text !== undefined && sel.textMatches !== undefined) {
+    throw new Error(
+      "Cannot serialize flow selector without losing constraints: both `text` and " +
+        "`textMatches` are set, but flow YAML can represent only one `text` constraint " +
+        '(a literal string or `{ matches: "<regex>" }`). Use either literal or regex text matching.'
+    );
+  }
+
+  // Both spellings parse back through selectorSchema's visible-text
+  // constraint. Guard the serialization boundary too — for the strict map
+  // form as much as the bare string: an empty, runtime-invalid, or
+  // invisible-only text value (icon-font Private Use Area glyphs, zero-width
+  // characters) would otherwise produce YAML that DISPLAYS as an empty
+  // selector and that selectorToYaml's inverse rejects. Recorders never hit
+  // this (deriveSelector refuses invisible text and falls back to
+  // coordinates); a hand-built selector fails loudly instead of writing a
+  // flow no one can read or replay.
+  if (sel.text !== undefined && (typeof sel.text !== "string" || !hasVisibleText(sel.text))) {
+    throw new Error(
+      "Cannot serialize flow selector: `text` must contain at least one visible character " +
+        "(icon-font/private-use and zero-width characters render as nothing). Select by " +
+        "identifier or role, or use a coordinate tap."
+    );
+  }
+
+  // Bare-string YAML is the only spelling that carries `loose` (the
+  // identifier-first, then text fallback). A map is necessarily strict, so a
+  // loose selector with any additional/alternative field cannot round-trip.
+  if (
+    sel.loose &&
+    (sel.text === undefined ||
+      sel.textMatches !== undefined ||
+      sel.identifier !== undefined ||
+      sel.role !== undefined)
+  ) {
+    const incompatible = [
+      sel.textMatches !== undefined ? "textMatches" : undefined,
+      sel.identifier !== undefined ? "identifier" : undefined,
+      sel.role !== undefined ? "role" : undefined,
+    ].filter((field): field is string => field !== undefined);
+    throw new Error(
+      "Cannot serialize loose flow selector without changing its meaning: bare-string YAML " +
+        "can represent only a loose text-only selector" +
+        (incompatible.length > 0 ? `; incompatible fields: ${incompatible.join(", ")}` : "") +
+        "."
+    );
+  }
+
   if (
     sel.loose &&
     sel.text !== undefined &&
@@ -377,9 +499,13 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   ) {
     return sel.text;
   }
-  // YAML spells the identifier field `id` (parseSelector maps it back).
-  const { loose: _loose, identifier, ...rest } = sel;
-  return identifier === undefined ? { ...rest } : { ...rest, id: identifier };
+  // YAML spells the identifier field `id` (parseSelector maps it back), and
+  // the internal `textMatches` field spells `text: { matches }`.
+  const { loose: _loose, identifier, textMatches, ...rest } = sel;
+  const out: Exclude<YamlSelector, string> = { ...rest };
+  if (textMatches !== undefined) out.text = { matches: textMatches };
+  if (identifier !== undefined) out.id = identifier;
+  return out;
 }
 
 /**
@@ -391,10 +517,89 @@ export function describeSelector(s: FlowSelector): string {
     Object.entries(s)
       .filter(([k]) => k !== "loose")
       // `identifier` is spelled `id` in flow YAML — print the spelling the flow
-      // file uses so the message reads like the step it refers to.
-      .map(([k, v]) => `${k === "identifier" ? "id" : k}="${v}"`)
+      // file uses so the message reads like the step it refers to. A regex
+      // matcher prints in /slashes/ so it can't be misread as a literal.
+      .map(([k, v]) =>
+        k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
+      )
       .join(" ")
   );
+}
+
+/**
+ * Render a text condition's comparator and expectation for reports. Literal
+ * expectations use JSON quoting so embedded quotes, backslashes, and control
+ * characters stay unambiguous; regex patterns use slash delimiters so they
+ * cannot be mistaken for literals. Failure prose asks for the infinitive verb
+ * form (`wanted to contain/equal/match`), while step targets use the YAML mode
+ * names (`contains/equals/matches`).
+ */
+export function describeTextExpectation(
+  expectedText: string | undefined,
+  textMatch: TextMatchMode | undefined,
+  verbForm: "mode" | "infinitive" = "mode"
+): string {
+  const expected = expectedText ?? "";
+  const mode = textMatch ?? "contains";
+  switch (mode) {
+    case "contains":
+      return `${verbForm === "infinitive" ? "contain" : mode} ${JSON.stringify(expected)}`;
+    case "equals":
+      return `${verbForm === "infinitive" ? "equal" : mode} ${JSON.stringify(expected)}`;
+    case "matches":
+      return `${verbForm === "infinitive" ? "match" : mode} /${expected}/`;
+  }
+}
+
+/**
+ * Preserve the selected text comparator when converting to YAML. Keeping this
+ * switch explicit makes a new TextMatchMode a compile error here instead of
+ * silently serializing it as `contains`.
+ */
+function textWaitToYaml(
+  selector: YamlSelector,
+  expectedText: string | undefined,
+  textMatch: TextMatchMode | undefined
+): YamlTextWaitCondition {
+  const expected = expectedText ?? "";
+  const mode = textMatch ?? "contains";
+  switch (mode) {
+    case "contains":
+      return { text: { in: selector, contains: expected } };
+    case "equals":
+      return { text: { in: selector, equals: expected } };
+    case "matches":
+      return { text: { in: selector, matches: expected } };
+    default: {
+      const exhaustive: never = mode;
+      throw new Error(`Unsupported text match mode: ${exhaustive}`);
+    }
+  }
+}
+
+/** Sugar a gesture target (`tap`/`long-press`) for YAML output, rejecting
+ * internal states that would serialize to a flow the parser cannot read back. */
+function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number }): YamlTarget {
+  const hasPointField = step.x !== undefined || step.y !== undefined;
+  if (step.selector !== undefined) {
+    if (hasPointField) {
+      throw new Error(
+        "Cannot serialize flow gesture target: use a selector or x/y coordinates, not both"
+      );
+    }
+    return selectorToYaml(step.selector);
+  }
+  if (typeof step.x !== "number" || typeof step.y !== "number") {
+    throw new Error(
+      "Cannot serialize flow gesture target: a coordinate target needs numeric x and y"
+    );
+  }
+  if (!(step.x >= 0 && step.x <= 1) || !(step.y >= 0 && step.y <= 1)) {
+    throw new Error(
+      "Cannot serialize flow gesture target: coordinates are normalized 0–1 fractions of the screen, not pixels"
+    );
+  }
+  return { x: step.x, y: step.y };
 }
 
 /** Sugar an await/assert step into the condition-as-key YAML body. */
@@ -418,10 +623,7 @@ function waitToYaml(
       body = { hidden: sel };
       break;
     case "text":
-      body =
-        textMatch === "equals"
-          ? { text: { in: sel, equals: expectedText ?? "" } }
-          : { text: { in: sel, contains: expectedText ?? "" } };
+      body = textWaitToYaml(sel, expectedText, textMatch);
       break;
   }
   if (timeoutMs !== undefined) body.timeout = timeoutMs;
@@ -436,11 +638,32 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { launch: step.app };
     case "run":
       return { run: step.flow };
+    case "when": {
+      const when: YamlWhenBody =
+        step.condition.kind === "platform"
+          ? { platform: step.condition.platform }
+          : waitToYaml(
+              step.condition.condition,
+              step.condition.selector,
+              step.condition.expectedText,
+              step.condition.textMatch,
+              undefined
+            );
+      return { when, steps: step.steps.map(toYamlStep) };
+    }
     case "tap": {
-      const body: TapBody = step.selector
-        ? selectorToYaml(step.selector)
-        : { x: step.x!, y: step.y! };
-      return { tap: body };
+      // Canonical minimal spelling: the options form appears only when an
+      // option is present (`times` is never stored as 1 — see parseTapTimes),
+      // so a plain tap always round-trips to the plain selector/point body.
+      const target = targetToYaml(step);
+      return { tap: step.times !== undefined ? { on: target, times: step.times } : target };
+    }
+    case "long-press": {
+      const target = targetToYaml(step);
+      return {
+        "long-press":
+          step.duration !== undefined ? { on: target, duration: step.duration } : target,
+      };
     }
     case "type": {
       const body: { into: YamlSelector; text: string; submit?: boolean } = {
@@ -505,12 +728,32 @@ function toYamlStep(step: FlowStep): YamlStep {
 }
 
 function badEntry(raw: unknown, detail: string): never {
-  throw new FailureError(`Unrecognized flow entry (${detail}): ${JSON.stringify(raw)}`, {
+  // A cyclic YAML alias materializes as a cyclic object — JSON.stringify
+  // would throw and mask the validation message, so fall back to a marker.
+  let rendered: string;
+  try {
+    rendered = JSON.stringify(raw);
+  } catch {
+    rendered = "[cyclic entry]";
+  }
+  throw new FailureError(`Unrecognized flow entry (${detail}): ${rendered}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
     error_kind: "validation",
   });
+}
+
+/** Validate a regex pattern at the YAML boundary and report its flow context. */
+function validatePattern(raw: unknown, pattern: string, where: string): void {
+  try {
+    new RegExp(pattern);
+  } catch (err) {
+    badEntry(
+      raw,
+      `${where} \`matches\` is not a valid regular expression: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 }
 
 // Optimal-string-alignment distance: Levenshtein plus adjacent transposition
@@ -593,8 +836,8 @@ function parseSelector(raw: unknown, where: string): FlowSelector {
     if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
     return { ...r.data, loose: true };
   }
-  // The shared selectorSchema strips unknown keys, so a misspelled field
-  // (`roel: button`) would silently vanish — reject it here instead.
+  // Reject unknown keys here so flow errors can name the YAML selector and
+  // list its accepted spellings (`id` plus the parse-only `identifier` alias).
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     rejectUnknownKeys(raw, raw as Record<string, unknown>, SELECTOR_KEYS, `${where}: selector`);
   }
@@ -609,12 +852,58 @@ function parseSelector(raw: unknown, where: string): FlowSelector {
     }
     normalized = { ...rest, identifier: id };
   }
+  // Regex text matcher: `text: { matches: '<pattern>' }`. Split off before
+  // schema validation (the schema's `text` is a plain string) and validate
+  // the pattern here, deviceless — same guarantee as the `text` condition's
+  // `matches`. The remaining fields (`id`/`role`) AND-combine as usual.
+  if (normalized !== null && typeof normalized === "object") {
+    const { text, ...rest } = normalized as { text?: unknown } & Record<string, unknown>;
+    if (text !== null && typeof text === "object") {
+      const keys = Object.keys(text);
+      if (!Array.isArray(text)) {
+        rejectUnknownKeys(
+          raw,
+          text as Record<string, unknown>,
+          ["matches"],
+          `${where}: text matcher`
+        );
+      }
+      const pattern = (text as Record<string, unknown>).matches;
+      if (keys.length !== 1 || keys[0] !== "matches") {
+        badEntry(
+          raw,
+          `${where}: a text matcher takes exactly { matches: '<regex>' } — for a substring, use the plain-string form (text: "…")`
+        );
+      }
+      if (typeof pattern !== "string" || pattern.length === 0) {
+        badEntry(raw, `${where}: text matcher needs a non-empty \`matches\` pattern`);
+      }
+      validatePattern(raw, pattern, `${where}: text`);
+      // A regex matcher is itself the selector's required text constraint, so
+      // validate only its remaining fields through the strict shared schema.
+      // Using the unrefined field schema keeps matcher-only selectors valid
+      // while giving id/role exactly the same validation as literal selectors.
+      const fields = selectorFieldsSchema.safeParse(rest);
+      if (!fields.success) {
+        badEntry(raw, `${where}: ${fields.error.issues[0]?.message ?? "invalid selector"}`);
+      }
+      return { ...fields.data, textMatches: pattern };
+    }
+  }
   const r = selectorSchema.safeParse(normalized);
   if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
   return r.data;
 }
 
 const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden", "text"];
+
+// Keep the runtime comparator list complete and exact relative to the shared
+// mode type: `Record` rejects both a missing TextMatchMode and an extra key.
+const TEXT_MATCH_MODES = Object.keys({
+  contains: true,
+  equals: true,
+  matches: true,
+} satisfies Record<TextMatchMode, true>) as readonly TextMatchMode[];
 
 const SCROLL_DIRECTIONS: readonly ScrollDirection[] = ["up", "down", "left", "right"];
 
@@ -627,14 +916,16 @@ type WaitFields = {
 };
 
 /**
- * Parse the body of an `await`/`assert` step into its condition + selector +
- * optional expected text. The condition is the key and its value is the
- * selector (`{ visible: "Home" }`, `{ text: { in, contains } }`). The `text`
- * check takes exactly one of `contains` (substring) or `equals` (exact text).
- * `await` additionally accepts an optional `timeout` sibling key (milliseconds);
- * an `assert` carrying one is rejected rather than silently ignored.
+ * Parse the body of an `await`/`assert` step (or a `when:` guard's UI
+ * condition) into its condition + selector + optional expected text. The
+ * condition is the key and its value is the selector (`{ visible: "Home" }`,
+ * `{ text: { in, contains } }`). The `text` check takes exactly one of
+ * `contains` (substring), `equals` (exact text), or `matches` (JS regex,
+ * validated here so a bad pattern fails at parse, not mid-run). `await`
+ * additionally accepts an optional `timeout` sibling key (milliseconds); an
+ * `assert` carrying one is rejected rather than silently ignored.
  */
-function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
+function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitFields {
   if (raw === null || typeof raw !== "object") {
     badEntry({ [kind]: raw }, `${kind} needs a condition (${WAIT_CONDITIONS.join(", ")})`);
   }
@@ -681,25 +972,37 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   );
 
   // `text` locates an element (`in`) and checks its rendered content against
-  // exactly one of `contains` (substring) or `equals` (exact text).
+  // exactly one of `contains` (substring), `equals` (exact text), or
+  // `matches` (regex).
   if (condition === "text") {
     const t = b.text;
     if (t === null || typeof t !== "object") {
-      badEntry({ [kind]: b }, `${kind} text needs { in: <selector>, contains|equals: <string> }`);
+      badEntry(
+        { [kind]: b },
+        `${kind} text needs { in: <selector>, contains|equals|matches: <string> }`
+      );
     }
     const tb = t as Record<string, unknown>;
     if (!Array.isArray(tb)) {
-      rejectUnknownKeys({ [kind]: b }, tb, ["in", "contains", "equals"], `${kind}.text`);
+      rejectUnknownKeys({ [kind]: b }, tb, ["in", ...TEXT_MATCH_MODES], `${kind}.text`);
     }
-    const hasContains = "contains" in tb;
-    const hasEquals = "equals" in tb;
-    if (hasContains === hasEquals) {
-      badEntry({ [kind]: b }, `${kind} text needs exactly one of \`contains\` or \`equals\``);
+    const comparators = TEXT_MATCH_MODES.filter((mode) => mode in tb);
+    if (comparators.length !== 1) {
+      badEntry(
+        { [kind]: b },
+        `${kind} text needs exactly one of \`contains\`, \`equals\`, or \`matches\``
+      );
     }
-    const textMatch: TextMatchMode = hasEquals ? "equals" : "contains";
-    const expected = hasEquals ? tb.equals : tb.contains;
+    const textMatch: TextMatchMode = comparators[0]!;
+    const expected = tb[textMatch];
     if (typeof expected !== "string" || expected.length === 0) {
       badEntry({ [kind]: b }, `${kind} text needs a non-empty \`${textMatch}\``);
+    }
+    if (textMatch === "matches") {
+      // Fail a bad pattern here, deviceless, not mid-run. The pattern reaches
+      // the runtime verbatim, so RegExp construction there can never throw on
+      // a flow's behalf.
+      validatePattern({ [kind]: b }, expected, `${kind} text`);
     }
     return {
       condition: "text",
@@ -713,7 +1016,12 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert"): WaitFields {
   return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`), timeout };
 }
 
-const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+/**
+ * The platform set, spelled once: launch maps, `when: { platform }` guards
+ * ({@link WhenPlatform}), flow-device's `FlowPlatform`, and flow-run's
+ * `platform` param enum all derive from this tuple.
+ */
+export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
@@ -785,8 +1093,10 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "echo",
   "launch",
   "run",
+  "when",
   "tool",
   "tap",
+  "long-press",
   "type",
   "await",
   "assert",
@@ -795,8 +1105,277 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "snapshot",
 ];
 
-function fromYamlStep(raw: YamlStep): FlowStep {
+/**
+ * Parse `times` on a tap body: an integer tap count dispatched as ONE
+ * multi-tap gesture (2 = double-tap; the OS may recognize it as such — N
+ * *independent* taps are N tap steps). `times: 1` is the default and
+ * normalizes to absent, keeping parse/serialize exact inverses. The cap
+ * matches the gesture-tap tool's clickCount bound.
+ */
+function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 10) {
+    badEntry(entry, "tap.times must be an integer between 1 and 10 (2 = double-tap)");
+  }
+  return raw === 1 ? undefined : raw;
+}
+
+/**
+ * Parse a gesture target (`tap`/`long-press` body or its `on:` value): a
+ * selector (bare string = loose, map = strict) or a raw normalized point
+ * `{ x, y }`. A map mixing selector fields with x/y is ambiguous (which
+ * wins?) — and zod would silently STRIP the coordinates from a selector
+ * map — so it is rejected loudly. Only the point-acting directives call
+ * this; the observation directives take `parseSelector` directly, since a
+ * point can be acted on but not observed.
+ */
+function parseTarget(
+  raw: unknown,
+  where: string
+): { selector: FlowSelector } | { x: number; y: number } {
+  if (raw !== null && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (obj.x !== undefined || obj.y !== undefined) {
+      if (
+        obj.text !== undefined ||
+        obj.id !== undefined ||
+        obj.identifier !== undefined ||
+        obj.role !== undefined
+      ) {
+        badEntry(raw, `${where} takes a selector or x/y coordinates, not both`);
+      }
+      if (typeof obj.x !== "number" || typeof obj.y !== "number") {
+        badEntry(raw, `${where}: a coordinate target needs numeric x and y`);
+      }
+      // Coordinates are normalized fractions of the screen. Reject anything
+      // outside [0, 1] — a pixel value like x: 250 would dispatch a far
+      // off-screen gesture — and NaN/.inf, which pass the numeric check.
+      if (!(obj.x >= 0 && obj.x <= 1) || !(obj.y >= 0 && obj.y <= 1)) {
+        badEntry(
+          raw,
+          `${where}: coordinates are normalized 0–1 fractions of the screen, not pixels`
+        );
+      }
+      if (!Object.keys(obj).every((k) => k === "x" || k === "y")) {
+        badEntry(raw, `${where}: a coordinate target takes only { x, y }`);
+      }
+      return { x: obj.x, y: obj.y };
+    }
+  }
+  return { selector: parseSelector(raw, where) };
+}
+
+/**
+ * Parse a `tap` body: a bare target (selector or raw point `{ x, y }`) or
+ * the options form `{ on: <target>, times? }`, which nests the target under
+ * `on` so an option key can never be mistaken for — or silently stripped
+ * from — a target field.
+ */
+function parseTap(body: unknown, entry: unknown): FlowStep {
+  const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+
+  if (obj.on !== undefined || obj.times !== undefined) {
+    if (
+      obj.text !== undefined ||
+      obj.id !== undefined ||
+      obj.identifier !== undefined ||
+      obj.role !== undefined
+    ) {
+      badEntry(
+        entry,
+        'the tap options form takes a nested selector — e.g. tap: { on: { text: "Photo" }, times: 2 }'
+      );
+    }
+    if (obj.x !== undefined || obj.y !== undefined) {
+      badEntry(
+        entry,
+        "the tap options form takes a nested point — e.g. tap: { on: { x: 0.5, y: 0.5 }, times: 2 }"
+      );
+    }
+    if (!Object.keys(obj).every((k) => k === "on" || k === "times")) {
+      badEntry(entry, "the tap options form accepts only { on, times }");
+    }
+    if (obj.on === undefined) {
+      badEntry(entry, 'tap with times needs a target — e.g. tap: { on: "Photo", times: 2 }');
+    }
+    const step: FlowStep = { kind: "tap", ...parseTarget(obj.on, "tap.on") };
+    const times = parseTapTimes(obj.times, entry);
+    if (times !== undefined) step.times = times;
+    return step;
+  }
+
+  return { kind: "tap", ...parseTarget(body, "tap") };
+}
+
+/**
+ * Parse a `long-press` body: a bare target (selector or raw point `{ x, y }`)
+ * or the options form `{ on: <target>, duration?: <ms> }` — the same
+ * nested-`on` convention as tap's options form.
+ */
+function parseLongPress(body: unknown, entry: unknown): FlowStep {
+  const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+
+  if (obj.on !== undefined || obj.duration !== undefined) {
+    if (
+      obj.text !== undefined ||
+      obj.id !== undefined ||
+      obj.identifier !== undefined ||
+      obj.role !== undefined
+    ) {
+      badEntry(
+        entry,
+        'the long-press options form takes a nested selector — e.g. long-press: { on: { text: "Row" }, duration: 1200 }'
+      );
+    }
+    if (obj.x !== undefined || obj.y !== undefined) {
+      badEntry(
+        entry,
+        "the long-press options form takes a nested point — e.g. long-press: { on: { x: 0.5, y: 0.5 }, duration: 1200 }"
+      );
+    }
+    if (!Object.keys(obj).every((k) => k === "on" || k === "duration")) {
+      badEntry(entry, "the long-press options form accepts only { on, duration }");
+    }
+    if (obj.on === undefined) {
+      badEntry(entry, 'long-press needs a target — e.g. long-press: { on: "Row", duration: 1200 }');
+    }
+    const step: FlowStep = { kind: "long-press", ...parseTarget(obj.on, "long-press.on") };
+    if (obj.duration !== undefined) {
+      // Like `await.timeout`: reject non-finite values (YAML `.inf` parses to
+      // Infinity), which would hold the press forever.
+      if (typeof obj.duration !== "number" || !Number.isFinite(obj.duration) || obj.duration <= 0) {
+        badEntry(
+          entry,
+          "long-press.duration needs a positive number of milliseconds (e.g. `duration: 1200`)"
+        );
+      }
+      step.duration = obj.duration;
+    }
+    return step;
+  }
+
+  return { kind: "long-press", ...parseTarget(body, "long-press") };
+}
+
+/**
+ * Parse a `when:` guard — exactly one condition key: a UI condition
+ * (exists|visible|hidden|text, the await/assert shapes) or `platform` (a
+ * static per-run test). No `timeout` sibling: the guard is always evaluated
+ * with the short assert grace, so a skipped block stays cheap on every clean
+ * run.
+ */
+function parseWhenCondition(raw: unknown): WhenCondition {
+  const conditionKeys = `${WAIT_CONDITIONS.join(", ")}, platform`;
+  if (raw === null || typeof raw !== "object") {
+    badEntry({ when: raw }, `when needs exactly one condition key (${conditionKeys})`);
+  }
+  const b = raw as Record<string, unknown>;
+  const present = [...WAIT_CONDITIONS, "platform"].filter((c) => c in b);
+  if (present.length !== 1) {
+    badEntry({ when: raw }, `when needs exactly one condition key (${conditionKeys})`);
+  }
+  if ("timeout" in b) {
+    badEntry(
+      { when: raw },
+      "when takes no timeout — the guard is evaluated with the short assert grace so a skipped block never adds a full await wait"
+    );
+  }
+  if (present[0] === "platform") {
+    if (Object.keys(b).length !== 1) {
+      badEntry({ when: raw }, "when.platform takes no other keys");
+    }
+    const p = b.platform;
+    if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
+      badEntry({ when: raw }, `when.platform must be one of ${LAUNCH_PLATFORMS.join(", ")}`);
+    }
+    return { kind: "platform", platform: p as WhenPlatform };
+  }
+  // A when guard is the await/assert fields minus `timeout` (rejected above,
+  // so always undefined here) — spread the rest so a future WaitFields
+  // addition reaches when guards the same way it reaches await/assert.
+  const { timeout: _timeout, ...cond } = parseWaitFields(raw, "when");
+  // `{{secret:NAME}}` resolves only inside the text-entry tools (a `type:`
+  // step), never in condition evaluation, so a guard carrying one tests for
+  // literal placeholder text that is never on screen: exists/visible/text
+  // guards are permanently false (the block silently skips every run) and a
+  // `hidden` guard is vacuously true (the block always runs). In an assert
+  // that mistake fails loudly on the first run; here the guard silently
+  // degenerates into a constant — the same silently-wrong class the per-step
+  // `optional:` rejection exists for, so it fails at parse too.
+  const { selector, expectedText } = cond;
+  for (const s of [
+    expectedText,
+    selector.text,
+    selector.textMatches,
+    selector.identifier,
+    selector.role,
+  ]) {
+    if (s !== undefined && s.includes(SECRET_PLACEHOLDER_MARKER)) {
+      badEntry(
+        { when: raw },
+        "when takes no {{secret:…}} placeholder — secrets resolve only in text-entry steps (`type:`), never in condition evaluation, so the guard tests literal placeholder text that is never on screen: permanently false (for `hidden`, vacuously true); use the literal on-screen text instead"
+      );
+    }
+  }
+  return { kind: "ui", ...cond };
+}
+
+/**
+ * Nesting cap for `when` blocks — the parse-side analog of flow-run's
+ * MAX_RUN_DEPTH. `when` is the only step kind whose parse recurses into child
+ * steps, and the yaml library happily materializes a cyclic alias
+ * (`steps: &s … steps: *s`) as a cyclic object; without a cap that cycle
+ * escapes parseFlow as a raw RangeError instead of a structured parse error.
+ */
+const MAX_WHEN_DEPTH = 20;
+
+/**
+ * Parse a `when` step: `{ when: <condition>, steps: [<step>, …] }` — a guarded
+ * block whose steps run only when the condition holds. Deliberately no `else`:
+ * a when block exists to restore determinism (dismiss the interstitial, get
+ * back on the known path), so paths may only reconverge, never diverge.
+ */
+function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
+  if (depth >= MAX_WHEN_DEPTH) {
+    badEntry(
+      raw,
+      `when blocks nest deeper than ${MAX_WHEN_DEPTH} levels — check for a cyclic YAML alias (\`steps: &s … steps: *s\`)`
+    );
+  }
+  if ("else" in raw) {
+    badEntry(
+      raw,
+      "when has no else — paths may only reconverge, never diverge; two genuinely different paths are two flows"
+    );
+  }
+  if (!Object.keys(raw).every((k) => k === "when" || k === "steps")) {
+    badEntry(raw, "a when step takes exactly { when: <condition>, steps: [...] }");
+  }
+  const condition = parseWhenCondition(raw.when);
+  if (!Array.isArray(raw.steps) || raw.steps.length === 0) {
+    badEntry(raw, "when needs a non-empty steps list to guard");
+  }
+  const steps = (raw.steps as unknown[]).map((s) => {
+    if (s !== null && typeof s === "object") return fromYamlStep(s as YamlStep, depth + 1);
+    return badEntry(s, "step must be an object");
+  });
+  return { kind: "when", condition, steps };
+}
+
+function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   const entry = raw as Record<string, unknown>;
+  // There is deliberately no per-step `optional:` — it would have to be
+  // re-plumbed into every action directive (and each future gesture
+  // directive), when a `when:` block already expresses it once for all of
+  // them. Rejected, not ignored: Maestro habits will produce it, and a
+  // silently-dropped `optional: true` leaves a step the author believes
+  // can't fail hard-stopping the flow.
+  if ("optional" in raw) {
+    badEntry(
+      raw,
+      "optional is not supported — guard the step with a when: block instead (`when: { visible: <target> }` + `steps:`)"
+    );
+  }
   const kinds = STEP_DIRECTIVE_KEYS.filter((k) => k in entry);
   if (kinds.length === 0) {
     const hint = Object.keys(entry)
@@ -810,52 +1389,36 @@ function fromYamlStep(raw: YamlStep): FlowStep {
       `a step takes exactly one directive key, found ${kinds.map((k) => `\`${k}\``).join(", ")}`
     );
   }
-  // Only a `tool` step carries sibling keys (`args`, `delayMs`); every
+  // Only a `tool` step carries sibling keys (`args`, `delayMs`); every other
   // directive step is a single-key mapping — its options live INSIDE the
-  // value, so a sibling key is a mis-nested or misspelled option.
+  // value, so a sibling key is a mis-nested or misspelled option. A `when`
+  // step also carries siblings (`steps`, and the rejected `else`), but
+  // parseWhenStep validates them itself with pointed messages, so the generic
+  // check stays out of its way.
   const kind = kinds[0]!;
-  const siblings = kind === "tool" ? ["tool", "args", "delayMs"] : [kind];
-  const extras = Object.keys(entry).filter((k) => !siblings.includes(k));
-  if (extras.length > 0) {
-    badEntry(
-      raw,
-      `a \`${kind}\` step has ${describeUnknownKeys(extras, siblings)}` +
-        (kind === "tool"
-          ? " — a tool step takes only `tool`, `args`, `delayMs`"
-          : ` — step options go inside the \`${kind}:\` value, not beside it`)
-    );
+  if (kind !== "when") {
+    const siblings = kind === "tool" ? ["tool", "args", "delayMs"] : [kind];
+    const extras = Object.keys(entry).filter((k) => !siblings.includes(k));
+    if (extras.length > 0) {
+      badEntry(
+        raw,
+        `a \`${kind}\` step has ${describeUnknownKeys(extras, siblings)}` +
+          (kind === "tool"
+            ? " — a tool step takes only `tool`, `args`, `delayMs`"
+            : ` — step options go inside the \`${kind}:\` value, not beside it`)
+      );
+    }
   }
 
   if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
   if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
   if ("run" in raw) return { kind: "run", flow: String(raw.run) };
+  if ("when" in raw) return parseWhenStep(entry, whenDepth);
 
-  if ("tap" in raw) {
-    const body = (raw as { tap: unknown }).tap;
-    const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    // A misspelled selector field or coordinate would silently fall through
-    // (a stripped key, or a selector parse where a point was meant).
-    if (body !== null && typeof body === "object" && !Array.isArray(body)) {
-      rejectUnknownKeys(raw, obj, [...SELECTOR_KEYS, "x", "y"], "tap");
-    }
-    // A tap targets either an element (selector) or a raw point (x/y) — a body
-    // mixing both is ambiguous (which wins?) and rejected rather than silently
-    // resolved one way.
-    if (obj.x !== undefined || obj.y !== undefined) {
-      if (
-        obj.text !== undefined ||
-        obj.id !== undefined ||
-        obj.identifier !== undefined ||
-        obj.role !== undefined
-      ) {
-        badEntry(raw, "tap takes a selector or x/y coordinates, not both");
-      }
-      if (typeof obj.x !== "number" || typeof obj.y !== "number") {
-        badEntry(raw, "a coordinate tap needs numeric x and y");
-      }
-      return { kind: "tap", x: obj.x, y: obj.y };
-    }
-    return { kind: "tap", selector: parseSelector(body, "tap") };
+  if ("tap" in raw) return parseTap((raw as { tap: unknown }).tap, raw);
+
+  if ("long-press" in raw) {
+    return parseLongPress((raw as { "long-press": unknown })["long-press"], raw);
   }
 
   if ("type" in raw) {

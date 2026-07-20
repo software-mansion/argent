@@ -5,8 +5,9 @@ import type { ToolsServerPaths } from "@argent/tools-client";
 // Installed package version, read from the shipped package.json. Lets the
 // launcher detect a stale tool-server after an in-place version bump (a local
 // devDependency update rewrites tool-server.cjs at the same path) and respawn
-// it — without relying on the postinstall script, which is frequently disabled
-// (--ignore-scripts, pnpm onlyBuiltDependencies, Yarn PnP, locked-down CI).
+// it — with no install-time hook: install scripts are frequently disabled
+// (--ignore-scripts, pnpm's build gate, Yarn PnP, locked-down CI), which is
+// why argent ships no postinstall script at all.
 function readPackageVersion(): string | undefined {
   try {
     const pkg = JSON.parse(

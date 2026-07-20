@@ -16,12 +16,37 @@ export interface SelectedTarget {
  * 3. title starts with "React Native Bridge" (legacy)
  * 4. Fallback: first target
  */
+/**
+ * Identify the DEVICE a target belongs to.
+ *
+ * Modern (Fusebox) targets carry a logicalDeviceId. Legacy ones (RN 0.72, which
+ * is what Vega/Kepler serves) carry no `reactNative` block at all, so fall back
+ * to the `device` index the proxy puts in the debugger URL — that is unique per
+ * attached device. deviceName is only a last resort because it names a device
+ * *class*, not an instance ("kepler-device" for every VVD), so two identical
+ * devices would collapse into one and defeat the guard below.
+ */
+function deviceKey(target: CDPTarget): string | undefined {
+  const logicalId = target.reactNative?.logicalDeviceId;
+  if (logicalId) return logicalId;
+  try {
+    const device = new URL(target.webSocketDebuggerUrl).searchParams.get("device");
+    if (device) return `device=${device}`;
+  } catch {
+    // Malformed URL — fall through to the name.
+  }
+  return target.deviceName;
+}
+
 export function selectTarget(
   targets: CDPTarget[],
   port: number,
   options?: Record<string, unknown>
 ): SelectedTarget {
-  let candidates = targets;
+  // discoverMetro has already dropped the legacy proxy's unusable
+  // `vm: "don't use"` page, so every target here is a real runtime.
+  const pool = targets;
+  let candidates = pool;
 
   if (typeof options?.deviceId === "string" && options.deviceId) {
     const deviceId = options.deviceId;
@@ -37,22 +62,42 @@ export function selectTarget(
       // distinct devices connected, refuse to guess and report the valid ids so
       // the caller can re-target (the logicalDeviceId is what debugger-connect
       // returns and what subsequent debugger-* calls must pass).
-      const distinctDevices = new Map<string, string | undefined>();
-      for (const t of targets) {
-        const id = t.reactNative?.logicalDeviceId;
-        if (id !== undefined && id !== "" && !distinctDevices.has(id)) {
-          distinctDevices.set(id, t.deviceName);
+      //
+      // Count devices via deviceKey, NOT logicalDeviceId alone: a legacy device
+      // has none, so keying on it made those devices invisible here. A Vega
+      // device_id would then match no target, count zero devices, look like
+      // "nothing to disambiguate" and fall through to the priority target — i.e.
+      // straight into another device's runtime (a Fusebox iOS/Android app on the
+      // same Metro wins the priority list), so debugger-evaluate would run JS in
+      // the wrong app.
+      const distinctDevices = new Map<string, { name?: string; logicalId?: string }>();
+      for (const t of pool) {
+        const key = deviceKey(t);
+        if (key && !distinctDevices.has(key)) {
+          distinctDevices.set(key, {
+            name: t.deviceName,
+            logicalId: t.reactNative?.logicalDeviceId,
+          });
         }
       }
       if (distinctDevices.size > 1) {
-        const listed = [...distinctDevices.entries()]
-          .map(([id, name]) => (name ? `${name} (${id})` : id))
+        // Only a logicalDeviceId is a usable device_id, so never print the
+        // internal key for a legacy device — it would read like an id the caller
+        // could pass back, and it is not one.
+        const listed = [...distinctDevices.values()]
+          .map((d) =>
+            d.logicalId
+              ? `${d.name ?? "unknown"} (${d.logicalId})`
+              : `${d.name ?? "unknown"} (legacy inspector — no logicalDeviceId)`
+          )
           .join(", ");
         throw new Error(
           `No debugger target matches device_id "${deviceId}". ` +
             `${distinctDevices.size} devices are connected to Metro on port ${port}: ` +
-            `${listed}. Pass the logicalDeviceId (in parentheses) of the desired ` +
-            `device as device_id (the logicalDeviceId returned by debugger-connect).`
+            `${listed}. Re-target with the logicalDeviceId in parentheses — that is what ` +
+            `debugger-connect returns and what subsequent debugger-* calls must pass. ` +
+            `A legacy-inspector device (RN 0.72 / Vega) reports none and cannot be singled ` +
+            `out of a shared Metro: give it its own Metro port.`
         );
       }
     }

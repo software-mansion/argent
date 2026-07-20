@@ -31,6 +31,7 @@ import {
 } from "./content.js";
 import {
   autoScreenshotEnabled,
+  containsSecretPlaceholder,
   getUdidFromArgs,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
@@ -94,10 +95,10 @@ export interface StartMcpServerOptions {
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
   // First-run telemetry notice, once per installation, for users who reach a
-  // telemetry-enabled build via an update: `argent update` runs the OLD binary
-  // (postinstall skipped), so the editor relaunching `argent mcp` is often the
-  // first time the new code runs. stdout is the JSON-RPC channel — the notice
-  // MUST go to stderr to avoid corrupting it.
+  // telemetry-enabled build via an update: `argent update` runs the OLD binary,
+  // so the editor relaunching `argent mcp` is often the first time the new
+  // code runs. stdout is the JSON-RPC channel — the notice MUST go to stderr
+  // to avoid corrupting it.
   if (shouldShowFirstRunNotice()) {
     process.stderr.write(`[argent] ${FIRST_RUN_NOTICE}\n`);
     markFirstRunNoticeShown();
@@ -303,7 +304,23 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
-      if (autoScreenshotOn && udid && shouldAutoScreenshot(params.name)) {
+      if (
+        autoScreenshotOn &&
+        udid &&
+        shouldAutoScreenshot(params.name) &&
+        containsSecretPlaceholder(params.arguments)
+      ) {
+        // The tool-server typed the *resolved* secret; a screenshot of a
+        // non-secure-entry field would hand the plaintext back to the model
+        // as pixels. Tell the agent why there is no image instead.
+        content = [
+          ...content,
+          {
+            type: "text" as const,
+            text: "Auto-screenshot skipped: the input contains a {{secret:…}} placeholder, and a screenshot of this screen could reveal the typed secret. Submit or navigate away first, then verify the resulting screen as usual.",
+          },
+        ];
+      } else if (autoScreenshotOn && udid && shouldAutoScreenshot(params.name)) {
         // Wait until the screen has settled before capturing, bounded by the
         // per-tool budget. Replaces a blind `setTimeout(delayMs)`: the
         // `await-screen-idle` tool polls the AX tree server-side and returns as

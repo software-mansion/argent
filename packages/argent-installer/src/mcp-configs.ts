@@ -21,8 +21,13 @@ import {
   editJsoncFile,
   isYarnPnp,
   getLocalArgentBinRelPath,
+  RULES_DIR,
+  AGENTS_DIR,
+  ARGENT_SKILL_PREFIX,
 } from "./utils.js";
-import { isMap } from "yaml";
+import { isMap, parse as parseYamlText } from "yaml";
+import { parse as parseJsoncText, type ParseError } from "jsonc-parser";
+import { parse as parseTomlText } from "smol-toml";
 import escapeStringRegexp from "escape-string-regexp";
 
 const TOOL_SERVER_BUNDLE = path.join(import.meta.dirname, "tool-server.cjs");
@@ -287,6 +292,371 @@ function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): voi
   writeToml(filePath, data);
 }
 
+// ── Installed-editor evidence ─────────────────────────────────────────────────
+// A bare editor config directory (`.cursor`, `.claude`, `.vscode`, …) is NOT
+// proof the editor is installed: argent itself creates those directories when
+// it writes an MCP config, an allowlist, rules, agents, or skills there.
+// Counting them as detection made every later `init` "detect" editors the
+// user never installed (self-fulfilling detection). A directory is evidence
+// only when it holds something argent doesn't write, or an argent-writable
+// file carries non-argent content. Anything empty, unreadable, or unparseable
+// counts as evidence — when unsure, keep the old dirExists behavior.
+//
+// Every adapter whose detect() probes a directory or file argent itself
+// creates must route through this check — an asymmetric subset just moves the
+// self-fulfilling detection to the unchecked editors (and, worse, makes the
+// nothing-detected → configure-everything fallback fire more often).
+
+function dirHasEditorEvidence(dir: string, looksArgentOnly: (dir: string) => boolean): boolean {
+  return dirExists(dir) && !looksArgentOnly(dir);
+}
+
+function fileHasEditorEvidence(
+  filePath: string,
+  looksArgentOnly: (filePath: string) => boolean
+): boolean {
+  return fs.existsSync(filePath) && !looksArgentOnly(filePath);
+}
+
+// Strict parses for the evidence check. The shared readJsonc/readToml swallow
+// read/parse errors and return {} — here that would classify a corrupt USER
+// config as argent-only and drop the editor from detection. null = can't read
+// or parse; callers treat it as user evidence.
+function parseJsoncStrict(filePath: string): Record<string, unknown> | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  const errors: ParseError[] = [];
+  const parsed = parseJsoncText(raw, errors, { allowTrailingComma: true }) as unknown;
+  if (errors.length > 0 || parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+    return null;
+  return parsed as Record<string, unknown>;
+}
+
+function parseTomlStrict(filePath: string): Record<string, unknown> | null {
+  try {
+    return parseTomlText(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function parseYamlStrict(filePath: string): Record<string, unknown> | null {
+  try {
+    const parsed = parseYamlText(fs.readFileSync(filePath, "utf8")) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+// The exact document argent's write() leaves in a config file it created
+// itself: a single server container holding only the argent entry (allowlist
+// toggles land INSIDE that entry). remove() prunes empty parents and deletes
+// the emptied file, so any other shape — extra top-level keys, foreign
+// servers, an empty document — is the user's.
+function jsonLooksArgentServerOnly(filePath: string, containerKey: string): boolean {
+  const config = parseJsoncStrict(filePath);
+  if (config === null) return false;
+  const keys = Object.keys(config);
+  if (keys.length !== 1 || keys[0] !== containerKey) return false;
+  const servers = (config[containerKey] ?? {}) as Record<string, unknown>;
+  const serverKeys = Object.keys(servers);
+  return serverKeys.length === 1 && serverKeys[0] === MCP_SERVER_KEY;
+}
+
+// rules/ and agents/ are byte copies of the bundled payloads — argent-written
+// means every entry matches a bundled name exactly (a user's own
+// "argent-notes.md" must NOT pass). skills/ entries come from the skills CLI;
+// argent reserves the ARGENT_SKILL_PREFIX namespace there. An empty dir was
+// not left by argent (its copies always carry content) — that's user evidence.
+let bundledManagedNamesCache: Map<string, Set<string>> | null = null;
+function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
+  if (!bundledManagedNamesCache) bundledManagedNamesCache = new Map();
+  const cached = bundledManagedNamesCache.get(kind);
+  if (cached) return cached;
+  let names: Set<string>;
+  try {
+    names = new Set(fs.readdirSync(kind === "rules" ? RULES_DIR : AGENTS_DIR));
+  } catch {
+    names = new Set();
+  }
+  bundledManagedNamesCache.set(kind, names);
+  return names;
+}
+
+function managedDirLooksArgentOnly(dir: string, kind: "rules" | "agents" | "skills"): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  if (kind === "skills") return entries.every((name) => name.startsWith(ARGENT_SKILL_PREFIX));
+  const bundled = bundledManagedNames(kind);
+  return entries.every((name) => bundled.has(name));
+}
+
+function cursorDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every((entry) => {
+    const full = path.join(dir, entry);
+    if (entry === "mcp.json") {
+      return jsonLooksArgentServerOnly(full, "mcpServers");
+    }
+    if (entry === "permissions.json") {
+      // Written by this adapter's addAllowlist: { mcpAllowlist: ["argent:*"] }.
+      const config = parseJsoncStrict(full);
+      if (config === null) return false;
+      const keys = Object.keys(config);
+      if (keys.length !== 1 || keys[0] !== "mcpAllowlist") return false;
+      const list = config.mcpAllowlist;
+      return (
+        Array.isArray(list) &&
+        list.length > 0 &&
+        list.every((rule) => rule === CURSOR_ALLOWLIST_PATTERN)
+      );
+    }
+    if (entry === "rules" || entry === "agents" || entry === "skills") {
+      return managedDirLooksArgentOnly(full, entry);
+    }
+    return false;
+  });
+}
+
+// .claude/settings.json as argent's addClaudePermission leaves it in a file
+// it created: only permissions.allow, holding only argent's own rule.
+function claudeSettingsLooksArgentOnly(filePath: string): boolean {
+  const config = parseJsoncStrict(filePath);
+  if (config === null) return false;
+  const keys = Object.keys(config);
+  if (keys.length !== 1 || keys[0] !== "permissions") return false;
+  const permissions = config.permissions;
+  if (!isRecord(permissions)) return false;
+  const permKeys = Object.keys(permissions);
+  if (permKeys.length !== 1 || permKeys[0] !== "allow") return false;
+  const allow = permissions.allow;
+  return (
+    Array.isArray(allow) && allow.length > 0 && allow.every((rule) => rule === PERMISSION_RULE)
+  );
+}
+
+function claudeDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every((entry) => {
+    const full = path.join(dir, entry);
+    if (entry === "settings.json") return claudeSettingsLooksArgentOnly(full);
+    if (entry === "rules" || entry === "agents" || entry === "skills") {
+      return managedDirLooksArgentOnly(full, entry);
+    }
+    return false;
+  });
+}
+
+// .vscode holds a single argent artifact: mcp.json. Anything else in the dir
+// (settings.json, launch.json, extensions.json, …) is the user's workspace.
+function vscodeDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every(
+    (entry) => entry === "mcp.json" && jsonLooksArgentServerOnly(path.join(dir, entry), "servers")
+  );
+}
+
+// ~/.codeium/windsurf holds a single argent artifact: mcp_config.json (the
+// alwaysAllow toggle lives inside the argent entry).
+function windsurfDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every(
+    (entry) =>
+      entry === "mcp_config.json" && jsonLooksArgentServerOnly(path.join(dir, entry), "mcpServers")
+  );
+}
+
+// ~/.config/zed/settings.json as argent leaves it in a file it created:
+// context_servers.argent plus the allowlist toggle, which is the one argent
+// write that lands OUTSIDE the server entry (agent.tool_permissions.default —
+// "allow" from addAllowlist, or "confirm" after removeAllowlist resets it).
+function zedSettingsLooksArgentOnly(filePath: string): boolean {
+  const config = parseJsoncStrict(filePath);
+  if (config === null) return false;
+  const keys = Object.keys(config);
+  if (keys.length === 0) return false;
+  return keys.every((key) => {
+    if (key === "context_servers") {
+      const servers = config.context_servers;
+      if (!isRecord(servers)) return false;
+      const serverKeys = Object.keys(servers);
+      return serverKeys.length === 1 && serverKeys[0] === MCP_SERVER_KEY;
+    }
+    if (key === "agent") {
+      const agent = config.agent;
+      if (!isRecord(agent)) return false;
+      const agentKeys = Object.keys(agent);
+      if (agentKeys.length !== 1 || agentKeys[0] !== "tool_permissions") return false;
+      const perms = agent.tool_permissions;
+      if (!isRecord(perms)) return false;
+      const permKeys = Object.keys(perms);
+      return (
+        permKeys.length === 1 &&
+        permKeys[0] === "default" &&
+        (perms.default === "allow" || perms.default === "confirm")
+      );
+    }
+    return false;
+  });
+}
+
+function zedDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every(
+    (entry) => entry === "settings.json" && zedSettingsLooksArgentOnly(path.join(dir, entry))
+  );
+}
+
+function geminiDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every((entry) => {
+    const full = path.join(dir, entry);
+    // The trust:true toggle lives inside the argent entry.
+    if (entry === "settings.json") return jsonLooksArgentServerOnly(full, "mcpServers");
+    if (entry === "rules" || entry === "agents") return managedDirLooksArgentOnly(full, entry);
+    return false;
+  });
+}
+
+// ~/.hermes holds a single argent artifact: config.yaml with only
+// mcp_servers.argent.
+function hermesConfigLooksArgentOnly(filePath: string): boolean {
+  const config = parseYamlStrict(filePath);
+  if (config === null) return false;
+  const keys = Object.keys(config);
+  if (keys.length !== 1 || keys[0] !== "mcp_servers") return false;
+  const servers = config.mcp_servers;
+  if (!isRecord(servers)) return false;
+  const serverKeys = Object.keys(servers);
+  return serverKeys.length === 1 && serverKeys[0] === MCP_SERVER_KEY;
+}
+
+function hermesDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every(
+    (entry) => entry === "config.yaml" && hermesConfigLooksArgentOnly(path.join(dir, entry))
+  );
+}
+
+// .kiro holds a single argent artifact: settings/mcp.json (autoApprove lives
+// inside the argent entry).
+function kiroDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every((entry) => {
+    if (entry !== "settings") return false;
+    const settingsDir = path.join(dir, entry);
+    let settingsEntries: string[];
+    try {
+      settingsEntries = fs.readdirSync(settingsDir);
+    } catch {
+      return false;
+    }
+    if (settingsEntries.length === 0) return false;
+    return settingsEntries.every(
+      (name) =>
+        name === "mcp.json" && jsonLooksArgentServerOnly(path.join(settingsDir, name), "mcpServers")
+    );
+  });
+}
+
+function codexDirLooksArgentOnly(dir: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) return false;
+  return entries.every((entry) => {
+    const full = path.join(dir, entry);
+    if (entry === "config.toml") {
+      const config = parseTomlStrict(full);
+      if (config === null) return false;
+      const configEntries = Object.entries(config);
+      // An empty document isn't argent's either — remove() deletes the file
+      // once it holds nothing.
+      if (configEntries.length === 0) return false;
+      return configEntries.every(([key, value]) => {
+        if (key === "mcp_servers") {
+          const servers = (value ?? {}) as Record<string, unknown>;
+          const serverKeys = Object.keys(servers);
+          return serverKeys.length === 1 && serverKeys[0] === MCP_SERVER_KEY;
+        }
+        if (key === "developer_instructions") {
+          // Argent-written instructions live entirely inside the managed
+          // markers; any text outside them is the user's own.
+          return typeof value === "string" && removeArgentSection(value) === "";
+        }
+        return false;
+      });
+    }
+    if (entry === "rules" || entry === "agents" || entry === "skills") {
+      return managedDirLooksArgentOnly(full, entry);
+    }
+    return false;
+  });
+}
+
 // ── Cursor adapter ────────────────────────────────────────────────────────────
 // MARK: Cursor
 // Format: { mcpServers: { argent: { command, args, env } } }
@@ -296,7 +666,8 @@ const cursorAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), ".cursor")) || dirExists(path.join(process.cwd(), ".cursor"))
+      dirHasEditorEvidence(path.join(homedir(), ".cursor"), cursorDirLooksArgentOnly) ||
+      dirHasEditorEvidence(path.join(process.cwd(), ".cursor"), cursorDirLooksArgentOnly)
     );
   },
 
@@ -441,11 +812,16 @@ const claudeAdapter: McpConfigAdapter = {
   name: "Claude Code",
 
   detect(): boolean {
+    // .mcp.json and the .claude dirs are argent-created (MCP entry;
+    // permissions/rules/agents/skills), so both go through the evidence check.
+    // ~/.claude.json is Claude Code's primary config (OAuth, per-project
+    // state) — a real install always has more in it than argent's entry.
+    const mcpJsonArgentOnly = (p: string): boolean => jsonLooksArgentServerOnly(p, "mcpServers");
     return (
-      fs.existsSync(path.join(process.cwd(), ".mcp.json")) ||
-      fs.existsSync(path.join(homedir(), ".claude.json")) ||
-      dirExists(path.join(process.cwd(), ".claude")) ||
-      dirExists(path.join(homedir(), ".claude"))
+      fileHasEditorEvidence(path.join(process.cwd(), ".mcp.json"), mcpJsonArgentOnly) ||
+      fileHasEditorEvidence(path.join(homedir(), ".claude.json"), mcpJsonArgentOnly) ||
+      dirHasEditorEvidence(path.join(process.cwd(), ".claude"), claudeDirLooksArgentOnly) ||
+      dirHasEditorEvidence(path.join(homedir(), ".claude"), claudeDirLooksArgentOnly)
     );
   },
 
@@ -594,8 +970,12 @@ const vscodeAdapter: McpConfigAdapter = {
   name: "VS Code",
 
   detect(): boolean {
+    // The project .vscode dir is argent-created (mcp.json) → evidence check.
+    // ~/.vscode is written only by VS Code itself (extensions cache), never by
+    // argent, so its bare existence remains valid evidence.
     return (
-      dirExists(path.join(process.cwd(), ".vscode")) || dirExists(path.join(homedir(), ".vscode"))
+      dirHasEditorEvidence(path.join(process.cwd(), ".vscode"), vscodeDirLooksArgentOnly) ||
+      dirExists(path.join(homedir(), ".vscode"))
     );
   },
 
@@ -697,7 +1077,10 @@ const windsurfAdapter: McpConfigAdapter = {
   name: "Windsurf",
 
   detect(): boolean {
-    return dirExists(path.join(homedir(), ".codeium", "windsurf"));
+    return dirHasEditorEvidence(
+      path.join(homedir(), ".codeium", "windsurf"),
+      windsurfDirLooksArgentOnly
+    );
   },
 
   projectPath(): string | null {
@@ -775,7 +1158,7 @@ const zedAdapter: McpConfigAdapter = {
   name: "Zed",
 
   detect(): boolean {
-    return dirExists(path.join(homedir(), ".config", "zed"));
+    return dirHasEditorEvidence(path.join(homedir(), ".config", "zed"), zedDirLooksArgentOnly);
   },
 
   projectPath(root: string): string | null {
@@ -860,7 +1243,8 @@ const geminiAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), ".gemini")) || dirExists(path.join(process.cwd(), ".gemini"))
+      dirHasEditorEvidence(path.join(homedir(), ".gemini"), geminiDirLooksArgentOnly) ||
+      dirHasEditorEvidence(path.join(process.cwd(), ".gemini"), geminiDirLooksArgentOnly)
     );
   },
 
@@ -947,8 +1331,8 @@ const codexAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), CODEX_FILENAME)) ||
-      dirExists(path.join(process.cwd(), CODEX_FILENAME))
+      dirHasEditorEvidence(path.join(homedir(), CODEX_FILENAME), codexDirLooksArgentOnly) ||
+      dirHasEditorEvidence(path.join(process.cwd(), CODEX_FILENAME), codexDirLooksArgentOnly)
     );
   },
 
@@ -1056,7 +1440,7 @@ const hermesAdapter: McpConfigAdapter = {
   name: "Hermes",
 
   detect(): boolean {
-    return dirExists(path.join(homedir(), ".hermes"));
+    return dirHasEditorEvidence(path.join(homedir(), ".hermes"), hermesDirLooksArgentOnly);
   },
 
   projectPath(): string | null {
@@ -1231,7 +1615,10 @@ const kiroAdapter: McpConfigAdapter = {
   name: "Kiro",
 
   detect(): boolean {
-    return dirExists(path.join(homedir(), ".kiro")) || dirExists(path.join(process.cwd(), ".kiro"));
+    return (
+      dirHasEditorEvidence(path.join(homedir(), ".kiro"), kiroDirLooksArgentOnly) ||
+      dirHasEditorEvidence(path.join(process.cwd(), ".kiro"), kiroDirLooksArgentOnly)
+    );
   },
 
   projectPath(root: string): string | null {

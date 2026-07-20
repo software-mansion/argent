@@ -855,11 +855,53 @@ describe("await-ui-element tool", () => {
       );
     });
 
-    it("accepts a valid visible-condition payload", () => {
-      expect(
-        schema.safeParse({ condition: "visible", udid: IOS_UDID, selector: { role: "button" } })
-          .success
-      ).toBe(true);
+    it("rejects unknown selector constraints instead of silently dropping them", () => {
+      const result = schema.safeParse({
+        condition: "visible",
+        udid: IOS_UDID,
+        selector: { text: "Order", textMatches: "^Order #\\d+$" },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["selector"],
+            keys: ["textMatches"],
+          })
+        );
+      }
+    });
+
+    it("rejects a selector containing only an unknown field with a pointed error", () => {
+      const result = schema.safeParse({
+        condition: "exists",
+        udid: IOS_UDID,
+        selector: { roel: "button" },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["selector"],
+            keys: ["roel"],
+          })
+        );
+      }
+    });
+
+    it.each([
+      { text: "Order" },
+      { identifier: "order-row" },
+      { role: "button" },
+      { text: "Order", identifier: "order-row", role: "button" },
+    ])("accepts the documented selector fields: %j", (selector) => {
+      expect(schema.safeParse({ condition: "visible", udid: IOS_UDID, selector }).success).toBe(
+        true
+      );
     });
   });
 });
