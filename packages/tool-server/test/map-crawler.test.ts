@@ -371,6 +371,32 @@ describe("crawlApp — replay and backtracking", () => {
     expect(snap.status).toBe("completed");
   });
 
+  it("continues from a revisited screen that still has work, with no navigation at all", async () => {
+    // home → a, then a's tap lands back on home while home still has "To B"
+    // pending: the crawler must simply keep exploring home from where it
+    // stands — no back tap, no restart — and still discover B.
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A", "To B"]),
+        a: screenTree("Screen A", ["To Home"]),
+        b: screenTree("Screen B", []),
+      },
+      { home: { "To A": "a", "To B": "b" }, a: { "To Home": "home" } },
+      "home"
+    );
+    const store = makeStore();
+    await crawl(app, store);
+    const snap = store.snapshot();
+
+    expect(snap.nodes.map((x) => x.title).sort()).toEqual(["Home", "Screen A", "Screen B"]);
+    expect(
+      snap.edges.some((e) => e.from === "s1" && e.to === "s0" && e.action.label === "To Home")
+    ).toBe(true);
+    expect(snap.stats.restarts).toBe(0);
+    expect(app.restartCount).toBe(1); // only the clean-root restart at launch
+    expect(snap.status).toBe("completed");
+  });
+
   it("iOS: adopts the known screen the back tap landed on instead of restarting", async () => {
     // Closing a sheet drops to its presenter, not to the page the crawler
     // asked to return to. When the landed screen still has unexplored

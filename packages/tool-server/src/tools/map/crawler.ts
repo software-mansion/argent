@@ -452,10 +452,16 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
 
     const known = byKey.get(key);
     if (known) {
-      // Revisit of an already-mapped screen: record the edge, then get back
-      // to unexplored work — ideally `current`, or whatever known screen the
-      // back navigation dropped us on.
       store.addEdge(current.id, known.id, action);
+      // Revisit of an already-mapped screen. If it still has unexplored
+      // actions, keep crawling from right here — we are already standing on
+      // it, and `current`'s remaining actions stay owed to the frontier
+      // backtrack. Only when the landed screen is spent is it worth paying
+      // navigation to get back to `current`.
+      if (!known.exhausted && known.nextAction < known.actions.length) {
+        current = known;
+        continue;
+      }
       const landed = await returnToCurrent(current, tree);
       if (aborted()) {
         store.cancel();
