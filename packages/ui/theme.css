@@ -264,4 +264,6 @@
   --map-zoom-max: 2.5;
   --map-zoom-intensity: 0.0015; /* wheel-px → zoom-factor exponent (cursor-anchored) */
   --map-elapsed-tick-ms: 1000; /* elapsed-clock refresh while a crawl runs */
+  --map-activity-dot-size: 6px; /* Map-tab dot marking an unseen running crawl */
+  --map-activity-pulse-dur: 1.6s; /* that dot's pulse cadence */
 }
