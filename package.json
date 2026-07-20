@@ -12,24 +12,26 @@
     "download:native-binaries": "bash scripts/download-native-binaries.sh",
     "download:trace-processor": "bash scripts/download-trace-processor.sh",
     "build:ios-binaries": "bash packages/native-devtools-ios/scripts/build.sh dev",
+    "build:ios-binaries:tcp": "bash packages/native-devtools-ios/scripts/build.sh dev --transport tcp",
     "build:android-binaries": "bash packages/native-devtools-android/scripts/build.sh",
     "pack": "node scripts/pack-mcp.cjs",
     "pack:mcp": "node scripts/pack-mcp.cjs",
-    "pack:mcp:local": "npm run download:simulator-server && npm run build:ios-binaries && npm run build:android-binaries && npm run download:trace-processor && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
+    "pack:mcp:local": "npm run download:simulator-server && npm run build:ios-binaries && npm run build:ios-binaries:tcp && npm run build:android-binaries && npm run download:trace-processor && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
     "dev": "node scripts/dev.cjs",
     "format": "prettier --write .",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
-    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs",
+    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs scripts/extract-tools.test.mjs scripts/next-canary-version.test.mjs",
     "check:versions": "node scripts/check-workspace-versions.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.5.0",
-    "globals": "^17.6.0",
-    "prettier": "^3.8.4",
-    "semver": "^7.8.0",
-    "typescript-eslint": "^8.61.1"
+    "globals": "^17.7.0",
+    "prettier": "^3.8.5",
+    "semver": "^7.8.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.0"
   }
 }

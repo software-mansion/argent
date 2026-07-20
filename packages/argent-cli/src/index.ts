@@ -1,6 +1,8 @@
 export { run, type RunCommandOptions } from "./run.js";
+export { flow, type FlowCommandOptions } from "./flow.js";
 export { tools, type ToolsCommandOptions } from "./tools.js";
 export { server } from "./server.js";
+export { lens, type LensCommandOptions } from "./lens.js";
 export { enable, disable, flags } from "./flags.js";
 export { link, unlink } from "./link.js";
 // Backward-compat re-export: the flag primitives now live in

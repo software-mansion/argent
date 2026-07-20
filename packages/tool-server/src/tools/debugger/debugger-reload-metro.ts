@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DISABLE_LOGBOX_SCRIPT } from "../../utils/debugger/scripts/disable-logbox";
@@ -9,7 +10,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
     ),
 });
 
@@ -35,7 +36,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
   // want that on Chromium later, it deserves its own tool.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, _params) {
     const api = services.debugger as JsRuntimeDebuggerApi;

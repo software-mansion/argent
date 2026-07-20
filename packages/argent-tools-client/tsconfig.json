@@ -11,5 +11,6 @@
     "declaration": true,
     "sourceMap": true
   },
+  "references": [{ "path": "../archive" }],
   "include": ["src/**/*"]
 }

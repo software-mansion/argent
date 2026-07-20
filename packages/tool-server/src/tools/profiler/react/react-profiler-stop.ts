@@ -19,13 +19,14 @@ import {
   RESOLVE_FIBER_META_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
     ),
 });
 
@@ -167,7 +168,7 @@ Fails if no active profiling session exists or the CDP connection was lost durin
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${canonicalDeviceId(params.device_id)}`;
       const snapshot = registry.getSnapshot();
       const entry = snapshot.services.get(psUrn);
 
@@ -209,9 +210,19 @@ Fails if no active profiling session exists or the CDP connection was lost durin
       // that would later crash `profile.samples.length` with a generic
       // TypeError — detect it up front and explain.
       if (!api.profilingActive) {
-        throw new Error(
+        throw new FailureError(
           "No active profiling run to stop. The session exists but Hermes CPU sampling was never started — typically because react-profiler-start failed before reaching the sampler (often on release builds without React DevTools). " +
-            "Check the error react-profiler-start returned, address the underlying cause (rebuild in dev mode, reconnect the debugger, etc.), then call react-profiler-start again."
+            "Check the error react-profiler-start returned, address the underlying cause (rebuild in dev mode, reconnect the debugger, etc.), then call react-profiler-start again.",
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
+            failure_stage: "react_profiler_stop_inactive",
+            failure_area: "tool_server",
+            // Internal session-state (start never reached the sampler), not caller
+            // input — matches the sibling session-lookup site above and the
+            // native NATIVE_PROFILER_NO_ACTIVE_SESSION so this code carries one
+            // consistent kind rather than splitting by which guard tripped.
+            error_kind: "not_found",
+          }
         );
       }
 
@@ -238,10 +249,16 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         !Array.isArray(profile.nodes) ||
         !Array.isArray(profile.timeDeltas)
       ) {
-        throw new Error(
+        throw new FailureError(
           "Hermes Profiler.stop returned a malformed profile (missing samples/nodes/timeDeltas). " +
             "This usually means CPU sampling was never actually started for this session — most often a release build without React DevTools, or a Metro reload between start and stop. " +
-            "Call react-profiler-start on a dev build and retry."
+            "Call react-profiler-start on a dev build and retry.",
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_NO_CPU_PROFILE,
+            failure_stage: "react_profiler_stop_malformed_profile",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          }
         );
       }
 

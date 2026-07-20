@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ServiceRef, ToolDefinition } from "@argent/registry";
+import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
 import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
@@ -45,7 +46,11 @@ const MAX_BODY_SIZE = 1000;
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("Device UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .describe(
+      "Device id from list-devices (iOS simulator UDID or Android serial) — the same id used with debugger-connect."
+    ),
   requestId: z.string().describe("The requestId from view-network-logs to get full details for"),
   includeBody: z.coerce
     .boolean()
@@ -121,7 +126,7 @@ Returns an error message string if the requestId is not found — use view-netwo
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
-    return { inspector: `NetworkInspector:${params.port}:${params.device_id}` };
+    return { inspector: `NetworkInspector:${params.port}:${canonicalDeviceId(params.device_id)}` };
   },
   async execute(services, params) {
     // Chromium: build details from the server-side CDP Network recording, and

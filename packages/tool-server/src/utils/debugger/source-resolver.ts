@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { parse as parseStackTrace } from "stacktrace-parser";
 
 // Source extensions we are willing to read into a debug response. Anything
 // else (e.g., ~/.zshrc, /etc/passwd, an .env file inside the project, or a
@@ -9,6 +10,11 @@ import * as path from "node:path";
 const ALLOWED_SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
 
 function isInsideProject(absFile: string, projectRoot: string): boolean {
+  // Containment against an empty root is meaningless: `path.resolve("")` is the
+  // tool-server's cwd, not the app's, so every path under the tool-server would
+  // read as "inside the project". Callers must not get here with an empty root
+  // (readSourceFragment bails first), but keep the predicate total.
+  if (!projectRoot) return false;
   const resolvedRoot = path.resolve(projectRoot);
   const resolvedFile = path.resolve(absFile);
   const rel = path.relative(resolvedRoot, resolvedFile);
@@ -46,20 +52,19 @@ interface StackFrame {
 /**
  * Parse _debugStack into individual frames.
  * Frame[0] is React internal, frame[1] is the JSX call-site in parent.
+ *
+ * Delegates to `stacktrace-parser`, which handles the V8/Hermes/JSC line
+ * shapes RN emits (and locations buried in a bundle URL with its own `:port`
+ * and query string) far more reliably than a hand-rolled `at fn (file:l:c)`
+ * regex.
  */
 export function parseDebugStack(stack: string): StackFrame[] {
-  const lines = stack.split("\n").filter((l) => l.trim().startsWith("at "));
-
-  return lines.map((line) => {
-    const match = line.trim().match(/at (?:([^\s(]+) \()?([^)]+):(\d+):(\d+)\)?/);
-    if (!match) return { fn: "unknown", file: "", line: 0, col: 0 };
-    return {
-      fn: match[1] || "anonymous",
-      file: match[2]!,
-      line: parseInt(match[3]!, 10),
-      col: parseInt(match[4]!, 10),
-    };
-  });
+  return parseStackTrace(stack).map((frame) => ({
+    fn: frame.methodName?.trim() || "anonymous",
+    file: frame.file ?? "",
+    line: frame.lineNumber ?? 0,
+    col: frame.column ?? 0,
+  }));
 }
 
 /**
@@ -114,7 +119,14 @@ export function createSourceResolver(port: number, projectRoot: string): SourceR
       // react-navigation route components), which we keep.
       if (/^https?:\/\//.test(frame.file)) return null;
 
-      const relFile = frame.file.replace(projectRoot + "/", "").replace(/^\/+/, "");
+      // Relativize against the project root when Metro reported one. With no
+      // root (RN 0.72 / Vega Metro sends no X-React-Native-Project-Root) there
+      // is nothing to strip, and `replace("" + "/", "")` would delete the first
+      // slash ANYWHERE in the path — turning "src/screens/Home.tsx" into
+      // "srcscreens/Home.tsx" — so hand the path back untouched instead.
+      const relFile = projectRoot
+        ? frame.file.replace(projectRoot + "/", "").replace(/^\/+/, "")
+        : frame.file;
 
       return {
         file: relFile,
@@ -137,6 +149,11 @@ export function createSourceResolver(port: number, projectRoot: string): SourceR
     symbolicate: symbolicateFrame,
 
     async readSourceFragment(location: SourceLocation, contextLines = 3): Promise<string | null> {
+      // Fail closed with no project root (RN 0.72 / Vega Metro reports none):
+      // containment cannot be established, and the checks below would otherwise
+      // lean on `fs.realpath("")` rejecting — an implementation detail of the
+      // promises API (the sync one happily returns the tool-server's cwd).
+      if (!projectRoot) return null;
       try {
         // location.file ultimately comes from a React fiber's
         // _debugSource.fileName, which is attacker-controllable code running

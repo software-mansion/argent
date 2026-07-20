@@ -1,9 +1,6 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as readline from "node:readline";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   TypedEventEmitter,
   FAILURE_CODES,
@@ -12,16 +9,79 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { bootstrapDylibPath, bootstrapDylibPathTcp } from "@argent/native-devtools-ios";
-import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
+import { pickIosHost, buildDyldInsertLibraries, type IosEndpoint } from "../utils/ios-host";
+
+// Re-exported for the env-merging unit test that imports it from this module.
+export { buildDyldInsertLibraries };
 
 export type NativeDevtoolsTransport = "unix" | "tcp";
 
-export const NATIVE_DEVTOOLS_TCP_PORT = Number(process.env.NATIVE_DEVTOOLS_TCP_PORT) || 9230;
-
-const execFileAsync = promisify(execFile);
-
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
+
+/**
+ * Whether the Argent native devtools dylib can ever be injected into an app.
+ *
+ * Apple system / built-in apps (bundle ids under `com.apple.`) are platform
+ * binaries shipped with library validation enabled. The simulator refuses to
+ * honour `DYLD_INSERT_LIBRARIES` for them, so our dylib can never load — no
+ * amount of relaunching changes that. Third-party apps the user installs carry
+ * no such restriction and inject normally. Treating the `com.apple.` prefix as
+ * non-injectable gives the native-* tools a terminal signal instead of an
+ * unbounded restart-app → retry loop.
+ *
+ * The prefix is matched case-insensitively: iOS treats bundle ids
+ * case-insensitively for launch and uniqueness, and Apple reserves the
+ * `com.apple` namespace in every casing, so any casing of `com.apple.` is a
+ * system app. Apple's real ids always carry the prefix in lowercase (the
+ * segments after it vary in case — e.g. `com.apple.Preferences`), but a stray
+ * re-cased prefix must not slip through as injectable and restart-loop.
+ */
+export function isInjectableBundleId(bundleId: string): boolean {
+  return !bundleId.toLowerCase().startsWith("com.apple.");
+}
+
+/**
+ * The invariant half of the non-injectable recovery guidance: which tools NOT
+ * to fall back to. Shared VERBATIM by every surface that reports this terminal
+ * state (this precheck's throw, the `describe` iOS fallback hint, and the
+ * `native-devtools-status` description) so none of them can drift into
+ * recommending a dead-end. Every native-* *feature* tool — notably the two
+ * view-at-point tools, which run this same 3-arg precheck — re-throws this
+ * identical error, so pointing an agent at any of them just loops it back here.
+ * (`native-devtools-status` is the lone exception: it runs the 2-arg precheck
+ * and *reports* `injectable: false` rather than throwing — see the precheck.)
+ */
+export const NON_INJECTABLE_NATIVE_WARNING =
+  "Do not fall back to the native-devtools feature tools (native-describe-screen, " +
+  "native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, " +
+  "native-user-interactable-view-at-point) — they run the same injection precheck and fail " +
+  "with the same non-injectable error.";
+
+/**
+ * Full recovery guidance for surfaces reached BEFORE `describe` has been tried
+ * (the precheck throw from a native-* tool, and the `native-devtools-status`
+ * description). `describe` reads these apps via the ax-service without injection
+ * and `screenshot` is always available, so both are safe next steps here.
+ *
+ * The `native-devtools-status` description INLINES this text rather than
+ * interpolating the constant: tool descriptions must be plain literals so
+ * scripts/extract-tools.mjs can read them statically for the spidershield scan.
+ * The verbatim match is pinned by native-devtools-status.test.ts — edit both
+ * together.
+ *
+ * The `describe` iOS fallback hint (`NON_INJECTABLE_HINT`) deliberately does NOT
+ * reuse this string: it is reached only after `describe`'s own ax-service path
+ * already returned empty, so re-recommending `describe` there would be circular.
+ * That hint leads with `screenshot` and appends
+ * {@link NON_INJECTABLE_NATIVE_WARNING}, so the dead-end warning is identical
+ * across all three surfaces. (The one runtime exception is that `describeIos`
+ * substitutes the sim's re-boot hint for `NON_INJECTABLE_HINT` when the
+ * ax-service is degraded — see that call site.)
+ */
+export const NON_INJECTABLE_RECOVERY =
+  "Use the standard `describe` tool (its accessibility path reads the screen without injection) " +
+  "or `screenshot` (then interact by coordinate). " +
+  NON_INJECTABLE_NATIVE_WARNING;
 
 // Max consecutive init failures per service instance before it stops retrying.
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
@@ -71,6 +131,31 @@ export async function precheckNativeDevtools(
   udid: string,
   bundleId?: string
 ): Promise<NativeDevtoolsPrecheckBlock | null> {
+  // Terminal case first: an app that can never be injected (Apple system app).
+  // Injectability is a static property of the bundle id, knowable without any
+  // env state, so this fires before the env plumbing below — a given-up sim or
+  // a transient ensureEnvReady failure must not mask the terminal signal behind
+  // init_failed's "re-boot the simulator" guidance (a reboot can never make a
+  // system app injectable), and no env-setup work is spent on an app that can
+  // never load the dylib. Throwing (rather than returning a restart-required
+  // block) makes the native-* feature tools surface a hard error instead of
+  // instructing an unbounded restart→retry loop that can never succeed. The
+  // 2-arg overload (bundleId undefined) must NOT throw: native-devtools-status
+  // reports the state instead, and launch-app / restart-app run it too —
+  // launching or restarting a system app is legitimate, it just never injects.
+  if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
+    throw new FailureError(
+      `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools can never be injected into it. ` +
+        NON_INJECTABLE_RECOVERY,
+      {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+        failure_stage: "native_devtools_precheck",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+
   const existing = api.getInitFailure();
   if (existing?.givenUp) return buildInitFailedResult(udid, existing);
 
@@ -192,158 +277,10 @@ interface AppConnection {
   networkLog: NetworkEvent[];
 }
 
-/** Current bootstrap filename; `libInjectionBootstrap.dylib` is legacy (pre-rename) and still stripped when merging env. */
-const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
-  "libArgentInjectionBootstrap.dylib",
-  "libInjectionBootstrap.dylib",
-]);
-
 function getNativeDevtoolsSocketPath(udid: string): string {
   // Deterministic, short — well under the 104-char macOS Unix socket limit
   // /tmp/argent-nd-XXXXXXXX.sock = 28 chars
   return `/tmp/argent-nd-${udid.slice(0, 8)}.sock`;
-}
-
-function splitDyldInsertLibraries(value: string): string[] {
-  return value
-    .split(":")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
-
-/**
- * Strips Argent bootstrap dylibs (by basename, including the legacy pre-rename name)
- * and entries that don't exist on disk (truncated artifacts from the simctl getenv
- * 127-byte bug, stale paths from old installs, etc.).
- * Entries starting with '@' (loader-path references) are always preserved.
- * Third-party dylibs present on disk (e.g. SimCam) are kept verbatim.
- */
-function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: string): boolean {
-  if (entry === bootstrapPath) {
-    return false;
-  }
-
-  if (ARGENT_BOOTSTRAP_DYLIB_BASENAMES.has(path.basename(entry))) {
-    return false;
-  }
-
-  if (entry.startsWith("@")) {
-    return true;
-  }
-
-  return fs.existsSync(entry);
-}
-
-export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
-  const preserved = splitDyldInsertLibraries(currentValue).filter((entry) =>
-    shouldPreserveDyldInsertLibrariesEntry(entry, bootstrapPath)
-  );
-  return [...preserved, bootstrapPath].join(":");
-}
-
-async function ensureAccessibilityEnabled(udid: string): Promise<void> {
-  // iOS 26+ requires AccessibilityEnabled and ApplicationAccessibilityEnabled to be set
-  // in the simulator's defaults for SwiftUI to populate the accessibility tree.
-  // Without these flags, all UIAccessibility APIs return nil/0 for SwiftUI views.
-  const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
-  await Promise.all(
-    flags.map((flag) =>
-      execFileAsync(
-        "xcrun",
-        [
-          "simctl",
-          "spawn",
-          udid,
-          "defaults",
-          "write",
-          "com.apple.Accessibility",
-          flag,
-          "-bool",
-          "true",
-        ],
-        { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-      )
-    )
-  );
-}
-
-async function ensureEnv(
-  udid: string,
-  endpoint: { transport: "unix"; socketPath: string } | { transport: "tcp"; port: number }
-): Promise<void> {
-  const bootstrapPath =
-    endpoint.transport === "tcp" ? bootstrapDylibPathTcp() : bootstrapDylibPath();
-
-  // Read from launchctl inside the simulator (via simctl spawn) instead of
-  // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
-  // which corrupts the colon-separated path list and causes stale entries to
-  // accumulate on every ensureEnv() cycle.
-  const result = await execFileAsync(
-    "xcrun",
-    ["simctl", "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
-    { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-  ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
-
-  const existing = (result.stdout ?? "").trim();
-  const updated = buildDyldInsertLibraries(existing, bootstrapPath);
-
-  if (updated !== existing) {
-    await execFileAsync(
-      "xcrun",
-      ["simctl", "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  }
-
-  // Always re-set the endpoint env var — deterministic value, cheap no-op if already correct,
-  // ensures correctness after tool-server restarts.
-  if (endpoint.transport === "tcp") {
-    await execFileAsync(
-      "xcrun",
-      [
-        "simctl",
-        "spawn",
-        udid,
-        "launchctl",
-        "setenv",
-        "NATIVE_DEVTOOLS_IOS_CDP_PORT",
-        String(endpoint.port),
-      ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  } else {
-    await execFileAsync(
-      "xcrun",
-      [
-        "simctl",
-        "spawn",
-        udid,
-        "launchctl",
-        "setenv",
-        "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
-        endpoint.socketPath,
-      ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  }
-
-  // Ensure the accessibility runtime is enabled so that describeScreen works on iOS 26+.
-  await ensureAccessibilityEnabled(udid);
-}
-
-async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
-    encoding: "utf8",
-  });
-
-  const bundleIds = new Set<string>();
-  for (const line of stdout.split("\n")) {
-    const match = line.match(/UIKitApplication:([^[]+)/);
-    if (match) {
-      bundleIds.add(match[1].trim());
-    }
-  }
-  return bundleIds;
 }
 
 export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, DeviceInfo> = {
@@ -369,8 +306,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     }
 
     const { device } = opts;
-    const transport: NativeDevtoolsTransport = opts.transport ?? "unix";
-    if (device.platform !== "ios") {
+    if (device.platform !== "ios" && device.platform !== "ios-remote") {
       throw new FailureError(
         `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`,
         {
@@ -381,14 +317,20 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }
       );
     }
+    const host = pickIosHost(device);
+    // Remote sims can't use unix sockets because the QUIC reverse tunnel
+    // only bridges TCP streams.
+    const transport: NativeDevtoolsTransport = host.requiresTcp
+      ? "tcp"
+      : (opts.transport ?? "unix");
 
     const udid = device.id;
     const socketPath = getNativeDevtoolsSocketPath(udid);
-    const tcpPort = NATIVE_DEVTOOLS_TCP_PORT;
-    const endpoint =
-      transport === "tcp"
-        ? ({ transport: "tcp", port: tcpPort } as const)
-        : ({ transport: "unix", socketPath } as const);
+    // For TCP, `port` starts undefined (ephemeral) and is populated by the
+    // listen block below. ensureEnvReady and the dispose path read it after
+    // that point.
+    const endpoint: IosEndpoint =
+      transport === "tcp" ? { transport: "tcp" } : { transport: "unix", socketPath };
     const MAX_LOG_ENTRIES = 1000;
     const connections = new Map<string, AppConnection>();
     const pendingRpc = new Map<
@@ -425,7 +367,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       if (inFlight) return inFlight;
 
       inFlight = Promise.resolve()
-        .then(() => ensureEnv(udid, endpoint))
+        .then(() => host.setupNativeDevtoolsEnv(udid, endpoint))
         .then(() => {
           envSetup = true;
           initFailure = null;
@@ -457,7 +399,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     };
 
     const isAppRunning = async (bundleId: string): Promise<boolean> => {
-      const runningBundleIds = await listRunningUIKitApplicationBundleIds(udid);
+      const runningBundleIds = await host.listRunningBundleIds(udid);
       return runningBundleIds.has(bundleId);
     };
 
@@ -603,8 +545,27 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       });
     });
 
-    if (transport === "tcp") {
-      server.listen(tcpPort, "127.0.0.1");
+    if (endpoint.transport === "tcp") {
+      // `endpoint.port` is undefined here — bind ephemeral and write the
+      // realized port back so each per-device instance gets its own.
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(endpoint.port ?? 0, "127.0.0.1", () => {
+          server.off("error", reject);
+          const addr = server.address();
+          if (addr === null || typeof addr === "string") {
+            server.close();
+            reject(new Error("native-devtools server failed to bind a TCP port"));
+            return;
+          }
+          endpoint.port = addr.port;
+          resolve();
+        });
+      });
+      // Wire the reverse tunnel (no-op on local) before kicking off ensureEnv
+      // so the dylib's first dial — which can happen as soon as the env is
+      // written — lands on our listener.
+      await host.startProxy(udid, endpoint.port!);
     } else {
       server.listen(socketPath);
     }
@@ -740,6 +701,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           );
         }
         pendingRpc.clear();
+        if (endpoint.transport === "tcp") {
+          await host.stopProxy(udid, endpoint.port!);
+        }
       },
       events,
     };

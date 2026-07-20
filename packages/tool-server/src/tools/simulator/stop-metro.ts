@@ -26,7 +26,13 @@ export const stopMetroTool: ToolDefinition<
       // execFileSync (no shell) so `port` can never be shell-interpreted,
       // even if a caller bypasses the zod schema. `port` is also validated to
       // an int by registry.invokeTool before reaching here.
-      const output = execFileSync("lsof", ["-ti", `tcp:${port}`], {
+      //
+      // `-sTCP:LISTEN` restricts the match to the process *listening* on the
+      // port (Metro itself). Without it, `lsof -ti tcp:<port>` also returns
+      // every process holding an ESTABLISHED connection to that port — which
+      // includes the Argent tool-server's own CDP client socket to Metro. We
+      // would then SIGTERM the tool-server along with Metro.
+      const output = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
         encoding: "utf-8",
         timeout: 5_000,
       }).trim();

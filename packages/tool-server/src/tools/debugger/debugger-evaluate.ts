@@ -8,7 +8,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from debugger-connect (iOS simulator UDID, Android logicalDeviceId, or Chromium device id)."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
     ),
   expression: z.string().describe("JavaScript expression to evaluate in the app runtime"),
 });
@@ -18,8 +18,8 @@ export const debuggerEvaluateTool: ToolDefinition<
   { result: unknown; deviceName: string; appName: string; logicalDeviceId: string | undefined }
 > = {
   id: "debugger-evaluate",
-  description: `Execute arbitrary JavaScript in the app's JS runtime via CDP — Hermes on iOS / Android, V8 on Chromium.
-Returns the evaluation result as a JSON-serializable value, along with deviceName, appName, and logicalDeviceId for context. Use when you need to read app state, call app functions, or test logic at runtime. Fails if the expression throws or the runtime is not connected.`,
+  description: `Execute arbitrary JavaScript in the app's JS runtime via CDP — Hermes on iOS / Android / Vega, V8 on Chromium.
+Returns the evaluation result as a JSON-serializable value, along with deviceName, appName, and logicalDeviceId for context. Use when you need to read app state, call app functions, or test logic at runtime. The result is serialized by value, so cyclic objects (many RN runtime values — fiber nodes, navigation refs, global — are cyclic) fail with a serialization error rather than returning silently. Fails if the expression throws or the runtime is not connected.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params) => ({

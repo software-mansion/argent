@@ -9,6 +9,7 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 // esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
+const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
 const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
 const NATIVE_DEVTOOLS_IOS_ENTRY = path.resolve(
@@ -41,6 +42,7 @@ const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/
 // from source (rather than each package's compiled dist/) keeps the bundle
 // independent of build order/freshness.
 const ALIASES = {
+  "@argent/archive": ARCHIVE_ENTRY,
   "@argent/registry": REGISTRY_ENTRY,
   "@argent/native-devtools-ios": NATIVE_DEVTOOLS_IOS_ENTRY,
   "@argent/native-devtools-android": NATIVE_DEVTOOLS_ANDROID_ENTRY,
@@ -75,10 +77,20 @@ const TELEMETRY_DEFINE = {
 // jsonc-parser, which ships both UMD (main) and ESM (module).
 const MAIN_FIELDS = ["module", "main"];
 
-// Banner injected into ESM bundles so any inlined CJS dependencies that call
-// `require()` work without a real CJS context.
+// Banner injected into ESM bundles so any inlined CJS dependencies that rely on
+// the CJS context work: `require()`, plus `__dirname`/`__filename` (e.g.
+// @argent/native-devtools-ios resolves the simulator-server binary dir relative
+// to `__dirname`, which is undefined in an ESM module without this shim). The
+// shimmed values point at the bundle's own location, matching how the CJS
+// tool-server bundle resolves them natively.
 const ESM_REQUIRE_BANNER = {
-  js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
+  js:
+    "import { createRequire as __createRequire } from 'node:module'; " +
+    "import { fileURLToPath as __fileURLToPath } from 'node:url'; " +
+    "import { dirname as __pathDirname } from 'node:path'; " +
+    "const require = __createRequire(import.meta.url); " +
+    "const __filename = __fileURLToPath(import.meta.url); " +
+    "const __dirname = __pathDirname(__filename);",
 };
 
 // ── Asset source/destination paths ─────────────────────────────────────────
@@ -92,6 +104,12 @@ const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
 const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
+// tvOS control binaries. Both are macOS-only: tvos-ax-service runs inside an
+// appletvsimulator, tvos-hid-daemon runs on the host. Unix-socket only.
+const TVOS_AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tvos-ax-service");
+const TVOS_HID_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tvos-hid-daemon");
+const TVOS_AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/tvos-ax-service");
+const TVOS_HID_BIN_DEST = path.resolve(BIN_DIR, "darwin/tvos-hid-daemon");
 // Host platform keys (see hostPlatformKey() in @argent/native-devtools-ios):
 // darwin is a universal binary; Linux ships one single-arch ELF per key.
 const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux", "linux-arm64"];
@@ -189,6 +207,28 @@ const ASSETS = [
     required: false,
     copiedLabel: "ax-service (tcp) binary",
     missLabel: "ax-service (tcp) binary",
+  },
+  // tvOS AX reader — spawned inside an appletvsimulator via simctl to read
+  // the focus-engine accessibility tree. macOS-only, unix-socket transport.
+  {
+    kind: "file",
+    src: TVOS_AX_BIN_SRC,
+    dest: TVOS_AX_BIN_DEST,
+    mode: 0o755,
+    required: false,
+    copiedLabel: "tvos-ax-service binary",
+    missLabel: "tvos-ax-service binary",
+  },
+  // tvOS HID daemon — runs on the macOS host, injects Siri-remote HID events
+  // into the simulator via SimulatorKit. macOS-only, unix-socket transport.
+  {
+    kind: "file",
+    src: TVOS_HID_BIN_SRC,
+    dest: TVOS_HID_BIN_DEST,
+    mode: 0o755,
+    required: false,
+    copiedLabel: "tvos-hid-daemon binary",
+    missLabel: "tvos-hid-daemon binary",
   },
   // Android host-side Perfetto trace processor: the third-party WASM engine
   // (trace_processor.wasm + emscripten glue + the EngineBase decoder + LICENSE).
@@ -490,12 +530,36 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // never opens. Keeping it external means the runtime `require("electron")` in
 // preview-window.ts resolves against the real node_modules/electron with an
 // intact __dirname. (The preview-window bundle below externalises it too.)
+//
+// `@fails-components/webtransport` and its http3-quiche transport ship native
+// addons (quiche, prebuilt .node binaries) that can't be inlined either. They
+// are declared in @swmansion/argent's dependencies so npm installs them
+// alongside the package; keep them external so the bundle resolves them from
+// node_modules/ at runtime.
+//
+// `dtrace-provider` MUST stay external. It is an OPTIONAL dependency of bunyan
+// (the tool-server event-log logger). bunyan loads it defensively as
+// `require('dtrace-provider' + '')` wrapped in try/catch — the `+ ''` is a
+// deliberate trick to hide the module from bundlers, and a failed require just
+// disables the (unused) DTrace USDT probes. esbuild constant-folds that string
+// back to a literal, defeating the trick, and then chokes on dtrace-provider's
+// own dynamic native binding require (`require('./src/build/'+build+'/…')`).
+// Keeping it external restores bunyan's intent: the published package never
+// declares dtrace-provider, so the runtime require misses and bunyan's
+// try/catch nulls it out — no DTrace probes, no functional impact.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
   format: "cjs",
   label: "tools server",
-  external: ["tree-sitter", "tree-sitter-typescript", "electron"],
+  external: [
+    "tree-sitter",
+    "tree-sitter-typescript",
+    "electron",
+    "@fails-components/webtransport",
+    "@fails-components/webtransport-transport-http3-quiche",
+    "dtrace-provider",
+  ],
 });
 
 // The remaining bundles are ESM so that:
@@ -506,7 +570,11 @@ buildBundle({
 const ESM_BUNDLES = [
   { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
   { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
-  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands" },
+  // node-pty is a native addon `argent lens` loads at runtime (the agent PTY
+  // proxy). esbuild can't inline a .node, so keep it external — the CLI bundle
+  // `require()`s it from the published package's optional dependency. Absent
+  // install → loadNodePty() returns null → lens falls back to a new window.
+  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
 ];
 for (const b of ESM_BUNDLES) {
   buildBundle({ ...b, format: "esm" });

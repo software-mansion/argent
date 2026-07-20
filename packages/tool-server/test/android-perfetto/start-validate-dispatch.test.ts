@@ -122,4 +122,34 @@ describe("startNativeProfilerAndroid — app_process dispatch (fail-fast validat
     expect(detectAndroidRunningApp).toHaveBeenCalledOnce();
     if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
   });
+
+  it("a failed startPerfetto does not burn a prior capture's pending partial-trace recovery", async () => {
+    // Pass-4 finding 2 (same class the iOS start path already guards): a prior
+    // capture hit the 10-min cap — recordingTimedOut=true with its partial trace
+    // still on the device, recoverable by native-profiler-stop. A new start whose
+    // startPerfetto then fails (adb offline, spawn failure) must NOT have already
+    // cleared recordingTimedOut or overwritten traceFile, or that ~10 min of data
+    // becomes unrecoverable (stop would throw "No active session").
+    const api = await buildAndroidSession();
+    api.recordingTimedOut = true; // prior capped capture awaiting recovery
+    api.traceFile = "/prior/partial.pftrace";
+    api.appProcess = "com.prior.app";
+    api.capturePid = 9999;
+    api.androidOnDeviceTracePath = "/data/misc/perfetto-traces/prior.pftrace";
+
+    detectAndroidRunningApp.mockResolvedValueOnce("com.new.app");
+    startPerfetto.mockRejectedValueOnce(new Error("adb: device offline"));
+
+    await expect(startNativeProfilerAndroid(api, { device_id: "emulator-5554" })).rejects.toThrow(
+      /device offline/
+    );
+
+    // Recovery state for the prior capture must survive the failed start.
+    expect(api.recordingTimedOut).toBe(true);
+    expect(api.traceFile).toBe("/prior/partial.pftrace");
+    expect(api.androidOnDeviceTracePath).toBe("/data/misc/perfetto-traces/prior.pftrace");
+    expect(api.capturePid).toBe(9999);
+    expect(api.profilingActive).toBe(false);
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
 });

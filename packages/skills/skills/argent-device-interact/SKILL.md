@@ -13,6 +13,8 @@ All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs A
 
 **Cookies & storage (Chromium only):** `chromium-cookies` reads/writes cookies via the Network domain (so HttpOnly cookies are visible): `action=get` (optionally scoped by `url`), `set` (`name`, `value`, + `url`/`domain`, optional `secure`/`httpOnly`/`sameSite`/`expires`), `delete` (`name`), `clear` (all). `chromium-storage` reads/writes Web Storage for the active page: `store=local|session`, `action=get` (one `key` or all entries), `set`, `remove`, `clear`. Both are per-origin / active-tab. Handy for seeding auth before a flow or asserting app state after one.
 
+> **TV targets (Apple TV / Android TV) are not covered by this skill.** A TV target is **focus-driven, not touch-driven** — the `gesture-*` tools are the wrong tools for it. This applies to both Apple TV simulators (UUID-shaped, identical to iOS) and Android TV / leanback devices (serial-shaped, identical to a phone emulator). If `list-devices` tags your target `runtimeKind: "tv"`, stop and use the `argent-tv-interact` skill: `describe` to read focus, `tv-remote` for remote / D-pad presses, and `keyboard` to type.
+
 For platform-specific caveats (Metro `adb reverse`, locked-screen describe errors, etc.), see § 9 Platform-specific notes at the bottom.
 
 ## 1. Before You Start
@@ -169,7 +171,19 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 { "udid": "<UDID>", "text": "search query", "key": "enter" }
 ```
 
-Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms).
+Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
+
+**Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
+
+```json
+{ "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}", "key": "enter" }
+```
+
+The placeholder is resolved on the machine running the tool-server from the `ARGENT_SECRET_<NAME>` environment variable (here `ARGENT_SECRET_APP_PASSWORD`) — the CI-native pattern: expose the secret under that prefix in the environment that starts the tool-server. Rules:
+
+- The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_.
+- The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen.
+- Only `ARGENT_SECRET_*` variables are resolvable; never ask the user to paste a secret value into the conversation — ask them to export the env var instead.
 
 ### rotate — Change orientation
 
@@ -188,8 +202,8 @@ Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to 
 ```
 
 - `condition`: `exists`, `visible`, `hidden`, or `text`.
-- `selector`: `{ text?, identifier?, role? }` — every provided field must match (case-insensitive substring). `text` matches the element's label or value; `identifier` matches its accessibility id / resource-id / testID; `role` matches its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`). The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
-- Prefer a **specific** selector. A loose substring can match several elements, and the tool may then key off one you didn't mean: `text` reads the **first** match in **reading order** (top-to-bottom, left-to-right — the same order `describe` lists them, so it's the one you saw first), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
+- `selector`: `{ text?, identifier?, role? }` — every provided field must match. `text` matches the element's label or value and `role` its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`), both as case-insensitive substrings; `identifier` matches its accessibility id / resource-id / testID **exactly** (case-insensitive), also accepting the unqualified Android resource-id name (`submit` matches `com.example.app:id/submit`). The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
+- Prefer a **specific** selector. A loose substring can match several elements, and the tool may then key off one you didn't mean: `text` reads the first **visible** match in **reading order** (top-to-bottom, left-to-right — the same order `describe` lists them, so it's the one you saw first; when no match is visible, the first match overall), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
 - `text` condition also needs `expectedText` (substring the matched element must contain).
 - `hidden` treats a selector that matches **nothing** as already-hidden, so a typo'd selector returns an instant (false) success. Double-check the selector for `hidden` waits — the result `note` flags when the selector never matched any element. (On iOS, if the accessibility backend is down the tree comes back empty; the tool will **not** report `hidden` success off such a degraded read and the `note` surfaces the boot hint instead.)
 - Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
@@ -215,6 +229,8 @@ When using `screenshot` for permission or native modal navigation:
 - Prefer obvious, centered alert buttons such as `Allow`, `OK`, `Don't Allow`, `Not Now`, or `Continue`.
 - Tap one control at a time and inspect the returned auto-screenshot before doing anything else.
 - After the modal is dismissed, return to normal discovery with `describe`, `native-describe-screen`, or `debugger-component-tree`.
+
+> **Prefer the dialog over the Settings tool.** When the app triggers its own permission prompt, answering it here is the real user path — do that. Reach for the `settings-permissions` tool only when you can't get to the change through the app: pre-authorize/deny a permission _before_ the app asks, re-enable one the user already denied (iOS won't re-prompt), or reset it so the prompt reappears. See the `argent-settings-permissions` skill.
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 

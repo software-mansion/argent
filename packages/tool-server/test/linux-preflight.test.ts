@@ -74,4 +74,18 @@ describe("diagnoseAvdSizing", () => {
     // the emulator, so we stay silent rather than guess.
     expect(diagnoseAvdSizing("argent-test", "hw.cpu.ncore = 4\n", PATH)).toBeNull();
   });
+
+  it("tolerates an inline comment after the value", () => {
+    // `ini.parse` strips a trailing `# …` / `; …` comment. The previous
+    // per-key `…\\s*$`-anchored regex matched the whole line and returned
+    // null the moment anything followed the value, so an annotated config
+    // silently lost its sizing signal.
+    const out = diagnoseAvdSizing(
+      "argent-test",
+      "hw.ramSize = 2G # bumped from 1G\nvm.heapSize = 228M\n",
+      PATH
+    );
+    expect(out).toMatch(/hw\.ramSize=2048 MB/);
+    expect(out).toMatch(/vm\.heapSize=228 MB/);
+  });
 });

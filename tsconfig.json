@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/archive" },
     { "path": "packages/registry" },
     { "path": "packages/telemetry" },
     { "path": "packages/update-core" },

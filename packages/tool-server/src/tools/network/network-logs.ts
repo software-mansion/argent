@@ -1,4 +1,6 @@
 import { z } from "zod";
+import bytesUtil from "bytes";
+import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import type { ServiceRef, ToolDefinition } from "@argent/registry";
 import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
 import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
@@ -12,10 +14,9 @@ import {
 
 const ITEMS_PER_PAGE = 50;
 
+// `bytes` (base-1024) so a download above 1 GB shows `1.4 GB`, not `1433.6 MB`.
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return bytesUtil(bytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${bytes} B`;
 }
 
 interface LogEntry {
@@ -103,7 +104,11 @@ const zodSchema = z.object({
     .number()
     .default(8081)
     .describe("Metro server port (RN only; ignored on Chromium)"),
-  device_id: z.string().describe("Device UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .describe(
+      "Device id from list-devices (iOS simulator UDID or Android serial) — the same id used with debugger-connect."
+    ),
   pageIndex: z
     .union([z.coerce.number().int().nonnegative(), z.literal("latest")])
     .default("latest")
@@ -117,7 +122,7 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
   description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
-On React Native (iOS/Android) interception is injected into the JS runtime — it captures fetch() calls. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
+On React Native (iOS / Android / Vega) interception is injected into the JS runtime — it captures fetch() calls. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   zodSchema,
@@ -129,7 +134,7 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
-    return { inspector: `NetworkInspector:${params.port}:${params.device_id}` };
+    return { inspector: `NetworkInspector:${params.port}:${canonicalDeviceId(params.device_id)}` };
   },
   async execute(services, params) {
     // Chromium: read the server-side CDP Network recording (no in-app injection).

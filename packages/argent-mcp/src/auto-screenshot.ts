@@ -27,8 +27,11 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
 ]);
 
 /**
- * Per-tool delay (ms) before capturing the screenshot.
- * +1 000 ms over baseline research values to cover slow devices/transitions.
+ * Per-tool cap (ms) on how long the auto-screenshot waits for the screen to
+ * settle before capturing (via the `await-screen-idle` tool). The readiness
+ * poll usually returns well under this; the cap only bounds a screen that never
+ * settles. Values sit ~1 000 ms above baseline research figures to stay safe on
+ * slow devices/transitions.
  */
 export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "launch-app": 3000,
@@ -55,6 +58,33 @@ const DEFAULT_DELAY_MS = 1400;
 // point storage at a temp dir.
 export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
   return !isFlagEnabled("disable-auto-screenshot", options);
+}
+
+/**
+ * Marker of a server-side secret placeholder (`{{secret:NAME}}`, resolved by
+ * the tool-server from `ARGENT_SECRET_*` env vars). Mirrors
+ * SECRET_PLACEHOLDER_MARKER in the tool-server's secrets util — duplicated
+ * rather than imported because argent-mcp must keep working against older
+ * tool-servers and shares no runtime package with it.
+ */
+export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
+
+/**
+ * Deep-scan tool args for a secret placeholder. When one is present the
+ * auto-screenshot must be skipped: the tool-server types the *resolved* value,
+ * and for a non-secure-entry field the follow-up screenshot would hand the
+ * plaintext straight back to the model as pixels. JSON.stringify covers nested
+ * shapes (run-sequence steps, flow-execute args) without knowing each tool's
+ * schema.
+ */
+export function containsSecretPlaceholder(args: unknown): boolean {
+  try {
+    return JSON.stringify(args)?.includes(SECRET_PLACEHOLDER_MARKER) ?? false;
+  } catch {
+    // Unserializable args can't have come from an MCP request — be safe and
+    // treat them as secret-bearing rather than risk screenshotting a secret.
+    return true;
+  }
 }
 
 export function getUdidFromArgs(args: unknown): string | undefined {

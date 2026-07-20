@@ -15,7 +15,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
@@ -81,6 +81,22 @@ jobs:
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      # tvOS (Apple TV) binaries — fail the publish if any is missing rather
+      # than silently shipping a package where tv-* tools crash at runtime.
+      - run: test -x packages/argent/bin/darwin/tvos-ax-service
+      - run: test -x packages/argent/bin/darwin/tvos-hid-daemon
+      - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
+      # TCP-transport (sim-remote / ios-remote) binaries — the ax-service and
+      # native-devtools variants the remote code path spawns/injects over a
+      # sim-remote-tunnelled TCP socket. Absent from 0.15.0 because the release
+      # never built them; gate the publish so they can't silently regress again.
+      # (Host=darwin here, so axServiceBinaryPathTcp() resolves bin/darwin/tcp.)
+      - run: test -x packages/argent/bin/darwin/tcp/ax-service
+      - run: test -f packages/argent/dylibs/tcp/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/tcp/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/tcp/libArgentInjectionBootstrap.dylib
       - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
       - run: test -d packages/argent/assets/queries
       - run: test -f packages/argent/assets/manifest.json
@@ -96,16 +112,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # Keep `next` pointing at the highest published version (prerelease or
-      # stable). A stable `npm publish` only moves `latest`, so without this the
-      # `next` tag would freeze on the last prerelease. Idempotent + self-healing.
-      #
-      # continue-on-error: the publish above already succeeded and is
-      # irreversible, while this sync is idempotent — a transient registry blip
-      # here self-heals on the next publish (or the manual Sync workflow), so it
-      # must never fail an otherwise-successful release.
-      - name: Sync 'next' dist-tag to highest published version
-        continue-on-error: true
-        run: node scripts/sync-next-dist-tag.mjs
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Keeping `next` pointing at the highest published version (a stable
+      # `npm publish` only moves `latest`) is handled by the "Sync 'next'
+      # dist-tag" workflow, which runs automatically once this workflow
+      # succeeds.

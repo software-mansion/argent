@@ -21,6 +21,10 @@ import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
+import {
+  isCaptureInFlight,
+  inFlightGuardMessage,
+} from "../../../utils/profiler-shared/capture-guard";
 
 // session_id is interpolated into on-disk file paths
 // (`react-profiler-${id}_cpu.json`, `native-profiler-${id}_raw_cpu.xml`, …).
@@ -29,6 +33,12 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function assertSafeSessionId(sessionId: string): void {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
+    // Defense-in-depth against path traversal. The zod schema already rejects any
+    // session_id that fails SESSION_ID_PATTERN (same regex) before execute() runs,
+    // so a value reaching here means a direct, non-registry caller bypassed the
+    // schema — a programmer error, not a user-reachable failure. It therefore
+    // stays a plain Error without a telemetry code (it could never bucket a real
+    // failure on the toolFailed path).
     throw new Error(
       `Invalid session_id "${sessionId}". Allowed: letters, digits, '_' and '-' ` +
         `(no path separators, no "..").`
@@ -317,6 +327,22 @@ async function loadNativeSession(
   appProcessOverride?: string
 ): Promise<string> {
   assertSafeSessionId(sessionId);
+  // Loading replaces the per-device session's capture state (traceFile,
+  // exportedFiles, parsedData, …). With a recording in flight that would wedge
+  // the session — stop's gate needs traceFile (which the load nulls) while
+  // start refuses with SESSION_ALREADY_RUNNING — and orphan the live capture
+  // unexportable. With a timed-out/crashed capture awaiting recovery, it would
+  // make stop's partial-trace export unreachable (the .trace bundle cannot be
+  // re-ingested; only the raw_*.xml that export writes are loadable). Refuse
+  // until the capture is stopped.
+  if (isCaptureInFlight(api)) {
+    throw new FailureError(inFlightGuardMessage(api, "retry profiler-load"), {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
+      failure_stage: "profiler_load_native_session",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
   // Android .pftrace first — the platform field on the resolved session API
   // tells us which shape to load. If the platform is android but the .pftrace
   // is missing we fall through to the iOS XML path so the user gets the
@@ -326,17 +352,29 @@ async function loadNativeSession(
     try {
       await fs.access(pftrace);
     } catch {
-      throw new Error(
+      throw new FailureError(
         `No native profiler .pftrace found for session "${sessionId}". ` +
-          `Expected file at ${pftrace}`
+          `Expected file at ${pftrace}`,
+        {
+          error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
+          failure_stage: "profiler_load_android_pftrace",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        }
       );
     }
     const metadata = await readAndroidNativeProfilerMetadata(pftrace);
     const appProcess = metadata?.appProcess ?? appProcessOverride?.trim();
     if (!appProcess) {
-      throw new Error(
+      throw new FailureError(
         `Android profiler session "${sessionId}" is missing its metadata sidecar. ` +
-          "Retry profiler-load with app_process set to the Android package name used for the recording."
+          "Retry profiler-load with app_process set to the Android package name used for the recording.",
+        {
+          error_code: FAILURE_CODES.PROFILER_NATIVE_METADATA_MISSING,
+          failure_stage: "profiler_load_android_metadata",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     api.traceFile = pftrace;
@@ -395,15 +433,40 @@ async function loadNativeSession(
         error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
         failure_stage: "profiler_load_native_session",
         failure_area: "tool_server",
-        error_kind: "validation",
+        // A trace file missing on disk is a not_found condition — same kind as
+        // the Android .pftrace-missing site above, so this shared code isn't
+        // split into two kinds by platform (validation stays for the
+        // analyze-before-stop guard, NATIVE_PROFILER_NO_EXPORTED_TRACE).
+        error_kind: "not_found",
       }
     );
   }
 
   const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
 
-  api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
+  // A loaded iOS trace has no start-time sidecar (raw_*.xml only), so its frozen
+  // anchor is null — the combined report will then report a missing native anchor
+  // rather than mis-anchoring to whatever residue the session held.
+  api.parsedData = {
+    cpuSamples,
+    uiHangs,
+    cpuHotspots,
+    memoryLeaks,
+    mallocStackLogging: null,
+    wallClockStartMs: null,
+  };
   api.exportedFiles = files;
+  // The raw_*.xml carry no metadata sidecar, so nothing per-capture is known
+  // about the loaded trace — clear ALL the session residue an earlier live
+  // capture in this process left behind, or analyze would attribute it to the
+  // loaded trace: the capture mode (mis-labels the unattributed-leaks note),
+  // the CPU filter PID (silently drops the loaded trace's samples), the start
+  // time (fires the stale-trace note with the wrong timestamp), and the .trace
+  // path (mislabels the report and writes the .md over the OLD trace's report).
+  api.mallocStackLogging = null;
+  api.cpuFilterPid = null;
+  api.wallClockStartMs = null;
+  api.traceFile = null;
 
   const lines: string[] = [
     `Loaded native profiler session \`${sessionId}\`.`,

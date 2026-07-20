@@ -1,10 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
 import {
   parseVvdConsolePorts,
+  parseVvdPids,
   listRunningVvdConsolePorts,
+  listRunningVvdPids,
   PS_ARGS,
+  PS_ARGS_WITH_PID,
+  PS_BIN,
 } from "../src/utils/vega-process";
 
 const execFileAsync = promisify(execFile);
@@ -67,6 +72,50 @@ describe("parseVvdConsolePorts", () => {
   });
 });
 
+// A `ps -o pid=,command=` line: a leading pid column, then the same argv.
+function vvdPidLine(pid: number, consolePort: number): string {
+  return `  ${pid} ${vvdLine(consolePort)}`;
+}
+
+describe("parseVvdPids", () => {
+  it("reads the pid of a running VVD emulator process", () => {
+    expect(parseVvdPids(vvdPidLine(75137, 5554))).toEqual([75137]);
+  });
+
+  it("ignores a co-running Android emulator, a crashpad sibling, and a branch ref", () => {
+    const ps = [
+      `  4242 ${ANDROID_EMULATOR}`,
+      `  4243 ${CRASHPAD}`,
+      `  4244 ${GIT_REF}`,
+      vvdPidLine(75137, 5556),
+    ].join("\n");
+    expect(parseVvdPids(ps)).toEqual([75137]);
+  });
+
+  it("returns empty when no VVD process is present", () => {
+    const ps = [`  1 /sbin/launchd`, `  4242 ${ANDROID_EMULATOR}`].join("\n");
+    expect(parseVvdPids(ps)).toEqual([]);
+  });
+
+  it("reports every pid when multiple VVDs run", () => {
+    const ps = [vvdPidLine(75137, 5554), vvdPidLine(80001, 5556)].join("\n");
+    expect(parseVvdPids(ps).sort((a, b) => a - b)).toEqual([75137, 80001]);
+  });
+
+  it("matches the legacy kepler-virtual-device process name", () => {
+    const line = vvdPidLine(75137, 5554).replace("vega-virtual-device", "kepler-virtual-device");
+    expect(parseVvdPids(line)).toEqual([75137]);
+  });
+
+  it("does not match a `…-virtual-device-wrapper` substring", () => {
+    const line = vvdPidLine(75137, 5554).replace(
+      "vega-virtual-device",
+      "vega-virtual-device-wrapper"
+    );
+    expect(parseVvdPids(line)).toEqual([]);
+  });
+});
+
 // Exercises the REAL `ps` invocation (not mocked) so a flag invalid on the host —
 // e.g. the BSD-only `-x` on the Linux CI runner — fails here, fast, instead of only
 // surfacing in the slow Vega e2e (where the catch would otherwise hide it).
@@ -80,5 +129,54 @@ describe("listRunningVvdConsolePorts (real ps)", () => {
     const ports = await listRunningVvdConsolePorts();
     expect(ports).toBeInstanceOf(Set);
     for (const p of ports) expect(Number.isInteger(p) && p > 0).toBe(true);
+  });
+
+  it("PS_ARGS_WITH_PID is accepted by the host `ps` (exit 0, non-empty output)", async () => {
+    const { stdout } = await execFileAsync("ps", [...PS_ARGS_WITH_PID], {
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    expect(stdout.split("\n").filter(Boolean).length).toBeGreaterThan(0);
+  });
+
+  it("resolves to positive integer pids without throwing", async () => {
+    const pids = await listRunningVvdPids();
+    expect(Array.isArray(pids)).toBe(true);
+    for (const p of pids) expect(Number.isInteger(p) && p > 0).toBe(true);
+  });
+});
+
+// Regression: under an MCP server's sanitized PATH (no /bin), a bare-name `ps`
+// spawn ENOENTs; the catch then yields an empty port set and the VVD adb-shadow
+// dedup no-ops, listing the VVD twice. An absolute `ps` path survives this.
+describe("PS_BIN (survives a sanitized PATH)", () => {
+  // Every host CI runs on has /bin/ps or /usr/bin/ps, so PS_BIN resolves absolute
+  // here. But production deliberately falls back to bare "ps" when neither exists
+  // (Nix, a non-POSIX layout) to preserve PATH resolution — so assert the contract
+  // as a disjunction, not a hard "always absolute", and don't fail the intentional
+  // fallback path.
+  const psBinIsAbsolute = PS_BIN.startsWith("/");
+
+  it("is either an existing absolute path or the bare-`ps` PATH fallback", () => {
+    if (psBinIsAbsolute) expect(existsSync(PS_BIN)).toBe(true);
+    else expect(PS_BIN).toBe("ps");
+  });
+
+  // Only meaningful when PS_BIN is absolute: a bare "ps" is exactly what ENOENTs
+  // under a sanitized PATH, so asserting it survives there would contradict the
+  // fallback's intent. Skip rather than fail on a host without a canonical `ps`.
+  it.skipIf(!psBinIsAbsolute)("spawns `ps` with PATH stripped of /bin and /usr/bin", async () => {
+    const savedPath = process.env.PATH;
+    process.env.PATH = "/nonexistent-dir";
+    try {
+      // Load-bearing: a bare "ps" would reject with ENOENT here, so a non-empty
+      // exit-0 result proves the absolute-path resolution is what survives.
+      const { stdout } = await execFileAsync(PS_BIN, [...PS_ARGS], {
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      expect(stdout.split("\n").filter(Boolean).length).toBeGreaterThan(0);
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+    }
   });
 });

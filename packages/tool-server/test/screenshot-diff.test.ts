@@ -204,7 +204,12 @@ describe("diffPngFiles", () => {
       ...rectPixels(4, 20, 4, 4, { r: 255, g: 0, b: 0 }),
     ]);
 
-    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+    const result = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      topMask: "status-bar",
+    });
 
     expect(result.regions).toEqual([
       expect.objectContaining({
@@ -216,6 +221,60 @@ describe("diffPngFiles", () => {
     expect(readRgb(diff, 0, 0)).toEqual({ r: 247, g: 247, b: 247 });
     expect(readRgb(diff, 4, 17)).toEqual({ r: 255, g: 220, b: 0 });
     expect(readRgb(diff, 5, 21)).toEqual({ r: 0, g: 200, b: 0 });
+  });
+
+  it("compares the full image when the top mask is disabled", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 12, 100, { r: 20, g: 20, b: 20 });
+    await writePng(
+      currentPath,
+      12,
+      100,
+      { r: 20, g: 20, b: 20 },
+      rectPixels(0, 0, 12, 6, { r: 240, g: 240, b: 240 })
+    );
+
+    const result = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      topMask: "none",
+    });
+
+    expect(result).toMatchObject({
+      differentPixels: 72,
+      mismatchPercentage: 6,
+      regions: [
+        expect.objectContaining({
+          bounds: { x: 0, y: 0, width: 12, height: 6 },
+          pixelCount: 72,
+        }),
+      ],
+    });
+    expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ignoreTopPixels: 0 })
+    );
+  });
+
+  it("does not mask an entire one-row image when the top mask is disabled", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 1, { r: 0, g: 0, b: 0 });
+    await writePng(currentPath, 2, 1, { r: 255, g: 255, b: 255 });
+
+    const masked = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+    const unmasked = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      topMask: "none",
+    });
+
+    expect(masked).toMatchObject({ differentPixels: 0, mismatchPercentage: 0 });
+    expect(unmasked).toMatchObject({ differentPixels: 2, mismatchPercentage: 100 });
   });
 
   it("colors changed pixels green when they brightened and red when they darkened", async () => {
@@ -274,6 +333,89 @@ describe("diffPngFiles", () => {
       expect.objectContaining({ textChangeMinConfidence: 0.7, ignoreTopPixels: 2 })
     );
   });
+
+  // diffPngFiles normalizes two same-aspect, different-resolution screenshots to a
+  // common size, then hands the OCR/font pass BOTH the normalized images and each
+  // image's decoded->normalized region scale, so the rescaled text bounds and the
+  // pixels they crop share the pixel-diff coordinate space. normalizeToCommonSize
+  // only ever downscales the LARGER image and returns the smaller one untouched, so
+  // for any one fixture only the downscaled side's wiring is load-bearing: its
+  // normalized image and region scale differ from the raw decoded ones, so reverting
+  // baselineImage/currentImage (or the matching region scale) to the decoded value
+  // would surface the raw size and fail here. The untouched side's assertions hold
+  // for both the decoded and normalized value, so we exercise BOTH directions to pin
+  // both sides. Without this wiring the OCR pass would be handed the raw images and
+  // no region scales -- the mismatch #442 fixed.
+  it.each([
+    {
+      larger: "baseline",
+      baseline: { width: 480, height: 240 },
+      current: { width: 240, height: 120 },
+      baselineRegionScale: { x: 0.5, y: 0.5 },
+      currentRegionScale: { x: 1, y: 1 },
+    },
+    {
+      larger: "current",
+      baseline: { width: 240, height: 120 },
+      current: { width: 480, height: 240 },
+      baselineRegionScale: { x: 1, y: 1 },
+      currentRegionScale: { x: 0.5, y: 0.5 },
+    },
+  ])(
+    "hands OCR the normalized images and decoded->normalized region scales when the $larger image is downscaled (diffPngFiles wiring)",
+    async ({ baseline, current, baselineRegionScale, currentRegionScale }) => {
+      const dir = await makeTempDir();
+      const baselinePath = path.join(dir, "baseline.png");
+      const currentPath = path.join(dir, "current.png");
+      await writePng(baselinePath, baseline.width, baseline.height, { r: 0, g: 0, b: 0 });
+      await writePng(currentPath, current.width, current.height, { r: 0, g: 0, b: 0 });
+
+      await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+      // Both images are normalized to the common 240x120 size; each region scale
+      // maps that image's OCR bounds from its decoded size into the shared space.
+      expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baselineImage: expect.objectContaining({ width: 240, height: 120 }),
+          currentImage: expect.objectContaining({ width: 240, height: 120 }),
+          baselineRegionScale,
+          currentRegionScale,
+        })
+      );
+    }
+  );
+
+  // diffPngFiles always calls the OCR/font pass, but tells it whether the pixel diff
+  // found any changes via hasPixelDiff; the pass uses that to skip text analysis when
+  // nothing moved. Pin the wiring in both directions -- identical images -> false, a
+  // real pixel change -> true -- so hardcoding the source (e.g. to false, which would
+  // silently disable text analysis for every real diff) fails here instead of staying
+  // green.
+  it.each([
+    { name: "no pixel diff", changePixel: false, expected: false },
+    { name: "a pixel diff", changePixel: true, expected: true },
+  ])(
+    "tells OCR whether the pixel diff found changes ($name -> hasPixelDiff=$expected)",
+    async ({ changePixel, expected }) => {
+      const dir = await makeTempDir();
+      const baselinePath = path.join(dir, "baseline.png");
+      const currentPath = path.join(dir, "current.png");
+      await writePng(baselinePath, 2, 20, { r: 0, g: 0, b: 0 });
+      await writePng(
+        currentPath,
+        2,
+        20,
+        { r: 0, g: 0, b: 0 },
+        changePixel ? [{ x: 1, y: 10, rgb: { r: 255, g: 0, b: 0 } }] : []
+      );
+
+      await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+      expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hasPixelDiff: expected })
+      );
+    }
+  );
 });
 
 async function makeTempDir(): Promise<string> {

@@ -16,6 +16,14 @@ export interface DescribeNode {
   label?: string;
   identifier?: string;
   value?: string;
+  // Text hoisted up from descendant nodes during the flow adapters' flatten
+  // pass (see flow-ios-tree / flow-android-tree). The flat-leaves shape
+  // discards nesting, so a testID container's own `label`/`value` is empty even
+  // when it visibly wraps text (e.g. a counter whose number is a child `Text`).
+  // `subtreeText` carries that descendant text so an `assert`/`text` check can
+  // read "what this container shows" without the structure. Only the flow trees
+  // populate it; the agent-facing describe path leaves it unset.
+  subtreeText?: string;
   // Interactivity flags surfaced by the Android uiautomator dump. iOS
   // consumers leave these unset; adding them as optional avoids breaking
   // existing payloads. `scrollHidden` counts children that fell outside an
@@ -46,6 +54,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       label: z.string().optional(),
       identifier: z.string().optional(),
       value: z.string().optional(),
+      subtreeText: z.string().optional(),
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),
@@ -63,16 +72,20 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
 // Where the tree came from. "ax-service" / "native-devtools" come from iOS;
 // "uiautomator" / "android-devtools" come from Android; "cdp-dom" is the
 // Chromium branch's DOM walk over Chrome DevTools Protocol; "vega-automation"
-// is the Vega on-device automation toolkit. Agents that branch on `source`
-// (e.g. to decide whether to also call `native-find-views` for a richer tree)
-// need to distinguish each provider — which a shared label would hide.
+// is the Vega on-device automation toolkit; "tv-focus" is the focus-driven view
+// returned for a TV target (Apple TV / Android TV), which reports focused /
+// focusable elements rather than a tap-oriented tree. Agents that branch on
+// `source` (e.g. to decide whether to also call `native-find-views` for a
+// richer tree) need to distinguish each provider — which a shared label would
+// hide.
 export type DescribeSource =
   | "ax-service"
   | "native-devtools"
   | "uiautomator"
   | "android-devtools"
   | "cdp-dom"
-  | "vega-automation";
+  | "vega-automation"
+  | "tv-focus";
 
 // Internal shape produced by the per-platform adapters. The `tree` is consumed
 // by the formatter in `format-tree.ts` and then dropped before the tool replies

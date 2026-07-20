@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import type { DeviceInfo } from "@argent/registry";
+import { toSimulatorNetworkError } from "../src/utils/format-error";
 
 // ─── Mocks ───────────────────────────────────────────────────────────
 //
@@ -29,6 +30,13 @@ vi.mock("../src/blueprints/ax-service", () => ({
 vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryPath: () => "/fake/bin/simulator-server",
   simulatorServerBinaryDir: () => "/fake/bin",
+}));
+
+// The factory now probes the runtime kind to reject tvOS sims. Mock it to the
+// iOS path (false) so these spawn/stdio tests stay hermetic — no real `simctl`,
+// which would otherwise hang the fake-timer test waiting on a child process.
+vi.mock("../src/utils/ios-devices", () => ({
+  isTvOsSimulator: vi.fn(async () => false),
 }));
 
 function makeFakeProc() {
@@ -242,5 +250,49 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("simulatorServerBlueprint.recoverable — self-heal a wedged sim-server", () => {
+  const apiUrl = "http://127.0.0.1:58710";
+
+  // Mirror what `fetch()` throws so the classifier walks the real cause chain:
+  // a `TypeError: fetch failed` wrapping the low-level connect error.
+  function fetchError(causeMessage: string, name = "TypeError"): Error {
+    const cause = new Error(causeMessage);
+    const err = new Error("fetch failed", { cause });
+    err.name = name;
+    return err;
+  }
+
+  it("recovers on ECONNREFUSED — the un-booted-simulator symptom", async () => {
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const err = toSimulatorNetworkError(
+      "Screenshot",
+      fetchError("connect ECONNREFUSED 127.0.0.1:58710"),
+      apiUrl
+    );
+    expect(simulatorServerBlueprint.recoverable!(err)).toBe(true);
+  });
+
+  it("does NOT recover on a reset — the request may have taken effect", async () => {
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const err = toSimulatorNetworkError("Screenshot", fetchError("read ECONNRESET"), apiUrl);
+    expect(simulatorServerBlueprint.recoverable!(err)).toBe(false);
+  });
+
+  it("does NOT recover on a timeout — a hung-but-listening server won't be fixed by respawning", async () => {
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const err = toSimulatorNetworkError(
+      "Screenshot",
+      fetchError("The operation was aborted", "AbortError"),
+      apiUrl
+    );
+    expect(simulatorServerBlueprint.recoverable!(err)).toBe(false);
+  });
+
+  it("does NOT recover on an unrelated error carrying no failure signal", async () => {
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    expect(simulatorServerBlueprint.recoverable!(new Error("boom"))).toBe(false);
   });
 });

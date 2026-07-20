@@ -22,6 +22,12 @@ type Params = z.infer<typeof zodSchema>;
 export const awaitUserSelectionTool: ToolDefinition<Params> = {
   id: "await_user_selection",
   featureFlag: "argent-lens",
+  // Hidden entirely while an `argent lens` CLI session owns the preview window:
+  // there, the user's picks are relayed into the agent's terminal as a normal
+  // message (see `argent-cli/src/lens.ts`), so the agent never blocks on a pick.
+  // Hiding the tool (rather than telling the agent "don't call it") keeps the
+  // CLI-relay surface honest — propose_variant then end the turn.
+  hideWhen: () => variantProposalStore.isCliSession(),
   description: `Block until the human finishes picking among the variants you proposed (the ONE blocking call).
 
 Call this exactly once, AFTER you have staged every variant for every element via \`propose_variant\`.
@@ -29,11 +35,14 @@ It parks until the user presses "Complete selection" in the Argent Lens window (
 that opens automatically on the user's screen), then returns their choices and any comments.
 
 Returns one of:
-  • { status: "completed", selections: [{ element, chosenVariant, comment? }], unselected,
-      annotations: [{ target, match, comment }], globalComment }
-        — the user is done; apply chosenVariant for each element (skip ones in \`unselected\`).
-        \`annotations\` are free-form comments the user pinned to specific on-screen elements via
-        the inspector — treat each as a change request for that element.
+  • { status: "completed", round, selections: [{ element, chosenVariant, comment? }], unselected,
+      annotations: [{ target, match, comment }], globalComment, morePending? }
+        — the user finished this round; apply chosenVariant for each element (skip ones in
+        \`unselected\`). \`annotations\` are free-form comments the user pinned to specific on-screen
+        elements via the inspector — treat each as a change request for that element.
+        If \`morePending\` is true, another already-decided round or a freshly-staged round is
+        still waiting — call await_user_selection AGAIN (repeat until you get a completed result
+        without \`morePending\`, a \`pending\`, or \`no_proposals\`); do not stop on this result alone.
   • { status: "pending", message, proposedElements } — timeoutSeconds elapsed with no submission.
         Expected, not an error: the proposals are still live; call await_user_selection AGAIN.
   • { status: "no_proposals" } — you called this before propose_variant.

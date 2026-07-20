@@ -111,12 +111,17 @@ const HORIZONTAL_TEXT_MERGE_MAX_GAP = 120;
 // still report the dominant RGB channel.
 const UNIFORM_BRIGHTNESS_DELTA_TOLERANCE = 4;
 
-export async function diffPngFiles(options: {
+type TopMaskPolicy = "none" | "status-bar";
+
+export interface DiffPngFilesOptions {
   baselinePath: string;
   currentPath: string;
   outputDir: string;
-}): Promise<PngDiffResult> {
-  const settings = resolveDiffSettings();
+  topMask?: TopMaskPolicy;
+}
+
+export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDiffResult> {
+  const settings = resolveDiffSettings(options.topMask ?? "status-bar");
 
   const [decodedBaseline, decodedCurrent] = await Promise.all([
     decodePngFile(options.baselinePath),
@@ -166,17 +171,22 @@ export async function diffPngFiles(options: {
   const mismatchPercentage =
     totalPixels === 0 ? 0 : (pixelDiff.differentPixels / totalPixels) * 100;
 
-  // The OCR/font-geometry pass re-reads the original files from disk, so it
-  // must receive the originally-decoded images (whose dimensions match those
-  // files) rather than the normalized copies. Derive its top cutoff from the
-  // original baseline height for the same reason.
+  // The OCR pass re-reads the two files from disk, so each image's text bounds
+  // come back in its own original coordinate space. When the inputs were
+  // normalized to a common size, rescale those bounds into that shared space
+  // (and hand the font-geometry pass the normalized images to match) so the
+  // cross-image comparison and the summary share the same coordinates the pixel
+  // diff uses. The scale factors are 1/1 when the inputs already match, and the
+  // top cutoff is derived from the normalized height for the same reason.
   const textAnalysis = await analyzeScreenshotTextChangesSafely({
     baselinePath: options.baselinePath,
     currentPath: options.currentPath,
     hasPixelDiff: pixelDiff.differentPixels > 0,
-    baselineImage: decodedBaseline,
-    currentImage: decodedCurrent,
-    ignoreTopPixels: ignoredTopRowsFor(decodedBaseline.height, settings.ignoreTopNormalizedY),
+    baselineImage: baseline,
+    currentImage: current,
+    baselineRegionScale: regionScaleBetween(decodedBaseline, baseline),
+    currentRegionScale: regionScaleBetween(decodedCurrent, current),
+    ignoreTopPixels: ignoredTopRowsFor(baseline.height, settings.ignoreTopNormalizedY),
     textChangeMinConfidence: DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE,
   });
 
@@ -192,10 +202,10 @@ export async function diffPngFiles(options: {
   });
 }
 
-function resolveDiffSettings(): DiffSettings {
+function resolveDiffSettings(topMask: TopMaskPolicy): DiffSettings {
   return {
     thresholdSquared: DEFAULT_THRESHOLD * DEFAULT_THRESHOLD * MAX_RGB_DISTANCE_SQUARED,
-    ignoreTopNormalizedY: DEFAULT_IGNORE_TOP_NORMALIZED_Y,
+    ignoreTopNormalizedY: topMask === "none" ? 0 : DEFAULT_IGNORE_TOP_NORMALIZED_Y,
     joinGapPixels: DEFAULT_REGION_MERGE_DISTANCE,
     contextDiffScale: DEFAULT_CONTEXT_DIFF_SCALE,
   };
@@ -259,6 +269,15 @@ function markChangedPixels(params: {
 
 function ignoredTopRowsFor(height: number, ignoreTopNormalizedY: number): number {
   return Math.min(height, Math.ceil(height * ignoreTopNormalizedY));
+}
+
+// Factors that map a bound from `from`'s pixel space into `to`'s pixel space.
+// Both dimensions are 1 when the sizes match, so same-size inputs are untouched.
+function regionScaleBetween(from: Size, to: Size): { x: number; y: number } {
+  return {
+    x: from.width === 0 ? 1 : to.width / from.width,
+    y: from.height === 0 ? 1 : to.height / from.height,
+  };
 }
 
 function getChangedRegions(params: {

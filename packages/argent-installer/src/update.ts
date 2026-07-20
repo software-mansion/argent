@@ -1,35 +1,48 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { execFileSync } from "node:child_process";
+import * as path from "node:path";
 import semver from "semver";
-import { init as telemetryInit, track } from "@argent/telemetry";
+import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
+  detectAdapters,
   findConfiguredAdapterScopes,
-  getMcpEntry,
+  getMcpEntryForScope,
+  isArgentManagedEntry,
+  resolveLocalCommandMode,
   copyRulesAndAgents,
   type McpConfigAdapter,
+  type McpServerEntry,
 } from "./mcp-configs.js";
+import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
 import {
   getGloballyInstalledVersion,
+  getGloballyInstalledPackageRoot,
   isGloballyInstalled,
   isNewerVersion,
   detectPackageManager,
+  detectProjectPackageManager,
   globalInstallCommand,
+  localInstallCommand,
+  probeLocalInstall,
+  getLocallyInstalledVersion,
+  readLocalPackageVersionUncached,
+  hasProjectPackageJson,
+  isDeclaredLocally,
+  resolveInstallMode,
   formatShellCommand,
   resolveProjectRoot,
   RULES_DIR,
   AGENTS_DIR,
+  type InstallMode,
 } from "./utils.js";
-import {
-  refreshArgentSkills,
-  formatSkillRefreshSummary,
-  summarizeSkillRefreshForTelemetry,
-} from "./skills.js";
+import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
+import { execShellCommandSync, runTrustingDisk } from "./shell.js";
+import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
-import { killToolServer } from "@argent/tools-client";
+import { killToolServer, killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
 
@@ -41,6 +54,23 @@ function getRequestedVersion(args: string[]): string | null {
     }
     if (arg?.startsWith("--version=")) {
       return arg.slice("--version=".length) || null;
+    }
+  }
+  return null;
+}
+
+// Explicit project pin from the agent-triggered update-argent tool, which has
+// already proven which project's local install it targets. Re-deriving via
+// resolveProjectRoot can resolve a different monorepo ancestor and silently
+// no-op the update the tool already reported as initiated.
+function getProjectRootOverride(args: string[]): string | null {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--project-root") {
+      return args[i + 1] ?? null;
+    }
+    if (arg?.startsWith("--project-root=")) {
+      return arg.slice("--project-root=".length) || null;
     }
   }
   return null;
@@ -93,13 +123,6 @@ const UPDATE_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
   error_kind: "unknown",
 };
 
-const INSTALL_SKILLS_REFRESH_FAILED: InstallerFailureSignal = {
-  error_code: FAILURE_CODES.INSTALL_SKILLS_REFRESH_FAILED,
-  failure_stage: "installer_update_skills_refresh",
-  failure_area: "installer",
-  error_kind: "subprocess",
-};
-
 export function getUpdateTriggerFromEnv(env: NodeJS.ProcessEnv = process.env): UpdateTrigger {
   return env.ARGENT_UPDATE_TRIGGER === "mcp_update" ? "mcp_update" : "update";
 }
@@ -120,6 +143,9 @@ export async function update(args: string[]): Promise<void> {
   telemetryInit("installer");
   const updateStartTime = performance.now();
   let telemetryFinalized = false;
+  // Reflects the project's install mode (resolveInstallMode); reported on every
+  // terminal update event and used to key the config refresh.
+  let installMode: InstallMode = "global";
 
   const trackPackageAction = async (
     action: UpdatePackageAction | "no_update" | "update_skipped" | "update_failed",
@@ -142,6 +168,7 @@ export async function update(args: string[]): Promise<void> {
     await finalizeTelemetry(() => {
       track("installation:cli_update_fail", {
         duration_ms: performance.now() - updateStartTime,
+        install_mode: installMode,
         ...(failureSignal ?? {}),
       });
     });
@@ -153,63 +180,130 @@ export async function update(args: string[]): Promise<void> {
     await finalizeTelemetry(() => {
       track("installation:cli_update_complete", {
         duration_ms: performance.now() - updateStartTime,
+        install_mode: installMode,
       });
     });
   };
 
-  try {
-    p.intro(pc.bgCyan(pc.black(" argent update ")));
+  // Version-check + install for ONE install target (global PATH binary or the
+  // project's local devDependency). EVERY outcome returns — a hard failure on
+  // one target must not abort the run mid-loop and skip another target's
+  // update or the refresh. The caller aggregates: "failed" carries the signal
+  // for the terminal telemetry event and exit code; "updated" / "declined" /
+  // "noop" decide whether the run earned the config refresh — a run whose only
+  // prompt was declined must cancel and touch nothing.
+  const applyUpdateForTarget = async (
+    mode: InstallMode,
+    projectRoot: string
+  ): Promise<"updated" | "declined" | "noop" | { failed: InstallerFailureSignal }> => {
+    // Disclose which install we're about to act on before any mutation.
+    if (mode === "local") {
+      p.log.info(
+        `Target: ${pc.cyan("local install")} — this project's ${PACKAGE_NAME} ` +
+          `devDependency ${pc.dim(`(${projectRoot})`)}.`
+      );
+    } else {
+      p.log.info(`Target: ${pc.cyan("global install")} — the argent command on your PATH.`);
+    }
 
-    // `--no-telemetry` force-disables before the first track(); otherwise just
-    // surface the notice. update never prompts — it often runs from the old
-    // binary or non-TTY contexts where the init consent step can't apply.
-    await resolveTelemetryConsent({ nonInteractive: true, disableFlag: noTelemetry });
+    // Under `npx @swmansion/argent update` the running package is the npx
+    // cache, always at the latest published version — PACKAGE_ROOT would
+    // falsely report "already on the latest". Resolve the *real* install: the
+    // project's resolved copy in local mode (PnP-aware), or the global
+    // binary's package.json in global mode.
+    const localProbe = mode === "local" ? probeLocalInstall(projectRoot) : null;
+    const globallyInstalled = mode === "global" && isGloballyInstalled();
+    const isInstalledForMode = mode === "local" ? localProbe!.installed : globallyInstalled;
+    const installed =
+      mode === "local"
+        ? localProbe!.version
+        : globallyInstalled
+          ? getGloballyInstalledVersion()
+          : null;
 
-    track("installation:cli_update_start", {});
-
-    // When invoked via `npx @swmansion/argent update`, the running package is
-    // the npx cache and will always be at the latest published version. Reading the
-    // version from PACKAGE_ROOT would falsely report "already on the latest"
-    // both when no global install exists AND when the global install is
-    // outdated. getGloballyInstalledVersion() resolves the *real* global
-    // binary's package.json, so the compare reflects what the user has
-    // installed rather than what npx just downloaded.
-    const globallyInstalled = isGloballyInstalled();
-    const installed = globallyInstalled ? getGloballyInstalledVersion() : null;
-
-    if (globallyInstalled && !installed) {
+    if (mode === "global" && globallyInstalled && !installed) {
       await trackPackageAction(
         "update_failed",
         updateStartTime,
         false,
         UPDATE_INSTALLED_VERSION_DETECT_FAILED
       );
-      await failUpdateTelemetry(UPDATE_INSTALLED_VERSION_DETECT_FAILED);
       p.log.error("Could not determine installed version.");
-      process.exit(1);
+      return { failed: UPDATE_INSTALLED_VERSION_DETECT_FAILED };
+    }
+
+    // A resolvable copy the project never opted into (no committed .argent
+    // record, no declaration in its own manifest) is not this project's
+    // install — install-record.ts's intent rule, same gate uninstall applies.
+    // The package-manager add would ADD a devDependency and rewrite a lockfile
+    // uninvited. Yarn PnP probes already imply a declaration.
+    if (
+      mode === "local" &&
+      localProbe?.installed &&
+      installMode !== "local" &&
+      !isDeclaredLocally(projectRoot)
+    ) {
+      p.log.warn(
+        `${PACKAGE_NAME} is resolvable from this project but is not declared in its package.json.`
+      );
+      p.log.info(
+        `A hoisted or transitive copy is not this project's install. Run ` +
+          `${pc.cyan("argent init --local")} to adopt it as a devDependency, or ` +
+          `${pc.cyan("argent update --global")} for the global install.`
+      );
+      await trackPackageAction("no_update", updateStartTime, true);
+      return "noop";
+    }
+
+    // Local mode but nothing installed (fresh clone, or a marker at a root
+    // with no manifest). The package-manager add is wrong either way: it
+    // rewrites the team's committed version pin to @latest, and with no
+    // package.json it walks up and mutates an unrelated ancestor project.
+    // Never auto-mutate; tell the user to materialize the install themselves.
+    if (mode === "local" && localProbe && !localProbe.installed) {
+      p.log.warn(`${PACKAGE_NAME} is not installed in this project yet.`);
+      if (isDeclaredLocally(projectRoot)) {
+        p.log.info(
+          `It is declared in package.json — run your package manager's install ` +
+            `(e.g. ${pc.cyan("npm install")}), then re-run ${pc.cyan("argent update")}.`
+        );
+      } else if (hasProjectPackageJson(projectRoot)) {
+        // A `--local` on a project that doesn't depend on argent: update won't
+        // silently add + half-configure a devDependency (that is init's job).
+        p.log.info(
+          `It is not a dependency of this project. Run ${pc.cyan("argent init --local")} to add it, ` +
+            `or ${pc.cyan("argent update --global")} for the global install.`
+        );
+      } else {
+        p.log.info(
+          `No package.json at ${pc.cyan(projectRoot)}. Run ${pc.cyan("argent init")} in the ` +
+            `project directory, or remove ${pc.cyan(".argent/install.json")}.`
+        );
+      }
+      await trackPackageAction("no_update", updateStartTime, true);
+      return "noop";
+    }
+
+    // The agent-triggered updater acts on an UPDATE consent, never an install
+    // consent: a missing global install is not updated into existence (a
+    // degraded 'both' target, or an explicit 'global' one, must not mutate
+    // the machine's global prefix with a fresh install nobody had).
+    if (trigger === "mcp_update" && mode === "global" && !globallyInstalled) {
+      p.log.warn(`${PACKAGE_NAME} is not installed globally — nothing to update.`);
+      await trackPackageAction("no_update", updateStartTime, true);
+      return "noop";
     }
 
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
-    const pm = detectPackageManager();
+    const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
     let latest: string | null = null;
-    let target: string | null = null;
+    let target: string | null;
     let minReleaseAgeMs = 0;
 
     if (requestedVersion !== null) {
-      if (!semver.valid(requestedVersion) || semver.prerelease(requestedVersion)) {
-        spinner.stop(pc.red("Invalid update target."));
-        await trackPackageAction(
-          "update_failed",
-          updateStartTime,
-          false,
-          UPDATE_INVALID_TARGET_VERSION
-        );
-        await failUpdateTelemetry(UPDATE_INVALID_TARGET_VERSION);
-        p.log.error(`Requested version is not a stable semver: ${requestedVersion}`);
-        process.exit(1);
-      }
+      // Validated once, before the target loop.
       target = requestedVersion;
     } else {
       let resolved;
@@ -223,9 +317,8 @@ export async function update(args: string[]): Promise<void> {
           false,
           UPDATE_REGISTRY_CHECK_FAILED
         );
-        await failUpdateTelemetry(UPDATE_REGISTRY_CHECK_FAILED);
         p.log.error(`Failed to check registry: ${err}`);
-        process.exit(1);
+        return { failed: UPDATE_REGISTRY_CHECK_FAILED };
       }
 
       if (resolved === null) {
@@ -236,9 +329,8 @@ export async function update(args: string[]): Promise<void> {
           false,
           UPDATE_REGISTRY_CHECK_FAILED
         );
-        await failUpdateTelemetry(UPDATE_REGISTRY_CHECK_FAILED);
         p.log.error("Failed to determine the latest Argent release from the registry.");
-        process.exit(1);
+        return { failed: UPDATE_REGISTRY_CHECK_FAILED };
       }
 
       latest = resolved.latestVersion;
@@ -250,8 +342,16 @@ export async function update(args: string[]): Promise<void> {
 
     if (installed) {
       p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
+    } else if (isInstalledForMode) {
+      // Installed but the version is unreadable (Yarn PnP with a range
+      // specifier). Don't report "not installed" or reinstall every run below.
+      p.log.info(`Installed: ${pc.cyan("version unknown")} ${pc.dim("(Yarn PnP)")}`);
     } else {
-      p.log.warn(`${PACKAGE_NAME} is not installed globally.`);
+      p.log.warn(
+        mode === "local"
+          ? `${PACKAGE_NAME} is not installed in this project.`
+          : `${PACKAGE_NAME} is not installed globally.`
+      );
     }
     if (latest) {
       p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
@@ -262,7 +362,16 @@ export async function update(args: string[]): Promise<void> {
       p.log.info(`${label}${pc.cyan(`v${target}`)}${suffix}`);
     }
 
-    const needsInstall = target !== null && (!installed || isNewerVersion(target, installed));
+    // Installed-with-unknown-version (PnP + range specifier) must not read as
+    // "not installed" — under --yes that would rewrite the manifest/lockfile on
+    // EVERY run. Act on it only when the user explicitly requested a version.
+    const versionUnknown = isInstalledForMode && installed === null;
+    const needsInstall =
+      target !== null &&
+      (!isInstalledForMode ||
+        (versionUnknown
+          ? requestedVersion !== null
+          : !installed || isNewerVersion(target, installed)));
     const latestIsNewer = latest !== null && (!installed || isNewerVersion(latest, installed));
 
     if (needsInstall && target !== null) {
@@ -270,31 +379,52 @@ export async function update(args: string[]): Promise<void> {
         p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${target}`)}`);
       }
 
-      const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${target}`);
+      const cmd =
+        mode === "local"
+          ? localInstallCommand(pm, `${PACKAGE_NAME}@${target}`)
+          : globalInstallCommand(pm, `${PACKAGE_NAME}@${target}`);
       const cmdStr = formatShellCommand(cmd);
 
       if (!nonInteractive) {
         p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
         const proceed = await p.confirm({
-          message: installed
+          message: isInstalledForMode
             ? `Update to v${target}?`
-            : `Install ${PACKAGE_NAME}@${target} globally?`,
+            : mode === "local"
+              ? `Add ${PACKAGE_NAME}@${target} to this project's devDependencies?`
+              : `Install ${PACKAGE_NAME}@${target} globally?`,
           initialValue: true,
         });
 
         if (p.isCancel(proceed) || !proceed) {
           await trackPackageAction("update_skipped", updateStartTime, true);
-          await completeUpdateTelemetry();
-          p.cancel(installed ? "Update cancelled." : "Install cancelled.");
-          process.exit(0);
+          p.log.info(pc.dim(`Skipped the ${mode} install.`));
+          return "declined";
         }
       }
 
       p.log.info(`Running: ${pc.dim(cmdStr)}`);
 
+      // Stop only tool-server(s) spawned from the install we're replacing — a
+      // DIFFERENT install's server may be serving another editor session and
+      // must be left alone (same invariant as the launcher's reuse gate and
+      // dead-bundle sweep). An unresolvable install dir (fresh install,
+      // Yarn PnP) means nothing of ours to stop; the launcher's version-aware
+      // reuse gate retires a stale server on the next call.
+      const installDirToStop =
+        mode === "local" ? localProbe!.packageDir : getGloballyInstalledPackageRoot();
       try {
-        await killToolServer();
+        if (installDirToStop) {
+          await killToolServerForInstallDir(installDirToStop);
+        } else if (mode === "global") {
+          // The global package root can be unresolvable (Windows .cmd-wrapper
+          // layouts — see getGloballyInstalledPackageRoot). Fall back to
+          // main's legacy kill: the single-slot state file is only written by
+          // pre-branch argent, whose server is necessarily the global
+          // install's, so this cannot hit another install's server.
+          await killToolServer();
+        }
       } catch (err) {
         await trackPackageAction(
           "update_failed",
@@ -302,114 +432,393 @@ export async function update(args: string[]): Promise<void> {
           false,
           UPDATE_TOOLSERVER_STOP_FAILED
         );
-        await failUpdateTelemetry(UPDATE_TOOLSERVER_STOP_FAILED);
         p.log.error(`Could not stop the running tool server: ${err}`);
-        process.exit(1);
+        return { failed: UPDATE_TOOLSERVER_STOP_FAILED };
       }
 
-      const packageAction = resolveUpdatePackageAction(trigger, installed);
+      const packageAction = resolveUpdatePackageAction(
+        trigger,
+        isInstalledForMode ? (installed ?? "unknown") : null
+      );
       const packageActionStartedAt = performance.now();
-      try {
-        execFileSync(cmd.bin, cmd.args, {
-          stdio: "inherit",
-          env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
-        });
-      } catch (err) {
+      // Success is decided from the DISK, not the exit code (see runTrustingDisk
+      // — pnpm 10+ exits non-zero on blocked build scripts): did the target
+      // version actually land?
+      let landedVersion: string | null = null;
+      const { landed: reachedTarget, exitError: installError } = await runTrustingDisk(
+        () => {
+          execShellCommandSync(cmd, {
+            // Older versions still ship a postinstall script that honors this
+            // (current ones have none); keep it so downgrades and pinned
+            // installs of those versions stay quiet and don't double-kill.
+            env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
+            // Local installs must rewrite the project's manifest/lockfile.
+            ...(mode === "local" ? { cwd: projectRoot } : {}),
+          });
+        },
+        () => {
+          landedVersion =
+            mode === "local"
+              ? // Cache-free read: the pre-install probe memoized the old version's
+                // realpath, so getLocallyInstalledVersion would report it stale here.
+                (readLocalPackageVersionUncached(projectRoot) ??
+                getLocallyInstalledVersion(projectRoot))
+              : getGloballyInstalledVersion();
+          // `target` is narrowed non-null by the enclosing if; the closure
+          // re-widens it, hence the assertion.
+          return landedVersion !== null && !isNewerVersion(target!, landedVersion);
+        }
+      );
+      if (installError) {
+        if (!reachedTarget) {
+          await trackPackageAction(
+            packageAction,
+            packageActionStartedAt,
+            false,
+            UPDATE_PACKAGE_ACTION_FAILED
+          );
+          p.log.error(`${installed ? "Update" : "Install"} failed: ${installError}`);
+          return { failed: UPDATE_PACKAGE_ACTION_FAILED };
+        }
+        p.log.warn(
+          pc.dim(
+            `Your package manager exited non-zero but ${PACKAGE_NAME}@${landedVersion} is installed — continuing.`
+          )
+        );
+      } else if (landedVersion !== null && !reachedTarget) {
+        // The disk verdict cuts BOTH ways: a clean exit whose target version
+        // did not land (nvm/prefix split) is a failure, not an update. Only a
+        // null landedVersion (unreadable, e.g. Yarn PnP) leaves the exit code
+        // authoritative.
         await trackPackageAction(
           packageAction,
           packageActionStartedAt,
           false,
           UPDATE_PACKAGE_ACTION_FAILED
         );
-        await failUpdateTelemetry(UPDATE_PACKAGE_ACTION_FAILED);
-        p.log.error(`${installed ? "Update" : "Install"} failed: ${err}`);
-        process.exit(1);
+        p.log.error(
+          `${installed ? "Update" : "Install"} reported success but v${landedVersion} is still ` +
+            `what resolves for the ${mode} install (expected v${target}). ` +
+            (mode === "global"
+              ? `Check that your package manager's global prefix matches the \`argent\` on your PATH.`
+              : `Check the project's node_modules layout.`)
+        );
+        return { failed: UPDATE_PACKAGE_ACTION_FAILED };
       }
       await trackPackageAction(packageAction, packageActionStartedAt, true);
+      return "updated";
     } else {
       await trackPackageAction("no_update", updateStartTime, true);
-      if (latest && target === null && latestIsNewer && minReleaseAgeMs > 0) {
+      if (versionUnknown) {
+        p.log.warn(
+          `Could not determine the installed version (Yarn PnP). ` +
+            `Pass ${pc.cyan("--version <x.y.z>")} to update to a specific version.`
+        );
+      } else if (latest && target === null && latestIsNewer && minReleaseAgeMs > 0) {
         p.log.warn(
           `Latest version ${pc.cyan(`v${latest}`)} is still held by your minimum-release-age policy.`
         );
         p.log.info("No installable update is available yet.");
       } else if (latest && target && latest !== target) {
         p.log.success("Already on the latest installable version.");
+      } else if (
+        requestedVersion !== null &&
+        installed &&
+        !isNewerVersion(requestedVersion, installed)
+      ) {
+        // A --version at or below the installed one is a no-op, not "latest".
+        p.log.success(
+          `Requested v${requestedVersion} is not newer than the installed v${installed} — nothing to do.`
+        );
       } else {
         p.log.success("Already on the latest version.");
       }
     }
+    return "noop";
+  };
 
-    // Refresh configuration
-    spinner.start("Refreshing workspace configuration...");
+  try {
+    p.intro(pc.bgCyan(pc.black(" argent update ")));
 
-    const projectRoot = resolveProjectRoot(process.cwd());
-    const mcpEntry = getMcpEntry();
-    const results: string[] = [];
+    // `--no-telemetry` force-disables before the first track(); otherwise just
+    // surface the notice. update never prompts — it often runs from the old
+    // binary or non-TTY contexts where the init consent step can't apply.
+    await resolveTelemetryConsent({ nonInteractive: true, disableFlag: noTelemetry });
 
-    // Only refresh adapter scopes that already contain an argent entry. A
-    // present editor dir (`.gemini`, `.cursor`, ...) is not consent — issue
-    // #195 — so we look for the argent MCP server key in the actual config.
-    const configuredScopes = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
-    const adaptersByScope = new Map<"local" | "global", Set<McpConfigAdapter>>([
-      ["local", new Set()],
-      ["global", new Set()],
-    ]);
+    // Establish the identity before the first event so cli_update_start carries
+    // the stable per-machine fingerprint instead of the fallback id the
+    // background upgrade would only migrate to afterward — see the matching note
+    // in init.ts before cli_init_start. SYNC by design (the async warm awaits an
+    // unref'd resolver that would exit a short-lived CLI). Bounded, best-effort,
+    // consent-gated.
+    warmTelemetryIdentitySync();
 
-    for (const { adapter, scope, configPath } of configuredScopes) {
-      try {
-        adapter.write(configPath, mcpEntry);
-        results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
-      } catch {
-        // Skip paths that can't be written.
-      }
-      adaptersByScope.get(scope === "project" ? "local" : "global")!.add(adapter);
+    track("installation:cli_update_start", {});
+
+    // Validate a --version request once, up front: it applies to every target
+    // alike, so it must fail the run before any target acts on it.
+    if (
+      requestedVersion !== null &&
+      (!semver.valid(requestedVersion) || semver.prerelease(requestedVersion))
+    ) {
+      await trackPackageAction(
+        "update_failed",
+        updateStartTime,
+        false,
+        UPDATE_INVALID_TARGET_VERSION
+      );
+      await failUpdateTelemetry(UPDATE_INVALID_TARGET_VERSION);
+      p.log.error(`Requested version is not a stable semver: ${requestedVersion}`);
+      process.exit(1);
     }
 
-    // Refresh allowlists only for scopes that already had argent configured —
-    // matches the editor list above.
-    for (const [scope, adapters] of adaptersByScope) {
-      for (const adapter of adapters) {
-        if (!adapter.addAllowlist) continue;
+    // The committed .argent/install.json (else a manifest declaration) decides
+    // the project's mode, keying the config refresh below and the telemetry
+    // funnel. Which install(s) to update is a separate choice — see next.
+    const rootOverride = getProjectRootOverride(args);
+    const projectRoot = rootOverride
+      ? path.resolve(rootOverride)
+      : resolveProjectRoot(process.cwd());
+    installMode = resolveInstallMode(projectRoot);
+
+    // Target selection: explicit flags win; a lone PRESENT install is used
+    // as-is; a coexisting global + local pair prompts (both preselected) or,
+    // non-interactively, acts on both. Presence is what matters: a local-mode
+    // repo whose devDependency isn't materialized yet (fresh clone) must not
+    // shadow a present global install and leave it silently outdated.
+    const flags = parseTargetFlags(args);
+    const localInstalled = installMode === "local" && probeLocalInstall(projectRoot).installed;
+    const globalInstalled = isGloballyInstalled();
+    const defaultTarget: InstallMode = localInstalled
+      ? "local"
+      : globalInstalled
+        ? "global"
+        : installMode;
+    // An explicit --local run gets the detailed guidance from
+    // applyUpdateForTarget instead of this one-liner.
+    if (installMode === "local" && !localInstalled && !flags.local) {
+      p.log.warn(
+        `${PACKAGE_NAME} is declared for this project but not installed — run your package ` +
+          `manager's install, or ${pc.cyan("argent update --local")} for guidance.`
+      );
+    }
+    const decision = decideInstallTargets({
+      globalPresent: globalInstalled,
+      localPresent: localInstalled,
+      defaultTarget,
+      flags,
+      nonInteractive,
+      nonInteractiveBothDefault: ["global", "local"],
+    });
+
+    let targets: InstallMode[];
+    if (decision.kind === "prompt") {
+      const picked = await promptInstallTargets("update");
+      if (picked === "cancel") {
+        await completeUpdateTelemetry();
+        p.cancel("Update cancelled.");
+        process.exit(0);
+      }
+      targets = picked;
+    } else {
+      targets = decision.targets;
+      if (decision.reason === "noninteractive-both") {
+        p.log.info(
+          pc.dim(
+            "Both a global and a project-local install were found; updating both " +
+              "(pass --global or --local to narrow)."
+          )
+        );
+      }
+    }
+
+    const outcomes: Array<"updated" | "declined" | "noop" | "failed"> = [];
+    let firstFailure: InstallerFailureSignal | null = null;
+    for (const mode of targets) {
+      const outcome = await applyUpdateForTarget(mode, projectRoot);
+      if (typeof outcome === "object") {
+        firstFailure ??= outcome.failed;
+        outcomes.push("failed");
+      } else {
+        outcomes.push(outcome);
+      }
+    }
+
+    // "No" means no: when a prompt was declined and nothing was updated, end
+    // here — running the refresh (entry rewrites, allowlists, stale-config
+    // removals, skills) after a "no" would mutate files the user just refused
+    // to have touched. A partial run (one declined, another updated) still
+    // refreshes: the applied update needs its configuration re-emitted.
+    if (outcomes.includes("declined") && !outcomes.includes("updated") && !firstFailure) {
+      await completeUpdateTelemetry();
+      p.cancel("Update cancelled.");
+      process.exit(0);
+    }
+
+    // Nothing updated and a target hard-failed: failure telemetry, exit 1, no
+    // refresh. (A partial run with an "updated" target falls through — it still
+    // needs its refresh; the failure resurfaces in the exit code below.)
+    if (firstFailure && !outcomes.includes("updated")) {
+      await failUpdateTelemetry(firstFailure);
+      p.outro(pc.red("Update failed."));
+      process.exit(1);
+    }
+
+    // ── Refresh configuration ───────────────────────────────────────────────────
+    // Keyed on the PROJECT's mode (installMode), not the install just updated:
+    // a local-mode project keeps its committed node-path command even when only
+    // the global install was bumped. Only scopes already holding an argent
+    // entry are touched.
+    {
+      const spinner = p.spinner();
+      spinner.start("Refreshing workspace configuration...");
+
+      const results: string[] = [];
+
+      // Project-scope entries in local mode run the repo-local copy (the bin
+      // path may move across versions); global scopes keep the bare `argent`.
+      const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
+      // Never REWRITE existing entries to the degraded npx fallback: local-npx
+      // only means the repo-local bin can't be resolved right now (fresh clone,
+      // pruned pnpm store). The committed node-path command is right again once
+      // the install materializes — clobbering it would dirty the team's file
+      // with a strictly worse command. (init still writes the fallback from
+      // scratch, with its own warning.)
+      const skipEntryRewrite = localCmdMode?.kind === "local-npx";
+      const entryFor = (scope: "local" | "global"): McpServerEntry =>
+        getMcpEntryForScope(installMode, scope, localCmdMode);
+
+      // Only refresh adapter scopes that already contain an argent entry. A
+      // present editor dir (`.gemini`, `.cursor`, ...) is not consent — issue
+      // #195 — so we look for the argent MCP server key in the actual config.
+      const configuredScopes = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
+      const adaptersByScope = new Map<"local" | "global", Set<McpConfigAdapter>>([
+        ["local", new Set()],
+        ["global", new Set()],
+      ]);
+
+      // Classify each configured entry BEFORE writing: an entry argent didn't
+      // author (custom command, extra args, env vars) is a deliberate override
+      // — rewriting it would destroy the customization AND launder it into a
+      // bare shape the stale-config sweep below could judge dead and delete.
+      // Everything else is rewritten unconditionally; the write also REPAIRS
+      // state the normalized view can't see (an opencode `enabled: false`, or
+      // getArgentEntry's unreadable sentinel { command: "" }).
+      for (const { adapter, scope, configPath } of configuredScopes) {
+        const normScope = scope === "project" ? "local" : "global";
+        // Allowlists and rules still refresh for this adapter either way — only
+        // the MCP entry itself is protected.
+        adaptersByScope.get(normScope)!.add(adapter);
+        if (skipEntryRewrite && normScope === "local") continue;
+        let existing: McpServerEntry | null;
         try {
-          adapter.addAllowlist(projectRoot, scope);
+          existing = adapter.getArgentEntry(configPath);
         } catch {
-          // non-fatal
+          continue;
+        }
+        const isUnreadableSentinel =
+          existing !== null && existing.command === "" && existing.args.length === 0;
+        if (existing !== null && !isUnreadableSentinel && !isArgentManagedEntry(existing)) {
+          results.push(
+            `${pc.yellow("!")} ${adapter.name} left a customized entry untouched ${pc.dim(configPath)}`
+          );
+          continue;
+        }
+        try {
+          adapter.write(configPath, entryFor(normScope));
+          results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
+        } catch {
+          // Skip paths that can't be written.
         }
       }
-    }
+      if (skipEntryRewrite && configuredScopes.some(({ scope }) => scope === "project")) {
+        p.log.info(
+          pc.dim(
+            "Left project MCP entries unchanged — the repo-local argent binary can't be " +
+              "resolved right now (fresh checkout: run your package manager's install; " +
+              "after an out-of-band version bump, just re-run argent update)."
+          )
+        );
+      }
 
-    // Refresh rules/agents the same way: per-scope, only for adapters the user
-    // opted into in that scope.
-    const localAdapters = [...adaptersByScope.get("local")!];
-    const globalAdapters = [...adaptersByScope.get("global")!];
-    const ruleResults = [
-      ...copyRulesAndAgents(globalAdapters, projectRoot, "global", RULES_DIR, AGENTS_DIR),
-      ...copyRulesAndAgents(localAdapters, projectRoot, "local", RULES_DIR, AGENTS_DIR),
-    ];
+      // Refresh allowlists only for scopes that already had argent configured —
+      // matches the editor list above.
+      for (const [scope, adapters] of adaptersByScope) {
+        for (const adapter of adapters) {
+          if (!adapter.addAllowlist) continue;
+          try {
+            adapter.addAllowlist(projectRoot, scope);
+          } catch {
+            // non-fatal
+          }
+        }
+      }
 
-    spinner.stop("Configuration refreshed.");
+      // Refresh rules/agents the same way: per-scope, only for adapters the user
+      // opted into in that scope.
+      const localAdapters = [...adaptersByScope.get("local")!];
+      const globalAdapters = [...adaptersByScope.get("global")!];
+      const ruleResults = [
+        ...copyRulesAndAgents(globalAdapters, projectRoot, "global", RULES_DIR, AGENTS_DIR),
+        ...copyRulesAndAgents(localAdapters, projectRoot, "local", RULES_DIR, AGENTS_DIR),
+      ];
 
-    if (results.length > 0) {
-      p.note(results.join("\n"), "MCP Configs Updated");
-    }
+      spinner.stop("Configuration refreshed.");
 
-    if (ruleResults.length > 0) {
-      p.note(ruleResults.join("\n"), "Rules & Agents Updated");
-    }
+      if (results.length > 0) {
+        p.note(results.join("\n"), "MCP Configs Updated");
+      }
 
-    const skillRefreshResults = refreshArgentSkills(projectRoot);
-    const skillSummary = formatSkillRefreshSummary(skillRefreshResults);
-    if (skillSummary) {
-      p.note(skillSummary, "Skills Updated");
-    }
-    const skillTelemetrySummary = summarizeSkillRefreshForTelemetry(skillRefreshResults);
-    if (skillTelemetrySummary.scope_count > 0) {
-      track("installation:skill_refresh_result", {
-        is_success: skillTelemetrySummary.failed_count === 0,
-        ...skillTelemetrySummary,
-        ...(skillTelemetrySummary.failed_count > 0 ? INSTALL_SKILLS_REFRESH_FAILED : {}),
+      // The same stale-config sweep init runs (its step 1d): configs the
+      // refresh did not rewrite can still shadow or block the refreshed entries
+      // (a `claude mcp add` leftover, a dead global entry after a global→local
+      // migration, a recorded .mcp.json rejection).
+      const staleCleanup = await cleanupStaleMcpConfigs({
+        writtenAdapters: [...new Set([...localAdapters, ...globalAdapters])],
+        detectedAdapters: detectAdapters(),
+        installMode,
+        scope: localAdapters.length > 0 ? "local" : "global",
+        effectiveRoot: projectRoot,
+        // Same one-shot confirmation init uses for cross-project removals.
+        // --yes passes no confirmer (sweep goes report-only there) — the agent-
+        // triggered `update --yes` must never delete cross-project state on a
+        // fallible PATH probe.
+        confirmCrossProjectRemovals: nonInteractive
+          ? undefined
+          : async (items) => {
+              p.log.warn(
+                `Dead argent entries from a previous global install were found in\n` +
+                  `  global (cross-project) config files:\n` +
+                  items.map((item) => `    ${pc.cyan(item)}`).join("\n")
+              );
+              const choice = await p.confirm({
+                message: "Remove these dead global entries? - recommended",
+                initialValue: true,
+              });
+              return !p.isCancel(choice) && choice === true;
+            },
       });
+      if (staleCleanup.lines.length > 0) {
+        p.note(staleCleanup.lines.join("\n"), "Stale Config Cleanup");
+        track("installation:stale_config_cleanup", {
+          removed_count: staleCleanup.removedCount,
+          warned_count: staleCleanup.warnedCount,
+        });
+      }
+
+      if (ruleResults.length > 0) {
+        p.note(ruleResults.join("\n"), "Rules & Agents Updated");
+      }
+
+      reportSkillRefresh(projectRoot, "installer_update_skills_refresh");
+    }
+
+    if (firstFailure) {
+      // Partial run: one target updated (its refresh just ran), another hard-
+      // failed. The exit code and terminal telemetry must not read as success.
+      await failUpdateTelemetry(firstFailure);
+      p.outro(pc.yellow("Update finished with errors — see above."));
+      process.exit(1);
     }
 
     await completeUpdateTelemetry();

@@ -1,6 +1,6 @@
 {
   "name": "@argent/native-devtools-android",
-  "version": "0.13.0",
+  "version": "0.16.0",
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,7 +16,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
-    "@types/node": "^25.9.3",
+    "@types/node": "^26.0.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }

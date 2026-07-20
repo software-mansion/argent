@@ -1,6 +1,81 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import { electronGuiChildEnv } from "./electron-env";
+
+/**
+ * macOS only. Build (and cache) a thin `.app` wrapper around the installed
+ * Electron.app whose Info.plist `CFBundleName` is "Argent Lens", so the OS names
+ * the window — menu bar, Cmd-Tab, Dock — "Argent Lens" instead of "Electron"
+ * (the framework default, which `app.setName()` at runtime cannot override).
+ *
+ * The wrapper SYMLINKS Electron's heavy Frameworks/Resources — there is no
+ * ~270MB copy — and supplies only its own Info.plist + a symlinked executable.
+ * The catch: a symlinked bundle with a modified Info.plist no longer matches the
+ * signed Helper apps inside Frameworks, so the OS sandbox cannot initialise and
+ * the helper processes crash unless the app is launched with `--no-sandbox`
+ * (the caller adds it). That is an acceptable trade-off for THIS window: it only
+ * ever loads the tool-server's own localhost preview UI — never untrusted or
+ * remote content — and the renderer still runs with contextIsolation +
+ * sandbox:true at the Electron level. The full alternative (a renamed, deeply
+ * re-signed copy of Electron.app, à la @electron/packager) is what avoids
+ * `--no-sandbox`, at the cost of that ~270MB copy.
+ *
+ * Returns the wrapper's executable path, or null to fall back to plain Electron
+ * (non-macOS, or any failure — the window still opens, just named "Electron").
+ */
+function ensureLensAppBundle(electronBin: string): string | null {
+  if (process.platform !== "darwin") return null;
+  try {
+    const realApp = electronBin.replace(/\/Contents\/MacOS\/[^/]+$/, "");
+    if (!realApp.endsWith(".app")) return null;
+    const realContents = path.join(realApp, "Contents");
+    const wrapperContents = path.join(
+      os.tmpdir(),
+      "argent-lens-app",
+      "Argent Lens.app",
+      "Contents"
+    );
+    const wrapperExec = path.join(wrapperContents, "MacOS", "Electron");
+    // Reuse the cached wrapper unless it's missing or points at a different
+    // Electron install (e.g. an upgrade moved the binary).
+    try {
+      if (fs.realpathSync(wrapperExec) === fs.realpathSync(electronBin)) return wrapperExec;
+    } catch {
+      /* not built yet — fall through and build it */
+    }
+    fs.rmSync(path.dirname(wrapperContents), { recursive: true, force: true });
+    fs.mkdirSync(path.join(wrapperContents, "MacOS"), { recursive: true });
+    fs.symlinkSync(path.join(realContents, "Frameworks"), path.join(wrapperContents, "Frameworks"));
+    fs.symlinkSync(path.join(realContents, "Resources"), path.join(wrapperContents, "Resources"));
+    fs.symlinkSync(electronBin, wrapperExec);
+    const pkgInfo = path.join(realContents, "PkgInfo");
+    if (fs.existsSync(pkgInfo)) fs.copyFileSync(pkgInfo, path.join(wrapperContents, "PkgInfo"));
+    // Custom Info.plist: copy Electron's, rename the display fields. PlistBuddy
+    // is a macOS system tool (handles binary or XML plists), so no new dep. Keep
+    // CFBundleExecutable = "Electron" so the signed Helper apps still resolve.
+    const plist = path.join(wrapperContents, "Info.plist");
+    fs.copyFileSync(path.join(realContents, "Info.plist"), plist);
+    const setPlist = (entry: string, value: string): void => {
+      try {
+        execFileSync("/usr/libexec/PlistBuddy", ["-c", `Set :${entry} ${value}`, plist]);
+      } catch {
+        try {
+          execFileSync("/usr/libexec/PlistBuddy", ["-c", `Add :${entry} string ${value}`, plist]);
+        } catch {
+          /* leave the original value if PlistBuddy can't set it */
+        }
+      }
+    };
+    setPlist("CFBundleName", "Argent Lens");
+    setPlist("CFBundleDisplayName", "Argent Lens");
+    setPlist("CFBundleIdentifier", "com.swmansion.argent.lens");
+    return wrapperExec;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Tool-server side of the Electron preview window. A single Electron child
@@ -110,8 +185,19 @@ export function createPreviewWindowManager(
       opts.onLaunchFailure?.(e);
       return;
     }
-    const next = spawn(electronBin, [mainScript], {
-      env: { ...process.env, ARGENT_PREVIEW_URL: url },
+    // On macOS, launch through the "Argent Lens" wrapper bundle so the OS names
+    // the window correctly. The wrapper needs `--no-sandbox` (see
+    // ensureLensAppBundle); both fall back to plain Electron when the wrapper
+    // can't be built, so the window always opens.
+    const wrapperBin = ensureLensAppBundle(electronBin);
+    const launchBin = wrapperBin ?? electronBin;
+    const launchArgs = wrapperBin ? ["--no-sandbox", mainScript] : [mainScript];
+    const next = spawn(launchBin, launchArgs, {
+      // Strip ELECTRON_RUN_AS_NODE so the child boots as a GUI Electron app, not
+      // a bare Node runtime (see electronGuiChildEnv). An Electron-based MCP
+      // host puts it in our env, and inheriting it makes main.cjs crash at
+      // app.setName() with `app` undefined — the window never opens.
+      env: electronGuiChildEnv({ ARGENT_PREVIEW_URL: url }),
       stdio: ["pipe", "ignore", "pipe"],
     });
     // `spawn` does not throw synchronously for ENOENT / EACCES — the error

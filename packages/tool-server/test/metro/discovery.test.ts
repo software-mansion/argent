@@ -48,9 +48,26 @@ describe("discoverMetro", () => {
     await expect(discoverMetro(8081)).rejects.toThrow("not running");
   });
 
-  it("throws when project root header is missing", async () => {
-    mockFetch.mockResolvedValueOnce(new Response("packager-status:running"));
-    await expect(discoverMetro(8081)).rejects.toThrow("X-React-Native-Project-Root");
+  it("tolerates a missing project root header (RN 0.72 / Vega Metro never sends it)", async () => {
+    const targets = [
+      {
+        id: "page1",
+        title: "Hermes React Native",
+        description: "com.example.vega",
+        webSocketDebuggerUrl: "ws://localhost:8081/inspector/debug?device=0&page=1",
+        deviceName: "kepler-device",
+      },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce(new Response("packager-status:running"))
+      .mockResolvedValueOnce(targetsResponse(targets));
+
+    // Only source-map / file:line resolution needs projectRoot, so discovery
+    // degrades to "" instead of taking the whole debugger session down.
+    const info = await discoverMetro(8081);
+    expect(info.projectRoot).toBe("");
+    expect(info.targets).toHaveLength(1);
   });
 
   it("throws when no targets are found", async () => {

@@ -2,9 +2,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
-import { createAwaitUiElementTool, findAll, evaluateMatches } from "../src/tools/await-ui-element";
+import { createAwaitUiElementTool, evaluateMatches } from "../src/tools/await-ui-element";
+import { findAll } from "../src/utils/ui-tree-match";
 import type { DescribeNode } from "../src/tools/describe/contract";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+
+// execute() resolves the target's form factor before polling: isTvOsSimulator()
+// shells out to `xcrun simctl list` (the fake UDID is never listed, so it never
+// caches and re-probes on EVERY test) and isAndroidTv() probes the serial via
+// real adb round-trips. Both take seconds under the parallel suite load — enough
+// to trip the 5s per-test timeout. The devices here are plain phone shapes, so
+// pin both probes to false and keep the rest of each module real.
+vi.mock("../src/utils/ios-devices", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/ios-devices")>(
+    "../src/utils/ios-devices"
+  );
+  return { ...actual, isTvOsSimulator: async () => false };
+});
+vi.mock("../src/utils/adb", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/adb")>("../src/utils/adb");
+  return { ...actual, isAndroidTv: async () => false };
+});
 
 const IOS_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const ANDROID_SERIAL = "emulator-5554";
@@ -316,6 +334,62 @@ describe("await-ui-element tool", () => {
 
     expect(result.success).toBe(false);
     expect(result.note).toMatch(/Loading/);
+  });
+
+  it("`text` check and timeout note both read the visible match, not a zero-area shadow", async () => {
+    // A stale zero-area "Total 0" sits above the visible "Total 42". Both the
+    // condition and the note must read the visible node — otherwise the check
+    // fails against the shadow while the note quotes the visible element,
+    // producing a self-contradictory message. Driven through the Chromium path
+    // because the iOS AX adapter prunes zero-area elements before they reach
+    // the tree, while Chromium deliberately keeps zero-height anchors.
+    const tree = {
+      role: "html",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "generic",
+          label: "Total 0",
+          frame: { x: 0.1, y: 0.1, width: 0, height: 0 },
+          children: [],
+        },
+        {
+          role: "generic",
+          label: "Total 42",
+          frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 },
+          children: [],
+        },
+      ],
+    };
+    const tool = createAwaitUiElementTool(makeMockRegistry({}));
+
+    const met = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      {
+        udid: CHROMIUM_ID,
+        condition: "text",
+        selector: { text: "Total" },
+        expectedText: "42",
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+    expect(met.success).toBe(true);
+
+    const unmet = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      {
+        udid: CHROMIUM_ID,
+        condition: "text",
+        selector: { text: "Total" },
+        expectedText: "99",
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+    expect(unmet.success).toBe(false);
+    expect(unmet.note).toMatch(/its text was "Total 42"/);
+    expect(unmet.note).not.toMatch(/Total 0/);
   });
 
   // ── Cancellation ─────────────────────────────────────────────────────────
@@ -781,11 +855,53 @@ describe("await-ui-element tool", () => {
       );
     });
 
-    it("accepts a valid visible-condition payload", () => {
-      expect(
-        schema.safeParse({ condition: "visible", udid: IOS_UDID, selector: { role: "button" } })
-          .success
-      ).toBe(true);
+    it("rejects unknown selector constraints instead of silently dropping them", () => {
+      const result = schema.safeParse({
+        condition: "visible",
+        udid: IOS_UDID,
+        selector: { text: "Order", textMatches: "^Order #\\d+$" },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["selector"],
+            keys: ["textMatches"],
+          })
+        );
+      }
+    });
+
+    it("rejects a selector containing only an unknown field with a pointed error", () => {
+      const result = schema.safeParse({
+        condition: "exists",
+        udid: IOS_UDID,
+        selector: { roel: "button" },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["selector"],
+            keys: ["roel"],
+          })
+        );
+      }
+    });
+
+    it.each([
+      { text: "Order" },
+      { identifier: "order-row" },
+      { role: "button" },
+      { text: "Order", identifier: "order-row", role: "button" },
+    ])("accepts the documented selector fields: %j", (selector) => {
+      expect(schema.safeParse({ condition: "visible", udid: IOS_UDID, selector }).success).toBe(
+        true
+      );
     });
   });
 });
