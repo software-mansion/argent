@@ -10,12 +10,13 @@ import type { DescribeNode } from "../describe/contract";
  * arbitrary sample of that oscillation mints phantom "new" screens on every
  * revisit and makes back-navigation verification fail.
  *
- * So the driver samples the tree several times and returns the richest
- * consistent snapshot: it exits early once two consecutive samples agree on
- * the fingerprint while being about as full as the fullest sample seen (the
- * common stable case costs one extra describe), and otherwise — an
- * oscillating or still-filling tree — it keeps sampling and returns the
- * fullest snapshot, which the sparser states are subsets of.
+ * So the driver samples the tree several times and always returns the fullest
+ * snapshot seen — the sparser states are subsets of it, so this is
+ * order-independent: the same oscillating screen mints one key no matter which
+ * phase it happened to sample first. Two consecutive samples that agree on the
+ * fingerprint (while about as full as the fullest seen) are only a cost signal:
+ * the screen has settled, so stop describing early — but still hand back the
+ * fullest snapshot, never the current sample.
  */
 
 export interface StableTreeOptions {
@@ -32,9 +33,11 @@ export interface StableTreeOptions {
 const DEFAULT_MAX_SAMPLES = 5;
 const DEFAULT_GAP_MS = 350;
 
-// A sample only counts as "as full as the fullest seen" within this ratio —
-// two consecutive sparse samples of an oscillating tree must not short-circuit
-// past the full state we already observed.
+// The early exit only fires when the agreeing, settled samples are at least
+// this full relative to the fullest seen — so a still-filling tree keeps
+// sampling until it is close to complete rather than exiting on early chrome.
+// (Correctness no longer rides on this ratio: the exit returns the fullest
+// snapshot regardless; the ratio only tunes how eagerly we stop describing.)
 const FULLNESS_RATIO = 0.9;
 
 function countNodes(node: DescribeNode): number {
@@ -60,8 +63,13 @@ export async function fetchStableTree(options: StableTreeOptions): Promise<Descr
     if (!best || count >= best.count) best = { tree, count };
 
     const key = options.keyOf(tree);
+    // Settled (two agreeing keys, and this stable state is close to the fullest
+    // we've seen) — stop early to save describes, but return `best`, not the
+    // current sample: a sparse phase of an oscillation must never win over a
+    // fuller phase already captured, or the same screen keys differently
+    // depending on sampling order.
     if (prevKey !== null && key === prevKey && count >= FULLNESS_RATIO * maxCount) {
-      return tree;
+      return best!.tree;
     }
     prevKey = key;
   }

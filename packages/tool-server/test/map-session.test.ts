@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { getFailureSignal, FAILURE_CODES } from "@argent/registry";
 import { MapSessionStore } from "../src/utils/map-session";
 import type { MapAction, MapCrawlLimits } from "../src/tools/map/contract";
@@ -121,6 +124,36 @@ describe("MapSessionStore — session lifecycle", () => {
     s.complete();
     s.cancel(); // guarded no-op — must not re-emit
     expect(seen).toEqual([true, false]);
+  });
+
+  it("begin sweeps stale orphan screenshot dirs (crashed tool-servers) but spares recent ones", () => {
+    // begin() only ever knew its own previous dir, so a crashed/restarted
+    // process leaks one dir per crawl under argent-map/. Point tmpdir at a
+    // sandbox and seed one aged-out orphan next to a fresh (active) sibling.
+    const realTmp = process.env.TMPDIR;
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "map-sweep-"));
+    process.env.TMPDIR = sandbox;
+    try {
+      const parent = path.join(sandbox, "argent-map");
+      const stale = path.join(parent, "stale-crawl");
+      const fresh = path.join(parent, "fresh-crawl");
+      for (const dir of [stale, fresh]) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "s0.png"), "x");
+      }
+      // Age the orphan two hours into the past (past the one-hour threshold).
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      fs.utimesSync(stale, old, old);
+
+      begin(new MapSessionStore());
+
+      expect(fs.existsSync(stale)).toBe(false); // swept — no live process owns it
+      expect(fs.existsSync(fresh)).toBe(true); // spared — mtime is recent
+    } finally {
+      if (realTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = realTmp;
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 });
 

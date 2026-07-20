@@ -107,9 +107,11 @@ export function treeLooksOutside(
 /**
  * Crawl the app and record the screen graph into `store`. Resolves
  * "completed" (budgets/frontier exhausted) or "cancelled" (signal aborted —
- * the partial graph is kept and the store finalized as cancelled). Rejects
- * only on a hard failure (e.g. the app never became readable); the CALLER
- * finalizes the store as failed then.
+ * the partial graph is kept and the store finalized as cancelled). Transient
+ * device errors (a dropped tap, a flaky relaunch) degrade the affected step
+ * rather than ending the run — the partial map survives. Rejects only on a
+ * genuinely-hard failure (the app never became readable at launch →
+ * MAP_APP_NOT_VISIBLE); the CALLER finalizes the store as failed then.
  */
 export async function crawlApp(opts: CrawlAppOptions): Promise<"completed" | "cancelled"> {
   try {
@@ -138,6 +140,22 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
 
   const aborted = (): boolean => signal?.aborted === true;
   const overTime = (): boolean => driver.now() - startedAt >= limits.timeBudgetMs;
+
+  /**
+   * Run one best-effort device action (a tap, a relaunch): a transient sub-tool
+   * rejection — a dropped gesture, a flaky restart — must degrade the crawl, not
+   * destroy it, so the caller keeps the partial map. Returns whether it landed;
+   * an abort still rethrows so cancellation stays cancellation.
+   */
+  async function tryStep(fn: () => Promise<void>): Promise<boolean> {
+    try {
+      await fn();
+      return true;
+    } catch (err) {
+      if (aborted()) throw err;
+      return false;
+    }
+  }
 
   /**
    * Read the current screen, or null when we're outside the app: the fetch
@@ -252,14 +270,20 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   async function replayTo(target: CrawlNode, reason: string): Promise<boolean> {
     store.bumpStats({ restarts: 1 });
     emit({ kind: "restart", reason });
-    await driver.restartApp();
+    // A failed restart just means we can't reach the target — a divergence the
+    // callers already handle (mark the node exhausted), not a crawl-ending throw.
+    if (!(await tryStep(() => driver.restartApp()))) return false;
     await driver.awaitSettle();
     for (const step of target.path) {
-      if (aborted()) return false;
+      // The deadline is also checked here, not only at the DFS loop top: a deep
+      // replay is the crawl's most expensive step (restart + a tap/settle/read
+      // per path element), so a budget that ran out mid-replay bails now with a
+      // partial map instead of overrunning by the rest of the path.
+      if (aborted() || overTime()) return false;
       const tree = await readTree();
       if (!tree) return false;
       const point = replayTapPoint(tree, step);
-      await driver.tap(point.x, point.y);
+      if (!(await tryStep(() => driver.tap(point.x, point.y)))) return false;
       await driver.awaitSettle();
     }
     const tree = await readTree();
@@ -308,13 +332,16 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   ): Promise<CrawlNode | null> {
     let backTried = false;
     if (platform === "android") {
-      backTried = await driver.pressBack();
+      // A failed hardware-back press is not fatal: fall through to the
+      // restart-replay below rather than tearing the whole crawl down.
+      try {
+        backTried = await driver.pressBack();
+      } catch (err) {
+        if (aborted()) throw err;
+      }
     } else {
       const point = iosBackPoint(hereTree);
-      if (point) {
-        await driver.tap(point.x, point.y);
-        backTried = true;
-      }
+      if (point) backTried = await tryStep(() => driver.tap(point.x, point.y));
     }
     if (backTried) {
       await driver.awaitSettle();
@@ -342,7 +369,10 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   // walks backwards through a stack its replay can never re-enter. The
   // restart tools tolerate a not-running app.
   emit({ kind: "phase", message: `Restarting ${bundleId} for a clean crawl root` });
-  await driver.restartApp();
+  // Best-effort: a failed restart doesn't reject on its own — the readTree gate
+  // below decides. If the app is readable anyway the crawl proceeds; if not, it
+  // is the genuinely-hard failure (MAP_APP_NOT_VISIBLE) the caller expects.
+  await tryStep(() => driver.restartApp());
   await driver.awaitSettle();
   const rootTree = await readTree();
   if (!rootTree) {
@@ -418,7 +448,9 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
     });
 
     const point = centreOf(action.frame);
-    await driver.tap(point.x, point.y);
+    // A dropped tap is a transient device hiccup, not a crawl-ender: skip this
+    // action (it stays counted as attempted) and move on to the next.
+    if (!(await tryStep(() => driver.tap(point.x, point.y)))) continue;
     await driver.awaitSettle();
     const tree = await readTree();
 
@@ -430,7 +462,9 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
       store.addEdge(current.id, ensureOutsideNode(current.depth + 1), action);
       store.bumpStats({ restarts: 1 });
       emit({ kind: "restart", reason: "the tap left the app; relaunching" });
-      await driver.launchApp();
+      // Best-effort relaunch: if it fails, the readTree/replay recovery below
+      // still runs (and can restart-replay us back onto the map).
+      await tryStep(() => driver.launchApp());
       await driver.awaitSettle();
       const resumed = await readTree();
       if (!resumed || screenKey(resumed) !== current.key) {
