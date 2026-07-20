@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
+  isInjectableBundleId,
   nativeDevtoolsRef,
   precheckNativeDevtools,
   type NativeDevtoolsApi,
@@ -23,25 +24,33 @@ type Result =
       connected: boolean;
       requiresRestart: boolean;
       nextLaunchWillBeInjected: boolean;
+      injectable: boolean;
     };
 
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
   capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  // The "injectable is false" recovery sentence inlines NON_INJECTABLE_RECOVERY
+  // verbatim: the description must stay a plain literal so scripts/extract-tools.mjs
+  // can read it statically for the spidershield scan. The verbatim match is pinned
+  // by native-devtools-status.test.ts.
   description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
 Use when you need to verify native devtools readiness before calling native-full-hierarchy, native-describe-screen, or native-network-logs.
 
-Returns { envSetup, appRunning, connected, requiresRestart, nextLaunchWillBeInjected }:
+Returns { envSetup, appRunning, connected, requiresRestart, nextLaunchWillBeInjected, injectable }:
 - envSetup: DYLD_INSERT_LIBRARIES is configured in the simulator's launchd environment
 - appRunning: the target bundle currently has a running UIKit process on the simulator
 - connected: the dylib is active in the current running process for this bundleId
-- requiresRestart: the app is already running but its current process does not have native devtools injected
-- nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place
+- requiresRestart: the app is already running but its current process does not have native devtools injected (always false for a non-injectable app)
+- nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place (always false for a non-injectable app)
+- injectable: whether native devtools can ever be injected into this app. Apple system apps (bundle ids under com.apple.) are platform binaries with library validation, so the dylib can never load into them.
 
 Call this before using app-scoped native hierarchy tools or native-network-logs.
+If injectable is false: this is a TERMINAL state — the app can never be injected. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point) — they run the same injection precheck and fail with the same non-injectable error.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app, then proceed with the native feature.
-Fails if the simulator server is not running for the given UDID or the bundleId is not found.`,
+Returns { status: "init_failed", message, attempts } instead when the simulator's native-devtools environment failed to initialize.
+Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
@@ -51,6 +60,42 @@ Fails if the simulator server is not running for the given UDID or the bundleId 
     await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
 
     const api = services.nativeDevtools as NativeDevtoolsApi;
+
+    // Terminal case first, mirroring precheckNativeDevtools: non-injectable
+    // apps (Apple system apps) can never load the dylib no matter how many
+    // times they relaunch, and injectability is a static property of the
+    // bundle id — so a broken env must not mask this terminal state behind the
+    // precheck's init_failed block, whose "re-boot the simulator" guidance can
+    // never make a system app injectable. Report a terminal state so agents
+    // stop looping restart-app → retry: no restart is required and the next
+    // launch will not be injected either. appRunning/connected are still
+    // measured and envSetup is read from the cached latch — unlike the
+    // injectable path below, there is no point running the precheck's env
+    // init or reverifying the env for an app that can never inject.
+    if (!isInjectableBundleId(params.bundleId)) {
+      let appRunning: boolean;
+      try {
+        appRunning = await api.isAppRunning(params.bundleId);
+      } catch (err) {
+        // The app-running probe (a simctl spawn) failed — typically a sim that
+        // is shut down or unreachable, exactly where env init fails too. Fall
+        // back to the precheck so a broken sim still surfaces the structured
+        // init_failed guidance (re-booting IS corrective for a dead sim)
+        // instead of a raw subprocess error; with a healthy env, surface the
+        // probe failure itself.
+        const blocked = await precheckNativeDevtools(api, params.udid);
+        if (blocked) return blocked;
+        throw err;
+      }
+      return {
+        envSetup: api.isEnvSetup(),
+        appRunning,
+        connected: api.isConnected(params.bundleId),
+        requiresRestart: false,
+        nextLaunchWillBeInjected: false,
+        injectable: false,
+      };
+    }
 
     const blocked = await precheckNativeDevtools(api, params.udid);
     if (blocked) return blocked;
@@ -74,6 +119,7 @@ Fails if the simulator server is not running for the given UDID or the bundleId 
       connected,
       requiresRestart: appRunning && !connected,
       nextLaunchWillBeInjected: envSetup,
+      injectable: true,
     };
   },
 };

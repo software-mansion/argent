@@ -13,3 +13,16 @@ import bytesUtil from "bytes";
 export function formatBytes(bytes: number): string {
   return bytesUtil(bytes, { decimalPlaces: 1 }) ?? `${bytes}B`;
 }
+
+/**
+ * Escape a value for interpolation into a GFM table cell: GFM splits cells on
+ * unescaped `|` even inside code spans, so a demangled C++ frame such as
+ * `folly::operator|(...)` would shift every column after it. Used by every
+ * profiler report table that interpolates a demangled symbol — the leak tables
+ * (analyze + leak_stacks), the CPU-hotspot summary, and the function
+ * caller/callee and thread-breakdown tables — since `dominantFunction` is a real
+ * demangled frame in every capture mode, not only under malloc_stack_logging.
+ */
+export function escapeMarkdownTableCell(value: string): string {
+  return value.replace(/\|/g, "\\|");
+}

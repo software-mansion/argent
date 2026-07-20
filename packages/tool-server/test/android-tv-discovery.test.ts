@@ -31,6 +31,7 @@ import {
   getAndroidRuntimeKind,
   isAndroidTv,
   __resetAndroidRuntimeKindCacheForTesting,
+  getCachedAndroidRuntimeKind,
 } from "../src/utils/adb";
 
 // Mock one device. `features` is the `pm list features` output (the primary TV
@@ -261,5 +262,33 @@ describe("Android TV discovery — getAndroidRuntimeKind / isAndroidTv", () => {
       return { stdout: "", stderr: "" };
     });
     expect(await getAndroidRuntimeKind("emulator-5554")).toBeUndefined();
+  });
+});
+
+describe("getCachedAndroidRuntimeKind — synchronous cache-only read", () => {
+  it("returns undefined for a serial that has never been probed", () => {
+    // No async probe has warmed the cache → the hot-path reader stays coarse.
+    expect(getCachedAndroidRuntimeKind("emulator-5554")).toBeUndefined();
+  });
+
+  it("returns the memoized 'tv' verdict after an async probe warms it, without any adb call", async () => {
+    mockDevice("emulator-5556", { features: LEANBACK_FEATURES });
+    expect(await getAndroidRuntimeKind("emulator-5556")).toBe("tv");
+    const callsBefore = execFileMock.mock.calls.length;
+    expect(getCachedAndroidRuntimeKind("emulator-5556")).toBe("tv");
+    // The cache read must not shell out to adb.
+    expect(execFileMock.mock.calls.length).toBe(callsBefore);
+  });
+
+  it("returns the memoized 'mobile' verdict for a warmed phone serial", async () => {
+    mockDevice("emulator-5554", { features: PHONE_FEATURES });
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBe("mobile");
+    expect(getCachedAndroidRuntimeKind("emulator-5554")).toBe("mobile");
+  });
+
+  it("does not cache (stays undefined) when the probe was indeterminate", async () => {
+    mockDevice("emulator-5554", {});
+    expect(await getAndroidRuntimeKind("emulator-5554")).toBeUndefined();
+    expect(getCachedAndroidRuntimeKind("emulator-5554")).toBeUndefined();
   });
 });

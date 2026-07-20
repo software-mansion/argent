@@ -32,7 +32,7 @@ If argent IS available, ignore the rest of this block and follow this rule norma
 
 If argent is ABSENT, treat it as an expected state, not an error to retry. Do not call `mcp__argent__*` tools, do not run `argent` commands, and do not attempt any argent workflow. Tell the user once, and ask if you should continue without argent:
 
-> Argent isn't installed in this environment. To enable the mobile/Chromium tooling this repo is configured for, run `npx @swmansion/argent init -y` (or `npm i -g @swmansion/argent && argent init -y`).
+> Argent isn't installed in this environment. To enable the mobile/Chromium tooling this repo is configured for, run `npx @swmansion/argent@latest init -y` (or `npm i -g @swmansion/argent@latest && argent init -y`).
 > </availability_check>
 
 <tapping_rule>
@@ -112,9 +112,14 @@ TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
 When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for any TV target use the TV skill below.
 
+APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
+Skill: `argent-settings-permissions`
+When: You must change an app runtime permission (camera, microphone, photos, contacts, notifications, calendar, location, location-always, media-library, motion, reminders) that the app itself can't flip — pre-authorize or deny it before the app asks, re-enable one the user already denied (iOS never re-prompts), or reset it so the first-run dialog reappears. Works on the iOS simulator and Android emulator/device. Do NOT use it when the app has an in-app toggle or is showing its own permission dialog — tap that instead (see `argent-device-interact`); nor for permissions/settings outside that list.
+Prompt keywords: permission, grant, deny, revoke, reset permission, privacy, camera access, location access, TCC
+
 TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
-When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh.
+When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
 Prompt keywords: apple tv, tvos, android tv, leanback, vega, fire tv, vvd, d-pad
 
 SCREENSHOT DIFF & VISUAL REGRESSION

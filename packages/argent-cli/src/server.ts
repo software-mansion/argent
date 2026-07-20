@@ -10,6 +10,7 @@ import {
   isToolsServerHealthy,
   isToolsServerProcessAlive,
   readToolsServerState,
+  readAllToolsServerStates,
   writeToolsServerState,
   writeToolsServerStateSync,
   clearToolsServerState,
@@ -17,28 +18,33 @@ import {
   formatLinkUrl,
   generateAuthToken,
   type ToolsServerPaths,
-  type ToolsServerState,
 } from "@argent/tools-client";
 
 const STATE_DIR = path.join(homedir(), ".argent");
-const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
 
-function readState(): ToolsServerState | null {
-  try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) as ToolsServerState;
-  } catch {
-    return null;
-  }
+// State records are tracked per argent install (per tool-server bundle), so
+// status/stop target THIS binary's server, never another install's.
+
+/** One-line hint when other installs' servers are alive but ours is not. */
+async function describeForeignServers(ownBundlePath?: string): Promise<string | null> {
+  const others = (await readAllToolsServerStates()).filter(
+    ({ state }) => state.bundlePath !== ownBundlePath && isToolsServerProcessAlive(state.pid)
+  );
+  if (others.length === 0) return null;
+  const list = others.map(({ state }) => `pid ${state.pid} (${state.bundlePath})`).join(", ");
+  return `Note: ${others.length} tool-server(s) from other argent installs: ${list}`;
 }
 
-async function statusCmd(json: boolean): Promise<void> {
-  const state = readState();
+async function statusCmd(json: boolean, paths?: ToolsServerPaths): Promise<void> {
+  const state = await readToolsServerState(paths?.bundlePath);
   if (!state) {
+    const foreign = await describeForeignServers(paths?.bundlePath);
     if (json) {
       console.log(JSON.stringify({ running: false }, null, 2));
     } else {
-      console.log("tool-server: not running (no state file)");
+      console.log("tool-server: not running (no state file for this install)");
+      if (foreign) console.log(foreign);
     }
     return;
   }
@@ -69,13 +75,15 @@ async function statusCmd(json: boolean): Promise<void> {
   }
 }
 
-async function stopCmd(): Promise<void> {
-  const state = readState();
+async function stopCmd(paths?: ToolsServerPaths): Promise<void> {
+  const state = await readToolsServerState(paths?.bundlePath);
   if (!state) {
     console.log("tool-server: not running");
+    const foreign = await describeForeignServers(paths?.bundlePath);
+    if (foreign) console.log(`${foreign}\nStop one with: kill <pid>`);
     return;
   }
-  await killToolServer();
+  await killToolServer(paths?.bundlePath);
   console.log(`tool-server stopped (pid ${state.pid}).`);
 }
 
@@ -271,11 +279,16 @@ function printConnectionInfo(bindHost: string, port: number, token?: string): vo
   }
 }
 
-async function ensureNoExistingServer(force: boolean): Promise<void> {
-  const state = await readToolsServerState();
+async function ensureNoExistingServer(force: boolean, paths: ToolsServerPaths): Promise<void> {
+  const state = await readToolsServerState(paths.bundlePath);
   if (!state) return;
   const alive = isToolsServerProcessAlive(state.pid);
-  const healthy = alive ? await isToolsServerHealthy(state.port, state.host ?? "127.0.0.1") : false;
+  // Pass the recorded token: authed servers 401 a tokenless probe, which reads
+  // as unhealthy — clearing the state and orphaning a live server instead of
+  // triggering the "already running" guard below.
+  const healthy = alive
+    ? await isToolsServerHealthy(state.port, state.host ?? "127.0.0.1", 2000, state.token)
+    : false;
   if (alive && healthy && !force) {
     const url = formatToolsServerUrl(state.host ?? "127.0.0.1", state.port);
     throw new StartFlagError(
@@ -284,10 +297,10 @@ async function ensureNoExistingServer(force: boolean): Promise<void> {
     );
   }
   if (alive && force) {
-    await killToolServer();
+    await killToolServer(paths.bundlePath);
   } else {
     // Stale state file — clear it so we don't leave it pointing at a dead pid.
-    await clearToolsServerState();
+    await clearToolsServerState(paths.bundlePath);
   }
 }
 
@@ -321,7 +334,7 @@ async function startCmd(argv: string[], paths: ToolsServerPaths | undefined): Pr
   }
 
   try {
-    await ensureNoExistingServer(flags.force);
+    await ensureNoExistingServer(flags.force, paths);
   } catch (err) {
     if (err instanceof StartFlagError) {
       console.error(err.message);
@@ -454,7 +467,7 @@ async function runForeground(
       process.removeListener("SIGINT", onInt);
       process.removeListener("SIGTERM", onTerm);
       if (stateWritten) {
-        clearToolsServerState().catch(() => {
+        clearToolsServerState(paths.bundlePath).catch(() => {
           /* non-fatal */
         });
       }
@@ -504,10 +517,10 @@ export async function server(
       await startCmd(argv.slice(1), options?.paths);
       return;
     case "status":
-      await statusCmd(json);
+      await statusCmd(json, options?.paths);
       return;
     case "stop":
-      await stopCmd();
+      await stopCmd(options?.paths);
       return;
     case "logs":
       logsCmd(follow);

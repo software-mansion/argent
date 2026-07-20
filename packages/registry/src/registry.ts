@@ -17,6 +17,7 @@ import {
   ServiceInitializationError,
   ToolNotFoundError,
   ToolExecutionError,
+  getFailureSignalOrFallback,
 } from "./errors";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
@@ -105,7 +106,13 @@ export class Registry {
 
     const startTime = performance.now();
     const toolInvocationId = options?.toolInvocationId ?? randomUUID();
-    this.events.emit("toolInvoked", id, toolInvocationId);
+    let effectiveParams = params;
+
+    const startedMsg = formatInteractionMessage(
+      () => definition.interaction?.startedMsg?.({ params: effectiveParams }),
+      `Tool ${id} was invoked.`
+    );
+    this.events.emit("toolInvoked", id, toolInvocationId, startedMsg);
 
     try {
       // Validate params against the tool's zod schema for EVERY dispatch path,
@@ -115,7 +122,6 @@ export class Registry {
       // shell metacharacters past a tool's regex (→ injection at the sink).
       // `params ?? {}` mirrors the HTTP layer (express.json yields {} for an
       // empty body) so no-arg internal invokes still validate cleanly.
-      let effectiveParams = params;
       if (definition.zodSchema) {
         const parsed = definition.zodSchema.safeParse(params ?? {});
         if (!parsed.success) {
@@ -124,22 +130,53 @@ export class Registry {
         effectiveParams = parsed.data;
       }
 
+      // The alias→URN mapping is pure (derived from params), so compute it once
+      // up front — we need the URNs to know which services to recover if the
+      // tool fails against a dead-but-cached instance.
       const aliasToRef = definition.services(effectiveParams);
-      const resolvedServices: Record<string, unknown> = {};
-      for (const [alias, ref] of Object.entries(aliasToRef)) {
-        const urn = typeof ref === "string" ? ref : ref.urn;
-        const resolveOptions = typeof ref === "string" ? undefined : ref.options;
-        resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
-      }
+      const refs = Object.entries(aliasToRef).map(([alias, ref]) => ({
+        alias,
+        urn: typeof ref === "string" ? ref : ref.urn,
+        options: typeof ref === "string" ? undefined : ref.options,
+      }));
 
       // Build the per-invocation context: caller options (e.g. signal) plus the
       // registry-owned artifact store, so any tool can register host files via
       // `ctx.artifacts` without declaring a per-tool service.
       const ctx: ToolContext = { ...options, artifacts: this.artifacts };
-      const result = await definition.execute(resolvedServices, effectiveParams, ctx);
+
+      const runOnce = async (): Promise<TResult> => {
+        const resolvedServices: Record<string, unknown> = {};
+        for (const { alias, urn, options: resolveOptions } of refs) {
+          resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+        }
+        return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+      };
+
+      let result: TResult;
+      try {
+        result = await runOnce();
+      } catch (execError) {
+        // Self-heal a cached-but-dead service: if any service this tool resolved
+        // declares this error recoverable (its underlying process is gone even
+        // though the handle was still cached), dispose it and retry the tool
+        // once against a freshly re-created instance. Bounded to a single retry
+        // so a genuinely broken service can't spin.
+        const recovered = await this._recoverFailedServices(refs, execError);
+        if (!recovered) throw execError;
+        result = await runOnce();
+      }
 
       const duration = performance.now() - startTime;
-      this.events.emit("toolCompleted", id, toolInvocationId, duration);
+      const completedMsg = formatInteractionMessage(
+        () =>
+          definition.interaction?.completedMsg?.({
+            params: effectiveParams,
+            result,
+          }),
+        `Tool ${id} completed in ${duration.toFixed(2)} ms.`
+      );
+      this.events.emit("toolCompleted", id, toolInvocationId, duration, completedMsg);
       return result as TResult;
     } catch (error) {
       const originalMsg = error instanceof Error ? error.message : String(error);
@@ -152,13 +189,24 @@ export class Registry {
           : new ToolExecutionError(id, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
+      const failureSignal = getFailureSignalOrFallback(wrappedError);
+      const failedMsg = formatInteractionMessage(
+        () =>
+          definition.interaction?.failedMsg?.({
+            params: effectiveParams,
+            error: wrappedError,
+            failureSignal,
+          }),
+        `Tool ${id} failed.`
+      );
 
       this.events.emit(
         "toolFailed",
         id,
         toolInvocationId,
         wrappedError,
-        performance.now() - startTime
+        performance.now() - startTime,
+        failedMsg
       );
       throw wrappedError;
     }
@@ -187,6 +235,35 @@ export class Registry {
       namespaces: [...this.blueprints.keys()],
       tools: [...this.tools.keys()],
     };
+  }
+
+  /**
+   * After a tool failed, ask each service it resolved whether the error means
+   * that service's instance is dead (`blueprint.recoverable(error)`). Dispose
+   * every one that says yes so the next `resolveService` re-creates it, and
+   * report whether anything was disposed (i.e. whether a retry is worthwhile).
+   *
+   * Only currently-RUNNING nodes are considered: a service that already
+   * errored/torn down during resolution needs no recovery here, and a URN this
+   * tool never resolved must not be touched.
+   */
+  private async _recoverFailedServices(
+    refs: ReadonlyArray<{ urn: URN }>,
+    error: unknown
+  ): Promise<boolean> {
+    let recoveredAny = false;
+    for (const { urn } of refs) {
+      const node = this.services.get(urn);
+      if (!node || node.state !== ServiceState.RUNNING) continue;
+      if (node.blueprint.recoverable?.(error) !== true) continue;
+      try {
+        await this.disposeService(urn);
+        recoveredAny = true;
+      } catch {
+        /* best-effort: if teardown fails, fall through and surface the original error */
+      }
+    }
+    return recoveredAny;
   }
 
   /**
@@ -359,5 +436,13 @@ export class Registry {
     node.initPromise = null;
     node.dependents.clear();
     this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
+  }
+}
+
+function formatInteractionMessage(format: () => string | undefined, fallback: string): string {
+  try {
+    return format() ?? fallback;
+  } catch {
+    return fallback;
   }
 }

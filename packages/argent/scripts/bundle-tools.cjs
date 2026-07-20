@@ -9,6 +9,7 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 // esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
+const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
 const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
 const NATIVE_DEVTOOLS_IOS_ENTRY = path.resolve(
@@ -41,6 +42,7 @@ const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/
 // from source (rather than each package's compiled dist/) keeps the bundle
 // independent of build order/freshness.
 const ALIASES = {
+  "@argent/archive": ARCHIVE_ENTRY,
   "@argent/registry": REGISTRY_ENTRY,
   "@argent/native-devtools-ios": NATIVE_DEVTOOLS_IOS_ENTRY,
   "@argent/native-devtools-android": NATIVE_DEVTOOLS_ANDROID_ENTRY,
@@ -75,10 +77,20 @@ const TELEMETRY_DEFINE = {
 // jsonc-parser, which ships both UMD (main) and ESM (module).
 const MAIN_FIELDS = ["module", "main"];
 
-// Banner injected into ESM bundles so any inlined CJS dependencies that call
-// `require()` work without a real CJS context.
+// Banner injected into ESM bundles so any inlined CJS dependencies that rely on
+// the CJS context work: `require()`, plus `__dirname`/`__filename` (e.g.
+// @argent/native-devtools-ios resolves the simulator-server binary dir relative
+// to `__dirname`, which is undefined in an ESM module without this shim). The
+// shimmed values point at the bundle's own location, matching how the CJS
+// tool-server bundle resolves them natively.
 const ESM_REQUIRE_BANNER = {
-  js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
+  js:
+    "import { createRequire as __createRequire } from 'node:module'; " +
+    "import { fileURLToPath as __fileURLToPath } from 'node:url'; " +
+    "import { dirname as __pathDirname } from 'node:path'; " +
+    "const require = __createRequire(import.meta.url); " +
+    "const __filename = __fileURLToPath(import.meta.url); " +
+    "const __dirname = __pathDirname(__filename);",
 };
 
 // ── Asset source/destination paths ─────────────────────────────────────────
@@ -529,6 +541,17 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // are declared in @swmansion/argent's dependencies so npm installs them
 // alongside the package; keep them external so the bundle resolves them from
 // node_modules/ at runtime.
+//
+// `dtrace-provider` MUST stay external. It is an OPTIONAL dependency of bunyan
+// (the tool-server event-log logger). bunyan loads it defensively as
+// `require('dtrace-provider' + '')` wrapped in try/catch — the `+ ''` is a
+// deliberate trick to hide the module from bundlers, and a failed require just
+// disables the (unused) DTrace USDT probes. esbuild constant-folds that string
+// back to a literal, defeating the trick, and then chokes on dtrace-provider's
+// own dynamic native binding require (`require('./src/build/'+build+'/…')`).
+// Keeping it external restores bunyan's intent: the published package never
+// declares dtrace-provider, so the runtime require misses and bunyan's
+// try/catch nulls it out — no DTrace probes, no functional impact.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -540,6 +563,7 @@ buildBundle({
     "electron",
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
+    "dtrace-provider",
   ],
 });
 

@@ -20,6 +20,8 @@ const originalPlatform = process.platform;
 const originalArch = process.arch;
 const originalDevtoolsDir = process.env.ARGENT_NATIVE_DEVTOOLS_DIR;
 const originalSimulatorDir = process.env.ARGENT_SIMULATOR_SERVER_DIR;
+const originalDevtoolsTcpDir = process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR;
+const originalSimulatorTcpDir = process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR;
 
 function setPlatform(value: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { value, configurable: true });
@@ -49,11 +51,17 @@ afterAll(() => {
   else process.env.ARGENT_NATIVE_DEVTOOLS_DIR = originalDevtoolsDir;
   if (originalSimulatorDir === undefined) delete process.env.ARGENT_SIMULATOR_SERVER_DIR;
   else process.env.ARGENT_SIMULATOR_SERVER_DIR = originalSimulatorDir;
+  if (originalDevtoolsTcpDir === undefined) delete process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR;
+  else process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR = originalDevtoolsTcpDir;
+  if (originalSimulatorTcpDir === undefined) delete process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR;
+  else process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR = originalSimulatorTcpDir;
 });
 
 afterEach(() => {
   setPlatform(originalPlatform);
   setArch(originalArch);
+  delete process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR;
+  delete process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR;
 });
 
 /**
@@ -81,14 +89,31 @@ describe("requireDarwin gating", () => {
     expect(() => r.keyboardPatchDylibPath()).toThrow(/requires a macOS host/);
   });
 
-  it("throws with a root-cause message on linux for TCP iOS-only dylibs", async () => {
-    // TCP variants are equally iOS-Simulator-only; the guard must fire before
-    // the file-existence check so Linux callers get the platform error, not
-    // a misleading "dylib not found" for the tcp/ subdirectory.
+  it("resolves TCP dylibs on linux (remote upload artifacts, not gated)", async () => {
+    // TCP variants are payloads uploaded to a remote Mac orchestrator via
+    // sim-remote, so a Linux host must be able to resolve them. They are guarded
+    // only by the file-existence check below, NOT by requireDarwin.
     setPlatform("linux");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "tcp-dylibs-"));
+    fs.writeFileSync(path.join(dir, "libArgentInjectionBootstrap.dylib"), "");
+    fs.writeFileSync(path.join(dir, "libNativeDevtoolsIos.dylib"), "");
+    fs.writeFileSync(path.join(dir, "libKeyboardPatch.dylib"), "");
+    process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR = dir;
     const r = await loadResolver();
-    expect(() => r.bootstrapDylibPathTcp()).toThrow(/requires a macOS host/);
-    expect(() => r.nativeDevtoolsDylibPathTcp()).toThrow(/requires a macOS host/);
+    expect(r.bootstrapDylibPathTcp()).toBe(path.join(dir, "libArgentInjectionBootstrap.dylib"));
+    expect(r.nativeDevtoolsDylibPathTcp()).toBe(path.join(dir, "libNativeDevtoolsIos.dylib"));
+    expect(r.keyboardPatchDylibPathTcp()).toBe(path.join(dir, "libKeyboardPatch.dylib"));
+  });
+
+  it("throws a plain not-found (not a macOS-host error) for missing TCP dylibs on linux", async () => {
+    // When the TCP artifacts haven't been downloaded, the file-existence check
+    // gives a "not found" error — never the "requires a macOS host" gate.
+    setPlatform("linux");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "tcp-dylibs-missing-"));
+    process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR = dir;
+    const r = await loadResolver();
+    expect(() => r.bootstrapDylibPathTcp()).toThrow(/dylib not found/);
+    expect(() => r.bootstrapDylibPathTcp()).not.toThrow(/requires a macOS host/);
   });
 
   it("throws with a root-cause message on linux for ax-service", async () => {
@@ -100,11 +125,19 @@ describe("requireDarwin gating", () => {
     expect(() => r.axServiceBinaryPath()).toThrow(/requires a macOS host/);
   });
 
-  it("throws with a root-cause message on linux for ax-service (tcp)", async () => {
+  it("resolves the ax-service TCP binary on linux (remote upload artifact)", async () => {
+    // The TCP ax-service is uploaded to and `simctl spawn`d on the remote Mac
+    // orchestrator, so a Linux host must be able to resolve it — no darwin gate.
     setPlatform("linux");
-    process.env.ARGENT_SIMULATOR_SERVER_DIR = tmpRoot;
+    setArch("x64");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-tcp-linux-"));
+    const tcpDir = path.join(dir, "linux", "tcp");
+    fs.mkdirSync(tcpDir, { recursive: true });
+    const binPath = path.join(tcpDir, "ax-service");
+    fs.writeFileSync(binPath, "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
-    expect(() => r.axServiceBinaryPathTcp()).toThrow(/requires a macOS host/);
+    expect(r.axServiceBinaryPathTcp()).toBe(binPath);
   });
 });
 

@@ -11,3 +11,4 @@ pnpm-lock.yaml
 
 # Generated.
 **/tsconfig.tsbuildinfo
+scripts/e2e-full/results/

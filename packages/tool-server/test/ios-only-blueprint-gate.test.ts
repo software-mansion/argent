@@ -11,6 +11,32 @@ vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryDir: () => "/fake",
 }));
 
+// The proof-of-gate iOS test below runs the native-devtools factory for real,
+// and its ensureEnv shells out to `xcrun simctl` (list / launchctl getenv +
+// setenv / defaults write) against a UDID no simulator has — several real
+// subprocesses that take seconds under the parallel suite load and trip the 5s
+// per-test timeout. Nothing here asserts on the env setup, only on which gate
+// error (if any) a factory throws — so intercept execFile and answer every
+// probe instantly with an empty success.
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFile: (
+      _cmd: string,
+      _args: readonly string[],
+      opts: unknown,
+      cb?: (err: Error | null, out: { stdout: string; stderr: string }) => void
+    ) => {
+      const callback = (typeof opts === "function" ? opts : cb!) as (
+        err: Error | null,
+        out: { stdout: string; stderr: string }
+      ) => void;
+      callback(null, { stdout: "", stderr: "" });
+    },
+  };
+});
+
 import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
 import { nativeProfilerSessionBlueprint } from "../src/blueprints/native-profiler-session";
 import { axServiceBlueprint } from "../src/blueprints/ax-service";

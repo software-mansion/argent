@@ -9,11 +9,13 @@ import { discoverMetro } from "../utils/debugger/discovery";
 import { classifyDevice } from "../utils/device-info";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
+import { rememberDeviceAlias, forgetDeviceAlias } from "../utils/debugger/device-alias";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import { DISABLE_LOGBOX_SCRIPT } from "../utils/debugger/scripts/disable-logbox";
 import { LogFileWriter } from "../utils/debugger/log-file-writer";
+import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 
@@ -232,7 +234,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       };
       logWriter.write({
         id: entry.id,
-        timestamp: new Date(entry.timestamp * 1000).toISOString(),
+        timestamp: consoleTimestampToIso(entry.timestamp),
         level: entry.level,
         message: entry.message,
         stackTrace: entry.stackTrace,
@@ -257,6 +259,13 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       consoleSocketUrl: consoleServer.url,
     };
 
+    // Both ids for this device are known here for the first (and only) time:
+    // `deviceId` is what the caller connected with, `logicalDeviceId` is what
+    // Metro echoed back. Record the alias so a later tool that forwards the
+    // logicalDeviceId canonicalizes back to this instance instead of opening a
+    // second connection. See utils/debugger/device-alias.ts.
+    rememberDeviceAlias(api.logicalDeviceId, deviceId);
+
     const events = new TypedEventEmitter<ServiceEvents>();
 
     cdp.events.on("disconnected", (error) => {
@@ -275,6 +284,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     return {
       api,
       dispose: async () => {
+        forgetDeviceAlias(api.logicalDeviceId);
         await consoleServer.close();
         logWriter.close();
         await cdp.disconnect();

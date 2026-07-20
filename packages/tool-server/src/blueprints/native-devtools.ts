@@ -18,6 +18,71 @@ export type NativeDevtoolsTransport = "unix" | "tcp";
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
+/**
+ * Whether the Argent native devtools dylib can ever be injected into an app.
+ *
+ * Apple system / built-in apps (bundle ids under `com.apple.`) are platform
+ * binaries shipped with library validation enabled. The simulator refuses to
+ * honour `DYLD_INSERT_LIBRARIES` for them, so our dylib can never load — no
+ * amount of relaunching changes that. Third-party apps the user installs carry
+ * no such restriction and inject normally. Treating the `com.apple.` prefix as
+ * non-injectable gives the native-* tools a terminal signal instead of an
+ * unbounded restart-app → retry loop.
+ *
+ * The prefix is matched case-insensitively: iOS treats bundle ids
+ * case-insensitively for launch and uniqueness, and Apple reserves the
+ * `com.apple` namespace in every casing, so any casing of `com.apple.` is a
+ * system app. Apple's real ids always carry the prefix in lowercase (the
+ * segments after it vary in case — e.g. `com.apple.Preferences`), but a stray
+ * re-cased prefix must not slip through as injectable and restart-loop.
+ */
+export function isInjectableBundleId(bundleId: string): boolean {
+  return !bundleId.toLowerCase().startsWith("com.apple.");
+}
+
+/**
+ * The invariant half of the non-injectable recovery guidance: which tools NOT
+ * to fall back to. Shared VERBATIM by every surface that reports this terminal
+ * state (this precheck's throw, the `describe` iOS fallback hint, and the
+ * `native-devtools-status` description) so none of them can drift into
+ * recommending a dead-end. Every native-* *feature* tool — notably the two
+ * view-at-point tools, which run this same 3-arg precheck — re-throws this
+ * identical error, so pointing an agent at any of them just loops it back here.
+ * (`native-devtools-status` is the lone exception: it runs the 2-arg precheck
+ * and *reports* `injectable: false` rather than throwing — see the precheck.)
+ */
+export const NON_INJECTABLE_NATIVE_WARNING =
+  "Do not fall back to the native-devtools feature tools (native-describe-screen, " +
+  "native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, " +
+  "native-user-interactable-view-at-point) — they run the same injection precheck and fail " +
+  "with the same non-injectable error.";
+
+/**
+ * Full recovery guidance for surfaces reached BEFORE `describe` has been tried
+ * (the precheck throw from a native-* tool, and the `native-devtools-status`
+ * description). `describe` reads these apps via the ax-service without injection
+ * and `screenshot` is always available, so both are safe next steps here.
+ *
+ * The `native-devtools-status` description INLINES this text rather than
+ * interpolating the constant: tool descriptions must be plain literals so
+ * scripts/extract-tools.mjs can read them statically for the spidershield scan.
+ * The verbatim match is pinned by native-devtools-status.test.ts — edit both
+ * together.
+ *
+ * The `describe` iOS fallback hint (`NON_INJECTABLE_HINT`) deliberately does NOT
+ * reuse this string: it is reached only after `describe`'s own ax-service path
+ * already returned empty, so re-recommending `describe` there would be circular.
+ * That hint leads with `screenshot` and appends
+ * {@link NON_INJECTABLE_NATIVE_WARNING}, so the dead-end warning is identical
+ * across all three surfaces. (The one runtime exception is that `describeIos`
+ * substitutes the sim's re-boot hint for `NON_INJECTABLE_HINT` when the
+ * ax-service is degraded — see that call site.)
+ */
+export const NON_INJECTABLE_RECOVERY =
+  "Use the standard `describe` tool (its accessibility path reads the screen without injection) " +
+  "or `screenshot` (then interact by coordinate). " +
+  NON_INJECTABLE_NATIVE_WARNING;
+
 // Max consecutive init failures per service instance before it stops retrying.
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
 
@@ -66,6 +131,31 @@ export async function precheckNativeDevtools(
   udid: string,
   bundleId?: string
 ): Promise<NativeDevtoolsPrecheckBlock | null> {
+  // Terminal case first: an app that can never be injected (Apple system app).
+  // Injectability is a static property of the bundle id, knowable without any
+  // env state, so this fires before the env plumbing below — a given-up sim or
+  // a transient ensureEnvReady failure must not mask the terminal signal behind
+  // init_failed's "re-boot the simulator" guidance (a reboot can never make a
+  // system app injectable), and no env-setup work is spent on an app that can
+  // never load the dylib. Throwing (rather than returning a restart-required
+  // block) makes the native-* feature tools surface a hard error instead of
+  // instructing an unbounded restart→retry loop that can never succeed. The
+  // 2-arg overload (bundleId undefined) must NOT throw: native-devtools-status
+  // reports the state instead, and launch-app / restart-app run it too —
+  // launching or restarting a system app is legitimate, it just never injects.
+  if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
+    throw new FailureError(
+      `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools can never be injected into it. ` +
+        NON_INJECTABLE_RECOVERY,
+      {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+        failure_stage: "native_devtools_precheck",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+
   const existing = api.getInitFailure();
   if (existing?.givenUp) return buildInitFailedResult(udid, existing);
 

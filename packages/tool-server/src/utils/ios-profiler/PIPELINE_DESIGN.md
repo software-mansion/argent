@@ -6,13 +6,13 @@ Living document tracking the reasoning behind pipeline architecture decisions.
 
 **3-tool flow**: `native-profiler-start` → `native-profiler-stop` → `native-profiler-analyze`
 
-1. **Start** — Detects the running app process on the simulator, spawns `xctrace record` attached to it.
+1. **Start** — Detects the running app process on the simulator, spawns `xctrace record` attached to it. With `malloc_stack_logging: true` it instead terminates any running instance and cold-launches the `.app` under `xctrace --device --launch` with `MallocStackLogging=1`, so leaks carry allocation backtraces (see IOS_PROFILER_REFERENCE.md).
 2. **Stop** — Sends SIGINT to xctrace, waits for process exit, exports the `.trace` bundle to 3 XML files (CPU time-profile, potential-hangs, leaks).
 3. **Analyze** — Parses the 3 XMLs, runs a 2-stage pipeline, renders a markdown report.
 
 **2-stage processing** (after XML parsing):
 
-- **Stage 1 — Correlate**: Hang–CPU time-window correlation, leak aggregation by object type.
+- **Stage 1 — Correlate**: Hang–CPU time-window correlation, leak aggregation by (object type, attribution-normalized responsible frame).
 - **Stage 2 — Aggregate**: CPU hotspot grouping by dominant function + normalized thread, min-weight filtering, hang-overlap flagging.
 
 ---
@@ -57,17 +57,17 @@ Leak data from xctrace is a static summary — total count and size by object ty
 
 ### Severity thresholds
 
-| Category    | Condition                                                    | Severity     |
-| ----------- | ------------------------------------------------------------ | ------------ |
-| CPU Hotspot | weight > 15% of total                                        | RED          |
-| CPU Hotspot | weight 3–15%                                                 | YELLOW       |
-| CPU Hotspot | weight < 3%                                                  | filtered out |
-| UI Hang     | type contains "severe" or equals "hang"                      | RED          |
-| UI Hang     | type is "microhang"                                          | YELLOW       |
-| Memory Leak | attributed (resolved responsible frame)                      | RED          |
-| Memory Leak | unattributed (`<Call stack limit reached>` under `--attach`) | YELLOW       |
+| Category    | Condition                                                           | Severity     |
+| ----------- | ------------------------------------------------------------------- | ------------ |
+| CPU Hotspot | weight > 15% of total                                               | RED          |
+| CPU Hotspot | weight 3–15%                                                        | YELLOW       |
+| CPU Hotspot | weight < 3%                                                         | filtered out |
+| UI Hang     | type contains "severe" or equals "hang"                             | RED          |
+| UI Hang     | type is "microhang"                                                 | YELLOW       |
+| Memory Leak | attributed (resolved responsible frame)                             | RED          |
+| Memory Leak | unattributed (no recorded frame, e.g. `<Call stack limit reached>`) | YELLOW       |
 
-The 3% minimum weight filter prevents noise — xctrace captures thousands of samples and most functions appear briefly. 15% RED threshold flags functions consuming significant wall time. Leak severity follows attribution: a leak with a resolved responsible frame is a confident RED, but under `xctrace --attach` (what Argent does) most simulator leaks have no malloc-stack history and come back with the `<Call stack limit reached>` sentinel and an empty library — benign system noise, demoted to a low-confidence YELLOW rather than flagged as a confirmed app bug.
+The 3% minimum weight filter prevents noise — xctrace captures thousands of samples and most functions appear briefly. 15% RED threshold flags functions consuming significant wall time. Leak severity follows attribution: a leak with a resolved responsible frame is a confident RED, but under `xctrace --attach` (argent's default capture mode) most simulator leaks have no malloc-stack history and come back with the `<Call stack limit reached>` sentinel and an empty library — benign system noise, demoted to a low-confidence YELLOW rather than flagged as a confirmed app bug. The opt-in `malloc_stack_logging` cold launch records allocation backtraces from process start, so those leaks come back attributed (RED, with a real frame + library).
 
 ### Thread normalization
 
@@ -91,9 +91,9 @@ If zero bottlenecks survive filtering, the report says "All clear" rather than m
 
 ## Stage Summary
 
-| Stage | File                       | Purpose                                                                                   |
-| ----- | -------------------------- | ----------------------------------------------------------------------------------------- |
-| 0     | `pipeline/xml-parser.ts`   | Parse 3 XMLs in parallel — id/ref deduplication, frame/binary resolution                  |
-| 1     | `pipeline/01-correlate.ts` | Hang–CPU time-window correlation, leak aggregation by object type                         |
-| 2     | `pipeline/02-aggregate.ts` | CPU hotspot grouping by dominant function + thread, min-weight filter, hang-overlap flags |
-| —     | `render.ts`                | Render bottlenecks to markdown with summary table, per-category sections, suggestions     |
+| Stage | File                       | Purpose                                                                                    |
+| ----- | -------------------------- | ------------------------------------------------------------------------------------------ |
+| 0     | `pipeline/xml-parser.ts`   | Parse 3 XMLs in parallel — id/ref deduplication, frame/binary resolution                   |
+| 1     | `pipeline/01-correlate.ts` | Hang–CPU time-window correlation, leak aggregation by (type, attribution-normalized frame) |
+| 2     | `pipeline/02-aggregate.ts` | CPU hotspot grouping by dominant function + thread, min-weight filter, hang-overlap flags  |
+| —     | `render.ts`                | Render bottlenecks to markdown with summary table, per-category sections, suggestions      |

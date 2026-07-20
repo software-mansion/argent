@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 
 /**
@@ -50,7 +51,12 @@ export async function getCookies(cdp: CDPClient, urls?: string[]): Promise<Cooki
 
 export async function setCookie(cdp: CDPClient, params: SetCookieParams): Promise<boolean> {
   if (!params.url && !params.domain) {
-    throw new Error("setCookie requires either `url` or `domain` to scope the cookie.");
+    throw new FailureError("setCookie requires either `url` or `domain` to scope the cookie.", {
+      error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
+      failure_stage: "chromium_cookie_scope",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   const out = (await cdp.send("Network.setCookie", { ...params })) as { success?: boolean };
   return out.success === true;
@@ -76,7 +82,12 @@ async function evalValue(cdp: CDPClient, expression: string): Promise<unknown> {
     exceptionDetails?: { text?: string };
   };
   if (out.exceptionDetails) {
-    throw new Error(`Storage evaluation failed: ${out.exceptionDetails.text ?? "threw"}`);
+    throw new FailureError(`Storage evaluation failed: ${out.exceptionDetails.text ?? "threw"}`, {
+      error_code: FAILURE_CODES.CHROMIUM_STORAGE_EVAL_FAILED,
+      failure_stage: "chromium_storage_eval",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+    });
   }
   return out.result?.value;
 }

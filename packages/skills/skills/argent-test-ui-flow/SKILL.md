@@ -26,7 +26,7 @@ For implementation tasks that modify visible UI, this workflow can also serve as
 2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
    - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps on either platform. To use it, resolve the `argent-react-native-app-workflow` skill for setup; on Android you must also run `adb -s <serial> reverse tcp:8081 tcp:8081` so Metro is reachable from the device.
    - **Standard app screens and in-app modals**: use `describe`. On iOS this returns the AX tree (falls back to native-devtools when AX is empty); on Android it returns the uiautomator tree in the same DescribeNode shape.
-   - **Permission prompts / system modal overlays**: try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably.
+   - **Permission prompts / system modal overlays**: try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably. When the app raises its own permission dialog, answer it here — that's the real flow under test. To take a prompt _out_ of the flow (pre-grant/deny before launch, re-enable a permission the user already denied, or reset it so the dialog reappears), use the `argent-settings-permissions` skill during setup instead of interacting with the dialog.
    - **Fallback**: use `screenshot` to estimate where the desired component is, then verify immediately after the action.
 3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...) — you receive a screenshot automatically.
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, prefer blocking until it settles with `await-ui-element` (expected element `visible`, or a spinner `hidden`) over a guessed delay — but only with a selector you can trust (`text`/`identifier`/`role`) that the screen is known to have or that you saw in a prior `describe`; a guessed one just times out. Otherwise use a short fixed wait. Pick evidence by what's being asserted:
@@ -60,10 +60,12 @@ Steps:
 2. gesture-tap { x: 0.5, y: 0.4 }  → tap email field
 3. keyboard { text: "user@example.com" }
 4. gesture-tap { x: 0.5, y: 0.55 } → tap password field
-5. keyboard { text: "password123" }
+5. keyboard { text: "{{secret:APP_PASSWORD}}" }
 6. gesture-tap { x: 0.5, y: 0.7 }  → tap Login button
 7. screenshot → verify home screen appeared
 ```
+
+> **Credentials:** never type plaintext credentials — use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side from the `ARGENT_SECRET_<NAME>` environment variable, so the value never enters agent context. If the variable is not set, ask the user to export it (e.g. `ARGENT_SECRET_APP_PASSWORD`) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
 
 ### Scroll and navigation
 

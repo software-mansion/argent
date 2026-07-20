@@ -9,6 +9,8 @@ import {
   startRecordingSession,
   clientFileDirective,
   serializeFlow,
+  validateFlow,
+  type FlowFile,
   type FlowSavedTo,
 } from "./flow-utils";
 
@@ -21,8 +23,11 @@ const zodSchema = z.object({
     ),
   executionPrerequisite: z
     .string()
+    .optional()
     .describe(
-      'Describes the required app/device state before running this flow (e.g. "App on home screen after a fresh reload", "Settings app open on General page")'
+      'Fragments only: the app/device state assumed on entry (e.g. "Settings app open on General page"). ' +
+        "For a self-contained e2e flow, omit this and record a `restart-app` as the first step instead — " +
+        "it is captured as the flow's `launch` step."
     ),
 });
 
@@ -49,8 +54,11 @@ Returns { message, flowFile, savedTo } and optionally { previousFlow } if a prio
 Fails if the .argent/flows/ directory cannot be created or the flow file cannot be written.
 
 After starting, use flow-add-step to append tool calls — each step is executed
-LIVE so you can verify it works before it gets recorded. Use flow-add-echo
-to add labels. Call flow-finish-recording when done.
+LIVE so you can verify it works before it gets recorded. For a self-contained
+e2e flow, record a restart-app of the app under test as the FIRST step (captured
+as the flow's \`launch\` step); for a reusable fragment, skip that and pass
+executionPrerequisite instead. Use flow-add-echo to add labels. Call
+flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, you can edit the .yaml file directly
 to remove or reorder steps.`,
@@ -62,7 +70,14 @@ to remove or reorder steps.`,
     const previousFlow = getActiveFlowOrNull();
 
     const filePath = getFlowPath(params.name);
-    const flow = { executionPrerequisite: params.executionPrerequisite, steps: [] };
+    // A recording's type emerges from its steps: recording a `restart-app`
+    // first makes it an e2e flow (captured as a leading `launch` step by
+    // flow-add-step); declaring an executionPrerequisite documents a fragment.
+    const flow: FlowFile = {
+      executionPrerequisite: params.executionPrerequisite ?? "",
+      steps: [],
+    };
+    validateFlow(flow);
     const flowFile = serializeFlow(flow);
 
     // No probe (older client, direct invocation) means the caller shares this

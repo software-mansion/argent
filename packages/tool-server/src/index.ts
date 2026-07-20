@@ -1,23 +1,57 @@
+import * as path from "node:path";
+import { homedir } from "node:os";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
 import {
   init as telemetryInit,
   attachRegistryTelemetry,
   track as telemetryTrack,
   shutdown as telemetryShutdown,
+  warmTelemetryIdentity,
   aiTelemetryFromMeta,
+  describeCrash,
+  type CrashDiagnostics,
+  type EventPropertyMap,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
+import { attachRegistryEventLogger, createToolServerEventLog } from "./event-log";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
 import { createPreviewWindowManager } from "./utils/preview-window";
-import { variantProposalStore } from "./utils/variant-proposals";
+import {
+  variantProposalStore,
+  type RoundCompletedStats,
+  type RoundAbandonedStats,
+  type CliSessionStartedStats,
+} from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 const DEFAULT_PORT = "3001";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_IDLE_TIMEOUT_MINUTES = "0";
+
+// Compile-time bidirectional drift guard between the store's privacy-safe stat
+// structs and the telemetry event props they are relayed as. `track()`'s
+// excess-property check only fires on an object LITERAL; the relays below pass
+// these stats as VARIABLES, so a field ADDED to a struct without extending the
+// telemetry props (and sanitize()) would otherwise compile and be silently
+// dropped downstream — a metric that never arrives, not a build break. This
+// asserts the key sets match EXACTLY in both directions, so adding, removing, or
+// renaming a field on either side fails the build here until the counterpart is
+// updated too. (Field value types are still checked by the relay track() call.)
+type SameKeys<A, B> = [keyof A] extends [keyof B]
+  ? [keyof B] extends [keyof A]
+    ? true
+    : never
+  : never;
+const _lensStatDriftGuards: [
+  SameKeys<RoundCompletedStats, EventPropertyMap["lens:round_completed"]>,
+  SameKeys<RoundAbandonedStats, EventPropertyMap["lens:round_abandoned"]>,
+  SameKeys<CliSessionStartedStats, EventPropertyMap["lens:cli_session_started"]>,
+] = [true, true, true];
+void _lensStatDriftGuards;
 
 // Format an HTTP origin for display. Bracket IPv6 literals per RFC 3986 §3.2.2.
 function formatOrigin(host: string, port: number): string {
@@ -67,13 +101,23 @@ export function start(): void {
   // crash arriving mid-shutdown would be swallowed by the re-entrancy guard and
   // the in-flight shutdown(0) would exit 0, hiding the crash from supervisors.
   let finalExitCode = 0;
+  let shutdownReason: "idle" | "signal" | "crash" = "signal";
+  let shutdownFailureSignal: FailureSignal | null = null;
+  // Anonymous crash detail (class name, syscall, stack fingerprint, phase),
+  // merged into the final toolserver:stop only on a real crash. Left null on
+  // idle/signal stops so clean shutdowns carry no crash fields.
+  let shutdownCrashDiagnostics: CrashDiagnostics | null = null;
+  // Flips once the HTTP listener has bound: lets a crash record whether it hit
+  // during startup (the dominant, sub-second, restart-loop population) or while
+  // actually serving.
+  let listening = false;
   let shutdown: ((exitCode?: number) => Promise<void>) | null = null;
 
   // The crash classification is passed in explicitly rather than re-derived from
   // `label`: `label` is a human-readable stderr prefix, and coupling the emitted
   // failure code to its exact wording would silently misclassify the crash if the
   // message were ever reworded.
-  function crashShutdown(label: string, detail: string, signal: FailureSignal): void {
+  function crashShutdown(label: string, detail: string, signal: FailureSignal, err: unknown): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
     // A second fatal event must not re-run teardown or schedule a second timer.
     if (crashing) return;
@@ -81,6 +125,14 @@ export function start(): void {
     shutdownReason = "crash";
     finalExitCode = 1;
     shutdownFailureSignal = signal;
+    // Derive the anonymous crash detail from the raw error (never from `detail`,
+    // which is a human-readable stderr string). Best-effort — a failure here must
+    // not stop the crash from being reported, so fall back to phase-only.
+    try {
+      shutdownCrashDiagnostics = describeCrash(err, listening ? "serving" : "startup");
+    } catch {
+      shutdownCrashDiagnostics = { crash_phase: listening ? "serving" : "startup" };
+    }
     setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
       shutdown(1).catch(() => process.exit(1));
@@ -90,12 +142,17 @@ export function start(): void {
   }
 
   process.on("uncaughtException", (err) => {
-    crashShutdown("Uncaught exception", String(err.stack ?? err), {
-      error_code: FAILURE_CODES.TOOLSERVER_UNCAUGHT_EXCEPTION,
-      failure_stage: "toolserver_uncaught_exception",
-      failure_area: "tool_server",
-      error_kind: "crash",
-    });
+    crashShutdown(
+      "Uncaught exception",
+      String(err.stack ?? err),
+      {
+        error_code: FAILURE_CODES.TOOLSERVER_UNCAUGHT_EXCEPTION,
+        failure_stage: "toolserver_uncaught_exception",
+        failure_area: "tool_server",
+        error_kind: "crash",
+      },
+      err
+    );
   });
   process.on("unhandledRejection", (reason) => {
     crashShutdown(
@@ -106,7 +163,8 @@ export function start(): void {
         failure_stage: "toolserver_unhandled_rejection",
         failure_area: "tool_server",
         error_kind: "crash",
-      }
+      },
+      reason
     );
   });
 
@@ -122,14 +180,45 @@ export function start(): void {
   // ── Bootstrap ─────────────────────────────────────────────────────
   const registry = createRegistry();
   attachRegistryLogger(registry);
+  let eventLog: ReturnType<typeof createToolServerEventLog> | null = null;
+  if (isFlagEnabled("tool-server-event-log")) {
+    const eventLogPath =
+      process.env.ARGENT_EVENT_LOG || path.join(homedir(), ".argent", "tool-server-events.jsonl");
+    try {
+      eventLog = createToolServerEventLog({ filePath: eventLogPath });
+    } catch (err) {
+      process.stderr.write(
+        `[tool-server] Failed to create event log at ${eventLogPath}: ${String(err)}\n`
+      );
+    }
+  }
+  if (eventLog) {
+    attachRegistryEventLogger(registry, eventLog);
+  }
+  if (eventLog) {
+    process.stderr.write(`[tool-server] Event log: ${eventLog.filePath}\n`);
+  }
 
   // Tool events use the queued client; shutdown gets a bounded final flush.
   telemetryInit("tool_server");
   const telemetryHandle = attachRegistryTelemetry(registry);
-  const serverStartedAt = Date.now();
-  let shutdownReason: "idle" | "signal" | "crash" = "signal";
-  let shutdownFailureSignal: FailureSignal | null = null;
 
+  // Establish the telemetry identity OFF the accept path: this resolves the host
+  // fingerprint asynchronously (no event-loop stall) and persists it before we
+  // advertise readiness, so `toolserver:start` and every inbound request find
+  // the stable id already on disk instead of a blocking spawn in the listen()
+  // callback. Runs concurrently with the watcher below — never throws.
+  const identityWarm = warmTelemetryIdentity();
+  // The fingerprint resolve's internal timeout watchdog is unref'd (so it never
+  // holds a short-lived CLI open at exit). During startup the server has no work
+  // of its own yet, so hold the loop open with a ref'd handle until warm-up
+  // settles — otherwise, if the binary wedged, the process could exit before
+  // listen() ever binds. Self-clearing and a no-op once warm-up (usually <100ms,
+  // capped at the resolve timeout) settles; makes readiness independent of any
+  // incidental liveness from the watcher.
+  const warmKeepAlive = setInterval(() => {}, 1_000);
+  void identityWarm.finally(() => clearInterval(warmKeepAlive));
+  const serverStartedAt = Date.now();
   const updateChecker = startUpdateChecker();
 
   const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
@@ -207,9 +296,32 @@ export function start(): void {
       }
     }
   };
+  // A round the human FIRST finalized (fires once per round, never on a resubmit
+  // — the store guards that). The generic tool:* path can't see this: submission
+  // is an HTTP POST to /preview, not a tool call, and in a CLI Lens session the
+  // await tool is hidden entirely. This is the human-decision half of the funnel.
+  const onRoundCompleted = (stats: RoundCompletedStats): void => {
+    telemetryTrack("lens:round_completed", stats);
+  };
+  // The drop-off half of the funnel: a staged round discarded before the human
+  // submitted. Same rationale as roundCompleted — invisible to the generic
+  // tool:* path (no tool call, no HTTP), fired from the store's reset() choke.
+  const onRoundAbandoned = (stats: RoundAbandonedStats): void => {
+    telemetryTrack("lens:round_abandoned", stats);
+  };
+  // Fired once per `argent lens` invocation (the CLI session-begin transition).
+  // The generic tool:* path counts per-tool-call and lens:preview_opened counts
+  // per-round, so neither can answer "how many `argent lens` runs / unique users"
+  // — this per-invocation marker does. Carries only an aggregate count.
+  const onCliSessionStarted = (stats: CliSessionStartedStats): void => {
+    telemetryTrack("lens:cli_session_started", stats);
+  };
   variantProposalStore.events.on("awaitParked", onAwaitParked);
   variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
   variantProposalStore.events.on("cliSessionChanged", onCliSessionChanged);
+  variantProposalStore.events.on("roundCompleted", onRoundCompleted);
+  variantProposalStore.events.on("roundAbandoned", onRoundAbandoned);
+  variantProposalStore.events.on("cliSessionStarted", onCliSessionStarted);
 
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
@@ -220,10 +332,29 @@ export function start(): void {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    variantProposalStore.events.off("awaitParked", onAwaitParked);
-    variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
-    variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
+    eventLog?.info({
+      type: "tool_server.stopping",
+      msg: "Tool server is stopping.",
+      exitCode: finalExitCode,
+    });
+
+    // The store-event relays (roundCompleted / roundAbandoned / …) stay attached
+    // until AFTER the HTTP server closes (see the end of shutdown). The server
+    // keeps accepting requests until `server.close()`, so a human clicking
+    // Complete during this drain still emits `roundCompleted` — detaching the
+    // relays here would silently drop it while `toolserver:stop` from this same
+    // shutdown is still delivered. (A submit landing after the telemetry drain
+    // below is inherently unobservable — the queue is already closing.)
     cancelPendingClose();
+
+    // "Server died mid-review": a round still staged (proposals, unsubmitted) at
+    // exit is a drop-off the funnel must see. Flush it as an abandonment now —
+    // while the roundAbandoned relay is attached and BEFORE the telemetry drain
+    // below — so it lands in this process's final batch instead of vanishing into
+    // the unattributable opens-minus-completions residue. A completed or empty
+    // round is a no-op (guarded inside flushAbandonedRound). On a clean CLI end
+    // the session-boundary reset already swept the round, so this is a no-op too.
+    variantProposalStore.flushAbandonedRound();
 
     // Drain any simulators Lens booted headless for a CLI session. The happy
     // path drains via onCliSessionChanged(false) when the CLI ends the session,
@@ -255,6 +386,11 @@ export function start(): void {
     } catch (err) {
       process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
     }
+    try {
+      await eventLog?.dispose();
+    } catch (err) {
+      process.stderr.write(`[tool-server] event log dispose failed: ${String(err)}\n`);
+    }
 
     // Capture toolserver:stop, then drain — the final telemetry action, so the
     // reason/signal are as fresh as possible. (A crash during the drain below is
@@ -265,6 +401,7 @@ export function start(): void {
         uptime_ms: Date.now() - serverStartedAt,
         total_tool_calls: telemetryHandle.getTotalToolCalls(),
         ...(shutdownFailureSignal ?? {}),
+        ...(shutdownCrashDiagnostics ?? {}),
       });
       telemetryHandle.detach();
       await telemetryShutdown(1500);
@@ -277,6 +414,16 @@ export function start(): void {
       await new Promise<void>((resolve) => server!.close(() => resolve()));
       clearTimeout(forceExit);
     }
+    // Detach the store-event relays now that the server is closed (no more
+    // requests can emit). Kept until here so a submit during the drain above was
+    // still relayed; removing them matters for a repeated in-process start()
+    // (tests) since the store is a module singleton that outlives one server.
+    variantProposalStore.events.off("awaitParked", onAwaitParked);
+    variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
+    variantProposalStore.events.off("cliSessionChanged", onCliSessionChanged);
+    variantProposalStore.events.off("roundCompleted", onRoundCompleted);
+    variantProposalStore.events.off("roundAbandoned", onRoundAbandoned);
+    variantProposalStore.events.off("cliSessionStarted", onCliSessionStarted);
     process.exit(finalExitCode);
   };
 
@@ -302,16 +449,27 @@ export function start(): void {
 
   // Block advertising readiness until the first watcher poll completes — this
   // guarantees DYLD_INSERT_LIBRARIES is set in launchd for all currently-booted
-  // simulators before any agent tool call (e.g. launch-app) can arrive.
-  watcherReady
+  // simulators before any agent tool call (e.g. launch-app) can arrive. Also
+  // wait for the identity warm-up (started above, runs concurrently) so the
+  // fingerprint resolve is done before the accept path opens, never on it.
+  Promise.all([watcherReady, identityWarm])
     .then(() => {
       server = httpHandle.app.listen(PORT, HOST, () => {
+        // Past this point a crash is a serving-time fault, not a startup fault.
+        listening = true;
         const addr = server!.address();
         const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
         const origin = formatOrigin(HOST, boundPort);
         process.stdout.write(`Tools server listening on ${origin}\n`);
         process.stderr.write(`  GET  ${origin}/tools\n`);
         process.stderr.write(`  POST ${origin}/tools/:name\n`);
+        eventLog?.info({
+          type: "tool_server.started",
+          msg: `Tool server started on ${origin}.`,
+          origin,
+          host: HOST,
+          port: boundPort,
+        });
         if (idleTimeoutMs > 0) {
           process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
         }
@@ -322,14 +480,39 @@ export function start(): void {
           /* swallow */
         }
       });
-      // Surface bind failures (EADDRINUSE / EACCES on privileged ports) as a
-      // clean exit instead of routing through uncaughtException → crashShutdown.
+      // A bind failure (EADDRINUSE from a stale server still holding the port,
+      // EACCES on a privileged port) is the socket half of the startup
+      // restart-loop population this diagnostics work exists to surface. Route it
+      // through crashShutdown so `err.code` is captured as error_syscall on a
+      // reason:"crash" stop instead of exiting silently with no telemetry at all.
+      // `listening` is still false here (the listen callback never ran), so the
+      // crash is correctly phased as "startup"; crashShutdown handles teardown,
+      // telemetry drain, and exit.
       server.on("error", (err: NodeJS.ErrnoException) => {
+        eventLog?.error({
+          type: "tool_server.bind_failed",
+          msg: `Tool server failed to bind ${HOST}:${PORT}.`,
+          host: HOST,
+          port: PORT,
+          failureSignal: {
+            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+            failure_stage: "toolserver_bind",
+            failure_area: "tool_server",
+            error_kind: "crash",
+          },
+        });
         const code = err.code ? `${err.code}: ` : "";
-        process.stderr.write(
-          `[tool-server] Failed to bind ${HOST}:${PORT} — ${code}${err.message}\n`
+        crashShutdown(
+          `Failed to bind ${HOST}:${PORT}`,
+          `${code}${err.message}`,
+          {
+            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+            failure_stage: "toolserver_bind",
+            failure_area: "tool_server",
+            error_kind: "crash",
+          },
+          err
         );
-        process.exit(1);
       });
       // Bolt the per-Chromium-device WebSocket upgrade handler onto the live
       // server. Must happen AFTER `listen()` so the http.Server instance
@@ -341,7 +524,27 @@ export function start(): void {
         process.stderr.write(
           `[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`
         );
+        eventLog?.error({
+          type: "tool_server.start_failed",
+          msg: "Tool server failed to start.",
+          failureSignal: {
+            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+            failure_stage: "toolserver_start",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          },
+        });
         shutdownReason = "crash";
+        // The readiness gate rejected before the HTTP listener bound, so this is
+        // definitionally a startup crash — attach the anonymous diagnostics from
+        // `err` (phase + name/fingerprint) so it clusters instead of collapsing
+        // back into the opaque bucket. Best-effort — a diagnostics failure must
+        // never stop the crash from being reported, so fall back to phase-only.
+        try {
+          shutdownCrashDiagnostics = describeCrash(err, "startup");
+        } catch {
+          shutdownCrashDiagnostics = { crash_phase: "startup" };
+        }
         await shutdown?.(1);
       })();
     });

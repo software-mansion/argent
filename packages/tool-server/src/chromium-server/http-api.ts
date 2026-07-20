@@ -331,6 +331,12 @@ async function handleWsCommand(
       return {};
     }
     default:
+      // handleWsCommand's only caller catches this and reformats it to a
+      // `{ status: "error", message }` frame, so a FailureError's structured
+      // signal is dropped before any registry boundary — this WS server isn't
+      // driven through a registered tool. Left a plain Error like the adjacent
+      // sendButton path; CHROMIUM_PARAM_INVALID still buckets via its reachable
+      // tool sites (chromium-cookies / chromium-storage / chromium-tabs).
       throw new Error(`Unknown ws cmd: ${msg.cmd}`);
   }
 }

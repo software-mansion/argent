@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/update-core",
-  "version": "0.14.0",
+  "version": "0.16.0",
   "description": "Shared npm release-age detection and installable-target resolution for argent updates",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

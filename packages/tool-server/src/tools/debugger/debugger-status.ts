@@ -8,7 +8,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from debugger-connect (iOS simulator UDID, Android logicalDeviceId, or Chromium device id)."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
     ),
 });
 
@@ -29,7 +29,7 @@ export const debuggerStatusTool: ToolDefinition<
 > = {
   id: "debugger-status",
   description: `Get JS runtime debugger connection status and diagnostic info.
-Use when you need to verify connectivity before using other debugger tools. Returns port, projectRoot (empty on Chromium), deviceName, appName, logicalDeviceId, connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning; no-op on Chromium). Fails if the runtime is unreachable.`,
+Use when you need to verify connectivity before using other debugger tools. Returns port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), isNewDebugger (false on the legacy inspector), connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning; no-op on Chromium). Fails if the runtime is unreachable.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params) => ({

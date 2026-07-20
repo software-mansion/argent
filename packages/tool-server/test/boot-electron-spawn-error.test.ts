@@ -88,6 +88,42 @@ describe("bootElectronApp — spawn error handling", () => {
     expect(child.listenerCount("error")).toBeGreaterThan(0);
   });
 
+  it("strips ELECTRON_RUN_AS_NODE from the spawned electron env (GUI boot, not Node mode)", async () => {
+    // Regression: an Electron-based MCP host (VS Code / Cursor / Codex desktop)
+    // spawns the tool-server with ELECTRON_RUN_AS_NODE=1. If that leaks into the
+    // Electron app we boot, the binary runs in Node mode — it never comes up as
+    // a browser with a CDP endpoint, so boot-device fails instead of the app
+    // launching. The env must strip the flag while keeping the per-launch
+    // override (ELECTRON_ENABLE_LOGGING).
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const prev = process.env.ELECTRON_RUN_AS_NODE;
+    process.env.ELECTRON_RUN_AS_NODE = "1";
+    try {
+      // With `port` provided, bootElectronApp reaches spawn() synchronously
+      // (no `await pickFreePort()`), so the spawn env is observable immediately.
+      const promise = bootElectronApp({
+        appPath: appDir,
+        // Unreachable port → the readiness race rejects fast; we only care about
+        // the spawn env, so detach and swallow the rejection.
+        port: 1,
+        readyTimeoutMs: 50,
+      });
+      promise.catch(() => {});
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const spawnEnv = (spawnMock.mock.calls[0]![2] as { env: NodeJS.ProcessEnv }).env;
+      expect(spawnEnv.ELECTRON_RUN_AS_NODE).toBeUndefined();
+      expect(spawnEnv.ELECTRON_ENABLE_LOGGING).toBe("1");
+
+      await promise.catch(() => {});
+    } finally {
+      if (prev === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+      else process.env.ELECTRON_RUN_AS_NODE = prev;
+    }
+  });
+
   it("rejects with a clear, actionable message when spawn emits ENOENT", async () => {
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child);
@@ -202,11 +238,17 @@ describe("bootElectronApp — spawn error handling", () => {
       });
 
       // After successful boot, both boot-time listeners MUST be detached.
+      // Exactly one 'exit' listener remains: the kill-registry cleanup hook
+      // installed for killChromiumByPort. It only evicts the retained handle —
+      // it can't reject anything, which the unhandled-rejection count below
+      // proves when we emit 'exit'.
       expect(child.listenerCount("error")).toBe(0);
-      expect(child.listenerCount("exit")).toBe(0);
+      expect(child.listenerCount("exit")).toBe(1);
 
       // Simulate the user closing the Electron window — normal exit code 0.
+      // The once() cleanup listener runs (evicting the handle) and detaches.
       child.emit("exit", 0, null);
+      expect(child.listenerCount("exit")).toBe(0);
 
       // And simulate a late stray `'error'` event from the OS layer.
       const err = new Error("late ECONNRESET") as NodeJS.ErrnoException;

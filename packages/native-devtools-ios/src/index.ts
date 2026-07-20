@@ -11,10 +11,15 @@ const BIN_DIR = process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, 
 const DYLIB_TCP_DIR = process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR ?? path.join(DYLIB_DIR, "tcp");
 const DYLIB_TVOS_DIR = path.join(DYLIB_DIR, "tvos");
 
-// iOS Simulator only runs on macOS, so the dylibs that get injected into it
-// and the ax-service that gets `simctl spawn`d into it are only ever usable
-// on darwin hosts. Throw with a clear, root-cause message so a Linux user
+// The *local* and *tvos* accessors are darwin-only: the dylibs they return get
+// `simctl spawn`d / injected into a simulator on *this* host, and iOS Simulator
+// only runs on macOS. Throw with a clear, root-cause message so a Linux user
 // invoking these accidentally doesn't get a confusing "file not found".
+//
+// The *TCP* accessors (`*Tcp`) are intentionally NOT gated: they are upload
+// artifacts shipped to a remote Mac orchestrator via `sim-remote` (see
+// `remoteIosHost` in tool-server), so they must be readable on any host — the
+// file-existence check below is the only guard they need.
 function requireDarwin(what: string): void {
   if (process.platform !== "darwin") {
     throw new Error(
@@ -45,7 +50,6 @@ export const keyboardPatchDylibPath = () => {
 };
 
 export const bootstrapDylibPathTcp = () => {
-  requireDarwin("bootstrapDylibPathTcp");
   return requireDylibIn(DYLIB_TCP_DIR, "libArgentInjectionBootstrap.dylib");
 };
 
@@ -58,11 +62,9 @@ export const nativeDevtoolsDylibPathTvos = () => {
   return requireDylibIn(DYLIB_TVOS_DIR, "libNativeDevtoolsIos.dylib");
 };
 export const nativeDevtoolsDylibPathTcp = () => {
-  requireDarwin("nativeDevtoolsDylibPathTcp");
   return requireDylibIn(DYLIB_TCP_DIR, "libNativeDevtoolsIos.dylib");
 };
 export const keyboardPatchDylibPathTcp = () => {
-  requireDarwin("keyboardPatchDylibPathTcp");
   return requireDylibIn(DYLIB_TCP_DIR, "libKeyboardPatch.dylib");
 };
 
@@ -149,7 +151,6 @@ export function axServiceBinaryPath(): string {
 }
 
 export function axServiceBinaryPathTcp(): string {
-  requireDarwin("ax-service (tcp)");
   return requireBinIn(platformTcpBinDir(), "ax-service");
 }
 

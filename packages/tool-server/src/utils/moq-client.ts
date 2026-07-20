@@ -94,6 +94,9 @@ export async function openMoqClient(udid: string): Promise<MoqClient> {
 export async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
   await ensurePolyfill();
   const url = new URL(info.url);
+  // sim-server rejects MoQ sessions without the lease token; the relay
+  // forwards it end-to-end from the `?token=` query param.
+  if (info.token) url.searchParams.set("token", info.token);
   const fingerprint = decodeHexFingerprint(info.fingerprint);
 
   let established;
