@@ -75,10 +75,12 @@ export interface MapArgs {
 
 /**
  * Hand-rolled argv parser (same style as `argent lens`). Throws
- * FlagParseException on a usage error. `--json` takes an optional path; the
- * path is only consumed once the positional bundle id has been seen, so
- * `argent map --json com.example.app` still reads the app id as the
- * positional rather than swallowing it as the output path.
+ * FlagParseException on a usage error. `--json` takes an optional path, but the
+ * explicit form is spelled attached — `--json=<path>` — the same `--flag=value`
+ * convention the rest of the CLI uses (see run.ts / flow.ts). Bare `--json`
+ * always means "write to the default path", so it never swallows a following
+ * token: `argent map --json com.example.app` unambiguously targets the app, and
+ * ordering (`--json` before or after the bundle id) no longer changes anything.
  */
 export function parseMapArgs(argv: string[]): MapArgs {
   const args: MapArgs = {
@@ -97,6 +99,13 @@ export function parseMapArgs(argv: string[]): MapArgs {
   const readValue = (flag: string, i: number): string => {
     const v = argv[i + 1];
     if (v === undefined) throw new FlagParseException(`${flag} requires a value`);
+    // Don't swallow a following flag as the value (e.g. `--udid --max-screens`).
+    // A `-`-leading token is only a legitimate value when it's a negative
+    // number, which numeric flags may receive and then reject downstream with a
+    // clearer "positive integer" message; anything else `-`-leading is a flag.
+    if (v.startsWith("-") && !Number.isFinite(Number(v))) {
+      throw new FlagParseException(`${flag} expects a value, but got the flag "${v}"`);
+    }
     return v;
   };
   const readPositiveInt = (flag: string, i: number): number => {
@@ -130,12 +139,16 @@ export function parseMapArgs(argv: string[]): MapArgs {
     } else if (tok === "--no-window") {
       args.window = false;
     } else if (tok === "--json") {
+      // Bare `--json` writes to the default path — the optional path is only
+      // ever taken attached (`--json=<path>`), so no following token is
+      // consumed and flag ordering is irrelevant.
       args.json = true;
-      const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith("-") && args.bundleId !== null) {
-        args.jsonPath = next;
-        i += 1;
-      }
+    } else if (tok.startsWith("--json=")) {
+      args.json = true;
+      const p = tok.slice("--json=".length);
+      if (p === "")
+        throw new FlagParseException(`--json expects a path when written as --json=<path>`);
+      args.jsonPath = p;
     } else if (tok.startsWith("-")) {
       throw new FlagParseException(`Unknown flag: ${tok}`);
     } else if (args.bundleId === null) {
@@ -257,6 +270,17 @@ async function fetchMapState(baseUrl: string, token: string): Promise<unknown> {
   return res.json();
 }
 
+/** Write an already-fetched map `state` to the `--json` output path (default
+ * ./argent-map.json), creating parent directories as needed. Returns the
+ * resolved path written. Shared by the normal-finish and cancel paths so a
+ * cancelled crawl keeps the JSON artifact the user asked for. */
+export function writeMapJson(state: unknown, jsonPath: string | null): string {
+  const outPath = path.resolve(jsonPath ?? "argent-map.json");
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, JSON.stringify(state, null, 2) + "\n");
+  return outPath;
+}
+
 function printHelp(): void {
   process.stdout.write(
     `Usage: argent map <bundleId> [options]\n\n` +
@@ -272,7 +296,7 @@ function printHelp(): void {
       `      --max-depth <n>     Maximum taps away from the start screen (default 5)\n` +
       `      --budget <seconds>  Overall time budget for the crawl (default 300)\n` +
       `      --no-window         Do not open the preview window\n` +
-      `      --json [path]       Also write the full graph JSON (default ./argent-map.json)\n` +
+      `      --json[=path]       Also write the full graph JSON (default ./argent-map.json)\n` +
       `  -h, --help              Show this help\n`
   );
 }
@@ -412,6 +436,21 @@ export async function map(argv: string[], options: MapCommandOptions): Promise<v
     const stats = normalizeStats(state?.stats, seen);
     console.log(`\n  ${formatMapSummary("cancelled", stats)}`);
     console.log(`  Map: ${mapUrl}`);
+    // Cancel is the supported "stop and keep the partial graph" path, so honour
+    // a requested --json here too — reusing the state already fetched above
+    // rather than fetching it a second time. A write failure doesn't change the
+    // 130 exit; the crawl was still cancelled.
+    if (args.json) {
+      if (state !== null) {
+        try {
+          console.log(`  Wrote: ${writeMapJson(state, args.jsonPath)}`);
+        } catch (err) {
+          console.error(`map: failed to write the graph JSON: ${errMsg(err)}`);
+        }
+      } else {
+        console.error("map: could not fetch the partial graph, so --json output was not written.");
+      }
+    }
     return exitAfterFlush(130);
   }
 
@@ -433,12 +472,9 @@ export async function map(argv: string[], options: MapCommandOptions): Promise<v
   console.log(`  Map: ${mapUrl}`);
 
   if (args.json) {
-    const outPath = path.resolve(args.jsonPath ?? "argent-map.json");
     try {
       const state = await fetchMapState(url, token);
-      fs.mkdirSync(path.dirname(outPath), { recursive: true });
-      fs.writeFileSync(outPath, JSON.stringify(state, null, 2) + "\n");
-      console.log(`  Wrote: ${outPath}`);
+      console.log(`  Wrote: ${writeMapJson(state, args.jsonPath)}`);
     } catch (err) {
       console.error(`map: failed to write the graph JSON: ${errMsg(err)}`);
       return exitAfterFlush(1);
