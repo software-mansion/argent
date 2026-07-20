@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -159,7 +160,9 @@ describe("runSnapshot baselines", () => {
       hostPath: baselinePath(),
       mimeType: "image/png",
     });
+    // Full-screen keys carry no `-crop-` suffix — that is cropOn-only identity.
     expect(r.snapshotKey).toBe("home__ios-390x844");
+    expect(r.snapshotKey).not.toContain("-crop-");
   });
 
   it("refreshes an existing baseline under updateBaselines", async () => {
@@ -331,10 +334,16 @@ describe("runSnapshot diff-dir cleanup", () => {
 
 describe("runSnapshot cropOn", () => {
   const cropOn = { text: "Header", loose: true };
+  // A cropOn key = full-capture dims + hash of the canonical selector identity
+  // ([text, textMatches, identifier, role, loose]) — recomputed here
+  // independently to pin the on-disk format.
+  const cropKey = `home__ios-100x200-crop-${createHash("sha256")
+    .update(JSON.stringify(["Header", null, null, null, true]))
+    .digest("hex")
+    .slice(0, 8)}`;
   // 100×200 capture; the frame's pixel rect is x 25–75, y 50–100 → a 50×50 crop.
   const frame = { x: 0.25, y: 0.25, width: 0.5, height: 0.25 };
-  const cropBaselinePath = () =>
-    path.join(tmpDir, "__baselines__", "checkout", "home__ios-100x200.png");
+  const cropBaselinePath = () => path.join(tmpDir, "__baselines__", "checkout", `${cropKey}.png`);
 
   beforeEach(async () => {
     await writeRealPng(h.shotPath, 100, 200);
@@ -350,8 +359,9 @@ describe("runSnapshot cropOn", () => {
     expect(vi.mocked(waitForFrame)).toHaveBeenCalledWith(env, cropOn);
     // waitForFrame settles internally — the plain settle must not run too.
     expect(vi.mocked(settleTree)).not.toHaveBeenCalled();
-    // Key: the FULL capture's dimensions (device-class identity). Content: the crop.
-    expect(r.snapshotKey).toBe("home__ios-100x200");
+    // Key: the FULL capture's dimensions (device-class identity) plus the
+    // selector hash (crop identity). Content: the crop.
+    expect(r.snapshotKey).toBe(cropKey);
     await expect(pngSize(cropBaselinePath())).resolves.toEqual({ w: 50, h: 50 });
   });
 
@@ -364,7 +374,7 @@ describe("runSnapshot cropOn", () => {
     expect(r.status).toBe("pass");
     // The differ compared the cropped scratch file, not the full capture…
     expect(h.diffCurrentPath).not.toBe(h.shotPath);
-    expect(path.basename(h.diffCurrentPath)).toBe("home__ios-100x200.png");
+    expect(path.basename(h.diffCurrentPath)).toBe(`${cropKey}.png`);
     // The top of a crop is element content, not the full screen's status bar.
     expect(h.diffTopMask).toBe("none");
     // Crop dims carry meaning — the differ must hard-fail any size drift.
@@ -395,9 +405,7 @@ describe("runSnapshot cropOn", () => {
     expect(r.status).toBe("fail");
     const current = r.artifacts?.current as { hostPath: string };
     await expect(pngSize(current.hostPath)).resolves.toEqual({ w: 50, h: 50 });
-    await expect(fs.readdir(path.dirname(current.hostPath))).resolves.toEqual([
-      "home__ios-100x200.png",
-    ]);
+    await expect(fs.readdir(path.dirname(current.hostPath))).resolves.toEqual([`${cropKey}.png`]);
   });
 
   it("fails with the standard not-found reason without capturing when cropOn never resolves", async () => {
@@ -445,5 +453,44 @@ describe("runSnapshot cropOn", () => {
 
     expect(r.status).toBe("fail");
     expect(r.reason).toContain("empty at this resolution");
+  });
+
+  it("keys same-name snapshots with different cropOn selectors to distinct baselines", async () => {
+    const r1 = await runSnapshot(env, opts({ updateBaselines: true, cropOn: { text: "Header" } }));
+    const r2 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { identifier: "hdr" } })
+    );
+
+    expect(r1.snapshotKey).toContain("-crop-");
+    expect(r2.snapshotKey).toContain("-crop-");
+    expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
+    // Two baseline files on disk — the second write did not clobber the first.
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files.sort()).toEqual([`${r1.snapshotKey}.png`, `${r2.snapshotKey}.png`].sort());
+  });
+
+  it("keys a selector canonically regardless of property insertion order", async () => {
+    const r1 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "a", role: "b" } })
+    );
+    const r2 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { role: "b", text: "a" } })
+    );
+
+    expect(r1.snapshotKey).toBe(r2.snapshotKey);
+  });
+
+  it("keys loose and strict spellings of the same text differently", async () => {
+    // `loose` changes resolution (identifier-first fallback) — a different element.
+    const r1 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "foo", loose: true } })
+    );
+    const r2 = await runSnapshot(env, opts({ updateBaselines: true, cropOn: { text: "foo" } }));
+
+    expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
   });
 });
