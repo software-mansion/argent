@@ -10,8 +10,8 @@
  *
  * Lifecycle: `begin()` opens a crawl session (one at a time — a second `begin`
  * while one is `running` throws) and resets the previous graph; the crawler
- * then streams `addNode` / `addEdge` / `patchNode` / `bumpStats` mutations;
- * exactly one of `complete()` / `cancel()` / `fail()` finalizes it. The graph
+ * then streams `addNode` / `addEdge` / `patchNode` / `markEntry` / `bumpStats`
+ * mutations; exactly one of `complete()` / `cancel()` / `fail()` finalizes it. The graph
  * of the last finished crawl stays readable until the next `begin`, so the Map
  * tab keeps rendering after the tool returns.
  *
@@ -64,7 +64,13 @@ export interface MapAddNodeInput {
   key: string;
   /** Best-effort title; null falls back to "Screen N". */
   title: string | null;
-  depth: number;
+  /**
+   * True when this node is an ENTRY POINT — the launch screen, or a screen a
+   * deep link opens directly into. An entry node's id is appended to
+   * `entryPoints` in discovery order. (A deep link that lands on an
+   * already-recorded screen is flagged retroactively via {@link markEntry}.)
+   */
+  entry: boolean;
   outside: boolean;
   actionsTotal: number;
   screenshotPath: string | null;
@@ -87,7 +93,7 @@ export class MapSessionStore {
     actionsExplored: 0,
     restarts: 0,
   };
-  private rootId: string | null = null;
+  private entryPoints: string[] = [];
   private nodes: MapScreenNode[] = [];
   private edges: MapEdge[] = [];
   private openWindow = false;
@@ -147,7 +153,7 @@ export class MapSessionStore {
     this.error = null;
     this.limits = { ...input.limits };
     this.stats = { screens: 0, edges: 0, actionsExplored: 0, restarts: 0 };
-    this.rootId = null;
+    this.entryPoints = [];
     this.nodes = [];
     this.edges = [];
     this.openWindow = input.openWindow;
@@ -160,16 +166,17 @@ export class MapSessionStore {
 
   /**
    * Record a newly discovered screen. Mints the id ("s0", "s1", … in discovery
-   * order), applies the "Screen N" title fallback, sets `rootId` on the first
-   * node, and counts non-`outside` nodes into `stats.screens`. Returns a copy
-   * of the stored node (callers must go through `patchNode` to mutate).
+   * order), applies the "Screen N" title fallback, appends the id to
+   * `entryPoints` when `entry` is set (the launch screen and deep-link seeds),
+   * and counts non-`outside` nodes into `stats.screens`. Returns a copy of the
+   * stored node (callers must go through `patchNode`/`markEntry` to mutate).
    */
   addNode(input: MapAddNodeInput): MapScreenNode {
     const node: MapScreenNode = {
       id: `s${this.nodes.length}`,
       key: input.key,
       title: input.title?.trim() || `Screen ${this.nodes.length + 1}`,
-      depth: input.depth,
+      entry: input.entry,
       outside: input.outside,
       actionsTotal: input.actionsTotal,
       actionsExplored: 0,
@@ -178,10 +185,24 @@ export class MapSessionStore {
       discoveredAt: Date.now(),
     };
     this.nodes.push(node);
-    if (this.rootId === null) this.rootId = node.id;
+    if (node.entry) this.entryPoints.push(node.id);
     if (!node.outside) this.stats.screens += 1;
     this.events.emit("changed");
     return { ...node };
+  }
+
+  /**
+   * Flag an already-recorded screen as an ENTRY POINT — a deep link is another
+   * way into a screen the crawl reached by tapping, so it becomes an entry
+   * without adding a duplicate node or a fake edge. Idempotent: a node already
+   * flagged (or an unknown id) is a no-op, so `entryPoints` never duplicates.
+   */
+  markEntry(id: string): void {
+    const node = this.nodes.find((n) => n.id === id);
+    if (!node || node.entry) return;
+    node.entry = true;
+    this.entryPoints.push(node.id);
+    this.events.emit("changed");
   }
 
   /** Record a traversed transition between two recorded screens. */
@@ -270,7 +291,7 @@ export class MapSessionStore {
       error: this.error,
       limits: this.limits ? { ...this.limits } : null,
       stats: { ...this.stats, elapsedMs },
-      rootId: this.rootId,
+      entryPoints: [...this.entryPoints],
       nodes: this.nodes.map((n) => ({ ...n })),
       edges: this.edges.map((e) => ({ ...e, action: copyAction(e.action) })),
     };

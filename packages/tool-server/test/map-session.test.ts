@@ -33,7 +33,7 @@ const action = (label = "Go"): MapAction => ({
 const nodeInput = (over: Partial<Parameters<MapSessionStore["addNode"]>[0]> = {}) => ({
   key: "key-0",
   title: "Home" as string | null,
-  depth: 0,
+  entry: false,
   outside: false,
   actionsTotal: 2,
   screenshotPath: null,
@@ -88,7 +88,7 @@ describe("MapSessionStore — session lifecycle", () => {
     expect(snap.status).toBe("running");
     expect(snap.nodes).toEqual([]);
     expect(snap.edges).toEqual([]);
-    expect(snap.rootId).toBeNull();
+    expect(snap.entryPoints).toEqual([]);
     expect(snap.error).toBeNull();
     expect(s.sessionScreenshotDir()).not.toBe(firstDir);
   });
@@ -176,20 +176,54 @@ describe("MapSessionStore — session lifecycle", () => {
 });
 
 describe("MapSessionStore — graph mutations", () => {
-  it("addNode mints ids in discovery order, sets rootId, counts screens (outside excluded)", () => {
+  it("addNode mints ids in discovery order, tracks entry points, counts screens (outside excluded)", () => {
     const s = new MapSessionStore();
     begin(s);
-    const first = s.addNode(nodeInput());
-    const second = s.addNode(nodeInput({ key: "key-1", depth: 1 }));
+    // The launch screen is an entry; a plain tap-reached screen is not; the
+    // synthetic outside node is neither an entry nor counted.
+    const first = s.addNode(nodeInput({ entry: true }));
+    const second = s.addNode(nodeInput({ key: "key-1" }));
     const outside = s.addNode(nodeInput({ key: "__outside__", outside: true, title: "Outside" }));
 
     expect(first.id).toBe("s0");
     expect(second.id).toBe("s1");
     expect(outside.id).toBe("s2");
     const snap = s.snapshot();
-    expect(snap.rootId).toBe("s0");
+    // entryPoints holds exactly the entry nodes, in discovery order.
+    expect(snap.entryPoints).toEqual(["s0"]);
+    expect(snap.nodes.map((n) => n.entry)).toEqual([true, false, false]);
     expect(snap.stats.screens).toBe(2); // outside not counted
     expect(snap.nodes[0]!.discoveredAt).toBeGreaterThan(0);
+  });
+
+  it("a second entry node (a deep-link seed) appends to entryPoints in discovery order", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    s.addNode(nodeInput({ entry: true })); // launch
+    s.addNode(nodeInput({ key: "key-1" })); // tap-reached, not an entry
+    s.addNode(nodeInput({ key: "key-2", title: "Settings", entry: true })); // deep-link seed
+    expect(s.snapshot().entryPoints).toEqual(["s0", "s2"]);
+  });
+
+  it("markEntry flags an existing node as an entry; it is idempotent and ignores unknown ids", () => {
+    const s = new MapSessionStore();
+    begin(s);
+    s.addNode(nodeInput({ entry: true })); // launch s0
+    s.addNode(nodeInput({ key: "key-1", title: "Detail" })); // tap-reached s1
+    expect(s.snapshot().entryPoints).toEqual(["s0"]);
+
+    // A deep link lands on the already-recorded s1 → it becomes an entry too,
+    // with no duplicate node.
+    s.markEntry("s1");
+    expect(s.snapshot().nodes[1]!.entry).toBe(true);
+    expect(s.snapshot().entryPoints).toEqual(["s0", "s1"]);
+    expect(s.snapshot().nodes).toHaveLength(2);
+
+    // Repeat calls and unknown ids never duplicate or throw.
+    s.markEntry("s1");
+    s.markEntry("s0"); // already an entry
+    s.markEntry("nope");
+    expect(s.snapshot().entryPoints).toEqual(["s0", "s1"]);
   });
 
   it("addNode falls back to 'Screen N' when no title was derived", () => {

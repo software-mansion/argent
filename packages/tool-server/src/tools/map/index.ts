@@ -63,6 +63,13 @@ const zodSchema = z.object({
     .describe(
       `Overall crawl time budget in seconds (default ${MAP_DEFAULT_LIMITS.timeBudgetMs / 1000}, max 1800). The crawl finishes with a partial map when it runs out.`
     ),
+  deepLinks: z
+    .array(z.string())
+    .max(20)
+    .optional()
+    .describe(
+      "Extra entry points to seed (deep-link URLs / URL schemes, e.g. myapp://settings). After the launch crawl, each is opened and mapped as an additional entry — reaching screens the launch screen never links to. A link that fails or leaves the app is skipped."
+    ),
   openWindow: z
     .boolean()
     .optional()
@@ -77,8 +84,10 @@ type Params = z.infer<typeof zodSchema>;
 interface MapAppResult {
   status: MapCrawlStatus;
   stats: MapCrawlStats;
+  /** Entry-point node ids (the launch screen, then any deep-link seeds). */
+  entryPoints: string[];
   /** Discovered screens, trimmed — the full graph is served at `mapUrl`. */
-  nodes: Array<{ id: string; title: string; depth: number; outside: boolean }>;
+  nodes: Array<{ id: string; title: string; entry: boolean; outside: boolean }>;
   edgesCount: number;
   mapUrl: string;
 }
@@ -95,9 +104,11 @@ export function createMapAppTool(registry: Registry): ToolDefinition<Params, Map
 
 Use it to get oriented in an unfamiliar app, to inventory its screens before writing flows or tests, or to produce a navigation overview a human can explore — the graph renders live in the Argent preview window's Map tab while the crawl runs (openWindow: false to skip the window).
 
+An app is a graph, not a tree: it can have several entry points. The crawl starts from the launch screen and, given deepLinks, seeds each as an extra entry — reaching screens the launch screen never links to (a settings pane, a detail view behind a link). Every discovered entry is marked in the result and the map.
+
 The crawler is careful but not read-only: it taps real UI. It skips text fields, disabled elements, and destructive-looking actions (log out / sign out / delete), collapses repeated list items, and honors screen/depth/time budgets — but the app's state may still change, so prefer a test account or throwaway build. One crawl runs at a time; progress events stream while it runs, and cancelling the call keeps the partial map.
 
-Returns { status, stats, nodes, edgesCount, mapUrl } — a trimmed summary. The full graph (screens, edges, action labels, screenshots) stays available at mapUrl.`,
+Returns { status, stats, entryPoints, nodes, edgesCount, mapUrl } — a trimmed summary. The full graph (screens, edges, action labels, screenshots) stays available at mapUrl.`,
     searchHint: "map crawl app screens graph navigation explore sitemap overview inventory",
     longRunning: true,
     featureFlag: "argent-map",
@@ -151,6 +162,7 @@ Returns { status, stats, nodes, edgesCount, mapUrl } — a trimmed summary. The 
           limits,
           platform,
           bundleId: params.bundleId,
+          deepLinks: params.deepLinks,
           signal: ctx?.signal,
           emitProgress: emitProgress ? (event: MapProgressEvent) => emitProgress(event) : undefined,
         });
@@ -178,10 +190,11 @@ Returns { status, stats, nodes, edgesCount, mapUrl } — a trimmed summary. The 
       return {
         status: snap.status,
         stats: snap.stats,
+        entryPoints: snap.entryPoints,
         nodes: snap.nodes.map((n) => ({
           id: n.id,
           title: n.title,
-          depth: n.depth,
+          entry: n.entry,
           outside: n.outside,
         })),
         edgesCount: snap.edges.length,

@@ -56,7 +56,7 @@ describe("/preview/map with a live session (screenshot allowlist)", () => {
     mapSessionStore.addNode({
       key: "k0",
       title: "Home",
-      depth: 0,
+      entry: true,
       outside: false,
       actionsTotal: 1,
       screenshotPath: path.join(sessionDir, "s0.png"),
@@ -64,7 +64,7 @@ describe("/preview/map with a live session (screenshot allowlist)", () => {
     mapSessionStore.addNode({
       key: "k1",
       title: "Escapee",
-      depth: 1,
+      entry: false,
       outside: false,
       actionsTotal: 0,
       screenshotPath: outsideFile,
@@ -72,7 +72,7 @@ describe("/preview/map with a live session (screenshot allowlist)", () => {
     mapSessionStore.addNode({
       key: "k2",
       title: "No shot",
-      depth: 1,
+      entry: false,
       outside: false,
       actionsTotal: 0,
       screenshotPath: null,
@@ -91,15 +91,17 @@ describe("/preview/map with a live session (screenshot allowlist)", () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("running");
     expect(res.body.bundleId).toBe("com.example.app");
-    expect(res.body.rootId).toBe("s0");
+    expect(res.body.entryPoints).toEqual(["s0"]);
     expect(res.body.nodes).toHaveLength(3);
     expect(res.body.nodes[0]).toMatchObject({
       id: "s0",
       title: "Home",
-      depth: 0,
+      entry: true,
       outside: false,
       actionsTotal: 1,
     });
+    // The wire node carries no `depth` — a screen has no intrinsic distance.
+    expect(res.body.nodes[0]).not.toHaveProperty("depth");
   });
 
   it("serves a node's PNG from inside the session dir", async () => {
@@ -126,7 +128,7 @@ describe("/preview/map with a live session (screenshot allowlist)", () => {
     mapSessionStore.addNode({
       key: "k3",
       title: "Ghost",
-      depth: 1,
+      entry: false,
       outside: false,
       actionsTotal: 0,
       screenshotPath: path.join(sessionDir, "missing.png"),

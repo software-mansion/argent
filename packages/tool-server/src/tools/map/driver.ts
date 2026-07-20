@@ -6,6 +6,7 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { fetchTree } from "../../utils/ui-tree-match";
 import type { DescribeNode } from "../describe/contract";
 import type { CrawlDriver } from "./crawler";
+import type { OpenUrlResult } from "../open-url/types";
 import { screenKey } from "./fingerprint";
 import { fetchStableTree } from "./stable-tree";
 
@@ -65,6 +66,14 @@ export function createMapDriver(opts: MapDriverOptions): CrawlDriver {
 
     async launchApp(): Promise<void> {
       await invokeSubTool(registry, ctx, "launch-app", { udid, bundleId });
+    },
+
+    async openUrl(url: string): Promise<boolean> {
+      // Seeds a deep-link entry point. The tool throws when nothing handles the
+      // URI; the crawler treats that (and a link that opens Safari / leaves the
+      // app, detected by the blank tree read afterwards) as a skip.
+      const result = await invokeSubTool<OpenUrlResult>(registry, ctx, "open-url", { udid, url });
+      return result.opened;
     },
 
     async awaitSettle(): Promise<void> {
