@@ -39,7 +39,7 @@ function runExtractor() {
     encoding: "utf8",
   });
   assert.equal(res.status, 0, `extractor exited with ${res.status}\n${res.stderr}`);
-  return { tools: JSON.parse(res.stdout).tools, stderr: res.stderr ?? "" };
+  return { tools: JSON.parse(res.stdout).tools };
 }
 
 function captureWarnings(fn) {
@@ -850,6 +850,30 @@ test("a nested template literal before a tool is skipped whole (interpolation in
   assert.equal(
     tools.find((t) => t.name === "after-nested-template-tool")?.description,
     "Real description after a nested template."
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test("a quote-bearing regex inside a template interpolation is skipped whole", () => {
+  // The real tree already contains this shape (open-url's android.ts shell
+  // quoting) — just never yet in a file with an id:, so only this fixture pins
+  // it. If the interpolation scanner did not lex the regex whole, the
+  // apostrophes in /'/g would open a fake string inside the interpolation and
+  // the following tool would vanish with no warning at all.
+  const src = `
+    const quoted = \`'\${params.url.replace(/'/g, "'\\\\''")}'\`;
+    export const t = defineTool({
+      id: "after-interp-regex-tool",
+      description: "Real description after an interpolation regex.",
+      handler: async () => {},
+    });
+  `;
+  const { result: tools, warnings } = captureWarnings(() =>
+    extractToolsFromSource(src, "fixture.ts")
+  );
+  assert.equal(
+    tools.find((t) => t.name === "after-interp-regex-tool")?.description,
+    "Real description after an interpolation regex."
   );
   assert.deepEqual(warnings, []);
 });

@@ -43,7 +43,10 @@ const ID_LITERAL = /id:\s*(["'`])([^"'`]+)\1/y;
 // Characters after which a `/` starts a regex literal rather than division:
 // an operator, an opening bracket, or a separator — never an identifier, a
 // number, a closing paren/bracket, or a string (where `/` means division).
-const REGEX_PREV_CHARS = new Set("(,=:[!&|?{};+-*%<>~^");
+// `+`, `-`, and `!` are absent on purpose: isRegexPosition disambiguates them
+// (postfix `++`/`--`/non-null `!` vs their prefix forms) before consulting
+// this set, so entries for them here could never be reached.
+const REGEX_PREV_CHARS = new Set("(,=:[&|?{};*%<>~^");
 
 // Keywords a regex literal can directly follow even though they end in an
 // identifier character (`return /["']/` is ordinary code in helper functions
@@ -82,8 +85,9 @@ function walk(dir) {
 // --- Lexical skip helpers ----------------------------------------------------
 // One shared set of rules for everything that is NOT code: comments, string and
 // template literals (with `${...}` interpolations skipped opaquely), and regex
-// literals. Both scanners drive these, so their notion of "code context" cannot
-// drift apart.
+// literals. Every scanner routes candidate characters through the single
+// `skipNonCode` dispatcher below, so the scanners' notion of "code context"
+// cannot drift apart.
 
 /** @returns {number} index just past the newline ending a `//` comment */
 function skipLineComment(src, i) {
@@ -128,6 +132,45 @@ function skipTemplateLiteral(src, i) {
   return src.length;
 }
 
+/**
+ * If src[i] starts something that is NOT code — a `//` or `/*` comment, a
+ * string or template literal, or a regex literal — skip it whole and return
+ * the scan state just past it; return null when src[i] is ordinary code.
+ *
+ * @param {string} src
+ * @param {number} i   index of the candidate character
+ * @param {string | null} prevSig  last significant code char, or null
+ * @param {number} prevSigIdx      index of prevSig in src (-1 when null)
+ * @returns {{ i: number, prevSig: string | null, prevSigIdx: number } | null}
+ *   the returned `i` sits ON the last skipped character, ready for the
+ *   caller's loop increment; comments leave prevSig untouched (they are
+ *   invisible to code context), a skipped literal becomes the new prevSig.
+ */
+function skipNonCode(src, i, prevSig, prevSigIdx) {
+  const ch = src[i];
+  if (ch === "/" && src[i + 1] === "/") {
+    return { i: skipLineComment(src, i) - 1, prevSig, prevSigIdx };
+  }
+  if (ch === "/" && src[i + 1] === "*") {
+    return { i: skipBlockComment(src, i) - 1, prevSig, prevSigIdx };
+  }
+  if (ch === "/") {
+    const end = skipRegexLiteral(src, i, prevSig, prevSigIdx);
+    // a value just ended; a following `/` is division
+    if (end > i) return { i: end - 1, prevSig: ")", prevSigIdx: end - 1 };
+    return null;
+  }
+  if (ch === '"' || ch === "'") {
+    const end = skipStringLiteral(src, i) - 1;
+    return { i: end, prevSig: ch, prevSigIdx: end };
+  }
+  if (ch === "`") {
+    const end = skipTemplateLiteral(src, i) - 1;
+    return { i: end, prevSig: "`", prevSigIdx: end };
+  }
+  return null;
+}
+
 /** src[i] is the `{` of a `${`. @returns {number} index just past the matching `}` */
 function skipInterpolation(src, i) {
   let depth = 1;
@@ -135,33 +178,9 @@ function skipInterpolation(src, i) {
   let prevSigIdx = -1;
   for (let j = i + 1; j < src.length; j++) {
     const ch = src[j];
-    if (ch === "/" && src[j + 1] === "/") {
-      j = skipLineComment(src, j) - 1;
-      continue;
-    }
-    if (ch === "/" && src[j + 1] === "*") {
-      j = skipBlockComment(src, j) - 1;
-      continue;
-    }
-    if (ch === "/") {
-      const end = skipRegexLiteral(src, j, prevSig, prevSigIdx);
-      if (end > j) {
-        j = end - 1;
-        prevSig = ")"; // a value just ended; a following `/` is division
-        prevSigIdx = j;
-        continue;
-      }
-    }
-    if (ch === '"' || ch === "'") {
-      j = skipStringLiteral(src, j) - 1;
-      prevSig = ch;
-      prevSigIdx = j;
-      continue;
-    }
-    if (ch === "`") {
-      j = skipTemplateLiteral(src, j) - 1;
-      prevSig = "`";
-      prevSigIdx = j;
+    const skipped = skipNonCode(src, j, prevSig, prevSigIdx);
+    if (skipped) {
+      ({ i: j, prevSig, prevSigIdx } = skipped);
       continue;
     }
     if (ch === "{") {
@@ -316,33 +335,9 @@ function findOwnDescriptionValue(afterId) {
   let prevSigIdx = -1;
   for (let i = 0; i < afterId.length; i++) {
     const ch = afterId[i];
-    if (ch === "/" && afterId[i + 1] === "/") {
-      i = skipLineComment(afterId, i) - 1;
-      continue;
-    }
-    if (ch === "/" && afterId[i + 1] === "*") {
-      i = skipBlockComment(afterId, i) - 1;
-      continue;
-    }
-    if (ch === "/") {
-      const end = skipRegexLiteral(afterId, i, prevSig, prevSigIdx);
-      if (end > i) {
-        i = end - 1;
-        prevSig = ")"; // a value just ended; a following `/` is division
-        prevSigIdx = i;
-        continue;
-      }
-    }
-    if (ch === '"' || ch === "'") {
-      i = skipStringLiteral(afterId, i) - 1;
-      prevSig = ch;
-      prevSigIdx = i;
-      continue;
-    }
-    if (ch === "`") {
-      i = skipTemplateLiteral(afterId, i) - 1;
-      prevSig = "`";
-      prevSigIdx = i;
+    const skipped = skipNonCode(afterId, i, prevSig, prevSigIdx);
+    if (skipped) {
+      ({ i, prevSig, prevSigIdx } = skipped);
       continue;
     }
     if (ch === "{") {
@@ -392,33 +387,9 @@ function findIdLiteralsInCode(src) {
   let prevSigIdx = -1;
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
-    if (ch === "/" && src[i + 1] === "/") {
-      i = skipLineComment(src, i) - 1;
-      continue;
-    }
-    if (ch === "/" && src[i + 1] === "*") {
-      i = skipBlockComment(src, i) - 1;
-      continue;
-    }
-    if (ch === "/") {
-      const end = skipRegexLiteral(src, i, prevSig, prevSigIdx);
-      if (end > i) {
-        i = end - 1;
-        prevSig = ")"; // a value just ended; a following `/` is division
-        prevSigIdx = i;
-        continue;
-      }
-    }
-    if (ch === '"' || ch === "'") {
-      i = skipStringLiteral(src, i) - 1;
-      prevSig = ch;
-      prevSigIdx = i;
-      continue;
-    }
-    if (ch === "`") {
-      i = skipTemplateLiteral(src, i) - 1;
-      prevSig = "`";
-      prevSigIdx = i;
+    const skipped = skipNonCode(src, i, prevSig, prevSigIdx);
+    if (skipped) {
+      ({ i, prevSig, prevSigIdx } = skipped);
       continue;
     }
     // A code-context `id:` token. The word-boundary check before it means
@@ -606,7 +577,7 @@ export function dedupeToolsById(tools) {
   });
 }
 
-export function extractAllTools() {
+function extractAllTools() {
   const files = walk(toolsRoot);
   const tools = [];
   for (const f of files) {
