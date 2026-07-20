@@ -8,7 +8,9 @@
  * discovered, and finish with a summary plus the preview-window Map URL. The
  * graph renders live in the preview window's Map tab while the crawl runs
  * (suppress with --no-window), and `--json` additionally writes the full graph
- * state to a file.
+ * state to a file. Repeatable `--deep-link <url>` flags seed extra entry points
+ * (an app is a graph, not a tree), letting the crawl jump straight into
+ * deep-linked screens rather than only tapping outward from the launch screen.
  *
  * Ctrl-C aborts the in-flight HTTP call — the server observes the client
  * abort, cancels the crawl, and keeps the partial graph — then this command
@@ -87,6 +89,10 @@ export interface MapArgs {
   maxActions: number | null;
   maxDepth: number | null;
   budgetS: number | null;
+  /** Deep-link URLs (repeatable --deep-link) that seed extra crawl entry
+   * points — an app is a graph, not a tree, so the crawl can jump straight into
+   * deep-linked screens. Empty when none were passed. */
+  deepLinks: string[];
   window: boolean;
   json: boolean;
   /** Output path for --json; null means the default ./argent-map.json. */
@@ -102,6 +108,9 @@ export interface MapArgs {
  * always means "write to the default path", so it never swallows a following
  * token: `argent map --json com.example.app` unambiguously targets the app, and
  * ordering (`--json` before or after the bundle id) no longer changes anything.
+ * `--deep-link <url>` is repeatable (each collects into `deepLinks`) and also
+ * accepts the attached `--deep-link=<url>` form, the same convention as
+ * `--json=<path>`; an empty url in either form is rejected.
  */
 export function parseMapArgs(argv: string[]): MapArgs {
   const args: MapArgs = {
@@ -111,6 +120,7 @@ export function parseMapArgs(argv: string[]): MapArgs {
     maxActions: null,
     maxDepth: null,
     budgetS: null,
+    deepLinks: [],
     window: true,
     json: false,
     jsonPath: null,
@@ -161,6 +171,20 @@ export function parseMapArgs(argv: string[]): MapArgs {
     } else if (tok === "--budget") {
       args.budgetS = readPositiveInt(tok, i);
       i += 1;
+    } else if (tok === "--deep-link") {
+      // Repeatable: each --deep-link seeds an extra crawl entry point. The bare
+      // form takes the next token as the url and reuses readValue's guard so a
+      // following flag isn't swallowed; the attached --deep-link=<url> form is
+      // handled just below (mirroring --json=<path>). Empty urls are rejected.
+      const link = readValue(tok, i);
+      if (link === "") throw new FlagParseException(`--deep-link requires a non-empty url`);
+      args.deepLinks.push(link);
+      i += 1;
+    } else if (tok.startsWith("--deep-link=")) {
+      const link = tok.slice("--deep-link=".length);
+      if (link === "")
+        throw new FlagParseException(`--deep-link expects a url when written as --deep-link=<url>`);
+      args.deepLinks.push(link);
     } else if (tok === "--no-window") {
       args.window = false;
     } else if (tok === "--json") {
@@ -325,6 +349,7 @@ function printHelp(): void {
       `      --max-actions <n>   Tappable elements explored per screen (default 12, max ${FLAG_MAX["--max-actions"]})\n` +
       `      --max-depth <n>     Maximum taps away from the start screen (default 5, max ${FLAG_MAX["--max-depth"]})\n` +
       `      --budget <seconds>  Overall time budget for the crawl (default 300, max ${FLAG_MAX["--budget"]})\n` +
+      `      --deep-link <url>   Seed an extra entry point by deep-linking into the app (repeatable)\n` +
       `      --no-window         Do not open the preview window\n` +
       `      --json[=path]       Also write the full graph JSON (default ./argent-map.json)\n` +
       `  -h, --help              Show this help\n`
@@ -415,6 +440,9 @@ export async function map(argv: string[], options: MapCommandOptions): Promise<v
   if (args.maxActions !== null) payload.maxActionsPerScreen = args.maxActions;
   if (args.maxDepth !== null) payload.maxDepth = args.maxDepth;
   if (args.budgetS !== null) payload.timeBudgetS = args.budgetS;
+  // Each deep link becomes an additional crawl entry point on the server. Omit
+  // the field entirely when none were passed (same as the other optionals).
+  if (args.deepLinks.length > 0) payload.deepLinks = args.deepLinks;
 
   // Track what the progress stream reported so a cancelled run can still
   // print a summary when the aborted call yields no result and the map state

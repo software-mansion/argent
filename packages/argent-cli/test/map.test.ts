@@ -20,6 +20,7 @@ describe("parseMapArgs", () => {
       maxActions: null,
       maxDepth: null,
       budgetS: null,
+      deepLinks: [],
       window: true,
       json: false,
       jsonPath: null,
@@ -42,6 +43,9 @@ describe("parseMapArgs", () => {
       "120",
       "--no-window",
       "--json=out/graph.json",
+      "--deep-link",
+      "myapp://home",
+      "--deep-link=myapp://profile",
     ]);
     expect(args).toEqual({
       bundleId: "com.example.app",
@@ -50,6 +54,7 @@ describe("parseMapArgs", () => {
       maxActions: 8,
       maxDepth: 3,
       budgetS: 120,
+      deepLinks: ["myapp://home", "myapp://profile"],
       window: false,
       json: true,
       jsonPath: "out/graph.json",
@@ -160,6 +165,70 @@ describe("parseMapArgs", () => {
   // rather than a misleading "expects a value".
   it("still routes a negative numeric value to the positive-integer check", () => {
     expect(() => parseMapArgs(["com.example.app", "--budget", "-5"])).toThrow(/positive integer/);
+  });
+
+  // Deep-link seeding: --deep-link is REPEATABLE and collects into deepLinks,
+  // forwarded to map-app as additional crawl entry points (an app is a graph,
+  // not a tree). The attached --deep-link=<url> form mirrors --json=<path>.
+  it("defaults deepLinks to an empty array", () => {
+    expect(parseMapArgs(["com.example.app"]).deepLinks).toEqual([]);
+  });
+
+  it("collects repeated --deep-link values into deepLinks in order", () => {
+    const args = parseMapArgs(["com.example.app", "--deep-link", "a", "--deep-link", "b"]);
+    expect(args.deepLinks).toEqual(["a", "b"]);
+    expect(args.bundleId).toBe("com.example.app");
+  });
+
+  it("accepts the attached --deep-link=<url> form", () => {
+    const args = parseMapArgs(["com.example.app", "--deep-link=myapp://home"]);
+    expect(args.deepLinks).toEqual(["myapp://home"]);
+  });
+
+  it("mixes the bare and attached deep-link forms (an =-bearing url survives)", () => {
+    const args = parseMapArgs([
+      "com.example.app",
+      "--deep-link",
+      "myapp://a",
+      "--deep-link=myapp://b?x=1",
+    ]);
+    expect(args.deepLinks).toEqual(["myapp://a", "myapp://b?x=1"]);
+  });
+
+  it("--deep-link= with an empty value throws", () => {
+    expect(() => parseMapArgs(["com.example.app", "--deep-link="])).toThrow(FlagParseException);
+    expect(() => parseMapArgs(["com.example.app", "--deep-link="])).toThrow(/expects a url/);
+  });
+
+  it("--deep-link with no following token throws", () => {
+    expect(() => parseMapArgs(["com.example.app", "--deep-link"])).toThrow(FlagParseException);
+    expect(() => parseMapArgs(["com.example.app", "--deep-link"])).toThrow(/requires a value/);
+  });
+
+  it("rejects an empty bare --deep-link value", () => {
+    expect(() => parseMapArgs(["com.example.app", "--deep-link", ""])).toThrow(FlagParseException);
+  });
+
+  it("--deep-link does not swallow a following flag token as its url", () => {
+    expect(() => parseMapArgs(["com.example.app", "--deep-link", "--no-window"])).toThrow(
+      /expects a value/
+    );
+  });
+
+  it("combines deep links with the positional bundle id and other flags in any order", () => {
+    const args = parseMapArgs([
+      "--deep-link=myapp://a",
+      "com.example.app",
+      "--max-screens",
+      "10",
+      "--deep-link",
+      "myapp://b",
+      "--no-window",
+    ]);
+    expect(args.bundleId).toBe("com.example.app");
+    expect(args.deepLinks).toEqual(["myapp://a", "myapp://b"]);
+    expect(args.maxScreens).toBe(10);
+    expect(args.window).toBe(false);
   });
 });
 
