@@ -89,3 +89,32 @@ describe("fetchStableTree — sampled tree capture", () => {
     expect(result).toBe(late);
   });
 });
+
+describe("fetchStableTree — order-independent capture of an oscillating screen", () => {
+  // The same screen flickering between a full and a sparse phase must produce
+  // ONE screenKey however the sampler phased into it — else back-navigation
+  // verification and revisit dedup fail. Oscillate once then settle: (A,B,B,…).
+  async function keyFromOrder(phaseA: DescribeNode, phaseB: DescribeNode): Promise<string> {
+    const s = scripted([phaseA, phaseB, phaseB]);
+    return screenKey(await fetchStableTree(s.options));
+  }
+
+  it("small sub-10% oscillation (40 ⇄ 38) keys the same from either phase first", async () => {
+    const full = treeWithButtons(40);
+    const sparse = treeWithButtons(38);
+    const fullFirst = await keyFromOrder(full, sparse); // (40, 38, 38)
+    const sparseFirst = await keyFromOrder(sparse, full); // (38, 40, 40)
+    expect(fullFirst).toBe(sparseFirst);
+    // ...and it is the fuller phase's key both times.
+    expect(fullFirst).toBe(screenKey(full));
+  });
+
+  it("large 27% oscillation (41 ⇄ 30) keys the same from either phase first", async () => {
+    const full = treeWithButtons(41);
+    const sparse = treeWithButtons(30);
+    const fullFirst = await keyFromOrder(full, sparse); // (41, 30, 30)
+    const sparseFirst = await keyFromOrder(sparse, full); // (30, 41, 41)
+    expect(fullFirst).toBe(sparseFirst);
+    expect(fullFirst).toBe(screenKey(full));
+  });
+});
