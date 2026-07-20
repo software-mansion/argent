@@ -129,9 +129,10 @@ export interface StepReport {
    */
   target?: string;
   /**
-   * Baseline key stem (`<name>__<platform>-WxH`) for snapshot steps that carry
-   * artifacts — clients exporting them to a durable location (the CLI's
-   * `--output`) name files by it.
+   * Baseline key stem (`<name>__<platform>-WxH`, plus `-crop-<hash>` for
+   * cropOn snapshots) for snapshot steps that carry artifacts — clients
+   * exporting them to a durable location (the CLI's `--output`) name files
+   * by it.
    */
   snapshotKey?: string;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */

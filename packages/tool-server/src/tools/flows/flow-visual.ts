@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -37,10 +38,10 @@ export interface VisualOutcome {
   status: "pass" | "fail" | "skip";
   reason?: string;
   /**
-   * Baseline key stem (`<name>__<platform>-WxH`) — present whenever
-   * `artifacts` is, so a consumer exporting the files to a durable location
-   * (the CLI's `--output`) can name them by the same collision-free key the
-   * baseline store uses.
+   * Baseline key stem (`<name>__<platform>-WxH`, plus `-crop-<hash>` for
+   * cropOn snapshots) — present whenever `artifacts` is, so a consumer
+   * exporting the files to a durable location (the CLI's `--output`) can name
+   * them by the same collision-free key the baseline store uses.
    */
   snapshotKey?: string;
   artifacts?: SnapshotArtifacts;
@@ -56,6 +57,22 @@ async function pngDimensions(file: string): Promise<{ w: number; h: number }> {
   } finally {
     await fh.close();
   }
+}
+
+/**
+ * Canonical crop identity for a selector: fixed field order, so the key is
+ * immune to YAML key order and to describeSelector's human-readable format
+ * (owned by failure prose). `loose` is included because it changes resolution
+ * (identifier-first fallback).
+ */
+function cropIdentity(s: FlowSelector): string {
+  return JSON.stringify([
+    s.text ?? null,
+    s.textMatches ?? null,
+    s.identifier ?? null,
+    s.role ?? null,
+    s.loose ?? false,
+  ]);
 }
 
 function baselineDir(flowsDir: string, flowName: string): string {
@@ -184,9 +201,15 @@ export async function runSnapshot(
 
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
-  // cropped dimensions — a function of layout — would destroy.
+  // cropped dimensions — a function of layout — would destroy. A cropOn key
+  // additionally hashes the selector, so same-name snapshots cropping
+  // different elements never share a baseline file.
   const { w, h } = await pngDimensions(shot.image.hostPath);
-  const snapshotKey = `${opts.name}__${env.device.platform}-${w}x${h}`;
+  const cropSuffix =
+    opts.cropOn === undefined
+      ? ""
+      : `-crop-${createHash("sha256").update(cropIdentity(opts.cropOn)).digest("hex").slice(0, 8)}`;
+  const snapshotKey = `${opts.name}__${env.device.platform}-${w}x${h}${cropSuffix}`;
   const key = `${snapshotKey}.png`;
   const dir = baselineDir(opts.flowsDir, opts.flowName);
   const baselinePath = path.join(dir, key);
