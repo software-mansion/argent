@@ -11,7 +11,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id: iOS simulator UDID, Android logicalDeviceId returned by Metro, Vega serial (amazon-...), or Chromium device id (chromium-cdp-<port>) from list-devices. When a logicalDeviceId is returned, forward it as device_id to all subsequent debugger-* calls to pin them to this device; when none is returned (Vega), keep passing the id you connected with."
+      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (Metro's own per-connection handle, absent on Vega); you do not switch to it — forwarding it still resolves here, but the list-devices id is the stable one."
     ),
 });
 
