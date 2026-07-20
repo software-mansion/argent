@@ -94,7 +94,8 @@ interface DiffArtifactPaths {
 
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
 const DEFAULT_THRESHOLD = 0.1;
-const DEFAULT_IGNORE_TOP_NORMALIZED_Y = 0.06;
+/** Fraction of image height the "status-bar" top mask ignores. */
+export const DEFAULT_IGNORE_TOP_NORMALIZED_Y = 0.06;
 const DEFAULT_REGION_MERGE_DISTANCE = 8;
 const DEFAULT_CONTEXT_DIFF_SCALE = 0.3;
 const MIN_REGION_PIXEL_COUNT = 2;
@@ -111,7 +112,10 @@ const HORIZONTAL_TEXT_MERGE_MAX_GAP = 120;
 // still report the dominant RGB channel.
 const UNIFORM_BRIGHTNESS_DELTA_TOLERANCE = 4;
 
-type TopMaskPolicy = "none" | "status-bar";
+// { topFraction } ignores that top fraction of the image (clamped to [0, 1]) —
+// internal-only (e.g. a flow crop overlapping the status-bar band), not exposed
+// by the standalone screenshot-diff tool's schema.
+type TopMaskPolicy = "none" | "status-bar" | { topFraction: number };
 
 export interface DiffPngFilesOptions {
   baselinePath: string;
@@ -215,10 +219,16 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
 function resolveDiffSettings(topMask: TopMaskPolicy): DiffSettings {
   return {
     thresholdSquared: DEFAULT_THRESHOLD * DEFAULT_THRESHOLD * MAX_RGB_DISTANCE_SQUARED,
-    ignoreTopNormalizedY: topMask === "none" ? 0 : DEFAULT_IGNORE_TOP_NORMALIZED_Y,
+    ignoreTopNormalizedY: topMaskFraction(topMask),
     joinGapPixels: DEFAULT_REGION_MERGE_DISTANCE,
     contextDiffScale: DEFAULT_CONTEXT_DIFF_SCALE,
   };
+}
+
+function topMaskFraction(topMask: TopMaskPolicy): number {
+  if (topMask === "none") return 0;
+  if (topMask === "status-bar") return DEFAULT_IGNORE_TOP_NORMALIZED_Y;
+  return Math.min(1, Math.max(0, topMask.topFraction));
 }
 
 function summarizeResult(result: Omit<PngDiffResult, "summary">): PngDiffResult {

@@ -25,8 +25,8 @@ const h = vi.hoisted(() => ({
   outputDir: "",
   /** Set by the differ mock: the currentPath it was asked to compare. */
   diffCurrentPath: "",
-  /** Set by the differ mock: whether the top status-bar band is excluded. */
-  diffTopMask: "" as "" | "none" | "status-bar",
+  /** Set by the differ mock: the top-mask policy it was passed. */
+  diffTopMask: "" as "" | NonNullable<DiffPngFilesOptions["topMask"]>,
   /** Set by the differ mock: the normalizeSizes option it was passed. */
   diffNormalizeSizes: undefined as boolean | undefined,
   /** What the waitForFrame mock resolves a cropOn selector to. */
@@ -50,7 +50,11 @@ vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
   waitForFrame: vi.fn(async () => h.cropFrame),
 }));
 
-vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
+vi.mock("../../src/tools/screenshot-diff/screenshot-diff", async (importOriginal) => ({
+  // The real band constant: runSnapshot derives the crop top mask from it.
+  DEFAULT_IGNORE_TOP_NORMALIZED_Y: (
+    await importOriginal<typeof import("../../src/tools/screenshot-diff/screenshot-diff")>()
+  ).DEFAULT_IGNORE_TOP_NORMALIZED_Y,
   diffPngFiles: vi.fn(async (options: DiffPngFilesOptions) => {
     h.outputDir = options.outputDir;
     h.diffCurrentPath = options.currentPath;
@@ -375,12 +379,27 @@ describe("runSnapshot cropOn", () => {
     // The differ compared the cropped scratch file, not the full capture…
     expect(h.diffCurrentPath).not.toBe(h.shotPath);
     expect(path.basename(h.diffCurrentPath)).toBe(`${cropKey}.png`);
-    // The top of a crop is element content, not the full screen's status bar.
+    // A crop fully below the status-bar band (y ≥ 0.06) gets no top mask —
+    // its top is element content, not the full screen's status bar.
     expect(h.diffTopMask).toBe("none");
     // Crop dims carry meaning — the differ must hard-fail any size drift.
     expect(h.diffNormalizeSizes).toBe(false);
     // …and the unregistered crop did not outlive the call.
     await expect(fs.access(path.dirname(h.diffCurrentPath))).rejects.toThrow();
+  });
+
+  it("masks the crop's overlap with the screen's status-bar band", async () => {
+    // y 0.02–0.10 overlaps the top band (0–0.06) by 0.04 — half the crop's
+    // 0.08 height. On the 100×200 capture that crop is 50×16 pixels.
+    h.cropFrame = { x: 0, y: 0.02, width: 0.5, height: 0.08 };
+    await fs.mkdir(path.dirname(cropBaselinePath()), { recursive: true });
+    await writeRealPng(cropBaselinePath(), 50, 16);
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("pass");
+    expect(h.diffTopMask).toHaveProperty("topFraction");
+    expect((h.diffTopMask as { topFraction: number }).topFraction).toBeCloseTo(0.5);
   });
 
   it("returns the cropped image as `current` on a missing baseline", async () => {

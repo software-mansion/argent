@@ -251,6 +251,37 @@ describe("diffPngFiles", () => {
     expect(readRgb(diff, 5, 21)).toEqual({ r: 0, g: 200, b: 0 });
   });
 
+  it("masks exactly the top rows for a fractional top mask", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 12, 100, { r: 20, g: 20, b: 20 });
+    await writePng(currentPath, 12, 100, { r: 20, g: 20, b: 20 }, [
+      // Rows 16–19: inside the masked top 20 rows — ignored.
+      ...rectPixels(4, 16, 4, 4, { r: 255, g: 0, b: 0 }),
+      // Rows 20–23: the same difference just below the band — counts.
+      ...rectPixels(4, 20, 4, 4, { r: 255, g: 0, b: 0 }),
+    ]);
+
+    const result = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      topMask: { topFraction: 0.2 },
+    });
+
+    expect(result).toMatchObject({ differentPixels: 16 });
+    expect(result.regions).toEqual([
+      expect.objectContaining({
+        bounds: { x: 4, y: 20, width: 4, height: 4 },
+        pixelCount: 16,
+      }),
+    ]);
+    expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ignoreTopPixels: 20 })
+    );
+  });
+
   it("compares the full image when the top mask is disabled", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");

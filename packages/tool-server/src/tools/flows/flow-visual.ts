@@ -12,7 +12,10 @@ import {
   type ActionEnv,
 } from "./flow-actions";
 import { describeSelector, type FlowSelector } from "./flow-utils";
-import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
+import {
+  diffPngFiles,
+  DEFAULT_IGNORE_TOP_NORMALIZED_Y,
+} from "../screenshot-diff/screenshot-diff";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 /** Default visual tolerance (percent of pixels) when a flow/step sets none. */
@@ -287,11 +290,24 @@ export async function runSnapshot(
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-diff-"));
     let keepInOutputDir: string | undefined;
     try {
+      // A crop overlapping the screen's top status-bar band would otherwise
+      // lean entirely on best-effort pinStatusBar — mask the overlapping
+      // fraction of the crop instead. (cropFrame.height > 0: waitForFrame
+      // only returns visible frames.)
+      const bandOverlap =
+        cropFrame === undefined
+          ? 0
+          : Math.max(0, Math.min(DEFAULT_IGNORE_TOP_NORMALIZED_Y - cropFrame.y, cropFrame.height));
       const result = await diffPngFiles({
         baselinePath,
         currentPath,
         outputDir,
-        topMask: cropFrame === undefined ? "status-bar" : "none",
+        topMask:
+          cropFrame === undefined
+            ? "status-bar"
+            : bandOverlap > 0
+              ? { topFraction: bandOverlap / cropFrame.height }
+              : "none",
         // Crop dimensions track the element — size drift must hard-fail below
         // instead of being resampled away like a full-screen scale difference.
         ...(cropFrame !== undefined && { normalizeSizes: false }),
