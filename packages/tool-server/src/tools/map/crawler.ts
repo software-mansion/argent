@@ -34,6 +34,13 @@ export interface CrawlDriver {
   restartApp(): Promise<void>;
   /** (Re-)foreground the app without resetting its state. */
   launchApp(): Promise<void>;
+  /**
+   * Open a URL / deep link on the device. Resolves true when the open was
+   * dispatched (the app may or may not foreground — the caller decides by
+   * reading the tree afterwards); false when nothing handled it. Used to seed
+   * additional entry points that no tap path reaches.
+   */
+  openUrl(url: string): Promise<boolean>;
   /** Wait briefly for animations/loads to settle. Never rejects on "unsettled". */
   awaitSettle(): Promise<void>;
   /** Capture + persist a screenshot for `nodeId`; null when capture failed. */
@@ -48,6 +55,14 @@ export interface CrawlAppOptions {
   limits: MapCrawlLimits;
   platform: "ios" | "android";
   bundleId: string;
+  /**
+   * Extra entry points to seed after the launch crawl. Each is opened via
+   * `driver.openUrl`; a link reaching a new screen becomes a fresh entry the
+   * crawl then explores, a link reaching a known screen just flags it an entry,
+   * and a link that fails / leaves the app is skipped. All entries share the
+   * one screen/time/depth budget.
+   */
+  deepLinks?: string[];
   signal?: AbortSignal;
   emitProgress?: (event: MapProgressEvent) => void;
 }
@@ -57,8 +72,20 @@ export interface CrawlAppOptions {
 interface CrawlNode {
   id: string;
   key: string;
+  // Live traversal depth (= `path.length`): the number of taps from this node's
+  // entry to reach it. Drives the maxDepth budget and the shallowest-frontier
+  // backtrack. INTERNAL only — the wire node has no depth (a screen is reachable
+  // by many paths of differing length; depth is a traversal artifact, not a
+  // property of the screen).
   depth: number;
-  /** First-discovery action path from the root — the restart-replay recipe. */
+  /**
+   * How to get back to the start of `path`: `null` = the launch root, replay
+   * from a fresh `restartApp`; a URL = a deep-link entry, replay by re-opening
+   * that link. Descendants inherit their entry's origin, so restart-replay
+   * backtracking works inside a deep-link-seeded subtree too.
+   */
+  entryUrl: string | null;
+  /** First-discovery action path from this node's entry — the replay recipe. */
   path: MapAction[];
   actions: MapAction[];
   /** Index of the next unexplored action. */
@@ -218,14 +245,16 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   async function createNode(
     tree: DescribeNode,
     depth: number,
-    path: MapAction[]
+    path: MapAction[],
+    entry: boolean,
+    entryUrl: string | null
   ): Promise<CrawlNode> {
     const key = screenKey(tree);
     const actions = enumerateActions(tree, { platform, maxActions: limits.maxActionsPerScreen });
     const stored = store.addNode({
       key,
       title: screenTitle(tree),
-      depth,
+      entry,
       outside: false,
       actionsTotal: actions.length,
       screenshotPath: null,
@@ -234,6 +263,7 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
       id: stored.id,
       key,
       depth,
+      entryUrl,
       path,
       actions,
       nextAction: 0,
@@ -250,12 +280,12 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   }
 
   /** The single synthetic "left the app" node, created on first use. */
-  function ensureOutsideNode(depth: number): string {
+  function ensureOutsideNode(): string {
     if (outsideNodeId !== null) return outsideNodeId;
     const stored = store.addNode({
       key: "__outside__",
       title: "Outside the app",
-      depth,
+      entry: false,
       outside: true,
       actionsTotal: 0,
       screenshotPath: null,
@@ -286,16 +316,33 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   }
 
   /**
-   * Restart the app and replay `target`'s discovery path. True when we land on
-   * a screen with `target`'s key; false on divergence (the path no longer
-   * leads there — dynamic content moved, an interstitial appeared) or abort.
+   * Re-establish `target`'s entry so its `path` can be replayed: a launch root
+   * restarts the app; a deep-link entry re-opens its link. False when the
+   * primitive failed (or the deep link no longer foregrounds the app). An abort
+   * mid-open rethrows so cancellation stays cancellation.
+   */
+  async function reopen(target: CrawlNode): Promise<boolean> {
+    if (target.entryUrl === null) return tryStep(() => driver.restartApp());
+    try {
+      return await driver.openUrl(target.entryUrl);
+    } catch (err) {
+      if (aborted()) throw err;
+      return false;
+    }
+  }
+
+  /**
+   * Re-establish `target`'s entry and replay its discovery path. True when we
+   * land on a screen with `target`'s key; false on divergence (the path no
+   * longer leads there — dynamic content moved, an interstitial appeared) or
+   * abort.
    */
   async function replayTo(target: CrawlNode, reason: string): Promise<boolean> {
     store.bumpStats({ restarts: 1 });
     emit({ kind: "restart", reason });
-    // A failed restart just means we can't reach the target — a divergence the
+    // A failed reopen just means we can't reach the target — a divergence the
     // callers already handle (mark the node exhausted), not a crawl-ending throw.
-    if (!(await tryStep(() => driver.restartApp()))) return false;
+    if (!(await reopen(target))) return false;
     await driver.awaitSettle();
     for (const step of target.path) {
       // The deadline is also checked here, not only at the DFS loop top: a deep
@@ -410,141 +457,216 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
       }
     );
   }
-  let current = await createNode(rootTree, 0, []);
+  const rootNode = await createNode(rootTree, 0, [], true, null);
 
-  // ── Main DFS loop ─────────────────────────────────────────────────────
-  while (true) {
+  // ── DFS exploration from one entry ────────────────────────────────────
+  // The depth-first walk, startable from any entry (the launch root or a
+  // deep-link seed). It backtracks across the WHOLE frontier — every
+  // unexhausted node, whatever entry it descends from — so a later entry's
+  // walk naturally skips the earlier, already-exhausted subtrees. Resolves
+  // "cancelled" (and finalizes the store) on abort, else "completed" when the
+  // frontier empties or a shared budget (screens/time) is spent.
+  async function explore(start: CrawlNode): Promise<"completed" | "cancelled"> {
+    let current = start;
+    while (true) {
+      if (aborted()) {
+        store.cancel();
+        return "cancelled";
+      }
+      if (overTime()) {
+        emit({ kind: "phase", message: "Time budget exhausted — finishing with a partial map" });
+        break;
+      }
+      if (screens >= limits.maxScreens) {
+        emit({ kind: "phase", message: "Screen cap reached — finishing with a partial map" });
+        break;
+      }
+
+      // Exhausted current ⇒ backtrack to the shallowest frontier screen.
+      if (current.exhausted || current.nextAction >= current.actions.length) {
+        markExhausted(current);
+        let frontier: CrawlNode | undefined;
+        for (const node of crawlNodes) {
+          if (node.exhausted || node.nextAction >= node.actions.length) continue;
+          if (!frontier || node.depth < frontier.depth) frontier = node;
+        }
+        if (!frontier) break; // everything explored — done
+        const ok = await replayTo(frontier, `backtracking to ${frontier.id}`);
+        if (aborted()) {
+          store.cancel();
+          return "cancelled";
+        }
+        if (!ok) {
+          // The path no longer reproduces this screen — give up on its
+          // remaining actions rather than looping on a dead replay.
+          markExhausted(frontier);
+          continue;
+        }
+        current = frontier;
+        continue;
+      }
+
+      const action = current.actions[current.nextAction]!;
+      current.nextAction += 1;
+      store.patchNode(current.id, { actionsExplored: current.nextAction });
+      store.bumpStats({ actionsExplored: 1 });
+      // Consuming the last action makes the node exhausted NOW — the loop may
+      // descend and never stand on this node again, so don't wait for a revisit
+      // to record it. (`current.exhausted` stays false so this iteration's own
+      // control flow is untouched; the flag is for the store/graph.)
+      if (current.nextAction >= current.actions.length) {
+        store.patchNode(current.id, { exhausted: true });
+      }
+      emit({
+        kind: "action",
+        nodeId: current.id,
+        label: action.label,
+        explored: current.nextAction,
+        total: current.actions.length,
+      });
+
+      const point = centreOf(action.frame);
+      // A dropped tap is a transient device hiccup, not a crawl-ender: skip this
+      // action (it stays counted as attempted) and move on to the next.
+      if (!(await tryStep(() => driver.tap(point.x, point.y)))) continue;
+      await driver.awaitSettle();
+      const tree = await readTree();
+
+      if (tree === null) {
+        // Left the app (home screen, another app, a browser). Record the edge
+        // into the synthetic outside node, then get back on the map: foreground
+        // the app first — it usually resumes exactly where we left it — and
+        // only restart-replay when that resume lands elsewhere.
+        store.addEdge(current.id, ensureOutsideNode(), action);
+        store.bumpStats({ restarts: 1 });
+        emit({ kind: "restart", reason: "the tap left the app; relaunching" });
+        // Best-effort relaunch: if it fails, the readTree/replay recovery below
+        // still runs (and can restart-replay us back onto the map).
+        await tryStep(() => driver.launchApp());
+        await driver.awaitSettle();
+        const resumed = await readTree();
+        if (!resumed || screenKey(resumed) !== current.key) {
+          const ok = await replayTo(
+            current,
+            `app state lost after leaving; replaying to ${current.id}`
+          );
+          if (!ok && !aborted()) markExhausted(current);
+        }
+        continue;
+      }
+
+      const key = screenKey(tree);
+      if (key === current.key) {
+        // Same screen — the tap did nothing observable (or toggled dynamic
+        // content the fingerprint deliberately ignores). No edge, no self-loop.
+        continue;
+      }
+
+      const known = byKey.get(key);
+      if (known) {
+        store.addEdge(current.id, known.id, action);
+        // Revisit of an already-mapped screen. If it still has unexplored
+        // actions, keep crawling from right here — we are already standing on
+        // it, and `current`'s remaining actions stay owed to the frontier
+        // backtrack. Only when the landed screen is spent is it worth paying
+        // navigation to get back to `current`.
+        if (!known.exhausted && known.nextAction < known.actions.length) {
+          current = known;
+          continue;
+        }
+        const landed = await returnToCurrent(current, tree);
+        if (aborted()) {
+          store.cancel();
+          return "cancelled";
+        }
+        if (landed) current = landed;
+        else markExhausted(current);
+        continue;
+      }
+
+      // A brand-new screen.
+      const child = await createNode(
+        tree,
+        current.depth + 1,
+        [...current.path, action],
+        false,
+        current.entryUrl
+      );
+      store.addEdge(current.id, child.id, action);
+      if (child.depth >= limits.maxDepth) {
+        // Depth cap: record the screen but never descend into it.
+        markExhausted(child);
+        const landed = await returnToCurrent(current, tree);
+        if (aborted()) {
+          store.cancel();
+          return "cancelled";
+        }
+        if (landed) current = landed;
+        else markExhausted(current);
+        continue;
+      }
+      current = child; // DFS descent
+    }
+    return "completed";
+  }
+
+  const rootOutcome = await explore(rootNode);
+  if (rootOutcome === "cancelled") return "cancelled";
+
+  // ── Deep-link seeding ─────────────────────────────────────────────────
+  // Each deep link is a possible extra way into the app. After the launch
+  // crawl, open each one and fingerprint where it lands: a NEW screen becomes
+  // a fresh entry the crawl explores (its own depth-0 origin, replayable by
+  // re-opening the link); a KNOWN screen is just flagged an entry (no fake edge
+  // from the root — a deep link is a jump, not a tap); a link that fails to
+  // open or leaves the app is skipped. All entries share the one budget.
+  for (const url of opts.deepLinks ?? []) {
     if (aborted()) {
       store.cancel();
       return "cancelled";
     }
-    if (overTime()) {
-      emit({ kind: "phase", message: "Time budget exhausted — finishing with a partial map" });
+    if (overTime() || screens >= limits.maxScreens) {
+      emit({ kind: "phase", message: "Budget spent — skipping the remaining deep links" });
       break;
     }
-    if (screens >= limits.maxScreens) {
-      emit({ kind: "phase", message: "Screen cap reached — finishing with a partial map" });
-      break;
-    }
-
-    // Exhausted current ⇒ backtrack to the shallowest frontier screen.
-    if (current.exhausted || current.nextAction >= current.actions.length) {
-      markExhausted(current);
-      let frontier: CrawlNode | undefined;
-      for (const node of crawlNodes) {
-        if (node.exhausted || node.nextAction >= node.actions.length) continue;
-        if (!frontier || node.depth < frontier.depth) frontier = node;
-      }
-      if (!frontier) break; // everything explored — done
-      const ok = await replayTo(frontier, `backtracking to ${frontier.id}`);
+    emit({ kind: "phase", message: `Seeding deep link ${url}` });
+    let opened: boolean;
+    try {
+      opened = await driver.openUrl(url);
+    } catch {
       if (aborted()) {
         store.cancel();
         return "cancelled";
       }
-      if (!ok) {
-        // The path no longer reproduces this screen — give up on its
-        // remaining actions rather than looping on a dead replay.
-        markExhausted(frontier);
-        continue;
-      }
-      current = frontier;
+      opened = false;
+    }
+    if (!opened) {
+      emit({ kind: "phase", message: `Deep link ${url} could not be opened — skipping` });
       continue;
     }
-
-    const action = current.actions[current.nextAction]!;
-    current.nextAction += 1;
-    store.patchNode(current.id, { actionsExplored: current.nextAction });
-    store.bumpStats({ actionsExplored: 1 });
-    // Consuming the last action makes the node exhausted NOW — the loop may
-    // descend and never stand on this node again, so don't wait for a revisit
-    // to record it. (`current.exhausted` stays false so this iteration's own
-    // control flow is untouched; the flag is for the store/graph.)
-    if (current.nextAction >= current.actions.length) {
-      store.patchNode(current.id, { exhausted: true });
-    }
-    emit({
-      kind: "action",
-      nodeId: current.id,
-      label: action.label,
-      explored: current.nextAction,
-      total: current.actions.length,
-    });
-
-    const point = centreOf(action.frame);
-    // A dropped tap is a transient device hiccup, not a crawl-ender: skip this
-    // action (it stays counted as attempted) and move on to the next.
-    if (!(await tryStep(() => driver.tap(point.x, point.y)))) continue;
     await driver.awaitSettle();
     const tree = await readTree();
-
-    if (tree === null) {
-      // Left the app (home screen, another app, a browser). Record the edge
-      // into the synthetic outside node, then get back on the map: foreground
-      // the app first — it usually resumes exactly where we left it — and
-      // only restart-replay when that resume lands elsewhere.
-      store.addEdge(current.id, ensureOutsideNode(current.depth + 1), action);
-      store.bumpStats({ restarts: 1 });
-      emit({ kind: "restart", reason: "the tap left the app; relaunching" });
-      // Best-effort relaunch: if it fails, the readTree/replay recovery below
-      // still runs (and can restart-replay us back onto the map).
-      await tryStep(() => driver.launchApp());
-      await driver.awaitSettle();
-      const resumed = await readTree();
-      if (!resumed || screenKey(resumed) !== current.key) {
-        const ok = await replayTo(
-          current,
-          `app state lost after leaving; replaying to ${current.id}`
-        );
-        if (!ok && !aborted()) markExhausted(current);
-      }
+    if (aborted()) {
+      store.cancel();
+      return "cancelled";
+    }
+    if (!tree) {
+      emit({ kind: "phase", message: `Deep link ${url} did not foreground the app — skipping` });
       continue;
     }
-
     const key = screenKey(tree);
-    if (key === current.key) {
-      // Same screen — the tap did nothing observable (or toggled dynamic
-      // content the fingerprint deliberately ignores). No edge, no self-loop.
-      continue;
-    }
-
     const known = byKey.get(key);
     if (known) {
-      store.addEdge(current.id, known.id, action);
-      // Revisit of an already-mapped screen. If it still has unexplored
-      // actions, keep crawling from right here — we are already standing on
-      // it, and `current`'s remaining actions stay owed to the frontier
-      // backtrack. Only when the landed screen is spent is it worth paying
-      // navigation to get back to `current`.
-      if (!known.exhausted && known.nextAction < known.actions.length) {
-        current = known;
-        continue;
-      }
-      const landed = await returnToCurrent(current, tree);
-      if (aborted()) {
-        store.cancel();
-        return "cancelled";
-      }
-      if (landed) current = landed;
-      else markExhausted(current);
+      // Already mapped — the deep link is just another entrance to it.
+      store.markEntry(known.id);
+      emit({ kind: "phase", message: `Deep link ${url} reached the known screen ${known.id}` });
       continue;
     }
-
-    // A brand-new screen.
-    const child = await createNode(tree, current.depth + 1, [...current.path, action]);
-    store.addEdge(current.id, child.id, action);
-    if (child.depth >= limits.maxDepth) {
-      // Depth cap: record the screen but never descend into it.
-      markExhausted(child);
-      const landed = await returnToCurrent(current, tree);
-      if (aborted()) {
-        store.cancel();
-        return "cancelled";
-      }
-      if (landed) current = landed;
-      else markExhausted(current);
-      continue;
-    }
-    current = child; // DFS descent
+    // A screen no tap path reached: a genuine new entry point. Explore it under
+    // the shared budgets, replayable by re-opening this link.
+    const entryNode = await createNode(tree, 0, [], true, url);
+    const outcome = await explore(entryNode);
+    if (outcome === "cancelled") return "cancelled";
   }
 
   store.complete();

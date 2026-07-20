@@ -113,9 +113,16 @@ class FakeApp implements CrawlDriver {
   taps = 0;
   restartCount = 0;
   launchCount = 0;
+  openUrlCount = 0;
   time = 0;
   onTap?: (tapNumber: number) => void;
   onRestart?: () => void;
+  /**
+   * Deep-link routing: url → the screen it opens onto. The special target
+   * "outside" models a link that opens but doesn't foreground the app (e.g. an
+   * iOS Universal Link → Safari). A url absent from this map "fails to open".
+   */
+  deepLinks: Record<string, string> = {};
   private backStack: string[] = [];
   private resumeOnLaunch: string;
 
@@ -168,6 +175,17 @@ class FakeApp implements CrawlDriver {
   async launchApp(): Promise<void> {
     this.launchCount += 1;
     if (this.current === "outside") this.current = this.resumeOnLaunch;
+  }
+
+  async openUrl(url: string): Promise<boolean> {
+    this.openUrlCount += 1;
+    const target = this.deepLinks[url];
+    if (target === undefined) return false; // nothing handled the link
+    // A fresh entrance resets the back stack (the link jumps straight in), the
+    // same way a restart does — so a deep-link subtree's replay is deterministic.
+    this.backStack = [];
+    this.current = target; // "outside" is a valid target: opened, not foregrounded
+    return true;
   }
 
   async awaitSettle(): Promise<void> {}
@@ -225,7 +243,7 @@ async function crawl(
   app: FakeApp,
   store: MapSessionStore,
   overrides: Partial<MapCrawlLimits> = {},
-  extra: { signal?: AbortSignal; platform?: "ios" | "android" } = {}
+  extra: { signal?: AbortSignal; platform?: "ios" | "android"; deepLinks?: string[] } = {}
 ): Promise<"completed" | "cancelled"> {
   return crawlApp({
     driver: app,
@@ -233,12 +251,13 @@ async function crawl(
     limits: { ...LIMITS, ...overrides },
     platform: extra.platform ?? "ios",
     bundleId: "com.example.app",
+    deepLinks: extra.deepLinks,
     signal: extra.signal,
   });
 }
 
 describe("crawlApp — graph discovery", () => {
-  it("maps a small app: nodes, depths, edges, titles, screenshots, dedup by structure", async () => {
+  it("maps a small app: nodes, entry flags, edges, titles, screenshots, dedup by structure", async () => {
     const app = new FakeApp(
       {
         home: screenTree("Home", ["To A", "To B"]),
@@ -254,11 +273,13 @@ describe("crawlApp — graph discovery", () => {
 
     expect(result).toBe("completed");
     expect(snap.status).toBe("completed");
-    expect(snap.rootId).toBe("s0");
-    expect(snap.nodes.map((x) => ({ title: x.title, depth: x.depth }))).toEqual([
-      { title: "Home", depth: 0 },
-      { title: "Screen A", depth: 1 },
-      { title: "Screen B", depth: 1 },
+    // The launch screen is the sole entry point; nothing carries a wire depth.
+    expect(snap.entryPoints).toEqual(["s0"]);
+    expect(snap.nodes[0]).not.toHaveProperty("depth");
+    expect(snap.nodes.map((x) => ({ title: x.title, entry: x.entry }))).toEqual([
+      { title: "Home", entry: true },
+      { title: "Screen A", entry: false },
+      { title: "Screen B", entry: false },
     ]);
     expect(snap.edges.map((e) => [e.from, e.to, e.action.label])).toEqual([
       ["s0", "s1", "To A"],
@@ -304,6 +325,154 @@ describe("crawlApp — graph discovery", () => {
       ["s0", "s1"],
       ["s0", "s1"],
     ]);
+  });
+});
+
+describe("crawlApp — deep-link seeding (multiple entry points)", () => {
+  it("entryPoints starts empty, then holds only the launch screen after a plain crawl", async () => {
+    const app = new FakeApp({ home: screenTree("Home", []) }, {}, "home");
+    const store = makeStore();
+    // Before any screen is recorded, there are no entry points.
+    expect(store.snapshot().entryPoints).toEqual([]);
+    await crawl(app, store);
+    const snap = store.snapshot();
+    expect(snap.entryPoints).toEqual(["s0"]);
+    expect(snap.nodes[0]!.entry).toBe(true);
+    expect(snap.nodes[0]).not.toHaveProperty("depth"); // wire node carries no depth
+  });
+
+  it("a deep link reaching a NEW screen adds an entry node, records it in entryPoints, and explores it", async () => {
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A"]),
+        a: screenTree("Screen A", []),
+        settings: screenTree("Settings", ["To Prefs"]),
+        prefs: screenTree("Prefs", []),
+      },
+      { home: { "To A": "a" }, settings: { "To Prefs": "prefs" } },
+      "home"
+    );
+    app.deepLinks = { "myapp://settings": "settings" };
+    const store = makeStore();
+    const result = await crawl(app, store, {}, { deepLinks: ["myapp://settings"] });
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    // Launch crawl found Home + Screen A; the deep link seeded Settings and the
+    // crawl explored it, discovering its child Prefs.
+    expect(snap.nodes.map((x) => x.title)).toEqual(["Home", "Screen A", "Settings", "Prefs"]);
+    const settings = snap.nodes.find((x) => x.title === "Settings")!;
+    const prefs = snap.nodes.find((x) => x.title === "Prefs")!;
+    // The launch screen and the deep-link screen are BOTH entry points.
+    expect(snap.entryPoints).toEqual(["s0", settings.id]);
+    expect(settings.entry).toBe(true);
+    expect(prefs.entry).toBe(false);
+    // A deep link is a jump, not a tap — no fake edge from the root into it…
+    expect(snap.edges.some((e) => e.from === "s0" && e.to === settings.id)).toBe(false);
+    // …but the seeded entry WAS explored: its own edge to Prefs exists.
+    expect(snap.edges.some((e) => e.from === settings.id && e.to === prefs.id)).toBe(true);
+    expect(app.openUrlCount).toBe(1);
+  });
+
+  it("a deep link reaching a KNOWN screen flags it an entry without duplicating a node or an edge", async () => {
+    const app = new FakeApp(
+      { home: screenTree("Home", ["To A"]), a: screenTree("Screen A", []) },
+      { home: { "To A": "a" } },
+      "home"
+    );
+    app.deepLinks = { "myapp://a": "a" };
+    const store = makeStore();
+    // The same link twice proves markEntry / entryPoints never duplicates.
+    const result = await crawl(app, store, {}, { deepLinks: ["myapp://a", "myapp://a"] });
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    // Screen A was already discovered by tapping — no second node is created.
+    expect(snap.nodes.map((x) => x.title)).toEqual(["Home", "Screen A"]);
+    const a = snap.nodes.find((x) => x.title === "Screen A")!;
+    expect(a.entry).toBe(true);
+    expect(snap.entryPoints).toEqual(["s0", a.id]); // A appears once despite two links
+    // The deep link added no edge — only the tap-discovered Home → Screen A.
+    expect(snap.edges).toHaveLength(1);
+    expect(snap.edges[0]).toMatchObject({ from: "s0", to: a.id });
+  });
+
+  it("a deep link that fails to open or leaves the app is skipped, and the crawl still completes", async () => {
+    const app = new FakeApp(
+      { home: screenTree("Home", ["To A"]), a: screenTree("Screen A", []) },
+      { home: { "To A": "a" } },
+      "home"
+    );
+    // "myapp://web" opens but does not foreground the app (blank tree read);
+    // "myapp://gone" is handled by nothing (openUrl resolves false).
+    app.deepLinks = { "myapp://web": "outside" };
+    const store = makeStore();
+    const result = await crawl(app, store, {}, { deepLinks: ["myapp://web", "myapp://gone"] });
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    expect(snap.status).toBe("completed");
+    expect(snap.nodes.map((x) => x.title)).toEqual(["Home", "Screen A"]);
+    expect(snap.entryPoints).toEqual(["s0"]); // only the launch entry
+    // A skipped deep link creates no node (not even the synthetic outside one).
+    expect(snap.nodes.some((x) => x.outside)).toBe(false);
+    expect(app.openUrlCount).toBe(2); // both were attempted
+  });
+
+  it("explores a deep-link subtree by re-opening the link to backtrack (a restart would land on the root)", async () => {
+    // The launch screen is a dead end; the real content sits behind a deep link
+    // with two dead-end children reached by separate taps. After the first, the
+    // crawler must backtrack to the deep-link entry — reachable ONLY by
+    // re-opening the link, since a restart would foreground Home instead.
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", []),
+        d: screenTree("Deep", ["To D1", "To D2"]),
+        d1: screenTree("Deep One", []),
+        d2: screenTree("Deep Two", []),
+      },
+      { d: { "To D1": "d1", "To D2": "d2" } },
+      "home"
+    );
+    app.deepLinks = { "myapp://deep": "d" };
+    const store = makeStore();
+    const result = await crawl(app, store, {}, { deepLinks: ["myapp://deep"] });
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    // Both children of the deep-link entry were discovered.
+    expect(snap.nodes.map((x) => x.title).sort()).toEqual(["Deep", "Deep One", "Deep Two", "Home"]);
+    const d = snap.nodes.find((x) => x.title === "Deep")!;
+    expect(d.entry).toBe(true);
+    expect(snap.entryPoints).toEqual(["s0", d.id]);
+    // Backtracking re-opened the link (seed + at least one replay) and never
+    // restarted the app after the clean-root launch restart.
+    expect(app.openUrlCount).toBeGreaterThanOrEqual(2);
+    expect(app.restartCount).toBe(1);
+  });
+
+  it("shares the screen budget across entries: a spent budget skips deep-link seeding entirely", async () => {
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A"]),
+        a: screenTree("Screen A", []),
+        settings: screenTree("Settings", []),
+      },
+      { home: { "To A": "a" } },
+      "home"
+    );
+    app.deepLinks = { "myapp://settings": "settings" };
+    const store = makeStore();
+    // maxScreens=2 is filled by the launch crawl (Home + Screen A), so the deep
+    // link is never opened.
+    const result = await crawl(app, store, { maxScreens: 2 }, { deepLinks: ["myapp://settings"] });
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    expect(snap.stats.screens).toBe(2);
+    expect(snap.nodes.map((x) => x.title)).toEqual(["Home", "Screen A"]);
+    expect(snap.entryPoints).toEqual(["s0"]);
+    expect(app.openUrlCount).toBe(0); // budget spent before any deep link
   });
 });
 
