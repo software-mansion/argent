@@ -25,6 +25,7 @@ import {
   type RoundAbandonedStats,
   type CliSessionStartedStats,
 } from "./utils/variant-proposals";
+import { mapSessionStore } from "./utils/map-session";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
 
 const PROCESS_TIMEOUT_MS = 5_000;
@@ -296,6 +297,27 @@ export function start(): void {
       }
     }
   };
+  // A `map-app` crawl began: open the preview window on its Map tab so the
+  // graph is visible as it grows — unless the caller asked not to
+  // (openWindow: false). Crawl end (active=false) deliberately does NOT close
+  // the window: the human is reading the finished map. Mirrors the Lens
+  // wiring above but with its own URL builder — the Map tab streams the
+  // crawl's device and selects itself via `tab=map`.
+  const mapPreviewUrl = (): string | null => {
+    if (!server) return null;
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : null;
+    if (!port) return null;
+    const udid = mapSessionStore.snapshot().udid;
+    const query = udid ? `?udid=${encodeURIComponent(udid)}&tab=map` : "?tab=map";
+    return `http://127.0.0.1:${port}/preview/${query}`;
+  };
+  const onMapSessionChanged = (active: boolean): void => {
+    if (!active || !mapSessionStore.openWindowRequested()) return;
+    const url = mapPreviewUrl();
+    if (url) previewWindow.ensureOpen(url);
+  };
+  mapSessionStore.events.on("mapSessionChanged", onMapSessionChanged);
   // A round the human FIRST finalized (fires once per round, never on a resubmit
   // — the store guards that). The generic tool:* path can't see this: submission
   // is an HTTP POST to /preview, not a tool call, and in a CLI Lens session the
@@ -424,6 +446,7 @@ export function start(): void {
     variantProposalStore.events.off("roundCompleted", onRoundCompleted);
     variantProposalStore.events.off("roundAbandoned", onRoundAbandoned);
     variantProposalStore.events.off("cliSessionStarted", onCliSessionStarted);
+    mapSessionStore.events.off("mapSessionChanged", onMapSessionChanged);
     process.exit(finalExitCode);
   };
 

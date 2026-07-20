@@ -18,6 +18,7 @@ import {
   type ElementAnnotation,
   type VariantMatch,
 } from "./utils/variant-proposals";
+import { mapSessionStore } from "./utils/map-session";
 import type { DescribeTreeData } from "./tools/describe/contract";
 import { describeIos } from "./tools/describe/platforms/ios";
 import { describeAndroid } from "./tools/describe/platforms/android";
@@ -670,6 +671,53 @@ export function createPreviewRouter(registry: Registry): Router {
     }
     res.set("Cache-Control", "no-store");
     res.type(mime);
+    fs.createReadStream(real)
+      .on("error", () => {
+        if (!res.headersSent) res.status(404).end();
+      })
+      .pipe(res);
+  });
+
+  // ── Map crawl (`argent map`) ─────────────────────────────────────────
+  // Live crawl state for the preview window's Map tab (polled like /variants).
+  // Read-only — it reports store state and mutates nothing — so like the other
+  // read-only /preview routes it is tokenless and not flag-gated: with the
+  // `argent-map` flag off the map-app tool can never run, and this only ever
+  // returns the idle state.
+  router.get("/map", (_req: Request, res: Response) => {
+    res.set("Cache-Control", "no-store");
+    res.json(mapSessionStore.snapshot());
+  });
+
+  // A crawled screen's PNG thumbnail. This route has no auth and node ids are
+  // enumerable ("s0", "s1", …), so containment is the real protection
+  // (mirroring /variant-image's allowlist): only a path that is currently
+  // stored on a crawl node AND resolves (after symlinks) inside the crawl
+  // session's own screenshot directory is ever served — a store entry that
+  // somehow pointed elsewhere would 404, never stream an arbitrary host file.
+  router.get("/map/screenshot/:nodeId", (req: Request, res: Response) => {
+    const src = mapSessionStore.screenshotPathFor(req.params.nodeId as string);
+    const sessionDir = mapSessionStore.sessionScreenshotDir();
+    if (!src || !sessionDir) {
+      res.status(404).end();
+      return;
+    }
+    let real: string;
+    let realDir: string;
+    try {
+      real = fs.realpathSync(src);
+      realDir = fs.realpathSync(sessionDir);
+      if (!fs.statSync(real).isFile()) throw new Error("not a file");
+    } catch {
+      res.status(404).end();
+      return;
+    }
+    if (!real.startsWith(realDir + path.sep) || path.extname(real).toLowerCase() !== ".png") {
+      res.status(404).end();
+      return;
+    }
+    res.set("Cache-Control", "no-store");
+    res.type("image/png");
     fs.createReadStream(real)
       .on("error", () => {
         if (!res.headersSent) res.status(404).end();
