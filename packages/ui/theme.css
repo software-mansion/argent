@@ -111,6 +111,7 @@
   --border-hairline: 1px;
   --border-strong: 2px; /* spotlight ring, touch dot */
   --connector-width: 1.5; /* SVG stroke-width (unitless) */
+  --map-edge-hit-width: 14; /* invisible hover-target stroke around a map edge (unitless, SVG) */
 
   /* ── Spacing — gaps (recurring roles) ────────────────────────────────── */
   --gap-tight: 5px;
@@ -140,6 +141,7 @@
   --pad-footbar: 8px 10px;
   --pad-footbar-input: 6px 9px;
   --pad-complete: 8px 14px;
+  --pad-tab-strip: 3px; /* gutter inside the Lens/Map segmented control */
 
   /* one-off margins / nudges (kept named by what they position) */
   --sub-margin: -4px 0 6px; /* device-picker caption */
@@ -181,6 +183,21 @@
   --pad-modal: 18px;
   --stream-max-h: 80dvh; /* dvh, not vh: in a browser tab `vh` is the toolbar-retracted (large) viewport, so the centered stream overflowed the %-height container and got clipped at the bottom. `dvh` tracks the visible viewport. In the frameless Electron window (no toolbar) dvh == vh, so production is unchanged. */
   --backdrop-blur: 1.67px; /* light haze over the dimmed stream (3× softer than the former 5px) */
+
+  /* Map tab (screen-graph crawler view) */
+  --map-node-w: 148px; /* screen card */
+  --map-node-h: 184px;
+  --map-col-gap: 90px; /* between depth columns — leaves room for the edge curves */
+  --map-row-gap: 26px; /* between cards within a column */
+  --map-world-pad: 56px; /* graph inset from the world's top-left origin */
+  --map-edge-reach: 54px; /* horizontal pull of an edge bezier's control points */
+  --map-drag-band-h: 52px; /* top window-drag band; the pannable canvas starts below it */
+  --map-outside-glyph: 26px; /* placeholder glyph on the synthetic "left the app" card */
+  --map-spinner-size: 12px;
+  --map-state-max-width: 280px; /* status-strip verdict (may carry a failure message) */
+  --map-detail-shot-w: 220px; /* node-detail overlay screenshot column */
+  --map-detail-max-w: 640px;
+  --map-detail-max-h: 80dvh;
 
   /* ── Cursors ─────────────────────────────────────────────────────────── */
   /* Comment-mode cursor — a Figma-style speech bubble that makes "you are
@@ -242,4 +259,9 @@
   --spot-max-frame-area: 0.85; /* nodes whose frame covers more than this fraction of the screen are not treated as highlightables (catches Android full-screen container roots that lack iOS's explicit root flag) */
   --annpop-hover-grace-ms: 280; /* hover-card grace: pin ↔ popover travel */
   --success-toast-show-ms: 1200; /* how long the post-submit confirmation card lingers (browser mode; in Electron the window closes around it sooner) */
+  --dur-spin: 0.9s; /* map status spinner rotation */
+  --map-zoom-min: 0.25; /* map canvas zoom clamp */
+  --map-zoom-max: 2.5;
+  --map-zoom-intensity: 0.0015; /* wheel-px → zoom-factor exponent (cursor-anchored) */
+  --map-elapsed-tick-ms: 1000; /* elapsed-clock refresh while a crawl runs */
 }

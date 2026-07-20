@@ -1464,6 +1464,357 @@
         font-size: var(--fs-title);
         font-weight: var(--fw-bold);
       }
+
+      /* ── Lens / Map tab strip ────────────────────────────────────────── */
+      /* Floating segmented control, top-centre — clear of the macOS traffic
+         lights (top-left) by construction, so unlike .float-status it needs
+         no .native-frame gutter. Lives beside #main rather than inside it, so
+         it stays put while the tabs swap the content underneath. */
+      .tab-strip {
+        position: fixed;
+        top: var(--footbar-bottom);
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        padding: var(--pad-tab-strip);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-pill);
+        box-shadow: var(--shadow-pill);
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+      }
+      .tab-btn {
+        border: 0;
+        background: transparent;
+        color: var(--color-muted);
+        font: inherit;
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+        padding: var(--pad-toggle);
+        border-radius: var(--radius-pill);
+        cursor: pointer;
+        transition:
+          background var(--dur-hover) var(--ease-out),
+          color var(--dur-hover) var(--ease-out);
+      }
+      .tab-btn:hover {
+        color: var(--color-fg);
+      }
+      .tab-btn.active,
+      .tab-btn.active:hover {
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+      }
+      .tab-btn:focus-visible {
+        outline: var(--border-strong) solid var(--color-accent);
+        outline-offset: var(--border-strong);
+      }
+
+      /* ── Map tab (screen-graph crawler view) ─────────────────────────── */
+      /* The Map tab hides #main with `visibility` (NOT display): Lens keeps
+         real layout geometry, so its background polling and springs stay valid
+         and switching back never re-flows from zero-sized rects. The theme
+         toggle is the one piece of Lens chrome resurfaced over the map (its
+         z-index outranks the z-auto .map-view in the root stacking context). */
+      .tab-map .main {
+        visibility: hidden;
+      }
+      .tab-map .float-controls {
+        visibility: visible;
+      }
+      .map-view {
+        position: fixed;
+        inset: 0;
+        background: var(--color-bg);
+      }
+      /* Window-drag band along the top — the canvas below is no-drag because
+         dragging it PANS the graph. Same inset trick as .drag-region so the
+         window's top resize edge keeps working. */
+      .map-drag {
+        position: absolute;
+        top: var(--resize-edge);
+        left: var(--resize-edge);
+        right: var(--resize-edge);
+        height: var(--map-drag-band-h);
+        pointer-events: none;
+        -webkit-app-region: drag;
+      }
+      .map-canvas {
+        position: absolute;
+        inset: var(--map-drag-band-h) 0 0 0;
+        overflow: hidden;
+        cursor: grab;
+        -webkit-app-region: no-drag;
+      }
+      .map-canvas.panning {
+        cursor: grabbing;
+      }
+      /* Pan/zoom is one translate+scale on this inner container, so nodes and
+         edges never move relative to each other. Its size tracks the graph
+         extents (the SVG needs real bounds to not clip the beziers). */
+      .map-world {
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform-origin: 0 0;
+      }
+      .map-edges {
+        position: absolute;
+        left: 0;
+        top: 0;
+      }
+      .map-edge .line {
+        fill: none;
+        stroke: var(--color-muted);
+        stroke-width: var(--connector-width);
+        opacity: var(--opacity-connector);
+        marker-end: url(#map-arrow);
+      }
+      /* Invisible fat twin of the line so the hover target isn't a hairline —
+         a transparent stroke still hit-tests. Hover surfaces the action label
+         via the group's SVG <title> tooltip. */
+      .map-edge .hit {
+        fill: none;
+        stroke: transparent;
+        stroke-width: var(--map-edge-hit-width);
+      }
+      .map-edge:hover .line {
+        stroke: var(--color-accent);
+        opacity: 1;
+        marker-end: url(#map-arrow-hover);
+      }
+      .map-edges marker path {
+        fill: var(--color-muted);
+      }
+      .map-edges #map-arrow-hover path {
+        fill: var(--color-accent);
+      }
+      /* Positioning layer only — clicks belong to the cards and, between them,
+         to the edge strokes underneath (mirrors .cards). */
+      .map-nodes {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .map-node {
+        position: absolute;
+        width: var(--map-node-w);
+        height: var(--map-node-h);
+        display: flex;
+        flex-direction: column;
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
+        overflow: hidden;
+        cursor: pointer;
+        pointer-events: auto;
+        animation: map-node-in var(--dur-card-in) var(--ease-out);
+        transition: border-color var(--dur-hover) ease;
+      }
+      .map-node:hover {
+        border-color: var(--color-accent);
+      }
+      @keyframes map-node-in {
+        from {
+          opacity: 0;
+          transform: scale(var(--card-gone-scale));
+        }
+      }
+      /* The synthetic "left the app" node: same shape, deliberately unlike the
+         real screens — dashed, flat, muted. */
+      .map-node.outside {
+        border-style: dashed;
+        background: var(--color-bg);
+        box-shadow: none;
+      }
+      .map-thumb {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--color-thumb-bg);
+      }
+      .map-node.outside .map-thumb {
+        background: transparent;
+      }
+      .map-node.outside .map-thumb::before {
+        content: "⌂";
+        font-size: var(--map-outside-glyph);
+        color: var(--color-muted);
+      }
+      .map-thumb img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: top;
+      }
+      .map-node-foot {
+        display: flex;
+        align-items: center;
+        gap: var(--gap-inline);
+        padding: var(--pad-card-head);
+        border-top: var(--border-hairline) solid var(--color-border);
+      }
+      .map-node.outside .map-node-foot {
+        border-top-style: dashed;
+      }
+      .map-node-title {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+      }
+      .map-node.outside .map-node-title {
+        color: var(--color-muted);
+      }
+      .map-node-badge {
+        flex: none;
+        font-family: var(--font-mono);
+        font-size: var(--fs-tag);
+        color: var(--color-muted);
+        background: var(--color-bg);
+        border-radius: var(--radius-chip);
+        padding: var(--pad-code);
+      }
+      /* Status strip — bottom-centre pill: bundle id, verdict, counts, clock. */
+      .map-status {
+        position: absolute;
+        bottom: var(--footbar-bottom);
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: var(--gap-bar);
+        max-width: calc(100% - 2 * var(--footbar-right));
+        padding: var(--pad-pill);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-pill);
+        box-shadow: var(--shadow-pill);
+        font-size: var(--fs-note);
+        color: var(--color-muted);
+        white-space: nowrap;
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+      }
+      .map-bundle {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--color-fg);
+        font-weight: var(--fw-semibold);
+      }
+      .map-state {
+        max-width: var(--map-state-max-width);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .map-state.ok {
+        color: var(--color-ok);
+      }
+      .map-state.error {
+        color: var(--color-error);
+      }
+      .map-spinner {
+        flex: none;
+        width: var(--map-spinner-size);
+        height: var(--map-spinner-size);
+        border: var(--border-strong) solid var(--color-border);
+        border-top-color: var(--color-accent);
+        border-radius: var(--radius-round);
+        animation: map-spin var(--dur-spin) linear infinite;
+      }
+      @keyframes map-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .map-empty {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      /* Node detail — same scrim-and-card pattern as the confirm modal:
+         bigger screenshot on the left, outgoing edges on the right. */
+      .map-detail {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--spotlight-scrim);
+        z-index: var(--z-modal);
+        -webkit-app-region: no-drag;
+      }
+      .map-detail-card {
+        display: flex;
+        max-width: var(--map-detail-max-w);
+        max-height: var(--map-detail-max-h);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-pop);
+        overflow: hidden;
+      }
+      .map-detail-shot {
+        flex: none;
+        width: var(--map-detail-shot-w);
+        object-fit: contain;
+        background: var(--color-thumb-bg);
+      }
+      .map-detail-body {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        min-width: 0;
+        padding: var(--pad-modal);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+      .map-detail-title {
+        margin: 0;
+        font-size: var(--fs-title);
+        font-weight: var(--fw-bold);
+      }
+      .map-detail-sub {
+        margin: 0;
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+      }
+      .map-detail-edges {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-tight);
+      }
+      .map-detail-edge {
+        display: flex;
+        align-items: baseline;
+        gap: var(--gap-inline);
+        font-size: var(--fs-note);
+      }
+      .map-detail-edge .lbl {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .map-detail-edge .arr,
+      .map-detail-edge .dst {
+        color: var(--color-muted);
+      }
+      .map-detail-none {
+        margin: 0;
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+      }
     </style>
   </head>
   <body>
@@ -1617,6 +1968,75 @@
           </div>
         </div>
       </div>
+      <!-- Map tab: live screen-graph of an `argent map` crawl. Hidden until
+           the Map tab is active; #main stays in the DOM (visibility-hidden)
+           so Lens keeps polling untouched underneath. -->
+      <div class="map-view" id="map-view" hidden>
+        <div class="map-drag"></div>
+        <div class="map-canvas" id="map-canvas">
+          <div class="map-world" id="map-world">
+            <svg class="map-edges" id="map-edges" aria-hidden="true">
+              <defs>
+                <marker
+                  id="map-arrow"
+                  viewBox="0 0 8 8"
+                  refX="7"
+                  refY="4"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto">
+                  <path d="M0 0 L8 4 L0 8 Z" />
+                </marker>
+                <marker
+                  id="map-arrow-hover"
+                  viewBox="0 0 8 8"
+                  refX="7"
+                  refY="4"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto">
+                  <path d="M0 0 L8 4 L0 8 Z" />
+                </marker>
+              </defs>
+              <g id="map-edge-layer"></g>
+            </svg>
+            <div class="map-nodes" id="map-nodes"></div>
+          </div>
+        </div>
+        <div class="map-empty" id="map-empty" hidden>
+          <div class="empty">
+            No app map yet — run <code>argent map &lt;bundleId&gt;</code> to crawl an app and watch
+            its screen graph grow here.
+          </div>
+        </div>
+        <div class="map-status" id="map-status" hidden>
+          <span class="map-spinner" id="map-spinner" hidden></span>
+          <span class="map-bundle" id="map-bundle"></span>
+          <span class="map-state" id="map-state"></span>
+          <span class="map-counts" id="map-counts"></span>
+          <span class="map-elapsed" id="map-elapsed"></span>
+        </div>
+        <div class="map-detail" id="map-detail" hidden>
+          <div class="map-detail-card">
+            <img class="map-detail-shot" id="map-detail-shot" alt="" hidden />
+            <div class="map-detail-body">
+              <p class="map-detail-title" id="map-detail-title"></p>
+              <p class="map-detail-sub" id="map-detail-sub"></p>
+              <div class="map-detail-edges" id="map-detail-edges"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Lens / Map tab strip — floating chrome shared by both tabs, so it
+           lives beside #main rather than inside it. -->
+      <div class="tab-strip" id="tab-strip" role="tablist" aria-label="View">
+        <button class="tab-btn" id="tab-lens" type="button" role="tab" aria-selected="true">
+          Lens
+        </button>
+        <button class="tab-btn" id="tab-map" type="button" role="tab" aria-selected="false">
+          Map
+        </button>
+      </div>
     </div>
 
     <script>
@@ -1664,6 +2084,16 @@
         collapsedThumbH: cssNum("--collapsed-thumb-h", 58),
         annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
         successToastShowMs: cssNum("--success-toast-show-ms", 1200),
+        mapNodeW: cssNum("--map-node-w", 148),
+        mapNodeH: cssNum("--map-node-h", 184),
+        mapColGap: cssNum("--map-col-gap", 90),
+        mapRowGap: cssNum("--map-row-gap", 26),
+        mapWorldPad: cssNum("--map-world-pad", 56),
+        mapEdgeReach: cssNum("--map-edge-reach", 54),
+        mapZoomMin: cssNum("--map-zoom-min", 0.25),
+        mapZoomMax: cssNum("--map-zoom-max", 2.5),
+        mapZoomIntensity: cssNum("--map-zoom-intensity", 0.0015),
+        mapElapsedTickMs: cssNum("--map-elapsed-tick-ms", 1000),
       };
 
       // Browser KeyboardEvent.code → USB HID Keyboard Usage Page (0x07) keycode.
@@ -5464,9 +5894,465 @@
         lastMainSize = { w: mr.width, h: mr.height };
         vpRender();
       });
+
+      // ── Map tab (screen-graph crawler view) ─────────────────────────────
+      // Renders the live `argent map` crawl from GET /preview/map: a layered
+      // directed graph — columns by depth, discovery order within a column —
+      // nodes keyed by id and updated INCREMENTALLY each poll (the crawl
+      // mutates the graph under us; rebuilding the DOM every tick would drop
+      // in-flight hovers and thumbnail loads). Positions are deterministic
+      // functions of depth/index — no force simulation, nothing ever jitters.
+      const mapViewEl = document.getElementById("map-view");
+      const mapCanvasEl = document.getElementById("map-canvas");
+      const mapWorldEl = document.getElementById("map-world");
+      const mapEdgesSvg = document.getElementById("map-edges");
+      const mapEdgeLayer = document.getElementById("map-edge-layer");
+      const mapNodesEl = document.getElementById("map-nodes");
+      const mapEmptyEl = document.getElementById("map-empty");
+      const mapStatusEl = document.getElementById("map-status");
+      const mapSpinnerEl = document.getElementById("map-spinner");
+      const mapBundleEl = document.getElementById("map-bundle");
+      const mapStateEl = document.getElementById("map-state");
+      const mapCountsEl = document.getElementById("map-counts");
+      const mapElapsedEl = document.getElementById("map-elapsed");
+      const mapDetailEl = document.getElementById("map-detail");
+      const mapDetailShotEl = document.getElementById("map-detail-shot");
+      const mapDetailTitleEl = document.getElementById("map-detail-title");
+      const mapDetailSubEl = document.getElementById("map-detail-sub");
+      const mapDetailEdgesEl = document.getElementById("map-detail-edges");
+
+      const mv = {
+        state: null, // last GET /preview/map snapshot (MapCrawlState JSON)
+        crawlStartedAt: undefined, // startedAt of the graph currently in the DOM
+        nodes: new Map(), // node id -> { el, img, titleEl, badgeEl, x, y, title, badge, shot }
+        edges: new Map(), // edge id -> { el, hit, line, d } reused SVG nodes
+        pan: { x: 0, y: 0 },
+        zoom: 1,
+        worldW: 0,
+        worldH: 0,
+        detailId: null, // node id the detail overlay is open for
+        detailShotFor: null, // node id the big screenshot was last loaded for
+      };
+
+      function mapShotUrl(id) {
+        return `${TOOL_SERVER}/preview/map/screenshot/${encodeURIComponent(id)}`;
+      }
+
+      async function pollMap(force) {
+        // Poll while the Map tab is showing, and keep polling in the background
+        // while a crawl runs so switching over lands on a warm, current graph.
+        if (!force && activeTab !== "map" && !(mv.state && mv.state.status === "running")) return;
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/map`, { cache: "no-store" });
+          if (!res.ok) return;
+          mv.state = await res.json();
+        } catch {
+          return; /* keep last state */
+        }
+        mapRender();
+      }
+
+      function mapClearGraph() {
+        mv.nodes.clear();
+        mv.edges.clear();
+        mapNodesEl.textContent = "";
+        mapEdgeLayer.textContent = "";
+        closeMapDetail();
+      }
+
+      function mapRender() {
+        const s = mv.state;
+        if (!s) return;
+        if (s.startedAt !== mv.crawlStartedAt) {
+          // A fresh crawl reuses node ids from "s0" — wipe the old graph and
+          // re-home the viewport rather than morphing between unrelated maps.
+          mv.crawlStartedAt = s.startedAt;
+          mapClearGraph();
+          mv.pan = { x: 0, y: 0 };
+          mv.zoom = 1;
+          mapApplyTransform();
+        }
+        const idle = s.status === "idle";
+        mapEmptyEl.hidden = !idle;
+        mapStatusEl.hidden = idle;
+        if (!idle) mapRenderStatus(s);
+        // Deterministic layout: column = depth, row = discovery order within
+        // it (s.nodes is discovery-ordered, so rows only ever append and an
+        // existing card never moves).
+        const pos = new Map();
+        const rows = new Map();
+        let worldW = 0;
+        let worldH = 0;
+        for (const n of s.nodes) {
+          const row = rows.get(n.depth) || 0;
+          rows.set(n.depth, row + 1);
+          const x = THEME.mapWorldPad + n.depth * (THEME.mapNodeW + THEME.mapColGap);
+          const y = THEME.mapWorldPad + row * (THEME.mapNodeH + THEME.mapRowGap);
+          pos.set(n.id, { x, y });
+          worldW = Math.max(worldW, x + THEME.mapNodeW + THEME.mapWorldPad);
+          worldH = Math.max(worldH, y + THEME.mapNodeH + THEME.mapWorldPad);
+        }
+        if (worldW !== mv.worldW || worldH !== mv.worldH) {
+          mv.worldW = worldW;
+          mv.worldH = worldH;
+          mapWorldEl.style.width = worldW + "px";
+          mapWorldEl.style.height = worldH + "px";
+          mapEdgesSvg.setAttribute("width", worldW);
+          mapEdgesSvg.setAttribute("height", worldH);
+          mapEdgesSvg.setAttribute("viewBox", `0 0 ${worldW} ${worldH}`);
+        }
+        // Upsert by id; prune whatever the snapshot no longer carries.
+        const nodeIds = new Set();
+        for (const n of s.nodes) {
+          nodeIds.add(n.id);
+          const p = pos.get(n.id);
+          mapUpsertNode(n, p.x, p.y);
+        }
+        for (const [id, rec] of mv.nodes) {
+          if (!nodeIds.has(id)) {
+            rec.el.remove();
+            mv.nodes.delete(id);
+          }
+        }
+        const edgeIds = new Set();
+        for (const e of s.edges) {
+          edgeIds.add(e.id);
+          mapUpsertEdge(e, pos);
+        }
+        for (const [id, rec] of mv.edges) {
+          if (!edgeIds.has(id)) {
+            rec.el.remove();
+            mv.edges.delete(id);
+          }
+        }
+        if (mv.detailId) renderMapDetail(); // keep the open overlay's counts live
+      }
+
+      const MAP_STATE_LABEL = {
+        running: "mapping",
+        completed: "completed",
+        failed: "failed",
+        cancelled: "cancelled",
+      };
+      function mapRenderStatus(s) {
+        mapSpinnerEl.hidden = s.status !== "running";
+        mapBundleEl.textContent = s.bundleId || "";
+        const verdict =
+          s.status === "failed" && s.error
+            ? `failed — ${s.error}`
+            : MAP_STATE_LABEL[s.status] || s.status;
+        mapStateEl.textContent = verdict;
+        mapStateEl.title = s.status === "failed" ? s.error || "" : "";
+        mapStateEl.classList.toggle("ok", s.status === "completed");
+        mapStateEl.classList.toggle("error", s.status === "failed");
+        mapCountsEl.textContent = `${s.stats.screens} screens · ${s.stats.edges} edges`;
+        mapRenderElapsed();
+      }
+
+      function mapRenderElapsed() {
+        const s = mv.state;
+        if (!s || s.status === "idle") {
+          mapElapsedEl.textContent = "";
+          return;
+        }
+        // While running, tick off the wall clock (same host as the server, so
+        // startedAt is directly comparable); afterwards show the final figure.
+        const ms =
+          s.status === "running" && s.startedAt ? Date.now() - s.startedAt : s.stats.elapsedMs;
+        const t = Math.max(0, Math.floor(ms / 1000));
+        mapElapsedEl.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+      }
+      function mapElapsedTick() {
+        if (activeTab === "map" && mv.state && mv.state.status === "running") mapRenderElapsed();
+      }
+
+      function mapUpsertNode(n, x, y) {
+        let rec = mv.nodes.get(n.id);
+        if (!rec) {
+          const el = document.createElement("div");
+          el.className = "map-node" + (n.outside ? " outside" : "");
+          el.dataset.id = n.id;
+          const thumb = document.createElement("div");
+          thumb.className = "map-thumb";
+          const img = document.createElement("img");
+          img.alt = "";
+          img.hidden = true; // shown on load; a 404 keeps the letterbox/glyph
+          img.addEventListener("load", () => {
+            img.hidden = false;
+          });
+          img.addEventListener("error", () => {
+            img.hidden = true;
+          });
+          thumb.appendChild(img);
+          const foot = document.createElement("div");
+          foot.className = "map-node-foot";
+          const titleEl = document.createElement("span");
+          titleEl.className = "map-node-title";
+          const badgeEl = document.createElement("span");
+          badgeEl.className = "map-node-badge";
+          foot.append(titleEl, badgeEl);
+          el.append(thumb, foot);
+          el.addEventListener("click", () => openMapDetail(n.id));
+          mapNodesEl.appendChild(el);
+          rec = {
+            el,
+            img,
+            titleEl,
+            badgeEl,
+            x: null,
+            y: null,
+            title: null,
+            badge: null,
+            shot: false,
+          };
+          mv.nodes.set(n.id, rec);
+        }
+        if (rec.x !== x || rec.y !== y) {
+          rec.x = x;
+          rec.y = y;
+          rec.el.style.left = x + "px";
+          rec.el.style.top = y + "px";
+        }
+        if (rec.title !== n.title) {
+          rec.title = n.title;
+          rec.titleEl.textContent = n.title;
+          rec.el.title = n.title;
+        }
+        const badge = `${n.actionsExplored}/${n.actionsTotal}`;
+        if (rec.badge !== badge) {
+          rec.badge = badge;
+          rec.badgeEl.textContent = badge;
+          rec.badgeEl.title = `${n.actionsExplored} of ${n.actionsTotal} actions explored`;
+        }
+        if (!rec.shot && n.screenshotPath) {
+          rec.shot = true; // src set once; on error the img simply stays hidden
+          rec.img.src = mapShotUrl(n.id);
+        }
+      }
+
+      function mapUpsertEdge(e, pos) {
+        const a = pos.get(e.from);
+        const b = pos.get(e.to);
+        if (!a || !b) return; // endpoint not in this snapshot — pick it up next poll
+        let rec = mv.edges.get(e.id);
+        if (!rec) {
+          const g = document.createElementNS(SVGNS, "g");
+          g.setAttribute("class", "map-edge");
+          const hit = document.createElementNS(SVGNS, "path");
+          hit.setAttribute("class", "hit");
+          const line = document.createElementNS(SVGNS, "path");
+          line.setAttribute("class", "line");
+          const tip = document.createElementNS(SVGNS, "title");
+          tip.textContent = e.action.label || e.action.role;
+          g.append(hit, line, tip);
+          mapEdgeLayer.appendChild(g);
+          rec = { el: g, hit, line, d: null };
+          mv.edges.set(e.id, rec);
+        }
+        const d = mapEdgePathD(a, b);
+        if (rec.d !== d) {
+          rec.d = d;
+          rec.hit.setAttribute("d", d);
+          rec.line.setAttribute("d", d);
+        }
+      }
+
+      // Cubic bezier between two card frames, anchored to the side facing the
+      // other card: forward edges run right-edge → left-edge, back-edges the
+      // mirror, same-column edges bulge out past the right edges.
+      function mapEdgePathD(a, b) {
+        const w = THEME.mapNodeW;
+        const r = THEME.mapEdgeReach;
+        const y1 = a.y + THEME.mapNodeH / 2;
+        const y2 = b.y + THEME.mapNodeH / 2;
+        let x1, x2, c1, c2;
+        if (b.x > a.x) {
+          x1 = a.x + w;
+          x2 = b.x;
+          c1 = x1 + r;
+          c2 = x2 - r;
+        } else if (b.x < a.x) {
+          x1 = a.x;
+          x2 = b.x + w;
+          c1 = x1 - r;
+          c2 = x2 + r;
+        } else {
+          x1 = a.x + w;
+          x2 = b.x + w;
+          c1 = x1 + r;
+          c2 = x2 + r;
+        }
+        return `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`;
+      }
+
+      // ── Map pan & zoom ──────────────────────────────────────────────────
+      // One translate+scale on .map-world. Drag the empty background to pan;
+      // wheel / trackpad-pinch zooms about the cursor. Deliberately dumb and
+      // deterministic — no inertia, no springs, no re-layout on the way.
+      function mapApplyTransform() {
+        mapWorldEl.style.transform = `translate(${mv.pan.x}px, ${mv.pan.y}px) scale(${mv.zoom})`;
+      }
+      mapCanvasEl.addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+          const rect = mapCanvasEl.getBoundingClientRect();
+          const cx = e.clientX - rect.left;
+          const cy = e.clientY - rect.top;
+          const next = Math.min(
+            THEME.mapZoomMax,
+            Math.max(THEME.mapZoomMin, mv.zoom * Math.exp(-e.deltaY * THEME.mapZoomIntensity))
+          );
+          if (next === mv.zoom) return;
+          // Keep the world point under the cursor fixed while the scale moves.
+          mv.pan.x = cx - ((cx - mv.pan.x) * next) / mv.zoom;
+          mv.pan.y = cy - ((cy - mv.pan.y) * next) / mv.zoom;
+          mv.zoom = next;
+          mapApplyTransform();
+        },
+        { passive: false }
+      );
+      let mapDrag = null; // { id, x, y } active background-pan pointer
+      mapCanvasEl.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0 || e.target.closest(".map-node")) return;
+        mapDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+        mapCanvasEl.setPointerCapture(e.pointerId);
+        mapCanvasEl.classList.add("panning");
+      });
+      mapCanvasEl.addEventListener("pointermove", (e) => {
+        if (!mapDrag || e.pointerId !== mapDrag.id) return;
+        mv.pan.x += e.clientX - mapDrag.x;
+        mv.pan.y += e.clientY - mapDrag.y;
+        mapDrag.x = e.clientX;
+        mapDrag.y = e.clientY;
+        mapApplyTransform();
+      });
+      function mapEndDrag(e) {
+        if (!mapDrag || e.pointerId !== mapDrag.id) return;
+        mapDrag = null;
+        mapCanvasEl.classList.remove("panning");
+      }
+      mapCanvasEl.addEventListener("pointerup", mapEndDrag);
+      mapCanvasEl.addEventListener("pointercancel", mapEndDrag);
+
+      // ── Map node detail overlay ─────────────────────────────────────────
+      function openMapDetail(id) {
+        mv.detailId = id;
+        renderMapDetail();
+      }
+      function closeMapDetail() {
+        mv.detailId = null;
+        mv.detailShotFor = null;
+        mapDetailEl.hidden = true;
+      }
+      function renderMapDetail() {
+        const s = mv.state;
+        let node = null;
+        if (s) {
+          for (const n of s.nodes) {
+            if (n.id === mv.detailId) {
+              node = n;
+              break;
+            }
+          }
+        }
+        if (!node) {
+          closeMapDetail(); // node vanished (new crawl) — nothing to show
+          return;
+        }
+        // (Re)load the big screenshot once per node, not on every poll tick.
+        if (
+          mv.detailShotFor !== node.id ||
+          (node.screenshotPath && !mapDetailShotEl.getAttribute("src"))
+        ) {
+          mv.detailShotFor = node.id;
+          if (node.screenshotPath) {
+            mapDetailShotEl.hidden = false;
+            mapDetailShotEl.src = mapShotUrl(node.id);
+          } else {
+            mapDetailShotEl.hidden = true;
+            mapDetailShotEl.removeAttribute("src");
+          }
+        }
+        mapDetailTitleEl.textContent = node.title;
+        mapDetailSubEl.textContent =
+          `depth ${node.depth} · ${node.actionsExplored}/${node.actionsTotal} actions explored` +
+          (node.outside ? " · outside the app" : "");
+        const titles = new Map();
+        for (const n of s.nodes) titles.set(n.id, n.title);
+        mapDetailEdgesEl.textContent = "";
+        let outgoing = 0;
+        for (const e of s.edges) {
+          if (e.from !== node.id) continue;
+          outgoing++;
+          const row = document.createElement("div");
+          row.className = "map-detail-edge";
+          const lbl = document.createElement("span");
+          lbl.className = "lbl";
+          lbl.textContent = e.action.label || e.action.role;
+          const arr = document.createElement("span");
+          arr.className = "arr";
+          arr.textContent = "→";
+          const dst = document.createElement("span");
+          dst.className = "dst";
+          dst.textContent = titles.get(e.to) || e.to;
+          row.append(lbl, arr, dst);
+          mapDetailEdgesEl.appendChild(row);
+        }
+        if (!outgoing) {
+          const p = document.createElement("p");
+          p.className = "map-detail-none";
+          p.textContent = "No outgoing edges yet.";
+          mapDetailEdgesEl.appendChild(p);
+        }
+        mapDetailEl.hidden = false;
+      }
+      mapDetailShotEl.addEventListener("error", () => {
+        mapDetailShotEl.hidden = true;
+      });
+      mapDetailEl.addEventListener("click", (e) => {
+        if (e.target === mapDetailEl) closeMapDetail();
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !mapDetailEl.hidden) closeMapDetail();
+      });
+
+      // ── Lens / Map tabs ─────────────────────────────────────────────────
+      // Client-side only: the strip swaps which root is visible; nothing is
+      // persisted. Lens's loops keep running untouched in the background (see
+      // the .tab-map notes in the stylesheet for why visibility, not display).
+      const tabButtons = {
+        lens: document.getElementById("tab-lens"),
+        map: document.getElementById("tab-map"),
+      };
+      let activeTab = null;
+      function setTab(tab) {
+        if (tab === activeTab) return;
+        activeTab = tab;
+        const isMap = tab === "map";
+        document.body.classList.toggle("tab-map", isMap);
+        mapViewEl.hidden = !isMap;
+        for (const [name, btn] of Object.entries(tabButtons)) {
+          btn.classList.toggle("active", name === tab);
+          btn.setAttribute("aria-selected", String(name === tab));
+        }
+        if (isMap) {
+          pollMap(true); // land on a current graph now, not a poll-tick later
+        } else {
+          closeMapDetail();
+        }
+      }
+      tabButtons.lens.addEventListener("click", () => setTab("lens"));
+      tabButtons.map.addEventListener("click", () => setTab("map"));
+
       setInterval(pollVariants, THEME.pollMs);
       pollVariants();
       pollDescribe(); // arms the single fast describe loop
+      setInterval(pollMap, THEME.pollMs);
+      setInterval(mapElapsedTick, THEME.mapElapsedTickMs);
+      // `?tab=map` (the URL the tool-server opens for a crawl) lands on Map;
+      // everything else starts on Lens.
+      setTab(urlParams.get("tab") === "map" ? "map" : "lens");
 
       // Opened for a specific device → stream it straight away. Otherwise fall
       // back to discovering booted simulators (single → auto-connect, multiple →
