@@ -28,9 +28,7 @@ describe("snapshot step wiring", () => {
   it("threads the parsed step — name, maxMismatch, cropOn — into runSnapshot", async () => {
     await writeFlow("crop", {
       executionPrerequisite: "",
-      steps: [
-        { kind: "snapshot", name: "row", maxMismatch: 1.5, cropOn: { identifier: "hdr" } },
-      ],
+      steps: [{ kind: "snapshot", name: "row", maxMismatch: 1.5, cropOn: { identifier: "hdr" } }],
     });
 
     const result = await run("crop");
