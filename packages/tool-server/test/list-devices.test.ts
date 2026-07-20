@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const execFileMock = vi.fn();
 
+// Production spawns `ps` by absolute path (PS_BIN); match on basename so the mock
+// fires regardless.
+const isPs = (cmd: string): boolean => cmd === "ps" || cmd.endsWith("/ps");
+
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { EventEmitter } = await import("node:events");
@@ -306,7 +310,7 @@ describe("list-devices", () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       const vega = mockVegaVvd(cmd, args);
       if (vega) return vega;
-      if (cmd === "ps") return psWithVvds(5554); // VVD on console port 5554
+      if (isPs(cmd)) return psWithVvds(5554); // VVD on console port 5554
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       if (cmd === "adb" && args[0] === "devices") {
         return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
@@ -332,7 +336,7 @@ describe("list-devices", () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       const vega = mockVegaVvd(cmd, args);
       if (vega) return vega;
-      if (cmd === "ps") return psWithVvds(5554);
+      if (isPs(cmd)) return psWithVvds(5554);
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       if (cmd === "adb" && args[0] === "devices") {
         // adb port = console + 1, so the `adb connect` serial is 127.0.0.1:5555.
@@ -356,7 +360,7 @@ describe("list-devices", () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       const vega = mockVegaVvd(cmd, args);
       if (vega) return vega;
-      if (cmd === "ps") return psWithVvds(5556); // VVD on console port 5556
+      if (isPs(cmd)) return psWithVvds(5556); // VVD on console port 5556
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       if (cmd === "adb" && args[0] === "devices") {
         return {
@@ -395,7 +399,7 @@ describe("list-devices", () => {
       if (cmd.endsWith("vega") && args[0] === "device" && args[1] === "list") {
         return { stdout: "Found the following device:\n", stderr: "" }; // no devices
       }
-      if (cmd === "ps") return { stdout: "/sbin/launchd\n", stderr: "" }; // no VVD process
+      if (isPs(cmd)) return { stdout: "/sbin/launchd\n", stderr: "" }; // no VVD process
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       if (cmd === "adb" && args[0] === "devices") {
         return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
@@ -424,7 +428,7 @@ describe("list-devices", () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       const vega = mockVegaVvd(cmd, args);
       if (vega) return vega;
-      if (cmd === "ps") return psWithVvds(5554);
+      if (isPs(cmd)) return psWithVvds(5554);
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       if (cmd === "adb" && args[0] === "devices") {
         return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };

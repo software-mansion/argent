@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import * as crypto from "node:crypto";
 import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
@@ -126,7 +127,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
     ),
   x: z.coerce.number().describe("Logical X coordinate on device screen"),
   y: z.coerce.number().describe("Logical Y coordinate on device screen"),
@@ -191,7 +192,7 @@ Use when you need the source file and line for a component at a tap coordinate. 
   // out of scope for this port.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;

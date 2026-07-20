@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { readFile, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { isPhysicalIosUdid } from "./device-info";
+import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
 
 const execFileAsync = promisify(execFile);
 
@@ -56,6 +57,7 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
   try {
     const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"], {
       timeout: 10_000,
+      killSignal: SIMCTL_KILL_SIGNAL,
     });
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];

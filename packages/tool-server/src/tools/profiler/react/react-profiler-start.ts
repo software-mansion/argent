@@ -26,6 +26,7 @@ import {
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import {
   bootstrapFailureMessage,
   type BootstrapResult,
@@ -62,7 +63,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
     ),
   sample_interval_us: z.coerce
     .number()
@@ -116,8 +117,11 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
-      const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}:${params.device_id}`;
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`;
+      // Canonicalize a forwarded logicalDeviceId to the connect id so the
+      // profiler session and its debugger dependency reuse the open connection.
+      const deviceId = canonicalDeviceId(params.device_id);
+      const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}:${deviceId}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${deviceId}`;
       const ignore = () => {};
 
       async function disposeAndWait() {

@@ -1,7 +1,16 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
 
 const execFileAsync = promisify(execFile);
+
+// Absolute path to `ps`, resolved once. An MCP server launched from a GUI /
+// launchd context inherits a sanitized PATH that omits `/bin`, so a bare `"ps"`
+// spawn ENOENTs — the callers below swallow it, yielding an empty running-VVD set
+// that silently defeats the VVD adb-shadow dedup in list-devices (VVD listed
+// twice). Pin the canonical location; fall back to bare `"ps"` only if neither
+// exists, preserving PATH resolution for an atypical layout.
+export const PS_BIN = ["/bin/ps", "/usr/bin/ps"].find((p) => existsSync(p)) ?? "ps";
 
 /**
  * Running VVD discovery from the OS process table: the `vega-virtual-device`
@@ -86,7 +95,7 @@ export function parseVvdPids(psOutput: string): number[] {
  */
 export async function listRunningVvdConsolePorts(): Promise<Set<number>> {
   try {
-    const { stdout } = await execFileAsync("ps", [...PS_ARGS], {
+    const { stdout } = await execFileAsync(PS_BIN, [...PS_ARGS], {
       timeout: VVD_PS_PROBE_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
     });
@@ -104,7 +113,7 @@ export async function listRunningVvdConsolePorts(): Promise<Set<number>> {
 /** PIDs of all running VVD emulator processes (empty if none / `ps` unavailable). */
 export async function listRunningVvdPids(): Promise<number[]> {
   try {
-    const { stdout } = await execFileAsync("ps", [...PS_ARGS_WITH_PID], {
+    const { stdout } = await execFileAsync(PS_BIN, [...PS_ARGS_WITH_PID], {
       timeout: 5_000,
       maxBuffer: 16 * 1024 * 1024,
     });

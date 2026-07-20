@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
+import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,7 +21,7 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
       "-bool",
       "true",
     ],
-    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+    { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   );
 }
 
@@ -48,7 +48,7 @@ export async function isEntitlementBypassActive(udid: string): Promise<boolean> 
       "com.apple.Accessibility",
       "IgnoreAXServerEntitlements",
     ],
-    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+    { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   )
     .then(({ stdout }) => stdout.trim() === "1")
     .catch(() => false);

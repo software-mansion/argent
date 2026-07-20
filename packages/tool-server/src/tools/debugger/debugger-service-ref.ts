@@ -1,6 +1,7 @@
 import type { ServiceRef, ToolCapability } from "@argent/registry";
 import { CHROMIUM_ID_PREFIX, resolveDevice } from "../../utils/device-info";
 import { chromiumJsRuntimeDebuggerRef } from "../../blueprints/chromium-js-runtime-debugger";
+import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 
 /**
  * Capability matrix shared by every debugger-* tool that has been ported to
@@ -71,14 +72,19 @@ export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
  * passing 8081 by default in the tools' zodSchemas does no harm.
  */
 export function debuggerServiceRef(params: { port: number; device_id?: string }): ServiceRef {
+  // Collapse a forwarded logicalDeviceId back onto the id its device was
+  // connected with, so it resolves to the one open debugger instance rather
+  // than minting a second URN. A no-op for the stable connect id and for
+  // Chromium ids (never aliased). See utils/debugger/device-alias.ts.
+  const deviceId = canonicalDeviceId(params.device_id);
   // Only branch into the Chromium blueprint when the device_id explicitly
   // matches the Chromium shape. The Metro path is the default — it has to
   // tolerate undefined / empty / malformed ids the same way the original
   // template-literal implementation did, because tests and older callers
   // expect a Metro URN to come back even when device_id is missing.
-  if (params.device_id && params.device_id.startsWith(CHROMIUM_ID_PREFIX)) {
-    const device = resolveDevice(params.device_id);
+  if (deviceId && deviceId.startsWith(CHROMIUM_ID_PREFIX)) {
+    const device = resolveDevice(deviceId);
     return chromiumJsRuntimeDebuggerRef(device);
   }
-  return `JsRuntimeDebugger:${params.port}:${params.device_id}`;
+  return `JsRuntimeDebugger:${params.port}:${deviceId}`;
 }
