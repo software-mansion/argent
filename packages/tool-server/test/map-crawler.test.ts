@@ -515,3 +515,150 @@ describe("crawlApp — cancellation and failure", () => {
     }
   });
 });
+
+describe("crawlApp — resilience to transient device errors", () => {
+  it("a dropped action tap is skipped, and the crawl keeps its partial map", async () => {
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A", "To B"]),
+        a: screenTree("Screen A", []),
+        b: screenTree("Screen B", []),
+      },
+      { home: { "To A": "a", "To B": "b" } },
+      "home"
+    );
+    const realTap = app.tap.bind(app);
+    let taps = 0;
+    app.tap = async (x, y) => {
+      taps += 1;
+      if (taps === 1) throw new Error("gesture-tap: device busy"); // the "To A" tap
+      return realTap(x, y);
+    };
+    const store = makeStore();
+    const result = await crawl(app, store);
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    expect(snap.status).toBe("completed");
+    // "To A" was dropped; the crawl carried on and still discovered B.
+    expect(snap.nodes.some((x) => x.title === "Screen B")).toBe(true);
+    expect(snap.nodes.some((x) => x.title === "Screen A")).toBe(false);
+  });
+
+  it("a transient restart rejection during backtracking degrades to a partial map", async () => {
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A", "To B"]),
+        a: screenTree("Screen A", []),
+        b: screenTree("Screen B", []),
+      },
+      { home: { "To A": "a", "To B": "b" } },
+      "home"
+    );
+    const realRestart = app.restartApp.bind(app);
+    let restarts = 0;
+    app.restartApp = async () => {
+      restarts += 1;
+      if (restarts === 2) throw new Error("restart-app: connection reset"); // the backtrack
+      return realRestart();
+    };
+    const store = makeStore();
+    const result = await crawl(app, store);
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    // The clean-root restart succeeded (Home + A mapped); the backtrack restart
+    // failed, so Home's "To B" was abandoned rather than crashing the crawl.
+    expect(snap.nodes.map((x) => x.title)).toContain("Home");
+    expect(snap.nodes.map((x) => x.title)).toContain("Screen A");
+    expect(snap.nodes.some((x) => x.title === "Screen B")).toBe(false);
+  });
+
+  it("a failed relaunch after leaving the app recovers via restart-replay", async () => {
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["Open Web", "To A"]),
+        a: screenTree("Screen A", []),
+      },
+      { home: { "Open Web": "outside", "To A": "a" } },
+      "home"
+    );
+    app.launchApp = async () => {
+      throw new Error("launch-app: device not responding");
+    };
+    const store = makeStore();
+    const result = await crawl(app, store);
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    // The failed relaunch fell through to restart-replay; the crawl continued.
+    expect(snap.nodes.some((x) => x.outside)).toBe(true);
+    expect(snap.nodes.some((x) => x.title === "Screen A")).toBe(true);
+  });
+
+  it("a failed clean-root restart still crawls when the app is already readable", async () => {
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A"]),
+        a: screenTree("Screen A", []),
+      },
+      { home: { "To A": "a" } },
+      "home"
+    );
+    const realRestart = app.restartApp.bind(app);
+    let restarts = 0;
+    app.restartApp = async () => {
+      restarts += 1;
+      if (restarts === 1) throw new Error("restart-app: transient"); // the clean-root restart
+      return realRestart();
+    };
+    const store = makeStore();
+    const result = await crawl(app, store);
+    const snap = store.snapshot();
+
+    // The launch restart failed, but the app was already on Home and readable —
+    // the readTree gate lets the crawl proceed instead of MAP_APP_NOT_VISIBLE.
+    expect(result).toBe("completed");
+    expect(snap.nodes.map((x) => x.title)).toContain("Home");
+    expect(snap.nodes.map((x) => x.title)).toContain("Screen A");
+  });
+});
+
+describe("crawlApp — deadline enforcement", () => {
+  it("bails mid-replay when the time budget runs out inside a deep backtrack", async () => {
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A"]),
+        a: screenTree("Screen A", ["To B"]),
+        b: screenTree("Screen B", ["To C", "To E"]),
+        c: screenTree("Screen C", ["To Deep"]),
+        deep: screenTree("Screen Deep", []),
+        e: screenTree("Screen E", []),
+      },
+      {
+        home: { "To A": "a" },
+        a: { "To B": "b" },
+        b: { "To C": "c", "To E": "e" },
+        c: { "To Deep": "deep" },
+      },
+      "home"
+    );
+    // Each tap costs 100s. Discovery to the dead end is 4 taps (400s), under the
+    // 450s budget, so the loop-top check passes and the backtrack to B starts.
+    // Replaying B's path [To A, To B] would cost another 200s — the mid-replay
+    // deadline check must bail after the first replay step (500s), not run the
+    // whole path to 600s.
+    app.onTap = () => {
+      app.time += 100_000;
+    };
+    const store = makeStore();
+    const result = await crawl(app, store, { timeBudgetMs: 450_000 });
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    expect(app.time).toBe(500_000); // bailed one step into the replay, not two
+    expect(app.taps).toBe(5);
+    // B's remaining action was never reached, so E stays undiscovered (partial).
+    expect(snap.nodes.some((x) => x.title === "Screen E")).toBe(false);
+  });
+});
