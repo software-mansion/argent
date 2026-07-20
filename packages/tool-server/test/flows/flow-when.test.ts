@@ -63,11 +63,19 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
 }
 
 async function run(
-  name: string
+  name: string,
+  device: string = DEVICE,
+  signal?: AbortSignal
 ): Promise<FlowRunResult & { taps: Array<{ x: number; y: number }> }> {
   const taps: Array<{ x: number; y: number }> = [];
   const tool = createRunFlowTool(mockRegistry(taps));
-  const result = asRun(await tool.execute({}, { name, project_root: tmpDir, device: DEVICE }));
+  const result = asRun(
+    await tool.execute(
+      {},
+      { name, project_root: tmpDir, device },
+      (signal ? { signal } : undefined) as never
+    )
+  );
   return Object.assign(result, { taps });
 }
 
@@ -185,6 +193,63 @@ describe("when: parse/serialize", () => {
     expect(() => parseFlow("steps:\n  - await: { visible: X }\n    optional: false\n")).toThrow(
       /optional is not supported/i
     );
+  });
+
+  it("rejects a {{secret:…}} placeholder in a guard's expected text", () => {
+    // Placeholders resolve only in the text-entry tools; condition evaluation
+    // sees the literal placeholder, so the guard degenerates into a constant —
+    // permanently false here (vacuously true for hidden) — same silently-wrong
+    // class as optional:.
+    expect(() =>
+      parseFlow(
+        'steps:\n  - when: { text: { in: account, equals: "{{secret:USERNAME}}" } }\n    steps: [{ tap: A }]\n'
+      )
+    ).toThrow(/when takes no \{\{secret:…\}\} placeholder/i);
+    expect(() =>
+      parseFlow(
+        'steps:\n  - when: { text: { in: banner, contains: "{{secret:PROMO}}" } }\n    steps: [{ tap: A }]\n'
+      )
+    ).toThrow(/never in condition evaluation/i);
+  });
+
+  it("rejects a {{secret:…}} placeholder in a guard's selector", () => {
+    // Same degenerate-constant class as the expected-text case: the tree
+    // probe would look for the literal placeholder string on screen — and a
+    // hidden guard would flip the failure to always-run instead of never-run.
+    expect(() =>
+      parseFlow('steps:\n  - when: { exists: "{{secret:TOKEN}}" }\n    steps: [{ tap: A }]\n')
+    ).toThrow(/when takes no \{\{secret:…\}\} placeholder/i);
+    expect(() =>
+      parseFlow(
+        'steps:\n  - when: { visible: { id: "{{secret:TOKEN}}" } }\n    steps: [{ tap: A }]\n'
+      )
+    ).toThrow(/use the literal on-screen text instead/i);
+    expect(() =>
+      parseFlow('steps:\n  - when: { hidden: "{{secret:TOKEN}}" }\n    steps: [{ tap: A }]\n')
+    ).toThrow(/vacuously true/i);
+    expect(() =>
+      parseFlow(
+        'steps:\n  - when: { text: { in: "{{secret:FIELD}}", equals: ok } }\n    steps: [{ tap: A }]\n'
+      )
+    ).toThrow(/when takes no \{\{secret:…\}\} placeholder/i);
+  });
+
+  it("still parses a type: step carrying a placeholder (resolved by the keyboard tool)", () => {
+    const flow = parseFlow('steps:\n  - type: { into: password, text: "{{secret:PASSWORD}}" }\n');
+    expect(flow.steps).toEqual([
+      { kind: "type", into: { text: "password", loose: true }, text: "{{secret:PASSWORD}}" },
+    ]);
+  });
+
+  it("still parses assert: and await: conditions carrying a placeholder (they fail loudly at runtime)", () => {
+    // The rejection is when-only by design: an assert/await comparing the
+    // literal placeholder fails loudly on the first run, unlike a guard's
+    // silent degeneration. A refactor hoisting the check into parseWaitFields
+    // must trip this test.
+    expect(() =>
+      parseFlow('steps:\n  - assert: { text: { in: account, equals: "{{secret:USERNAME}}" } }\n')
+    ).not.toThrow();
+    expect(() => parseFlow('steps:\n  - await: { visible: "{{secret:TOKEN}}" }\n')).not.toThrow();
   });
 });
 
@@ -311,6 +376,52 @@ describe("when: execution", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("expands a when block skipped by a hard stop — one line per authored step, no abort", async () => {
+    // The hard-stop test above places an echo after the failure; here a when
+    // BLOCK sits there instead, so the stopped-run branch must expand the
+    // block's authored steps rather than collapse it to one line. And a hard
+    // stop is not a cancellation: `aborted` stays unset and the skip lines
+    // carry no "run aborted" reason.
+    currentTree = () =>
+      screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
+    await writeFlow("hard-stop-when", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "visible",
+          selector: { text: "No such button", loose: true },
+        },
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "What's new", loose: true },
+          },
+          steps: [
+            { kind: "tap", selector: { text: "Skip", loose: true } },
+            { kind: "echo", message: "inside" },
+          ],
+        },
+      ],
+    });
+
+    const result = await run("hard-stop-when");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "assert:fail",
+      "when:skip",
+      "tap:skip",
+      "echo:skip",
+    ]);
+    expect(result.steps[1].reason).toBeUndefined();
+    expect(result.steps[3].message).toBe("inside");
+    expect(result.taps).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    expect(result.aborted).toBeUndefined();
+  });
+
   it("evaluates a platform guard statically against the resolved device", async () => {
     await writeFlow("per-platform", {
       executionPrerequisite: "",
@@ -337,6 +448,119 @@ describe("when: execution", () => {
       "tool:skip",
     ]);
     expect(result.steps[2].reason).toMatch(/platform android/);
+    expect(result.ok).toBe(true);
+  });
+
+  it("folds ios-remote to ios: a platform guard matches on a remote simulator", async () => {
+    // A `remote:`-prefixed udid resolves as platform "ios-remote" (shape-based,
+    // see classifyDevice), a spelling the parser deliberately rejects in
+    // guards — execWhenStep folds it to "ios" at evaluation time. Without the
+    // fold no guard could ever match on a remote sim: every
+    // `when: { platform: ios }` block would silently skip there while the run
+    // stays green — the same silent-no-op class the indeterminate-guard
+    // handling exists to prevent. This test pins the fold at runtime.
+    currentTree = () =>
+      screen([n({ label: "Skip", frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.1 } })]);
+    await writeFlow("remote-sim", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "tap", selector: { text: "Skip", loose: true } }],
+        },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "tool", name: "button", args: { button: "back" } }],
+        },
+      ],
+    });
+
+    const result = await run("remote-sim", `remote:${DEVICE}`);
+
+    // The run really targeted the remote-prefixed id (platform "ios-remote"),
+    // not a local iOS udid — so entering the ios block below IS the fold.
+    expect(result.device).toBe(`remote:${DEVICE}`);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:pass",
+      "tap:pass",
+      "when:skip",
+      "tool:skip",
+    ]);
+    expect(result.steps[0].reason).toMatch(/condition met \(platform ios\)/);
+    expect(result.steps[2].reason).toMatch(/platform android/);
+    expect(result.taps).toHaveLength(1);
+    expect(result.ok).toBe(true);
+  });
+
+  it("matches a platform guard positively on an android device and skips the ios block", async () => {
+    // The inverse orientation of the iOS-udid test above: an android serial
+    // (any id that is not a UUID / remote: / chromium-cdp- / amazon- shape
+    // resolves as android) must ENTER the android block. Pins that guard
+    // matching works from a non-iOS device too, not only as
+    // ios-matches / android-skips seen from an iOS udid.
+    currentTree = () =>
+      screen([n({ label: "Allow", frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.1 } })]);
+    await writeFlow("android-run", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "tap", selector: { text: "Allow", loose: true } }],
+        },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "echo", message: "ios only" }],
+        },
+      ],
+    });
+
+    const result = await run("android-run", "emulator-5554");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:pass",
+      "tap:pass",
+      "when:skip",
+      "echo:skip",
+    ]);
+    expect(result.steps[0].reason).toMatch(/condition met \(platform android\)/);
+    expect(result.steps[2].reason).toMatch(/platform ios/);
+    expect(result.taps).toHaveLength(1);
+    expect(result.ok).toBe(true);
+  });
+
+  it("matches a platform guard positively on a vega device", async () => {
+    // Vega resolves by the amazon- serial prefix. Touch directives are
+    // rejected upfront on vega (it is remote-driven), so the guarded step is
+    // an echo — the guard entering at all is what's under test.
+    await writeFlow("vega-run", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "vega" },
+          steps: [{ kind: "echo", message: "vega only" }],
+        },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "echo", message: "ios only" }],
+        },
+      ],
+    });
+
+    const result = await run("vega-run", "amazon-4a27df03c9777152");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:pass",
+      "echo:pass",
+      "when:skip",
+      "echo:skip",
+    ]);
+    expect(result.steps[0].reason).toMatch(/condition met \(platform vega\)/);
     expect(result.ok).toBe(true);
   });
 
@@ -534,16 +758,18 @@ describe("when: execution", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("keeps a clean skip when trusted reads showed a non-hidden condition false and only trailing reads throw", async () => {
-    // The trailing-blip tolerance for every condition except `hidden`: the
-    // trusted first read already showed "What's new" absent, so a last-poll
-    // disconnect is a blip, not doubt — the skip stays clean and the run green.
-    let reads = 0;
+  it("keeps a clean skip when trusted reads showed a non-hidden condition false and only the final polls throw", async () => {
+    // The trailing-blip tolerance for every condition except `hidden`:
+    // trusted reads showed "What's new" absent until ~one poll before the
+    // 1s guard deadline, so a disconnect on the trailing polls is a blip,
+    // not doubt — the skip stays clean and the run green. (Appending the
+    // failed-read note is an assert/await report feature; the when skip
+    // reason carries only the guard label.)
+    let firstReadAt: number | undefined;
     currentTree = () => {
-      if (reads++ === 0) {
-        return screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
-      }
-      throw new Error("native devtools disconnected");
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 950) throw new Error("native devtools disconnected");
+      return screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
     };
     await writeFlow("blip-skip", {
       executionPrerequisite: "",
@@ -571,6 +797,50 @@ describe("when: execution", () => {
     expect(result.steps[0].reason).toMatch(/condition not met/);
     expect(result.taps).toHaveLength(0);
     expect(result.ok).toBe(true);
+  });
+
+  it("errors — not skips — a guard whose reads go dark for the tail of the window", async () => {
+    // The unbounded dark tail: one trusted read shows "What's new" absent,
+    // then the tree source dies for the REST of the 1s window. That early
+    // read is the expected starting state of a wait, not evidence about the
+    // deadline — a determinate "condition not met" skip here would let a
+    // dying tree source turn a guarded dismissal into a silent green no-op
+    // while the dialog may well be on screen. Unknown is not false: error.
+    let reads = 0;
+    currentTree = () => {
+      if (reads++ === 0) {
+        return screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
+      }
+      throw new Error("native devtools disconnected");
+    };
+    await writeFlow("dark-tail-guard", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "What's new", loose: true },
+          },
+          steps: [{ kind: "tap", selector: { text: "Skip", loose: true } }],
+        },
+        { kind: "echo", message: "never reached" },
+      ],
+    });
+
+    const result = await run("dark-tail-guard");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:error",
+      "tap:skip",
+      "echo:skip",
+    ]);
+    expect(result.steps[0].reason).toMatch(/could not evaluate when guard/i);
+    expect(result.steps[0].reason).toMatch(/unreadable for the final \d+ms/i);
+    expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
+    expect(result.taps).toHaveLength(0);
+    expect(result.ok).toBe(false);
   });
 
   it("streams every when-related report line to the live progress consumer", async () => {
@@ -661,5 +931,141 @@ describe("when: as tap-if-present", () => {
     ]);
     expect(result.taps).toHaveLength(0);
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("when: run cancellation", () => {
+  // Same abort injection as flow-abort.test.ts: trip an AbortController from
+  // inside the mocked tree fetch, landing the cancellation deterministically
+  // inside a poll (no timer races).
+
+  it("skips the block with the abort reason — not a determinate skip — when the guard probe is cancelled", async () => {
+    const controller = new AbortController();
+    // The guard's target is absent and the cancellation lands inside the
+    // probe's first tree read. ABORTED_OUTCOME carries no `indeterminate`, so
+    // without execWhenStep's dedicated probe.aborted branch the cancelled
+    // probe would fall through to met=false and claim the determinate
+    // "condition not met (...) — block skipped" for a screen it never
+    // finished reading — the assertions below pin the abort reason instead.
+    currentTree = () => {
+      controller.abort();
+      return screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
+    };
+    await writeFlow("cancelled-guard", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "What's new", loose: true },
+          },
+          steps: [
+            { kind: "tap", selector: { text: "Skip", loose: true } },
+            { kind: "echo", message: "inside" },
+          ],
+        },
+        { kind: "echo", message: "after block" },
+      ],
+    });
+
+    const result = await run("cancelled-guard", DEVICE, controller.signal);
+
+    // The block marker + every authored step skip with the uniform abort
+    // reason, and the guarded tap never dispatches.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "when:skip",
+      "tap:skip",
+      "echo:skip",
+      "echo:skip",
+    ]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.steps[0].reason).not.toMatch(/condition not met/);
+    expect(result.steps[1].reason).toBe("run aborted");
+    expect(result.taps).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    expect(result.aborted).toBe(true);
+  });
+
+  it("expands a when block — nested block included — when the run was cancelled before it", async () => {
+    const controller = new AbortController();
+    // The tap's target never appears; the run is cancelled on the third tree
+    // read, while the tap's auto-wait is still polling. The when block after
+    // it then hits the pre-step abort guard: one skip line for the marker AND
+    // one per authored step, with the nested when's subtree expanded.
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      if (reads >= 3) controller.abort();
+      return screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
+    };
+    await writeFlow("aborted-before-when", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", selector: { text: "Checkout", loose: true } },
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "What's new", loose: true },
+          },
+          steps: [
+            { kind: "tap", selector: { text: "Skip", loose: true } },
+            {
+              kind: "when",
+              condition: { kind: "platform", platform: "ios" },
+              steps: [{ kind: "echo", message: "nested" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await run("aborted-before-when", DEVICE, controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "tap:skip",
+      "when:skip",
+      "tap:skip",
+      "when:skip",
+      "echo:skip",
+    ]);
+    expect(result.steps.map((s) => s.reason)).toEqual(Array(5).fill("run aborted"));
+    // The skipped nested echo keeps its message, matching reportBlockSkipped.
+    expect(result.steps[4].message).toBe("nested");
+    expect(result.taps).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    expect(result.aborted).toBe(true);
+  });
+
+  it("leaves the aborted field unset on a clean green run", async () => {
+    // Control for the cancellation cases: summarize spreads the flag in only
+    // when the signal tripped (`...(aborted ? { aborted: true } : {})`), so a
+    // completed run must not carry the key at all.
+    currentTree = () =>
+      screen([n({ label: "Got it", frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.1 } })]);
+    await writeFlow("green-run", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "Got it", loose: true },
+          },
+          steps: [{ kind: "tap", selector: { text: "Got it", loose: true } }],
+        },
+        { kind: "echo", message: "after" },
+      ],
+    });
+
+    const result = await run("green-run");
+
+    expect(result.ok).toBe(true);
+    expect(result.aborted).toBeUndefined();
+    expect("aborted" in result).toBe(false);
   });
 });

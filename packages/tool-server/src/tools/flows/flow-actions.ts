@@ -187,6 +187,17 @@ function axisFullyInside(
 // it absorbs that latency; a genuinely-false assertion still fails quickly.
 const DEFAULT_ASSERT_TIMEOUT_MS = 1000;
 
+// Evidence-gap bound for `waitForCondition`'s post-timeout verdict: how far
+// behind the loop's exit the last TRUSTED read may lie before a determinate
+// "condition false" verdict stops being honest. Two poll intervals budgets
+// the worst genuine last-poll blip — up to one interval of sleep since the
+// last clean read, plus an interval's worth of latency for the deadline poll
+// and its back-to-back final retry both failing.
+// Anything longer means consecutive polls went dark, and a verdict narrated
+// from the reads before the darkness would describe a screen nobody saw at
+// the deadline.
+const CONDITION_DARK_TAIL_TOLERANCE_MS = POLL_INTERVAL_MS * 2;
+
 /**
  * Evaluate a `when:` block's UI guard — the same engine as `assert`, on the
  * same assert grace window: a skipped block must not add an await-sized dead
@@ -764,7 +775,10 @@ async function waitForCondition(
   let lastMatches: ReturnType<typeof findAll> = [];
   let fetchError: string | undefined;
   let everMatched = false;
-  let everTrustedRead = false;
+  // Date.now() of the most recent TRUSTED read — undefined until one lands.
+  // Post-loop it anchors the dark-tail measurement: how long the window's
+  // final stretch went without a trustworthy look at the screen.
+  let lastTrustedReadAt: number | undefined;
   // Whether the LAST completed read attempt was trusted — assigned on every
   // pass through the loop (true on a trusted fetch, false on a blind one or a
   // throw), so post-loop it describes the final poll.
@@ -780,7 +794,7 @@ async function waitForCondition(
       everMatched ||= lastMatches.length > 0;
       const blind =
         data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
-      everTrustedRead ||= !blind;
+      if (!blind) lastTrustedReadAt = Date.now();
       lastReadTrusted = !blind;
       if (
         !blind &&
@@ -805,19 +819,32 @@ async function waitForCondition(
     }
   }
 
-  // Unknown, not false: the window never produced a read we can trust —
-  // every fetch either threw or returned a blind tree (empty + degraded
-  // hint, or empty after the selector had matched). This is not specific to
-  // `hidden`: a probe that never got a trustworthy look at the screen cannot
-  // vouch for "condition false" for any condition. Conversely, once a trusted
-  // read exists, a transient fetch error on the trailing polls does NOT make
-  // the outcome unknown — the reads that succeeded already showed the
-  // condition false, and a last-poll blip must not flip a clean skip into a
-  // hard error. (`hidden` is the one exception, handled below: there
-  // "condition false" means the element was VISIBLE, and the element leaving
-  // is exactly the transition `hidden` waits for — so visibility seen before
-  // the reads went dark cannot vouch for it still being on screen.)
-  if (!everTrustedRead) {
+  // Post-timeout verdict — unknown must not masquerade as false. Three tiers
+  // of evidence quality:
+  //
+  // 1. No trusted read in the whole window: every fetch either threw or
+  //    returned a blind tree (empty + degraded hint, or empty after the
+  //    selector had matched). A probe that never got a trustworthy look at
+  //    the screen cannot vouch for "condition false" for ANY condition.
+  // 2. Trusted reads existed but the window went dark at the end: the FINAL
+  //    read attempt was blind or threw AND the last trusted read lies more
+  //    than {@link CONDITION_DARK_TAIL_TOLERANCE_MS} behind the loop's exit.
+  //    The condition becoming true is exactly the transition being waited on,
+  //    so a "condition false" observation from before the reads went dark
+  //    says nothing about the deadline — a determinate verdict built from it
+  //    would let a dying tree source fake a clean report (and green-skip a
+  //    `when:` guard whose dismissal target may well be on screen). `hidden`
+  //    is held to a stricter bar: there "condition false" means the element
+  //    was VISIBLE, and the element leaving is the transition itself — so ANY
+  //    untrusted final read, however short the tail, leaves gone-ness
+  //    unconfirmable.
+  // 3. Dark tail within the tolerance — a genuine last-poll blip: trusted
+  //    reads showed the condition false until at most ~one poll interval
+  //    before the deadline, so they still describe the window and a transient
+  //    fetch error on the trailing poll must not flip a clean skip into a
+  //    hard error. The determinate verdict stands, with the failed final read
+  //    appended so the error is not silently dropped from the report.
+  if (lastTrustedReadAt === undefined) {
     return {
       ok: false,
       indeterminate: true,
@@ -826,30 +853,45 @@ async function waitForCondition(
         : "could not evaluate the condition — every read of the UI tree was empty or degraded",
     };
   }
-  // `hidden` with an evidence gap: the element matched on an earlier trusted
-  // read and the FINAL read attempt was blind or threw, so gone-ness can't be
-  // confirmed — also unknown, not false. (A trusted read WITHOUT a visible
-  // match would have satisfied `hidden` inside the loop, so a trusted final
-  // read implies it saw the element — that falls through to the determinate
-  // "still visible" below with `lastMatches` fresh from that read.)
-  if (step.condition === "hidden" && !lastReadTrusted) {
-    return {
-      ok: false,
-      indeterminate: true,
-      reason: fetchError
-        ? `could not confirm the element is hidden — it was visible earlier, but the last UI read failed: ${fetchError}`
-        : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
-    };
+  if (!lastReadTrusted) {
+    // `hidden` with an evidence gap: the element matched on an earlier
+    // trusted read and the FINAL read attempt was blind or threw, so
+    // gone-ness can't be confirmed — no blip tolerance here (tier 2's
+    // stricter bar). (A trusted read WITHOUT a visible match would have
+    // satisfied `hidden` inside the loop, so a trusted final read implies it
+    // saw the element — that falls through to the determinate "still
+    // visible" below with `lastMatches` fresh from that read.)
+    if (step.condition === "hidden") {
+      return {
+        ok: false,
+        indeterminate: true,
+        reason: fetchError
+          ? `could not confirm the element is hidden — it was visible earlier, but the last UI read failed: ${fetchError}`
+          : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
+      };
+    }
+    const darkTailMs = Date.now() - lastTrustedReadAt;
+    if (darkTailMs > CONDITION_DARK_TAIL_TOLERANCE_MS) {
+      return {
+        ok: false,
+        indeterminate: true,
+        reason: fetchError
+          ? `could not evaluate the condition — the UI tree was unreadable for the final ${darkTailMs}ms of the window: ${fetchError}`
+          : `could not evaluate the condition — the UI tree reads were empty or degraded for the final ${darkTailMs}ms of the window`,
+      };
+    }
   }
+  // Tier 3 (or a trusted final read): the verdict is determinate; a blip's
+  // failed final read is appended, not dropped.
+  const blipNote =
+    !lastReadTrusted && fetchError
+      ? ` (the final poll could not read the UI tree: ${fetchError})`
+      : "";
   return {
     ok: false,
-    reason: assertReason(
-      step.condition,
-      step.selector,
-      step.expectedText,
-      step.textMatch,
-      lastMatches
-    ),
+    reason:
+      assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
+      blipNote,
   };
 }
 

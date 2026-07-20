@@ -11,6 +11,7 @@ import {
   type WaitCondition,
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
+import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
@@ -1293,6 +1294,29 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   // so always undefined here) — spread the rest so a future WaitFields
   // addition reaches when guards the same way it reaches await/assert.
   const { timeout: _timeout, ...cond } = parseWaitFields(raw, "when");
+  // `{{secret:NAME}}` resolves only inside the text-entry tools (a `type:`
+  // step), never in condition evaluation, so a guard carrying one tests for
+  // literal placeholder text that is never on screen: exists/visible/text
+  // guards are permanently false (the block silently skips every run) and a
+  // `hidden` guard is vacuously true (the block always runs). In an assert
+  // that mistake fails loudly on the first run; here the guard silently
+  // degenerates into a constant — the same silently-wrong class the per-step
+  // `optional:` rejection exists for, so it fails at parse too.
+  const { selector, expectedText } = cond;
+  for (const s of [
+    expectedText,
+    selector.text,
+    selector.textMatches,
+    selector.identifier,
+    selector.role,
+  ]) {
+    if (s !== undefined && s.includes(SECRET_PLACEHOLDER_MARKER)) {
+      badEntry(
+        { when: raw },
+        "when takes no {{secret:…}} placeholder — secrets resolve only in text-entry steps (`type:`), never in condition evaluation, so the guard tests literal placeholder text that is never on screen: permanently false (for `hidden`, vacuously true); use the literal on-screen text instead"
+      );
+    }
+  }
   return { kind: "ui", ...cond };
 }
 

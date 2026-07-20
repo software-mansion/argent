@@ -103,7 +103,12 @@ export interface StepReport {
   index: number;
   kind: FlowStep["kind"];
   status: StepStatus;
-  /** Machine-readable explanation when the step did not pass. */
+  /**
+   * Machine-readable explanation of the outcome. Always set when the step did
+   * not pass; also set on some passing reports whose result is self-narrating —
+   * the `when:` guard marker (`condition met (…)`) and snapshot passes (diff
+   * percentage, baseline written/updated).
+   */
   reason?: string;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
