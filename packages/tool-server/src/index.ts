@@ -288,6 +288,10 @@ export function start(): void {
     // rounds — the user iterates and their feedback is piped into the spawned
     // terminal, so a submit must never animate-close the window.
     if (variantProposalStore.isCliSession()) return;
+    // A map crawl and a Lens flow can share one tool-server (and its one
+    // window): don't tear the window down on a variant submit while a crawl is
+    // live in the Map tab — it would vanish mid-crawl with nothing to reopen it.
+    if (mapSessionStore.isCrawlRunning()) return;
     pendingCloseTimer = setTimeout(() => {
       pendingCloseTimer = null;
       previewWindow.requestClose();

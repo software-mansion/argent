@@ -75,21 +75,10 @@ function centreOf(frame: MapFrame): { x: number; y: number } {
   return { x: frame.x + frame.w / 2, y: frame.y + frame.h / 2 };
 }
 
-/**
- * Android "left the app" tell: resource-ids are package-qualified
- * (`com.pkg:id/name`), so a tree whose ids all belong to OTHER packages is
- * another app / the launcher. The `android:` namespace is shared framework
- * chrome and proves nothing either way. A tree with no qualified ids at all is
- * treated as still-in-app (Compose screens often carry none). iOS has no
- * equivalent signal — there, leaving the app surfaces as a failed or empty
- * describe, handled by the caller.
- */
-export function treeLooksOutside(
-  tree: DescribeNode,
-  bundleId: string,
-  platform: "ios" | "android"
-): boolean {
-  if (platform !== "android") return false;
+/** The non-framework resource-id packages present in a tree. Android
+ * resource-ids are package-qualified (`com.pkg:id/name`); the `android:`
+ * namespace is shared framework chrome and is excluded. */
+export function collectResourcePackages(tree: DescribeNode): Set<string> {
   const packages = new Set<string>();
   const walk = (node: DescribeNode): void => {
     const id = node.identifier;
@@ -100,8 +89,39 @@ export function treeLooksOutside(
     for (const child of node.children) walk(child);
   };
   walk(tree);
-  if (packages.size === 0) return false;
-  return !packages.has(bundleId);
+  return packages;
+}
+
+/**
+ * Android "left the app" detector. A tree whose resource-ids all belong to
+ * OTHER packages is another app / the launcher.
+ *
+ * The app's own package is LEARNED from its in-app screens rather than assumed
+ * from the launch bundle id, because the two legitimately differ: an
+ * `applicationIdSuffix` build launches as `com.example.app.debug` while its
+ * resource-ids stay namespaced `com.example.app`, so an exact bundle-id match
+ * would flag every one of its own screens as "outside" and abort the crawl at
+ * launch. The first screens carrying qualified ids seed the app's package set
+ * (the root is reached before any tap, so it cannot be outside), and screens
+ * sharing a known package grow it (multi-module apps span several namespaces).
+ * A tree with no qualified ids is treated as still-in-app (Compose screens
+ * often carry none). iOS has no equivalent signal — there, leaving the app
+ * surfaces as a failed or empty describe, handled by the caller.
+ */
+export function makeOutsideDetector(platform: "ios" | "android"): (tree: DescribeNode) => boolean {
+  const appPackages = new Set<string>();
+  return (tree: DescribeNode): boolean => {
+    if (platform !== "android") return false;
+    const packages = collectResourcePackages(tree);
+    if (packages.size === 0) return false;
+    let sharesKnown = appPackages.size === 0;
+    for (const p of packages) if (appPackages.has(p)) sharesKnown = true;
+    if (sharesKnown) {
+      for (const p of packages) appPackages.add(p);
+      return false;
+    }
+    return true;
+  };
 }
 
 /**
@@ -140,6 +160,9 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
 
   const aborted = (): boolean => signal?.aborted === true;
   const overTime = (): boolean => driver.now() - startedAt >= limits.timeBudgetMs;
+  // Stateful across the crawl: learns the app's own resource-id package(s) from
+  // its in-app screens so a suffixed applicationId isn't misread as "outside".
+  const looksOutside = makeOutsideDetector(platform);
 
   /**
    * Run one best-effort device action (a tap, a relaunch): a transient sub-tool
@@ -182,7 +205,7 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
       }
       if (tree.children.length === 0) return null;
     }
-    return treeLooksOutside(tree, bundleId, platform) ? null : tree;
+    return looksOutside(tree) ? null : tree;
   }
 
   function markExhausted(node: CrawlNode): void {

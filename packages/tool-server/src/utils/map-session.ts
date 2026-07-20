@@ -293,6 +293,11 @@ export class MapSessionStore {
   openWindowRequested(): boolean {
     return this.openWindow;
   }
+
+  /** Whether a crawl is currently in progress. */
+  isCrawlRunning(): boolean {
+    return this.status === "running";
+  }
 }
 
 // A crawl runs for at most the maximum time budget (30 min) plus settle slack,

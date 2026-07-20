@@ -116,6 +116,24 @@ describe("MapSessionStore — session lifecycle", () => {
     expect(s.snapshot().status).toBe("cancelled");
   });
 
+  it("isCrawlRunning tracks the running state (the window-close guard reads it)", () => {
+    // onSelectionSubmitted (index.ts) suppresses the Lens window's auto-close
+    // while this is true, so a variant submit can't tear down a live crawl's
+    // Map window. Pin the predicate it depends on across the lifecycle.
+    const s = new MapSessionStore();
+    expect(s.isCrawlRunning()).toBe(false); // idle
+    begin(s);
+    expect(s.isCrawlRunning()).toBe(true);
+    s.complete();
+    expect(s.isCrawlRunning()).toBe(false);
+    begin(s);
+    s.cancel();
+    expect(s.isCrawlRunning()).toBe(false);
+    begin(s);
+    s.fail("boom");
+    expect(s.isCrawlRunning()).toBe(false);
+  });
+
   it("emits mapSessionChanged(true) on begin and (false) exactly once on finalize", () => {
     const s = new MapSessionStore();
     const seen: boolean[] = [];

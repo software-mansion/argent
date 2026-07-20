@@ -5979,16 +5979,23 @@
       };
 
       function mapShotUrl(id) {
-        return `${TOOL_SERVER}/preview/map/screenshot/${encodeURIComponent(id)}`;
+        // A per-crawl cache-bust token: node ids restart at s0 every crawl, so
+        // the same URL would otherwise map to a stale, byte-identical request
+        // the browser never refetches — the detail overlay would show the
+        // previous crawl's screenshot for the reused id. Tagging the URL with
+        // the current crawl's start time makes each crawl's URLs distinct; the
+        // route resolves by the path segment and ignores the query.
+        const token = mv.crawlStartedAt ?? 0;
+        return `${TOOL_SERVER}/preview/map/screenshot/${encodeURIComponent(id)}?c=${token}`;
       }
 
-      async function pollMap(force) {
+      async function pollMap() {
         // Poll regardless of the active tab: a crawl no longer yanks an in-use
         // Lens window over to Map (see index.ts), so the page must notice a
         // crawl STARTING on its own to raise the Map-tab activity dot — and
         // keep the graph warm so switching over lands on a current map. `GET
         // /preview/map` is a cheap in-memory snapshot, so the steady poll is
-        // negligible. `force` is retained for the land-now call in `setTab`.
+        // negligible.
         try {
           const res = await fetch(`${TOOL_SERVER}/preview/map`, { cache: "no-store" });
           if (!res.ok) return;
@@ -6404,7 +6411,7 @@
         }
         if (isMap) {
           mapUpdateTabActivity(); // clear the activity dot now — this crawl is seen
-          pollMap(true); // land on a current graph now, not a poll-tick later
+          pollMap(); // land on a current graph now, not a poll-tick later
         } else {
           closeMapDetail();
         }

@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import { getFailureSignal, FAILURE_CODES } from "@argent/registry";
 import type { DescribeNode } from "../src/tools/describe/contract";
 import type { MapCrawlLimits } from "../src/tools/map/contract";
-import { crawlApp, type CrawlDriver } from "../src/tools/map/crawler";
+import {
+  crawlApp,
+  makeOutsideDetector,
+  collectResourcePackages,
+  type CrawlDriver,
+} from "../src/tools/map/crawler";
 import { MapSessionStore } from "../src/utils/map-session";
 
 // ── Synthetic app ──────────────────────────────────────────────────────────
@@ -34,6 +39,72 @@ function screenTree(name: string, buttonLabels: string[]): DescribeNode {
     ),
   ]);
 }
+
+// An Android screen whose widgets carry package-qualified resource-ids.
+function androidScreen(pkg: string, ids: string[]): DescribeNode {
+  return n(
+    "android.widget.FrameLayout",
+    [0, 0, 1, 1],
+    {},
+    ids.map((idName, i) =>
+      n("android.widget.TextView", [0.1, 0.1 + i * 0.1, 0.8, 0.06], {
+        identifier: `${pkg}:id/${idName}`,
+      })
+    )
+  );
+}
+
+describe("makeOutsideDetector — Android left-the-app tell", () => {
+  it("keeps a suffixed applicationId in-app: its resource namespace differs from the launch id", () => {
+    // The regression: launch id com.example.app.debug, resource namespace
+    // com.example.app. An exact bundle-id compare flagged every own screen as
+    // outside and aborted the crawl at launch.
+    const looksOutside = makeOutsideDetector("android");
+    // Root defines the app's package set (it cannot be outside).
+    expect(looksOutside(androidScreen("com.example.app", ["root"]))).toBe(false);
+    // Later own screens keep matching by the learned namespace, not the id.
+    expect(looksOutside(androidScreen("com.example.app", ["detail"]))).toBe(false);
+  });
+
+  it("flags a foreign-package screen as outside, then re-admits the app on return", () => {
+    const looksOutside = makeOutsideDetector("android");
+    expect(looksOutside(androidScreen("com.example.app", ["home"]))).toBe(false);
+    expect(looksOutside(androidScreen("com.android.launcher3", ["workspace"]))).toBe(true);
+    expect(looksOutside(androidScreen("com.example.app", ["home"]))).toBe(false);
+  });
+
+  it("learns additional in-app namespaces from screens that share a known one", () => {
+    // A multi-module app: a screen carrying BOTH the app package and a library
+    // package teaches the detector the library package too, so a later
+    // library-only screen is still in-app.
+    const looksOutside = makeOutsideDetector("android");
+    expect(looksOutside(androidScreen("com.example.app", ["root"]))).toBe(false);
+    const mixed = n("android.widget.FrameLayout", [0, 0, 1, 1], {}, [
+      n("android.widget.TextView", [0.1, 0.1, 0.8, 0.06], {
+        identifier: "com.example.app:id/host",
+      }),
+      n("android.widget.TextView", [0.1, 0.2, 0.8, 0.06], {
+        identifier: "com.example.lib:id/widget",
+      }),
+    ]);
+    expect(looksOutside(mixed)).toBe(false);
+    expect(looksOutside(androidScreen("com.example.lib", ["widget"]))).toBe(false);
+  });
+
+  it("treats a tree with no qualified ids (Compose) as in-app, and ignores android: chrome", () => {
+    const looksOutside = makeOutsideDetector("android");
+    const compose = n("android.view.View", [0, 0, 1, 1], {}, [
+      n("android.widget.TextView", [0.1, 0.1, 0.8, 0.06], { identifier: "android:id/statusBar" }),
+    ]);
+    expect(looksOutside(compose)).toBe(false);
+    expect(collectResourcePackages(compose).size).toBe(0);
+  });
+
+  it("is inert on iOS — describe-failure, not package identity, signals leaving there", () => {
+    const looksOutside = makeOutsideDetector("ios");
+    expect(looksOutside(androidScreen("com.other.app", ["x"]))).toBe(false);
+  });
+});
 
 type Transitions = Record<string, Record<string, string>>;
 

@@ -13,6 +13,14 @@ import { hasVisibleText } from "../../utils/ui-tree-match";
  * never closes. `screenKey` therefore hashes only the structural skeleton:
  * role + identifier + a coarsely rounded frame per node, labels and values
  * excluded entirely.
+ *
+ * Known limitation: the skeleton still counts nodes, so a list/feed whose
+ * item COUNT differs between two visits keys differently (10 rows vs 11 rows
+ * are structurally distinct). Within one crawl the settle + `fetchStableTree`
+ * sampling drives both visits to the same fully-loaded state, so the usual
+ * trigger (a half-loaded list) is absorbed; only a genuinely live feed that
+ * mutates between visits can still mint a few duplicate nodes — a bounded
+ * quality cost no purely-structural or text-based fingerprint can avoid.
  */
 
 /** Frame rounding step: 0.05 of the screen, so sub-5% layout jitter (a badge
