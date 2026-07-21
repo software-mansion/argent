@@ -277,6 +277,7 @@ export type FlowStep =
     }
   | { kind: "wait"; ms: number }
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
+  | { kind: "pinch"; selector?: FlowSelector; scale: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number };
 
 export type FlowFile = {
@@ -418,6 +419,7 @@ type YamlStep =
   | { assert: YamlWaitCondition }
   | { wait: number }
   | { "scroll-to": YamlScrollBody }
+  | { pinch: { on?: YamlSelector; scale: number } }
   | { snapshot: string | { name: string; maxMismatch?: number } };
 
 type YamlFlowFile = {
@@ -710,6 +712,13 @@ function toYamlStep(step: FlowStep): YamlStep {
         },
       };
     }
+    case "pinch":
+      // Canonical spelling puts `on` before `scale` (key order is preserved).
+      return {
+        pinch: step.selector
+          ? { on: selectorToYaml(step.selector), scale: step.scale }
+          : { scale: step.scale },
+      };
     case "snapshot":
       // A name-only snapshot sugars to a bare string.
       return step.maxMismatch === undefined
@@ -1102,6 +1111,7 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "assert",
   "wait",
   "scroll-to",
+  "pinch",
   "snapshot",
 ];
 
@@ -1255,6 +1265,46 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
   }
 
   return { kind: "long-press", ...parseTarget(body, "long-press") };
+}
+
+/**
+ * Parse a `pinch` body — options-map only (`{ on?, scale }`): unlike tap, a
+ * bare `pinch: "Map"` is ambiguous (in or out?), so there is no bare form.
+ * `scale` is validity-checked only (finite, > 0, ≠ 1 — a no-op scale is
+ * almost certainly a mistake); there is deliberately no magnitude cap — an
+ * extreme scale just decomposes into more chained gestures at run time.
+ */
+function parsePinch(body: unknown, entry: unknown): FlowStep {
+  if (body === null || typeof body !== "object") {
+    badEntry(
+      entry,
+      'pinch takes an options map — e.g. pinch: { on: "Map", scale: 3 } (a bare "pinch: Map" is ambiguous: in or out?)'
+    );
+  }
+  const obj = body as Record<string, unknown>;
+  if (
+    obj.text !== undefined ||
+    obj.id !== undefined ||
+    obj.identifier !== undefined ||
+    obj.role !== undefined
+  ) {
+    badEntry(entry, 'pinch takes a nested selector — e.g. pinch: { on: "Map", scale: 3 }');
+  }
+  rejectUnknownKeys(entry, obj, ["on", "scale"], "pinch");
+  if (
+    typeof obj.scale !== "number" ||
+    !Number.isFinite(obj.scale) ||
+    obj.scale <= 0 ||
+    obj.scale === 1
+  ) {
+    badEntry(
+      entry,
+      "pinch.scale must be a finite number > 0 and ≠ 1 (2 = zoom in 2×, 0.5 = zoom out to half)"
+    );
+  }
+  const step: FlowStep = { kind: "pinch", scale: obj.scale };
+  if (obj.on !== undefined) step.selector = parseSelector(obj.on, "pinch.on");
+  return step;
 }
 
 /**
@@ -1492,6 +1542,8 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
     if (b.within !== undefined) step.within = parseSelector(b.within, "scroll-to.within");
     return step;
   }
+
+  if ("pinch" in raw) return parsePinch((raw as { pinch: unknown }).pinch, raw);
 
   if ("snapshot" in raw) {
     const body = (raw as { snapshot: unknown }).snapshot;
