@@ -48,6 +48,11 @@ const FLAG_MAX = {
   "--budget": 1800,
 } as const;
 
+// The repeatable --deep-link flag has a count cap too (the server schema is
+// z.array(z.string()).max(20)); enforced here for the same reason as FLAG_MAX,
+// so a 21st link fails with a one-line message instead of a ZodError blob.
+const MAX_DEEP_LINKS = 20;
+
 // Device-sourced text (screen titles, element labels) comes from an arbitrary,
 // untrusted app and is printed to the user's terminal. Strip C0/C1 control
 // bytes and DEL so a crafted accessibility label can't smuggle ANSI/OSC escape
@@ -205,6 +210,12 @@ export function parseMapArgs(argv: string[]): MapArgs {
     } else {
       throw new FlagParseException(`Unexpected extra argument: "${tok}"`);
     }
+  }
+
+  if (args.deepLinks.length > MAX_DEEP_LINKS) {
+    throw new FlagParseException(
+      `--deep-link accepts at most ${MAX_DEEP_LINKS} urls, got ${args.deepLinks.length}`
+    );
   }
 
   return args;

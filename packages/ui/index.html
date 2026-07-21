@@ -6024,6 +6024,8 @@
         zoom: 1,
         worldW: 0,
         worldH: 0,
+        worldMinX: 0, // left/top extent of the graph (≤0); the edge SVG covers
+        worldMinY: 0, // the negative region so arcs into it are not clipped
         detailId: null, // node id the detail overlay is open for
         detailShotFor: null, // node id the big screenshot was last loaded for
         activitySeen: null, // startedAt of the last crawl the user viewed on Map
@@ -6091,23 +6093,49 @@
         const halfW = THEME.mapNodeW / 2;
         const halfH = THEME.mapNodeH / 2;
         const pos = new Map(); // id -> world-space centre, consumed by the edge curves
-        let worldW = 0;
-        let worldH = 0;
+        // Track the FULL extent, including negatives: the force layout grows
+        // radially from a fixed anchor and is not origin-normalized, so a node
+        // (and the edges reaching it) can sit left of / above x=0/y=0. The edge
+        // SVG clips anything outside its viewBox, so a "0 0 w h" box would sever
+        // every arc into a negative node at the world origin while the cards —
+        // which overflow visibly — still drew. Span [minX..maxX] × [minY..maxY].
+        // minX/minY are clamped to ≤0 so an all-positive graph is unchanged.
+        let minX = 0;
+        let minY = 0;
+        let maxX = 0;
+        let maxY = 0;
         for (const n of s.nodes) {
           const p = mv.pos.get(n.id);
           if (!p) continue; // seeded on the next poll if somehow absent
           pos.set(n.id, { x: p.cx, y: p.cy });
-          worldW = Math.max(worldW, p.cx + halfW + THEME.mapWorldPad);
-          worldH = Math.max(worldH, p.cy + halfH + THEME.mapWorldPad);
+          minX = Math.min(minX, p.cx - halfW - THEME.mapWorldPad);
+          minY = Math.min(minY, p.cy - halfH - THEME.mapWorldPad);
+          maxX = Math.max(maxX, p.cx + halfW + THEME.mapWorldPad);
+          maxY = Math.max(maxY, p.cy + halfH + THEME.mapWorldPad);
         }
-        if (worldW !== mv.worldW || worldH !== mv.worldH) {
-          mv.worldW = worldW;
-          mv.worldH = worldH;
-          mapWorldEl.style.width = worldW + "px";
-          mapWorldEl.style.height = worldH + "px";
-          mapEdgesSvg.setAttribute("width", worldW);
-          mapEdgesSvg.setAttribute("height", worldH);
-          mapEdgesSvg.setAttribute("viewBox", `0 0 ${worldW} ${worldH}`);
+        const svgW = maxX - minX;
+        const svgH = maxY - minY;
+        if (
+          maxX !== mv.worldW ||
+          maxY !== mv.worldH ||
+          minX !== mv.worldMinX ||
+          minY !== mv.worldMinY
+        ) {
+          mv.worldW = maxX;
+          mv.worldH = maxY;
+          mv.worldMinX = minX;
+          mv.worldMinY = minY;
+          // The world box stays anchored at (0,0) so node cards keep their exact
+          // left/top (cx-halfW, cy-halfH) and never shift as the graph grows;
+          // negative cards overflow it visibly. Only the edge SVG is offset to
+          // cover the negative region, its viewBox mapping world→CSS 1:1.
+          mapWorldEl.style.width = maxX + "px";
+          mapWorldEl.style.height = maxY + "px";
+          mapEdgesSvg.style.left = minX + "px";
+          mapEdgesSvg.style.top = minY + "px";
+          mapEdgesSvg.setAttribute("width", svgW);
+          mapEdgesSvg.setAttribute("height", svgH);
+          mapEdgesSvg.setAttribute("viewBox", `${minX} ${minY} ${svgW} ${svgH}`);
         }
         // Entry points (accent ring/pin). The per-node `entry` flag and the
         // `entryPoints` list agree by contract; union them defensively.

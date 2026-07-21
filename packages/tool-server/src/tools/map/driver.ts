@@ -4,6 +4,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { fetchTree } from "../../utils/ui-tree-match";
+import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import { runAdb } from "../../utils/adb";
 import type { DescribeNode } from "../describe/contract";
 import type { CrawlDriver } from "./crawler";
 import type { OpenUrlResult } from "../open-url/types";
@@ -48,6 +50,58 @@ export function createMapDriver(opts: MapDriverOptions): CrawlDriver {
         keyOf: screenKey,
         sleep: (ms) => delay(ms),
       });
+    },
+
+    async isTargetForeground(): Promise<boolean | null> {
+      // Answers "is the app we're crawling actually on screen right now?" so the
+      // crawler can tell an in-app screen from a foreign one it was bounced to (a
+      // tap that opened Safari / the share sheet / Settings, or an Android tap
+      // that opened the launcher or browser). This is the reliable signal iOS
+      // otherwise lacks: the AX describe reads whichever app is frontmost, not
+      // the target bundle, so a foreign tree comes back looking non-empty and
+      // in-app. Returns true (confidently on screen), false (confidently gone),
+      // or null (can't tell — the caller then keeps its prior behaviour).
+      try {
+        if (device.platform === "ios") {
+          const ref = nativeDevtoolsRef(device);
+          const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+          // Only apps reached through native-devtools expose a lifecycle state.
+          // A never-connected app (non-RN, or injection failed) is unknowable
+          // here — return null rather than force a spurious "left the app".
+          if (!api.isConnected(bundleId)) return null;
+          const st = await api.getAppState(bundleId);
+          // Any foreground scene (active OR inactive — a system alert / in-app
+          // permission dialog leaves the app inactive-but-foregrounded, and its
+          // content is exactly what we still want to map) means on screen.
+          if (st.foregroundActiveSceneCount > 0 || st.foregroundInactiveSceneCount > 0) return true;
+          if (st.applicationState === "active" || st.applicationState === "inactive") return true;
+          if (st.applicationState === "background") return false;
+          return null;
+        }
+        if (device.platform === "android") {
+          const { stdout } = await runAdb(
+            ["-s", udid, "shell", "dumpsys", "activity", "activities"],
+            {
+              timeoutMs: 5_000,
+            }
+          );
+          // The resumed activity is written "<package>/<activity>"; the label is
+          // mResumedActivity on most API levels and topResumedActivity on newer
+          // ones. The package here is the launch applicationId (suffix and all),
+          // which is exactly what `bundleId` holds.
+          const m =
+            /(?:mResumedActivity|topResumedActivity)\b[^\n]*?\s([A-Za-z0-9_.]+)\/[A-Za-z0-9_.$]+/.exec(
+              stdout
+            );
+          if (!m) return null;
+          return m[1] === bundleId;
+        }
+        return null;
+      } catch {
+        // A downed service / dropped adb call must not be misread as "left the
+        // app" — that would trigger spurious relaunches. Unknown = keep going.
+        return null;
+      }
     },
 
     async tap(x: number, y: number): Promise<void> {

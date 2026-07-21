@@ -22,6 +22,15 @@ import { screenKey, screenTitle } from "./fingerprint";
 export interface CrawlDriver {
   /** The raw describe tree of the current screen. */
   fetchTree(): Promise<DescribeNode>;
+  /**
+   * Whether the app being crawled is actually on screen right now: true
+   * (confidently in the foreground), false (confidently gone — a tap bounced us
+   * to another app / the launcher / a browser), or null (can't tell). Optional:
+   * drivers that cannot answer omit it and the crawler falls back to the tree's
+   * own signals. The reliable "left the app" signal iOS otherwise lacks, since
+   * its describe reads whichever app is frontmost rather than the target bundle.
+   */
+  isTargetForeground?(): Promise<boolean | null>;
   /** Tap at a normalized [0..1] point. */
   tap(x: number, y: number): Promise<void>;
   /**
@@ -132,8 +141,11 @@ export function collectResourcePackages(tree: DescribeNode): Set<string> {
  * (the root is reached before any tap, so it cannot be outside), and screens
  * sharing a known package grow it (multi-module apps span several namespaces).
  * A tree with no qualified ids is treated as still-in-app (Compose screens
- * often carry none). iOS has no equivalent signal — there, leaving the app
- * surfaces as a failed or empty describe, handled by the caller.
+ * often carry none). This resource-id tell is a FALLBACK: the primary "left the
+ * app" signal is `driver.isTargetForeground()` (checked first in readTree),
+ * which covers both the iOS case — where describe reads whichever app is
+ * frontmost, so a foreign tree looks in-app and no resource-id heuristic applies
+ * — and the Compose-app gap where this detector has no package to match on.
  */
 export function makeOutsideDetector(platform: "ios" | "android"): (tree: DescribeNode) => boolean {
   const appPackages = new Set<string>();
@@ -231,6 +243,15 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
         return null;
       }
       if (tree.children.length === 0) return null;
+    }
+    // A non-empty tree can still belong to another app: iOS' describe reads
+    // whichever app is frontmost, so a tap that opened Safari / Settings / the
+    // share sheet returns that foreign app's tree looking perfectly in-app.
+    // Ask the driver whether our target is actually on screen; a confident "no"
+    // is "left the app". This runs BEFORE the resource-id heuristic so a foreign
+    // tree never seeds the Android package set (which would poison later reads).
+    if (driver.isTargetForeground) {
+      if ((await driver.isTargetForeground()) === false) return null;
     }
     return looksOutside(tree) ? null : tree;
   }

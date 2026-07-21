@@ -100,7 +100,9 @@ describe("makeOutsideDetector — Android left-the-app tell", () => {
     expect(collectResourcePackages(compose).size).toBe(0);
   });
 
-  it("is inert on iOS — describe-failure, not package identity, signals leaving there", () => {
+  it("is inert on iOS — the foreground check, not package identity, signals leaving there", () => {
+    // iOS describe reads whichever app is frontmost, so a resource-id namespace
+    // tell is meaningless; readTree relies on driver.isTargetForeground instead.
     const looksOutside = makeOutsideDetector("ios");
     expect(looksOutside(androidScreen("com.other.app", ["x"]))).toBe(false);
   });
@@ -123,6 +125,14 @@ class FakeApp implements CrawlDriver {
    * iOS Universal Link → Safari). A url absent from this map "fails to open".
    */
   deepLinks: Record<string, string> = {};
+  /**
+   * Screens that render a perfectly readable, non-empty tree but belong to
+   * ANOTHER app — a tap that opened Safari / the share sheet / Settings. Unlike
+   * "outside" (fetchTree throws), these read as in-app to the tree itself; only
+   * `isTargetForeground` tells them apart. Models the real iOS trap where AX
+   * describe returns whichever app is frontmost.
+   */
+  foreignScreens = new Set<string>();
   private backStack: string[] = [];
   private resumeOnLaunch: string;
 
@@ -149,9 +159,12 @@ class FakeApp implements CrawlDriver {
     if (!label) return;
     const target = this.transitions[this.current]?.[label];
     if (!target) return; // no-op tap
-    if (target === "outside") {
+    if (target === "outside" || this.foreignScreens.has(target)) {
+      // Left the app: "outside" reads as a throw, a foreign screen reads as a
+      // full tree — either way the app is no longer frontmost, so launchApp
+      // must bring us back to where we were.
       this.resumeOnLaunch = this.current;
-      this.current = "outside";
+      this.current = target;
       return;
     }
     this.backStack.push(this.current);
@@ -174,7 +187,14 @@ class FakeApp implements CrawlDriver {
 
   async launchApp(): Promise<void> {
     this.launchCount += 1;
-    if (this.current === "outside") this.current = this.resumeOnLaunch;
+    if (this.current === "outside" || this.foreignScreens.has(this.current)) {
+      this.current = this.resumeOnLaunch;
+    }
+  }
+
+  async isTargetForeground(): Promise<boolean | null> {
+    if (this.current === "outside") return false; // fetchTree also throws here
+    return this.foreignScreens.has(this.current) ? false : true;
   }
 
   async openUrl(url: string): Promise<boolean> {
@@ -570,6 +590,54 @@ describe("crawlApp — leaving the app", () => {
     // The crawl continued after the exit: "To A" was still explored.
     expect(snap.nodes.some((x) => x.title === "Screen A")).toBe(true);
     expect(app.launchCount).toBeGreaterThanOrEqual(1); // the resume relaunch
+  });
+
+  it("treats a tap into another app (non-empty foreign tree) as leaving, not a screen", async () => {
+    // The real iOS trap: describe reads whichever app is frontmost, so a tap
+    // that opens Safari / Settings / the share sheet hands back a full,
+    // in-app-looking tree. Only isTargetForeground tells it apart — without it
+    // the crawler would map the foreign screen and DFS-descend into it, burning
+    // the screen/time budget mapping another app.
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["Open link", "To A"]),
+        safari: screenTree("Safari — example.com", ["Address bar", "Reload"]),
+        a: screenTree("Screen A", []),
+      },
+      { home: { "Open link": "safari", "To A": "a" } },
+      "home"
+    );
+    app.foreignScreens.add("safari"); // reads as a full tree, but it is Safari
+    const store = makeStore();
+    await crawl(app, store);
+    const snap = store.snapshot();
+
+    // Safari is NOT a mapped screen — it was recorded as leaving the app.
+    expect(snap.nodes.some((x) => x.title.startsWith("Safari"))).toBe(false);
+    const outside = snap.nodes.find((x) => x.outside)!;
+    expect(outside).toBeDefined();
+    expect(snap.edges.some((e) => e.from === "s0" && e.to === outside.id)).toBe(true);
+    expect(snap.stats.restarts).toBeGreaterThanOrEqual(1);
+    expect(app.launchCount).toBeGreaterThanOrEqual(1);
+    // Recovered onto the map and still explored the sibling path.
+    expect(snap.nodes.some((x) => x.title === "Screen A")).toBe(true);
+  });
+
+  it("a foreground signal of null (driver can't tell) keeps the tree — no spurious exit", async () => {
+    // When the driver cannot answer (getAppState down / non-RN app), a readable
+    // tree is still trusted: the crawl must not invent an outside edge.
+    const app = new FakeApp(
+      { home: screenTree("Home", ["To A"]), a: screenTree("Screen A", []) },
+      { home: { "To A": "a" } },
+      "home"
+    );
+    app.isTargetForeground = async () => null;
+    const store = makeStore();
+    await crawl(app, store);
+    const snap = store.snapshot();
+    expect(snap.nodes.some((x) => x.outside)).toBe(false);
+    expect(snap.nodes.some((x) => x.title === "Screen A")).toBe(true);
+    expect(snap.stats.restarts).toBe(0);
   });
 });
 

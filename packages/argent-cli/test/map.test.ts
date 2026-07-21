@@ -145,6 +145,16 @@ describe("parseMapArgs", () => {
     expect(parseMapArgs(["com.example.app", "--max-screens", "100"]).maxScreens).toBe(100);
   });
 
+  it("rejects more than 20 --deep-link urls here, not as a server-side ZodError blob", () => {
+    const links = Array.from({ length: 21 }, (_, i) => `--deep-link=myapp://s${i}`);
+    expect(() => parseMapArgs(["com.example.app", ...links])).toThrow(
+      /--deep-link accepts at most 20 urls, got 21/
+    );
+    // The cap is inclusive — exactly 20 is accepted.
+    const ok = Array.from({ length: 20 }, (_, i) => `--deep-link=myapp://s${i}`);
+    expect(parseMapArgs(["com.example.app", ...ok]).deepLinks).toHaveLength(20);
+  });
+
   it("rejects unknown flags and extra positionals", () => {
     expect(() => parseMapArgs(["com.example.app", "--frobnicate"])).toThrow(/Unknown flag/);
     expect(() => parseMapArgs(["com.example.app", "com.other.app"])).toThrow(/extra argument/);
