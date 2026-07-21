@@ -33,7 +33,9 @@ beforeEach(() => {
 
 describe("simctlSpawn --json", () => {
   it("passes --json for a non-detached in-simulator argv", async () => {
-    await simctlSpawn("remote:ABCD1234", { args: ["defaults", "write", "com.apple.Accessibility", "X"] });
+    await simctlSpawn("remote:ABCD1234", {
+      args: ["defaults", "write", "com.apple.Accessibility", "X"],
+    });
     expect(calls).toHaveLength(1);
     const { cmd, args } = calls[0];
     expect(cmd).toBe("sim-remote");

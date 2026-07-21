@@ -45,15 +45,20 @@ function requireDylibIn(dir: string, name: string): string {
 // do with the real cause. Give an actionable, self-explaining error instead:
 // name the exact path, the env override that relocates the lookup, and how to
 // produce the binary.
-function requireTcpArtifact(dir: string, name: string, kind: "binary" | "dylib", envVar: string): string {
+function requireTcpArtifact(
+  dir: string,
+  name: string,
+  kind: "binary" | "dylib",
+  envVar: string
+): string {
   const p = path.join(dir, name);
   if (!fs.existsSync(p)) {
     throw new Error(
       `TCP-transport ${kind} not found: ${p}. This ${kind} is required to drive an ` +
         `ios-remote (sim-remote) device over the QUIC tunnel. It ships in the argent ` +
-        `package under bin/<platform>/tcp/ and dylibs/tcp/; if you are running a local ` +
-        `build, produce it with \`npm run build:ios-binaries:tcp\`. To point the lookup ` +
-        `at a directory that already contains it, set ${envVar}=<dir>.`
+        `package under bin/tcp/ and dylibs/tcp/ (platform-neutral); if you are running a ` +
+        `local build, produce it with \`npm run build:ios-binaries:tcp\`. To point the ` +
+        `lookup at a directory that already contains it, set ${envVar}=<dir>.`
     );
   }
   return p;
@@ -141,9 +146,16 @@ export function hostPlatformKey(): string {
 function platformBinDir(): string {
   return path.join(BIN_DIR, hostPlatformKey());
 }
-// TCP dir: <platform>/tcp by default; ARGENT_SIMULATOR_SERVER_TCP_DIR overrides the whole path.
-function platformTcpBinDir(): string {
-  return process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR ?? path.join(platformBinDir(), "tcp");
+// TCP dir: platform-NEUTRAL bin/tcp by default; ARGENT_SIMULATOR_SERVER_TCP_DIR
+// overrides the whole path. Unlike simulator-server and the unix ax-service —
+// host binaries that live under bin/<hostPlatform>/ — the tcp ax-service is an
+// iOS-simulator (darwin) binary that gets uploaded to and `simctl spawn`d on the
+// *remote* macOS orchestrator. It is therefore needed regardless of the host
+// platform and must NOT sit under a host-platform subdir: a Linux host would
+// resolve bin/linux/tcp and never find the darwin-built binary. This mirrors the
+// already-neutral dylibs/tcp location.
+function tcpBinDir(): string {
+  return process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR ?? path.join(BIN_DIR, "tcp");
 }
 
 export function simulatorServerBinaryPath(): string {
@@ -181,12 +193,7 @@ export function axServiceBinaryPath(): string {
 }
 
 export function axServiceBinaryPathTcp(): string {
-  return requireTcpArtifact(
-    platformTcpBinDir(),
-    "ax-service",
-    "binary",
-    "ARGENT_SIMULATOR_SERVER_TCP_DIR"
-  );
+  return requireTcpArtifact(tcpBinDir(), "ax-service", "binary", "ARGENT_SIMULATOR_SERVER_TCP_DIR");
 }
 
 // tvOS control binaries. tvos-ax-service is `simctl spawn`d into an

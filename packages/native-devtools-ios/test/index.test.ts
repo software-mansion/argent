@@ -117,7 +117,7 @@ describe("requireDarwin gating", () => {
     // point at the override env so the real cause is diagnosable.
     setPlatform("darwin");
     const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-tcp-missing-"));
-    fs.mkdirSync(path.join(dir, "darwin", "tcp"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "tcp"), { recursive: true });
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
     expect(() => r.axServiceBinaryPathTcp()).toThrow(/TCP-transport binary not found/);
@@ -133,13 +133,14 @@ describe("requireDarwin gating", () => {
     expect(() => r.axServiceBinaryPath()).toThrow(/requires a macOS host/);
   });
 
-  it("resolves the ax-service TCP binary on linux (remote upload artifact)", async () => {
+  it("resolves the ax-service TCP binary from the platform-neutral bin/tcp on linux", async () => {
     // The TCP ax-service is uploaded to and `simctl spawn`d on the remote Mac
-    // orchestrator, so a Linux host must be able to resolve it — no darwin gate.
+    // orchestrator, so a Linux host must resolve it from the neutral bin/tcp —
+    // NOT bin/linux/tcp, which would never hold the darwin-built binary.
     setPlatform("linux");
     setArch("x64");
     const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-tcp-linux-"));
-    const tcpDir = path.join(dir, "linux", "tcp");
+    const tcpDir = path.join(dir, "tcp");
     fs.mkdirSync(tcpDir, { recursive: true });
     const binPath = path.join(tcpDir, "ax-service");
     fs.writeFileSync(binPath, "", { mode: 0o755 });
@@ -269,10 +270,11 @@ describe("ax-service path resolution", () => {
     expect(r.axServiceBinaryPath()).toBe(binPath);
   });
 
-  it("joins process.platform/tcp into the ax-service TCP bin path", async () => {
-    if (originalPlatform !== "darwin") return;
+  it("resolves the ax-service TCP binary from the platform-neutral bin/tcp", async () => {
+    // The tcp ax-service is host-platform-independent (uploaded to the remote
+    // orchestrator), so it resolves at bin/tcp — not bin/<hostPlatform>/tcp.
     const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-tcp-"));
-    const tcpDir = path.join(dir, "darwin", "tcp");
+    const tcpDir = path.join(dir, "tcp");
     fs.mkdirSync(tcpDir, { recursive: true });
     const binPath = path.join(tcpDir, "ax-service");
     fs.writeFileSync(binPath, "", { mode: 0o755 });
