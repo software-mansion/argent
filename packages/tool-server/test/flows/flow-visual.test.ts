@@ -479,9 +479,13 @@ describe("runSnapshot cropOn", () => {
     const r = await runSnapshot(env, opts({ cropOn }));
 
     expect(r.status).toBe("fail");
-    const current = r.artifacts?.current as { hostPath: string };
+    const current = r.artifacts?.current as { hostPath: string; filename: string };
     await expect(pngSize(current.hostPath)).resolves.toEqual({ w: 50, h: 50 });
     await expect(fs.readdir(path.dirname(current.hostPath))).resolves.toEqual([`${cropKey}.png`]);
+    // The crop file on disk shares the baseline's basename, and a remote client
+    // materializes downloads by filename — the two handles must not collide.
+    expect(current.filename).toBe(`${cropKey}-current.png`);
+    expect(r.artifacts?.baseline).toMatchObject({ filename: `${cropKey}.png` });
   });
 
   it("fails with the standard not-found reason without capturing when cropOn never resolves", async () => {
@@ -520,6 +524,9 @@ describe("runSnapshot cropOn", () => {
     expect(r.status).toBe("fail");
     expect(r.reason).toContain("cropOn region is 50x50");
     expect(r.reason).toContain("crop a fixed-size container");
+    // Same collision risk as the over-threshold path: both handles download.
+    expect(r.artifacts?.current).toMatchObject({ filename: `${cropKey}-current.png` });
+    expect(r.artifacts?.baseline).toMatchObject({ filename: `${cropKey}.png` });
   });
 
   it("fails a sub-pixel crop region instead of writing an empty PNG", async () => {
