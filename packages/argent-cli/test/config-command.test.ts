@@ -110,8 +110,11 @@ describe("argent config — set/get across scopes", () => {
 
   it("set reports the normalized value that was stored", () => {
     config(["set", "lens.agent", "  codex  "]);
-    // The message echoes the trimmed value that actually landed on disk.
-    expect(output()).toContain("Set lens.agent = codex (global).");
+    // The message echoes the trimmed value that actually landed on disk, not the
+    // raw CLI input. (Assert on the un-colorized value segment — the key is
+    // wrapped in bold ANSI codes when color is enabled, e.g. in CI.)
+    expect(output()).toContain("= codex (global).");
+    expect(output()).not.toContain("  codex  ");
     logSpy.mockClear();
     config(["get", "lens.agent"]);
     expect(output()).toBe("codex");
