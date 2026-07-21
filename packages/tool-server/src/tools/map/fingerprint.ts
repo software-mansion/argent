@@ -41,6 +41,26 @@ export function isScrollDecoration(node: DescribeNode): boolean {
 }
 
 /**
+ * Count of the nodes that contribute to `screenKey` — every node EXCEPT the
+ * scroll-decoration overlays the key excludes (matching `screenKey`'s own walk:
+ * the decoration node itself is skipped, its children still count). This is the
+ * "fullness" metric `fetchStableTree` picks its best sample by, so fullness is
+ * measured over the SAME node set the fingerprint keys on: a fading scroll
+ * indicator — counted by a raw node walk but ignored by the key — can no longer
+ * bias the capture toward a lower-CONTENT snapshot whose key then flips between
+ * visits.
+ */
+export function screenNodeCount(root: DescribeNode): number {
+  let n = 0;
+  const walk = (node: DescribeNode): void => {
+    if (!isScrollDecoration(node)) n += 1;
+    for (const child of node.children) walk(child);
+  };
+  walk(root);
+  return n;
+}
+
+/**
  * The screen's dedup key: sha1-hex (first 16 chars) over the in-order
  * concatenation of `role|identifier|frame` per node. Same structure with
  * different text ⇒ same key; a structurally different screen ⇒ a new key.

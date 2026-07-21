@@ -39,6 +39,14 @@ export interface StableTreeOptions {
   fetch: () => Promise<DescribeNode>;
   /** Screen fingerprint used to compare samples (the crawler's `screenKey`). */
   keyOf: (tree: DescribeNode) => string;
+  /**
+   * "Fullness" metric for "fullest wins". Defaults to a raw node count. The
+   * driver passes `screenNodeCount` so fullness is measured over the SAME nodes
+   * `keyOf` fingerprints (scroll decorations excluded) — otherwise a fading
+   * scroll indicator, counted here but ignored by the key, could make a
+   * lower-content sample win and flip the screen's key between visits.
+   */
+  sizeOf?: (tree: DescribeNode) => number;
   sleep: (ms: number) => Promise<void>;
   /** Upper bound on describes per capture. */
   maxSamples?: number;
@@ -66,6 +74,7 @@ function countNodes(node: DescribeNode): number {
 export async function fetchStableTree(options: StableTreeOptions): Promise<DescribeNode> {
   const maxSamples = options.maxSamples ?? DEFAULT_MAX_SAMPLES;
   const gapMs = options.gapMs ?? DEFAULT_GAP_MS;
+  const sizeOf = options.sizeOf ?? countNodes;
 
   let best: { tree: DescribeNode; count: number } | null = null;
   let maxCount = 0;
@@ -87,7 +96,7 @@ export async function fetchStableTree(options: StableTreeOptions): Promise<Descr
       lastError = err;
       continue;
     }
-    const count = countNodes(tree);
+    const count = sizeOf(tree);
     maxCount = Math.max(maxCount, count);
     minCount = Math.min(minCount, count);
     // ">=" so an equally-full later sample wins: it is the more recent look.

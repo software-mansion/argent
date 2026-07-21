@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { DescribeNode } from "../src/tools/describe/contract";
 import { fetchStableTree } from "../src/tools/map/stable-tree";
-import { screenKey } from "../src/tools/map/fingerprint";
+import { screenKey, screenNodeCount } from "../src/tools/map/fingerprint";
 
 // A flat tree with `count` uniform buttons — enough to give each state a
 // distinct fingerprint and node count.
@@ -29,6 +29,8 @@ function scripted(states: DescribeNode[]) {
     options: {
       fetch: () => Promise.resolve(states[Math.min(i++, states.length - 1)]!),
       keyOf: screenKey,
+      // Match the driver: measure fullness over the fingerprint's node set.
+      sizeOf: screenNodeCount,
       sleep: (ms: number) => {
         sleeps.push(ms);
         return Promise.resolve();
@@ -85,6 +87,36 @@ describe("fetchStableTree — sampled tree capture", () => {
     );
     expect(sparseFirst).toBe(fullFirst);
     expect(sparseFirst).toBe(screenKey(full));
+  });
+
+  it("measures fullness over the fingerprint's node set, so a fading scroll bar can't flip the key", async () => {
+    // screenKey excludes scroll-decoration overlays, but a RAW node count includes
+    // them. A scrollable screen flashes its scroll bar on appear then it fades, so
+    // one visit samples 30 content rows WITH the bar, another samples 31 rows with
+    // the bar already gone — the same raw total (31 == 30 + bar), so "fullest wins"
+    // by raw count is order-dependent and picks the sparser CONTENT half the time,
+    // keying the screen two different ways across visits. Measuring fullness with
+    // screenNodeCount (scroll decorations excluded, like the key) makes the fuller-
+    // content sample win regardless of which phase the visit sampled first.
+    const scrollBar: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0.95, y: 0.1, width: 0.02, height: 0.8 },
+      children: [],
+      label: "Vertical scroll bar, 3 pages",
+    };
+    const withScroll = treeWithButtons(30);
+    withScroll.children.push(scrollBar);
+    const noScroll = treeWithButtons(31);
+    // Sanity: the two raw-count the same (so a raw metric ties/flips), but differ
+    // by the fingerprint's node set (so the aligned metric ranks them correctly).
+    const scrollFirst = screenKey(
+      await fetchStableTree(scripted([withScroll, noScroll, noScroll]).options)
+    );
+    const contentFirst = screenKey(
+      await fetchStableTree(scripted([noScroll, withScroll, withScroll]).options)
+    );
+    expect(scrollFirst).toBe(contentFirst);
+    expect(scrollFirst).toBe(screenKey(noScroll));
   });
 
   it("rides out a transient describe failure, keeping the good sample already captured", async () => {

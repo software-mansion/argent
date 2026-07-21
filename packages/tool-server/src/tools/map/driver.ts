@@ -9,7 +9,7 @@ import { runAdb } from "../../utils/adb";
 import type { DescribeNode } from "../describe/contract";
 import type { CrawlDriver } from "./crawler";
 import type { OpenUrlResult } from "../open-url/types";
-import { screenKey } from "./fingerprint";
+import { screenKey, screenNodeCount } from "./fingerprint";
 import { fetchStableTree } from "./stable-tree";
 
 /**
@@ -48,6 +48,9 @@ export function createMapDriver(opts: MapDriverOptions): CrawlDriver {
       return fetchStableTree({
         fetch: async () => (await fetchTree(registry, device, { bundleId })).tree,
         keyOf: screenKey,
+        // Measure "fullest" over the same nodes the key uses (scroll decorations
+        // excluded), so a fading scroll indicator can't bias the pick.
+        sizeOf: screenNodeCount,
         sleep: (ms) => delay(ms),
       });
     },
