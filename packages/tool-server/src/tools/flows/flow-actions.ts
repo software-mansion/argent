@@ -180,6 +180,60 @@ function axisFullyInside(
     : fStart >= clipStart + EDGE_EPS && fEnd <= clipEnd + EDGE_EPS;
 }
 
+// Edge-avoid nudge: shape 1 accepts a target with only EDGE_EPS of clearance,
+// so a scrolled-to row routinely lands flush against the entry edge — and when
+// that edge is a screen edge, under edge-anchored chrome (home indicator,
+// gesture-nav bar, an overlaying tab bar). After acceptance the loop keeps
+// scrolling in the SAME direction in deficit-sized increments until the target
+// sits EDGE_AVOID_PADDING clear of the entry edge. Best-effort by design: it
+// engages only when the clip's entry edge effectively is a screen edge (an
+// inset container already clears screen chrome), and gives up — accepting the
+// flush landing — when the container can't move, the target has no headroom,
+// or the attempts run out. A nudge can therefore delay a step but never fail
+// one that was already visible.
+const EDGE_AVOID_PADDING = 0.1; // clears the home indicator (~0.04) and a typical tab bar (~0.1)
+const EDGE_AVOID_SCREEN_EPS = 0.05; // clip edge within this of a screen edge = chrome can overlap it
+const MAX_EDGE_NUDGES = 3; // touch slop makes a nudge undershoot — allow a re-measure retry or two
+
+// A nudge asks for 1.5× the deficit: touch slop eats the first ~0.01 of a
+// swipe's travel before scrolling engages, so a deficit-sized nudge lands
+// short and would need a second round almost every time. The overshoot is
+// capped at half the headroom, so it can never carry the target near the
+// opposite edge.
+const EDGE_NUDGE_OVERSHOOT = 1.5;
+
+/**
+ * Travel for one edge-avoid nudge, or 0 when none should happen: the accepted
+ * `frame` already sits `EDGE_AVOID_PADDING` clear of the clip's entry edge,
+ * that edge isn't a screen edge (an inset container's own border already
+ * clears screen chrome), or there is no room to move — the headroom (the
+ * target's distance to the opposite clip edge, which a spanning shape-2 target
+ * has none of) must fit at least twice the minimum scroll gesture, since the
+ * travel is capped at `headroom / 2` and a shorter swipe would register as a
+ * tap (see MIN_SCROLL_INCREMENT).
+ */
+function edgeNudgeDistance(
+  frame: DescribeFrame,
+  direction: ScrollDirection,
+  clip: DescribeFrame
+): number {
+  const vertical = direction === "down" || direction === "up";
+  const clipStart = vertical ? clip.y : clip.x;
+  const clipEnd = clipStart + (vertical ? clip.height : clip.width);
+  const fStart = vertical ? frame.y : frame.x;
+  const fEnd = fStart + (vertical ? frame.height : frame.width);
+  // `down`/`right` reveal from the end edge; `up`/`left` from the start edge.
+  const fromEnd = direction === "down" || direction === "right";
+  const atScreenEdge = fromEnd
+    ? clipEnd >= 1 - EDGE_AVOID_SCREEN_EPS
+    : clipStart <= EDGE_AVOID_SCREEN_EPS;
+  if (!atScreenEdge) return 0;
+  const deficit = EDGE_AVOID_PADDING - (fromEnd ? clipEnd - fEnd : fStart - clipStart);
+  const headroom = fromEnd ? fStart - clipStart : clipEnd - fEnd;
+  if (deficit <= 0 || headroom / 2 < MIN_SCROLL_INCREMENT) return 0;
+  return Math.min(Math.max(deficit * EDGE_NUDGE_OVERSHOOT, MIN_SCROLL_INCREMENT), headroom / 2);
+}
+
 // `assert` is a correctness check, not an open-ended wait — but UI updates after
 // an action land asynchronously, so a strictly one-shot read races the
 // re-render (e.g. a counter that increments a frame after a tap). Like
@@ -440,19 +494,21 @@ interface ScrollResolve {
  * point is clamped, so the down stays at the anchor and keeps latching to the
  * right container) — sized to the clip window rather than the screen, so
  * consecutive views of a small container's content still overlap and a target
- * can't be scrolled fully past between settle checkpoints. Touch platforms use
- * a `settle` swipe (no fling); Chromium uses wheel events (already
- * momentum-free).
+ * can't be scrolled fully past between settle checkpoints. An explicit
+ * `travel` overrides that default — edge-avoid nudges pass the exact distance
+ * they need. Touch platforms use a `settle` swipe (no fling); Chromium uses
+ * wheel events (already momentum-free).
  */
 async function scrollIncrement(
   env: ActionEnv,
   direction: ScrollDirection,
-  region: DescribeFrame
+  region: DescribeFrame,
+  travel?: number
 ): Promise<void> {
   const cx = clamp01(region.x + region.width / 2);
   const cy = clamp01(region.y + region.height / 2);
   const extent = direction === "up" || direction === "down" ? region.height : region.width;
-  const dist = Math.min(SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
+  const dist = travel ?? Math.min(SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
 
   if (env.device.platform === "chromium") {
     // Positive deltaY/deltaX reveals content below / to the right (see gesture-scroll).
@@ -508,8 +564,16 @@ async function scrollIncrement(
  * its end (or the anchor scrolls nothing): the target is then as visible as it
  * will ever be, so it's accepted wherever it landed — the LAST item sits flush
  * against the far edge and can never clear it, and a genuinely stuck partial
- * can't be improved either. A target already fully on screen returns
- * immediately (no scroll).
+ * can't be improved either.
+ *
+ * A visible target is not always accepted where it stands: when it sits nearly
+ * flush against an entry edge that is also a screen edge, the loop keeps
+ * nudging it clear of screen-edge chrome first (see edgeNudgeDistance) — so
+ * even an already-on-screen target may get scrolled. The nudge phase reuses
+ * the end-of-scroll fingerprint (a nudge that moves nothing accepts the flush
+ * landing) and is bounded by MAX_EDGE_NUDGES; once the axis check has accepted
+ * a frame the step can only pass, and only nudge-sized gestures are dispatched
+ * — a round that loses the target stops at the accepted frame.
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -518,6 +582,11 @@ async function scrollToVisible(
   within: FlowSelector | undefined
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
+  let nudges = 0;
+  // The last axis-accepted frame: once set, every exit path returns it rather
+  // than a failure, so a nudge gone sideways (target transiently unresolved,
+  // iterations exhausted) can never fail a step that had its target visible.
+  let accepted: DescribeFrame | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
@@ -529,11 +598,25 @@ async function scrollToVisible(
     // clip window the axis check measures the target against.
     const region = within ? flowSelectorToFrame(tree, within) : FULL_SCREEN;
     if (!region) {
+      // Post-acceptance (a nudge round) a vanished container is best-effort
+      // territory, not a failure — the target was already fully visible.
+      if (accepted) return { frame: accepted };
       return { reason: `scroll container ${describeSelector(within!)} is not visible` };
     }
 
     const frame = flowSelectorToFrame(tree, target);
-    if (frame && axisFullyInside(frame, direction, region)) return { frame };
+    let nudge = 0;
+    if (frame && axisFullyInside(frame, direction, region)) {
+      accepted = frame;
+      nudge = edgeNudgeDistance(frame, direction, region);
+      if (nudge === 0 || nudges >= MAX_EDGE_NUDGES) return { frame };
+    }
+    // Post-acceptance, a round that no longer re-accepts the target (transient
+    // re-render, a snap list paging in response to the nudge) must stop at the
+    // accepted frame: the loop never reverses, so there is no recovery gesture,
+    // and falling through would dispatch a default half-clip increment —
+    // uncounted plain-search scrolling past the already-found target.
+    if (accepted && nudge === 0) return { frame: accepted };
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
@@ -562,8 +645,10 @@ async function scrollToVisible(
     }
     prevFp = fp;
 
-    await scrollIncrement(env, direction, region);
+    if (nudge > 0) nudges++;
+    await scrollIncrement(env, direction, region, nudge > 0 ? nudge : undefined);
   }
+  if (accepted) return { frame: accepted }; // iterations ran out mid-nudge
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
   };
