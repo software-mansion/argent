@@ -1012,6 +1012,81 @@ describe("pixel settle backstop", () => {
     expect(settled).toMatchObject({ converged: false, treeFresh: true, visual: "skipped" });
   });
 
+  it("restarts from the stable fingerprint when the post-pixel revalidation read blips", async () => {
+    const stable = screen([n({ label: "Go", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } })]);
+    let treeReads = 0;
+    const capturesAtRead: number[] = [];
+    currentTree = () => {
+      treeReads++;
+      capturesAtRead.push(vi.mocked(capturePixels).mock.calls.length);
+      // Reads 1–2 converge the tree phase and the pixel pair runs in between,
+      // so read 3 is exactly the mandatory post-pixel revalidation read. A
+      // mid-navigation describe blip lands on it once; every later read
+      // succeeds with the same stable tree.
+      return treeReads === 3 ? Promise.reject(new Error("transient describe blip")) : stable;
+    };
+    vi.mocked(capturePixels).mockResolvedValue(solid([255, 255, 255]));
+    let readsAtTap = 0;
+    let capturesAtTap = 0;
+    const calls: string[] = [];
+    const registry = mockRegistry(calls, undefined, (id) => {
+      if (id === "gesture-tap") {
+        readsAtTap = treeReads;
+        capturesAtTap = vi.mocked(capturePixels).mock.calls.length;
+      }
+    });
+    const tool = createRunFlowTool(registry);
+
+    const result = await tool.execute({}, { name: "tap-go", project_root: tmpDir, device: DEVICE });
+
+    // One blip on the revalidation read is a transient gap, not a tree-source
+    // outage: the step passes, dispatching at the final tree's frame, and the
+    // error string surfaces nowhere in the report.
+    if (!("steps" in result))
+      throw new Error(`expected a run result, got notice: ${result.notice}`);
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass"]);
+    expect(result.steps[0].reason).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("transient describe blip");
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "gesture-tap",
+      expect.objectContaining({ x: 0.5, y: 0.5 })
+    );
+    // The restart is seeded with the pre-blip stable fingerprint: read 4
+    // matches that seed, so the restarted tree phase converges on that single
+    // read and the settle finishes at read 5 (a restart that dropped the seed
+    // would need two matching post-blip reads — six in total).
+    expect(readsAtTap).toBe(5);
+    // And the restart re-proves visual quiet instead of trusting the pre-blip
+    // pair: two captures before the failing read, two more between the
+    // restart's convergence (read 4) and the final read (read 5).
+    expect(capturesAtRead).toEqual([0, 0, 2, 2, 4]);
+    expect(capturesAtTap).toBe(4);
+  });
+
+  it("returns a fully settled result after a transient error on the revalidation read", async () => {
+    const stable = screen([n({ label: "Go", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } })]);
+    let treeReads = 0;
+    currentTree = () => {
+      treeReads++;
+      return treeReads === 3 ? Promise.reject(new Error("transient describe blip")) : stable;
+    };
+    vi.mocked(capturePixels).mockResolvedValue(solid([255, 255, 255]));
+    const env = {
+      registry: mockRegistry([]),
+      device: { platform: "ios", id: DEVICE },
+    } as unknown as ActionEnv;
+
+    const settled = await settleTree(env);
+
+    // The blip forces a restart (the downgraded `settled` must not leak), but
+    // the re-seeded phase re-converges and the re-run pixel pair restores
+    // `settled` — nothing about the error reads as an outage or best-effort.
+    expect(settled).toEqual({ tree: stable, converged: true, treeFresh: true, visual: "settled" });
+    expect(treeReads).toBe(5);
+    expect(vi.mocked(capturePixels)).toHaveBeenCalledTimes(4);
+  });
+
   it("writes a snapshot baseline when pixels settle but the final tree read hangs", async () => {
     vi.useFakeTimers();
     const shotPath = path.join(tmpDir, "snapshot.png");
