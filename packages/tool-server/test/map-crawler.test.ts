@@ -785,6 +785,49 @@ describe("crawlApp — replay and backtracking", () => {
     expect(snap.edges.some((e) => e.from === b.id && e.to === c.id)).toBe(true);
   });
 
+  it("adopts the shorter depth when revisiting a non-exhausted known screen, keeping its owed subtree in budget", async () => {
+    // Screen X is discovered deep (Home→A→X, depth 2) with an owed action left
+    // pending, then reached again by the direct Home→X link (depth 1). Exploring
+    // X's owed "To W" from the stale deep depth would push the W→U→T chain over
+    // maxDepth and drop Screen T; adopting the shorter depth on revisit keeps the
+    // whole reachable chain — depth is a traversal artifact, not a screen property.
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A", "To X"]),
+        a: screenTree("Screen A", ["To X"]),
+        x: screenTree("Screen X", ["To Y", "To W"]),
+        y: screenTree("Screen Y", []),
+        w: screenTree("Screen W", ["To U"]),
+        u: screenTree("Screen U", ["To T"]),
+        t: screenTree("Screen T", []),
+      },
+      {
+        home: { "To A": "a", "To X": "x" },
+        a: { "To X": "x" },
+        x: { "To Y": "y", "To W": "w" },
+        w: { "To U": "u" },
+        u: { "To T": "t" },
+      },
+      "home"
+    );
+    const store = makeStore();
+    await crawl(app, store, { maxDepth: 4 });
+    const snap = store.snapshot();
+
+    expect(snap.nodes.map((n) => n.title).sort()).toEqual([
+      "Home",
+      "Screen A",
+      "Screen T",
+      "Screen U",
+      "Screen W",
+      "Screen X",
+      "Screen Y",
+    ]);
+    const u = snap.nodes.find((n) => n.title === "Screen U")!;
+    const t = snap.nodes.find((n) => n.title === "Screen T")!;
+    expect(snap.edges.some((e) => e.from === u.id && e.to === t.id)).toBe(true);
+  });
+
   it("marks a node exhausted when its replay diverges, and keeps crawling the rest", async () => {
     const app = new FakeApp(
       {

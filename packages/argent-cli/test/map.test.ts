@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, it, expect } from "vitest";
 import {
   parseMapArgs,
   bootedMapCandidates,
+  formatDevicePicker,
   formatProgressLine,
   formatMapSummary,
   writeMapJson,
@@ -291,6 +292,31 @@ describe("bootedMapCandidates", () => {
     expect(bootedMapCandidates(undefined)).toEqual([]);
     expect(bootedMapCandidates("nope")).toEqual([]);
     expect(bootedMapCandidates([null, 42, {}, { platform: "ios", state: "Booted" }])).toEqual([]);
+  });
+});
+
+describe("formatDevicePicker", () => {
+  it("strips control bytes from device-sourced labels (terminal-injection guard)", () => {
+    // A physical Android device's ro.product.model is device-controlled; an
+    // ESC/OSC payload in it must not reach the terminal when the picker lists it.
+    const candidates = bootedMapCandidates([
+      { platform: "ios", udid: "IOS-1", state: "Booted", name: "iPhone 16" },
+      {
+        platform: "android",
+        serial: "R5CT1",
+        state: "device",
+        avdName: null,
+        model: "Pixel\x1b]0;pwned\x07\x1b[2J",
+      },
+    ]);
+    const out = formatDevicePicker(candidates);
+    // The ESC/BEL bytes are gone (structural newlines between rows are fine);
+    // the visible tail of each sequence stays as inert text.
+    expect(out.includes("\x1b")).toBe(false);
+    expect(out.includes("\x07")).toBe(false);
+    expect(out).toContain("R5CT1  Pixel]0;pwned[2J (android)");
+    expect(out).toContain("IOS-1  iPhone 16 (ios)");
+    expect(out.startsWith("map: several booted devices found")).toBe(true);
   });
 });
 

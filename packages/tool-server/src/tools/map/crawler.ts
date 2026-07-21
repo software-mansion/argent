@@ -599,22 +599,30 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
       const known = byKey.get(key);
       if (known) {
         store.addEdge(current.id, known.id, action);
-        // Revisit of an already-mapped screen. If it still has unexplored
-        // actions, keep crawling from right here — we are already standing on
-        // it, and `current`'s remaining actions stay owed to the frontier
-        // backtrack.
+        // Revisit of an already-mapped screen still owing actions: keep crawling
+        // from right here — we are standing on it, and `current`'s remaining
+        // actions stay owed to the frontier backtrack. `depth` is a traversal
+        // artifact, not a screen property, so if this tap path reached the screen
+        // more shallowly than it was first recorded, adopt the shorter route:
+        // otherwise its stale-deep depth would cap children that are in fact
+        // within budget and drop reachable screens (the same reason the depth-cap
+        // and deep-link re-roots below reset depth).
+        const revisitDepth = current.depth + 1;
         if (!known.exhausted && known.nextAction < known.actions.length) {
+          if (revisitDepth < known.depth) {
+            known.depth = revisitDepth;
+            known.path = [...current.path, action];
+            known.entryUrl = current.entryUrl;
+          }
           current = known;
           continue;
         }
         // A screen first discovered at the depth cap is flagged exhausted with
-        // its actions still owed (the only state in which an exhausted node
-        // keeps owed actions). If this tap path reached it more shallowly and
-        // that shorter depth is back inside the budget, re-root it here and
-        // descend: depth is a traversal artifact, not a screen property, so a
-        // shorter route revives the subtree the deep-first discovery had to drop
-        // — the tap-path twin of the deep-link re-root below.
-        const revisitDepth = current.depth + 1;
+        // its actions still owed (the only state in which an exhausted node keeps
+        // owed actions). If this shorter path is back inside the budget, re-root
+        // it here, clear the cap flag, and descend — reviving the subtree the
+        // deep-first discovery had to drop (the tap-path twin of the deep-link
+        // re-root below).
         if (
           known.exhausted &&
           known.nextAction < known.actions.length &&

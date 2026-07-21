@@ -260,6 +260,20 @@ export function bootedMapCandidates(devices: unknown): MapDeviceCandidate[] {
 }
 
 /**
+ * The "several booted devices" picker message. Each label carries device-sourced
+ * text (an Android model or iOS simulator name from an untrusted device) printed
+ * straight to the terminal, so strip control bytes first — the same guard
+ * `formatProgressLine` applies to crawl output.
+ */
+export function formatDevicePicker(candidates: MapDeviceCandidate[]): string {
+  return (
+    "map: several booted devices found — pass --udid <id> to pick one:\n" +
+    candidates.map((c) => `  ${sanitizeDeviceText(c.label)}`).join("\n") +
+    "\n"
+  );
+}
+
+/**
  * Render one progress event as a printable line, or null for an unknown
  * shape. Discovered screens print prominently; action/restart/phase noise is
  * marked `dim` so the caller can de-emphasise it on a TTY.
@@ -433,11 +447,7 @@ export async function map(argv: string[], options: MapCommandOptions): Promise<v
       return exitAfterFlush(1);
     }
     if (candidates.length > 1) {
-      process.stderr.write(
-        "map: several booted devices found — pass --udid <id> to pick one:\n" +
-          candidates.map((c) => `  ${c.label}`).join("\n") +
-          "\n"
-      );
+      process.stderr.write(formatDevicePicker(candidates));
       return exitAfterFlush(1);
     }
     udid = candidates[0]!.id;
