@@ -64,6 +64,23 @@ function windowSpanning() {
   };
 }
 
+/** A window whose subtree is pure scaffolding — no identifier, label, semantic
+ * role, or first responder anywhere — so the flatten emits zero leaves. */
+function windowBare() {
+  return {
+    className: "UIWindow",
+    frame: { x: 0, y: 0, width: 400, height: 800 },
+    windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+    children: [
+      {
+        className: "UIView",
+        windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+        children: [],
+      },
+    ],
+  };
+}
+
 describe("queryFullHierarchyTree — untrusted (no windows) reads", () => {
   it("throws when the target returns an empty windows array", async () => {
     const registry = registryFor(nativeApi(() => ({ windows: [] })));
@@ -82,6 +99,16 @@ describe("queryFullHierarchyTree — untrusted (no windows) reads", () => {
     const { tree, source } = await queryFullHierarchyTree(registry, IOS_DEVICE);
     expect(source).toBe("native-devtools");
     expect(tree.children.length).toBeGreaterThan(0);
+  });
+
+  // The guard keys on the raw `windows` array, not the flattened child count:
+  // windows-present-but-zero-leaves is a genuinely sparse, trusted screen, so
+  // it must resolve (letting a `hidden` assert pass) rather than throw.
+  it("resolves an empty trusted tree when windows are present but flatten to no leaves", async () => {
+    const registry = registryFor(nativeApi(() => ({ windows: [windowBare()] })));
+    const { tree, source } = await queryFullHierarchyTree(registry, IOS_DEVICE);
+    expect(source).toBe("native-devtools");
+    expect(tree.children.length).toBe(0);
   });
 
   it("still throws on an explicit getFullHierarchy error (unchanged)", async () => {
