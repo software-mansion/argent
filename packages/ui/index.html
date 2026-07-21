@@ -2160,6 +2160,7 @@
         mapNodeGap: cssNum("--map-node-gap", 16),
         mapCollideK: cssNum("--map-collide-k", 0.5),
         mapSeparatePasses: cssNum("--map-separate-passes", 24),
+        mapSeparatePassesPerNode: cssNum("--map-separate-passes-per-node", 6),
         mapMaxStep: cssNum("--map-max-step", 62),
         mapMinStep: cssNum("--map-min-step", 0.5),
         mapIters: cssNum("--map-iters", 170),
@@ -6324,7 +6325,18 @@
         const sepW = THEME.mapNodeW + THEME.mapNodeGap;
         const sepH = THEME.mapNodeH + THEME.mapNodeGap;
         const collideK = THEME.mapCollideK;
-        const separatePasses = Math.max(0, Math.round(THEME.mapSeparatePasses));
+        // De-overlap needs enough passes for separation to PROPAGATE across the
+        // pile: incrementally (one new node per revision) a handful clears the
+        // local overlap, but a single-shot cold-load — a fresh page render of an
+        // already-completed graph, where every node is movable at once — piles N
+        // opaque cards and needs ~O(N) Gauss-Seidel sweeps to fully un-stack. So
+        // scale the budget with node count (floored at the token). The loop below
+        // early-breaks the instant nothing moves, so the high ceiling is free for
+        // the common already-separated case and only spent on the cold pile.
+        const separatePasses = Math.max(
+          Math.max(0, Math.round(THEME.mapSeparatePasses)),
+          Math.ceil(ids.length * THEME.mapSeparatePassesPerNode)
+        );
         const iters = Math.max(1, Math.round(THEME.mapIters));
         let temp = THEME.mapMaxStep;
         const cool = Math.pow(

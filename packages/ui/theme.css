@@ -274,7 +274,8 @@
   --map-center-pull: 0.013; /* mild pull of movable nodes toward the graph centroid per iter */
   --map-node-gap: 16px; /* minimum clear space between two screen-card edges (anti-occlusion) */
   --map-collide-k: 0.5; /* how hard overlapping cards push apart (fraction of penetration per iter) */
-  --map-separate-passes: 24; /* post-relax de-overlap passes that guarantee cards don't occlude */
+  --map-separate-passes: 24; /* floor of post-relax de-overlap passes (small graphs need only a few) */
+  --map-separate-passes-per-node: 6; /* de-overlap budget scales with node count so a single-shot cold-load of a large completed graph still fully un-stacks */
   --map-max-step: 62px; /* per-iteration displacement clamp at the start of the cool */
   --map-min-step: 0.5px; /* displacement clamp at the end of the cool (exponential schedule) */
   --map-iters: 170; /* relaxation iterations run when new nodes were seeded */
