@@ -99,8 +99,10 @@ export function invokeOnDevice(
   );
 }
 
-const DEFAULT_ACTION_TIMEOUT_MS = 7500;
-const POLL_INTERVAL_MS = 300;
+// One action-scoped deadline and retry cadence for every step kind — exported
+// so flow-visual's snapshot settle retries on the same budget.
+export const DEFAULT_ACTION_TIMEOUT_MS = 7500;
+export const POLL_INTERVAL_MS = 300;
 
 // `type` focus handshake: the focus tap resolves as soon as its Up event is
 // enqueued, but the app still has to move input focus there (first responder /
@@ -306,7 +308,10 @@ export interface SettleResult {
   treeFresh: boolean;
   /**
    * Pixel phase outcome. `skipped` means tree-only mode, or that tree settling
-   * exhausted its deadline before a combined settle could start captures.
+   * exhausted its deadline before a combined settle could start (or re-run)
+   * captures. `settled` always describes the screen as returned (a pre-restart
+   * match is downgraded to `skipped`), so a caller may trust it without
+   * `treeFresh` for anything that consumes no tree-derived value.
    * Aborts return `undefined` from settleTree instead of a result.
    */
   visual: Exclude<PixelSettleOutcome, "aborted"> | "skipped";
@@ -557,6 +562,11 @@ export async function settleTree(
       seedFp = stableFp;
     }
 
+    // A restart invalidates a prior `settled` — the screen provably changed
+    // after that pixel pair matched. A re-converging restart re-runs the pixel
+    // phase and overwrites this; `unavailable` and the sticky timeout stay.
+    if (visual === "settled") visual = "skipped";
+
     if (Date.now() >= deadline) {
       return { tree: lastTree ?? stableTree, converged: false, treeFresh, visual };
     }
@@ -572,27 +582,35 @@ export async function settleTree(
  *
  * `settleTree` owns both tree and pixel stabilization and revalidates the tree
  * after the pixel wait, so selector resolution never uses a pre-transition
- * frame.
+ * frame. Only fresh trees are consulted while budget remains; at deadline
+ * exhaustion the selector is resolved once, best-effort, from the last valid
+ * settled tree — a window of merely slow settles must not read as "element
+ * not found". A genuinely absent element still returns undefined.
  */
 async function waitForFrame(
   env: ActionEnv,
   selector: FlowSelector
 ): Promise<DescribeFrame | "aborted" | undefined> {
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
+  let lastTree: DescribeNode | undefined;
   for (;;) {
     if (env.signal?.aborted) return "aborted";
-    if (Date.now() >= deadline) return undefined;
+    if (Date.now() >= deadline) break;
     const settled = await settleTree(env, { absoluteDeadline: deadline });
+    if (settled) lastTree = settled.tree;
     if (settled?.treeFresh) {
       const frame = flowSelectorToFrame(settled.tree, selector);
       if (frame) return frame;
     } else if (env.signal?.aborted) {
       return "aborted"; // settleTree bailed on the abort, not on a blank read
     }
-    if (Date.now() >= deadline) return undefined;
+    if (Date.now() >= deadline) break;
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
   }
+  // Best-effort last resort: stale coordinates beat failing a step whose
+  // settles merely ran long.
+  return lastTree ? flowSelectorToFrame(lastTree, selector) : undefined;
 }
 
 function framesOverlap(a: DescribeFrame, b: DescribeFrame): boolean {
@@ -758,20 +776,22 @@ async function scrollIncrement(
  * along the scroll axis — fully inside it, or (for a target as tall/wide as the
  * viewport or larger) spanning it — returning its frame. Before the first
  * decision it performs a combined tree + pixel settle so scrolling never
- * starts through an unrelated transition. Later rounds settle only the tree:
- * every increment is momentum-free/settled, and a following tap/type/snapshot
- * performs its own visual settle. Each round then checks the target and, if it
- * isn't fully in view, does one increment. Stopping only once the target has
- * cleared the entry edge (not on the first sliver) is what keeps a following
- * `tap`/`snapshot` off a half-clipped element. If a
- * round's settled tree — fingerprinted within the scrolled region only (the
- * `within` container, or the scroll containers under the gesture anchor when
- * none is named) — is identical to the previous round's, the container has hit
- * its end (or the anchor scrolls nothing): the target is then as visible as it
- * will ever be, so it's accepted wherever it landed — the LAST item sits flush
- * against the far edge and can never clear it, and a genuinely stuck partial
- * can't be improved either. A target already fully on screen returns
- * immediately (no scroll).
+ * starts through an unrelated transition; a round whose settle cannot
+ * revalidate the tree is skipped (no scroll, no fingerprint) and the next
+ * iteration re-settles instead of failing the step. Later rounds
+ * settle only the tree: every increment is momentum-free/settled, and a
+ * following tap/type/snapshot performs its own visual settle. Each round then
+ * checks the target and, if it isn't fully in view, does one increment.
+ * Stopping only once the target has cleared the entry edge (not on the first
+ * sliver) is what keeps a following `tap`/`snapshot` off a half-clipped
+ * element. If a round's settled tree — fingerprinted within the scrolled
+ * region only (the `within` container, or the scroll containers under the
+ * gesture anchor when none is named) — is identical to the previous round's,
+ * the container has hit its end (or the anchor scrolls nothing): the target is
+ * then as visible as it will ever be, so it's accepted wherever it landed —
+ * the LAST item sits flush against the far edge and can never clear it, and a
+ * genuinely stuck partial can't be improved either. A target already fully on
+ * screen returns immediately (no scroll).
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -786,7 +806,10 @@ async function scrollToVisible(
     const settled = await settleTree(env, { mode: i === 0 ? "combined" : "tree-only" });
     if (!settled) return { aborted: true }; // settleTree only returns undefined on abort
     if (!settled.treeFresh) {
-      return { reason: "timed out revalidating the UI tree after visual settling" };
+      // Only round 0's combined settle can be stale (tree-only results are
+      // always fresh). Skip it and re-settle: not scrolling keeps the content
+      // in place, not fingerprinting keeps the end-of-scroll check honest.
+      continue;
     }
     const tree = settled.tree;
 
@@ -895,11 +918,16 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
 /**
  * Resolve a gesture target (`tap`/`long-press`) to a normalized point: a
  * selector resolves to its frame centre (settled tree + auto-wait); raw
- * coordinates still wait for the same combined settle before dispatch.
+ * coordinates still wait for the same combined settle before dispatch, with
+ * {@link waitForFrame}'s patience: a settle without a usable result is
+ * retried until the shared action deadline. The literal x/y never consult
+ * the tree, so a fresh tree or settled pixels both count as usable — and at
+ * deadline exhaustion the gesture dispatches anyway, the settle being
+ * best-effort stabilization rather than a precondition.
  * Coordinate targets are the fallback for elements with no stable selector
  * (e.g. an unlabeled view), not an escape hatch from full-hierarchy settling:
- * they bypass selector resolution only, and still require the platform's flow
- * tree/devtools source to be available.
+ * they bypass selector resolution only — a tree-source outage throw from
+ * settleTree propagates as ever.
  */
 async function resolveTargetPoint(
   env: ActionEnv,
@@ -914,15 +942,26 @@ async function resolveTargetPoint(
     return getDescribeTapPoint(frame);
   }
   if (typeof target.x === "number" && typeof target.y === "number") {
-    const settled = await settleTree(env, {
-      absoluteDeadline: Date.now() + DEFAULT_ACTION_TIMEOUT_MS,
-    });
-    if (!settled) return { fail: ABORTED_OUTCOME };
-    if (!settled.treeFresh) {
-      return {
-        fail: { ok: false, reason: "timed out revalidating the UI tree after visual settling" },
-      };
+    const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
+    for (;;) {
+      // A sleep can land exactly on the deadline, and a zero-budget settle
+      // would misreport a healthy tree source as an outage.
+      if (Date.now() >= deadline) break;
+      const settled = await settleTree(env, { absoluteDeadline: deadline });
+      if (!settled) return { fail: ABORTED_OUTCOME };
+      // A fresh tree proves the settle's view is current; settled pixels
+      // prove the screen itself stopped (settleTree never leaks a pre-restart
+      // "settled"). Either one is enough for coordinates no selector reads.
+      if (settled.treeFresh || settled.visual === "settled") {
+        return { x: target.x, y: target.y };
+      }
+      if (Date.now() >= deadline) break;
+      const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
+      if (!(await sleepOrAbort(sleepMs, env.signal))) return { fail: ABORTED_OUTCOME };
     }
+    // Deadline exhausted without a usable settle (e.g. an endless animation):
+    // the settle is best-effort, so dispatch anyway — only a dispatch failure
+    // may fail the step. Aborts and outages already short-circuited above.
     return { x: target.x, y: target.y };
   }
   return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };

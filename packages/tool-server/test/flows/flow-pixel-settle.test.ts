@@ -433,7 +433,7 @@ describe("pixel settle backstop", () => {
     expect(vi.mocked(capturePixels)).toHaveBeenCalledTimes(2);
   });
 
-  it("does not dispatch a selector gesture when final tree freshness cannot be established", async () => {
+  it("errors a selector gesture when the tree source goes dark mid-action", async () => {
     vi.useFakeTimers();
     const visible = screen([
       n({ label: "Go", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } }),
@@ -569,6 +569,237 @@ describe("pixel settle backstop", () => {
       expect(capturesAtGesture).toBe(3);
     }
   );
+
+  it.each(["tap", "long-press"] as const)(
+    "dispatches a raw-coordinate %s when pixels settle but the final tree read hangs",
+    async (kind) => {
+      vi.useFakeTimers();
+      const visible = screen([
+        n({ label: "Go", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } }),
+      ]);
+      let reads = 0;
+      currentTree = () => {
+        reads++;
+        return reads <= 2 ? visible : new Promise<DescribeNode>(() => {});
+      };
+      vi.mocked(capturePixels).mockResolvedValue(solid([255, 255, 255]));
+      const calls: string[] = [];
+      const registry = mockRegistry(calls);
+      const env = {
+        registry,
+        device: { platform: "ios", id: DEVICE },
+      } as unknown as ActionEnv;
+
+      const pending = runDirective(
+        env,
+        kind === "tap" ? { kind, x: 0.3, y: 0.7 } : { kind, x: 0.3, y: 0.7, duration: 500 }
+      );
+      await vi.advanceTimersByTimeAsync(8_000);
+      const result = await pending;
+
+      // The literal coordinates consult no selector: settled pixels are proof
+      // enough, and the missing revalidation read must not fail the step.
+      expect(result.ok).toBe(true);
+      expect(calls).toContain(kind === "tap" ? "gesture-tap" : "gesture-custom");
+      if (kind === "tap") {
+        expect(registry.invokeTool).toHaveBeenCalledWith(
+          "gesture-tap",
+          expect.objectContaining({ x: 0.3, y: 0.7 })
+        );
+      }
+    }
+  );
+
+  it("retries a raw-coordinate tap when revalidation misses once and a later settle succeeds", async () => {
+    vi.useFakeTimers();
+    const visible = screen([
+      n({ label: "Go", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } }),
+    ]);
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      // The first post-pixel revalidation read hangs (a slow uiautomator
+      // dump); every read after it succeeds again.
+      return reads === 3 ? new Promise<DescribeNode>(() => {}) : visible;
+    };
+    vi.mocked(capturePixels).mockImplementation(() => new Promise(() => {}));
+    const calls: string[] = [];
+    const registry = mockRegistry(calls);
+    const env = {
+      registry,
+      device: { platform: "ios", id: DEVICE },
+    } as unknown as ActionEnv;
+
+    const pending = runDirective(env, { kind: "tap", x: 0.3, y: 0.7 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await pending;
+
+    expect(result.ok).toBe(true);
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "gesture-tap",
+      expect.objectContaining({ x: 0.3, y: 0.7 })
+    );
+  });
+
+  it.each(["tap", "long-press"] as const)(
+    "dispatches a raw-coordinate %s best-effort when an endless animation outlasts the deadline",
+    async (kind) => {
+      vi.useFakeTimers();
+      const visible = screen([
+        n({ label: "Go", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } }),
+      ]);
+      let reads = 0;
+      currentTree = () => {
+        reads++;
+        // Every post-pixel revalidation read (each settle's third) outlives
+        // its budget, so no settle ever ends tree-fresh…
+        return reads % 3 === 0 ? new Promise<DescribeNode>(() => {}) : visible;
+      };
+      // …and a perpetual animation keeps the pixel pairs from ever matching.
+      let white = false;
+      vi.mocked(capturePixels).mockImplementation(async () => {
+        white = !white;
+        return solid(white ? [255, 255, 255] : [0, 0, 0]);
+      });
+      const calls: string[] = [];
+      let dispatchedAt = -1;
+      const registry = mockRegistry(calls, undefined, (id) => {
+        if (id.startsWith("gesture-")) dispatchedAt = Date.now();
+      });
+      const env = {
+        registry,
+        device: { platform: "ios", id: DEVICE },
+      } as unknown as ActionEnv;
+
+      const start = Date.now();
+      const pending = runDirective(
+        env,
+        kind === "tap" ? { kind, x: 0.3, y: 0.7 } : { kind, x: 0.3, y: 0.7, duration: 500 }
+      );
+      await vi.advanceTimersByTimeAsync(9_000);
+      const result = await pending;
+
+      // A settle that never becomes usable must not fail the step: at deadline
+      // exhaustion the gesture dispatches anyway at the literal point.
+      expect(result.ok).toBe(true);
+      expect(calls).toContain(kind === "tap" ? "gesture-tap" : "gesture-custom");
+      // …and only after the deadline gave settling every chance first.
+      expect(dispatchedAt - start).toBeGreaterThanOrEqual(7_500);
+      if (kind === "tap") {
+        expect(registry.invokeTool).toHaveBeenCalledWith(
+          "gesture-tap",
+          expect.objectContaining({ x: 0.3, y: 0.7 })
+        );
+      }
+    }
+  );
+
+  it.each(["tap", "type"] as const)(
+    "resolves a selector %s from the last settled tree when no settle ends tree-fresh",
+    async (kind) => {
+      vi.useFakeTimers();
+      const visible = screen([
+        n({ label: "Go", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } }),
+      ]);
+      let dispatched = false;
+      let reads = 0;
+      currentTree = () => {
+        reads++;
+        // Until the gesture fires, every settle's post-pixel revalidation
+        // read (its third) hangs, so no settle ends tree-fresh.
+        if (dispatched) return visible;
+        return reads % 3 === 0 ? new Promise<DescribeNode>(() => {}) : visible;
+      };
+      vi.mocked(capturePixels).mockResolvedValue(solid([255, 255, 255]));
+      const calls: string[] = [];
+      const registry = mockRegistry(calls, undefined, (id) => {
+        if (id === "gesture-tap") dispatched = true;
+      });
+      const env = {
+        registry,
+        device: { platform: "ios", id: DEVICE },
+      } as unknown as ActionEnv;
+
+      const pending = runDirective(
+        env,
+        kind === "tap"
+          ? { kind, selector: { text: "Go", loose: true } }
+          : { kind, into: { text: "Go", loose: true }, text: "hi" }
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await pending;
+
+      // At deadline exhaustion the selector resolves best-effort from the
+      // last valid settled tree instead of failing on the slow settles.
+      expect(result.ok).toBe(true);
+      expect(registry.invokeTool).toHaveBeenCalledWith(
+        "gesture-tap",
+        expect.objectContaining({ x: 0.5, y: 0.5 })
+      );
+      if (kind === "type") expect(calls).toContain("keyboard");
+    }
+  );
+
+  it("fails a selector tap honestly when the element is absent from the stale trees", async () => {
+    vi.useFakeTimers();
+    const noGo = screen([
+      n({ label: "Other", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } }),
+    ]);
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      return reads % 3 === 0 ? new Promise<DescribeNode>(() => {}) : noGo;
+    };
+    vi.mocked(capturePixels).mockResolvedValue(solid([255, 255, 255]));
+    const calls: string[] = [];
+    const env = {
+      registry: mockRegistry(calls),
+      device: { platform: "ios", id: DEVICE },
+    } as unknown as ActionEnv;
+
+    const pending = runDirective(env, { kind: "tap", selector: { text: "Go", loose: true } });
+    await vi.advanceTimersByTimeAsync(9_000);
+    const result = await pending;
+
+    // The stale-tree fallback finds nothing: the element is genuinely absent,
+    // so the ordinary not-found reason stands.
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("no visible element matched selector");
+    expect(calls).not.toContain("gesture-tap");
+  });
+
+  it("prefers a later fresh resolution over the stale-tree fallback", async () => {
+    vi.useFakeTimers();
+    const staleAt = screen([
+      n({ label: "Go", frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } }),
+    ]);
+    const freshAt = screen([
+      n({ label: "Go", frame: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 } }),
+    ]);
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      // Settle 1's post-pixel read (read 3) hangs, leaving a stale result at
+      // the old frame; settle 2 completes fresh at the new one.
+      if (reads === 3) return new Promise<DescribeNode>(() => {});
+      return reads < 3 ? staleAt : freshAt;
+    };
+    vi.mocked(capturePixels).mockResolvedValue(solid([255, 255, 255]));
+    const calls: string[] = [];
+    const registry = mockRegistry(calls);
+    const env = { registry, device: { platform: "ios", id: DEVICE } } as unknown as ActionEnv;
+
+    const pending = runDirective(env, { kind: "tap", selector: { text: "Go", loose: true } });
+    await vi.advanceTimersByTimeAsync(9_000);
+    const result = await pending;
+
+    expect(result.ok).toBe(true);
+    // Dispatched at the fresh frame, not the stale round's remembered one.
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "gesture-tap",
+      expect.objectContaining({ x: 0.7, y: 0.7 })
+    );
+  });
 
   it("does not scroll through a compositor transition", async () => {
     await writeFlow("scroll", [
@@ -711,5 +942,131 @@ describe("pixel settle backstop", () => {
     expect(result.ok).toBe(true);
     expect(swipes).toBe(2);
     expect(vi.mocked(capturePixels)).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries the first scroll round when tree revalidation misses instead of failing", async () => {
+    vi.useFakeTimers();
+    // The target is fully on screen the whole time — only the first combined
+    // settle's hung capture and hung revalidation read stand in the way.
+    const tree = screen([
+      n({ label: "Target", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.2 } }),
+    ]);
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      return reads === 3 ? new Promise<DescribeNode>(() => {}) : tree;
+    };
+    vi.mocked(capturePixels).mockImplementation(() => new Promise(() => {}));
+    const calls: string[] = [];
+    const env = {
+      registry: mockRegistry(calls),
+      device: { platform: "ios", id: DEVICE },
+    } as unknown as ActionEnv;
+
+    const pending = runDirective(env, {
+      kind: "scroll-to",
+      target: { text: "Target" },
+      direction: "down",
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await pending;
+
+    // The skipped round scrolls nothing, and the next (tree-only) round
+    // resolves the target — one slow read is not a step failure.
+    expect(result.ok).toBe(true);
+    expect(calls).not.toContain("gesture-swipe");
+    // The pixel probe still runs only in the first (combined) round.
+    expect(vi.mocked(capturePixels)).toHaveBeenCalledTimes(1);
+  });
+
+  it("downgrades settled pixels when a restarted tree phase never re-converges", async () => {
+    vi.useFakeTimers();
+    const before = screen([n({ label: "Go", frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } })]);
+    let moved = false;
+    let ticks = 0;
+    currentTree = () => {
+      if (!moved) return before;
+      ticks++;
+      return screen([
+        n({ label: `tick ${ticks}`, frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } }),
+      ]);
+    };
+    vi.mocked(capturePixels)
+      .mockResolvedValueOnce(solid([255, 255, 255]))
+      .mockImplementationOnce(async () => {
+        moved = true;
+        return solid([255, 255, 255]);
+      })
+      .mockResolvedValue(undefined);
+    const env = {
+      registry: mockRegistry([]),
+      device: { platform: "ios", id: DEVICE },
+    } as unknown as ActionEnv;
+
+    const pending = settleTree(env);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const settled = await pending;
+
+    // The pixel pair matched BEFORE the tree moved, so "settled" would
+    // describe the pre-restart screen — it must come back downgraded.
+    expect(settled).toMatchObject({ converged: false, treeFresh: true, visual: "skipped" });
+  });
+
+  it("writes a snapshot baseline when pixels settle but the final tree read hangs", async () => {
+    vi.useFakeTimers();
+    const shotPath = path.join(tmpDir, "snapshot.png");
+    const png = Buffer.alloc(24);
+    png.writeUInt32BE(390, 16);
+    png.writeUInt32BE(844, 20);
+    await fs.writeFile(shotPath, png);
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      return reads <= 2
+        ? screen([n({ label: "Go", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } })])
+        : new Promise<DescribeNode>(() => {});
+    };
+    vi.mocked(capturePixels).mockResolvedValue(solid([255, 255, 255]));
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "screenshot") {
+          return {
+            image: {
+              __argentArtifact: true,
+              id: "current-snapshot",
+              hostPath: shotPath,
+              mimeType: "image/png",
+            },
+          };
+        }
+        return { ok: true };
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+    const env = {
+      registry,
+      ctx: { artifacts: new ArtifactStore() },
+      device: { platform: "ios", id: DEVICE },
+    } as unknown as ActionEnv;
+
+    const pending = runSnapshot(env, {
+      flowsDir: tmpDir,
+      flowName: "checkout",
+      name: "home",
+      maxMismatch: 0.5,
+      updateBaselines: true,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await pending;
+
+    // Pixels settled, only the confirming tree read is missing: the settler
+    // retries for freshness on the action deadline, then accepts the
+    // stale-but-settled screen — the comparison proceeds undegraded.
+    expect(result.status).toBe("pass");
+    expect(result.reason).toContain("baseline written");
+    expect(result.reason).not.toContain("degraded");
+    await expect(
+      fs.access(path.join(tmpDir, "__baselines__", "checkout", "home__ios-390x844.png"))
+    ).resolves.toBeUndefined();
   });
 });

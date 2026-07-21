@@ -23,7 +23,10 @@ const h = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../src/tools/flows/flow-actions", () => ({
+// Keep the real module (the snapshot settler shares its deadline constants);
+// stub only the settle and dispatch entry points.
+vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-actions")>()),
   settleTree: vi.fn(async () => ({
     tree: {},
     converged: true,
@@ -115,6 +118,7 @@ beforeEach(async () => {
   await writeFakePng(h.shotPath);
 });
 afterEach(async () => {
+  vi.useRealTimers();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -231,7 +235,10 @@ describe("runSnapshot settle", () => {
 
     await runSnapshot(env, opts({ updateBaselines: true }));
 
-    expect(vi.mocked(settleTree)).toHaveBeenCalledWith(env);
+    // The settle rides the shared action deadline so its retries stay bounded.
+    expect(vi.mocked(settleTree)).toHaveBeenCalledWith(env, {
+      absoluteDeadline: expect.any(Number),
+    });
     expect(vi.mocked(settleTree).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invokeOnDevice).mock.invocationCallOrder[0]!
     );
@@ -290,7 +297,109 @@ describe("runSnapshot settle", () => {
     expect(r.reason).toContain("unavailable");
   });
 
-  it("refuses to write a missing baseline after settle timeout and attaches the capture", async () => {
+  it("compares undegraded when pixels settled but tree revalidation missed the deadline", async () => {
+    vi.useFakeTimers();
+    // A hung post-pixel read leaves `visual: "settled"` without freshness.
+    // The settler prefers full convergence: it re-settles, the second settle
+    // converges, and the comparison proceeds undegraded.
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: false,
+      visual: "settled",
+    });
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    const pending = runSnapshot(env, opts());
+    await vi.advanceTimersByTimeAsync(1_000);
+    const r = await pending;
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).not.toContain("degraded");
+    expect(vi.mocked(settleTree)).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes a baseline under updateBaselines when pixels settled without tree freshness", async () => {
+    vi.useFakeTimers();
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: false,
+      visual: "settled",
+    });
+
+    const pending = runSnapshot(env, opts({ updateBaselines: true }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const r = await pending;
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).not.toContain("degraded");
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("accepts the settled-but-stale screen only when the retry deadline exhausts", async () => {
+    vi.useFakeTimers();
+    // Every settle is visually settled but never tree-fresh (a persistently
+    // slow source). The settler re-settles for freshness and accepts the
+    // stale-but-settled screen only at deadline exhaustion.
+    vi.mocked(settleTree).mockResolvedValue({
+      tree: {} as never,
+      converged: false,
+      treeFresh: false,
+      visual: "settled",
+    });
+
+    const pending = runSnapshot(env, opts({ updateBaselines: true }));
+    await vi.advanceTimersByTimeAsync(8_000);
+    const r = await pending;
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).not.toContain("degraded");
+    // The acceptance came from retry exhaustion, not from the first result.
+    expect(vi.mocked(settleTree).mock.calls.length).toBeGreaterThan(2);
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("writes a degraded baseline when a restarted settle never re-observed pixels", async () => {
+    // settleTree downgraded a pre-restart "settled" to "skipped" — the write
+    // still proceeds best-effort, flagged as a settle timeout.
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: true,
+      visual: "skipped",
+    });
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).toContain("timed out");
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("degrades a non-converged unavailable settle as timed out, not merely unavailable", async () => {
+    // converged: false alongside "unavailable" hides an earlier pixel
+    // timeout — the note must name the timeout, not just unavailability.
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: true,
+      visual: "unavailable",
+    });
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).toContain("timed out");
+    expect(r.reason).not.toContain("unavailable");
+  });
+
+  it("writes a missing baseline with a degradation note after settle timeout", async () => {
     vi.mocked(settleTree).mockResolvedValueOnce({
       tree: {} as never,
       converged: false,
@@ -300,15 +409,20 @@ describe("runSnapshot settle", () => {
 
     const r = await runSnapshot(env, opts({ updateBaselines: true }));
 
-    expect(r.status).toBe("fail");
-    expect(r.reason).toContain("baseline not written");
+    // A timed-out settle degrades the write, never blocks it: the note warns
+    // that the adopted baseline may show mid-animation pixels.
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).toContain("best-effort/degraded");
     expect(r.reason).toContain("timed out");
-    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
-    expect(r.artifacts?.baseline).toBeUndefined();
-    await expect(fs.access(baselinePath())).rejects.toThrow();
+    expect(r.artifacts?.baseline).toMatchObject({
+      __argentArtifact: true,
+      hostPath: baselinePath(),
+    });
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
   });
 
-  it("leaves an existing baseline untouched after settle timeout", async () => {
+  it("updates an existing baseline with a degradation note after settle timeout", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath(), 390, 844);
     const before = await fs.readFile(baselinePath());
@@ -322,10 +436,11 @@ describe("runSnapshot settle", () => {
 
     const r = await runSnapshot(env, opts({ updateBaselines: true }));
 
-    expect(r.status).toBe("fail");
-    expect(r.reason).toContain("baseline not updated");
-    expect(await fs.readFile(baselinePath())).toEqual(before);
-    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline updated");
+    expect(r.reason).toContain("timed out");
+    expect(await fs.readFile(baselinePath())).not.toEqual(before);
+    expect(await fs.readFile(baselinePath())).toEqual(await fs.readFile(h.shotPath));
   });
 
   it("may write a baseline after a tree outage when pixel-only settling succeeds", async () => {

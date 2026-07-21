@@ -102,10 +102,10 @@ async function capturePixelsBefore(env: ActionEnv, deadline: number): Promise<Bo
  * Wait for two matching pixel captures without consulting the describe tree.
  *
  * Snapshots use this after a combined settle proves the tree source is down:
- * screenshots do not need selector coordinates, but still benefit from a
- * bounded compositor-motion check. A missing capture backend remains distinct
- * from motion exhausting the deadline so callers can report the degradation
- * and apply stricter baseline-write policy to known timeouts.
+ * the capture is gated by pixel stability alone, though nothing tree-derived
+ * can ever come from this path (see the snapshot settler's `cropOn` notes).
+ * A missing capture backend stays distinct from motion exhausting the
+ * deadline so callers can report which degradation occurred.
  */
 export async function settlePixels(
   env: ActionEnv,
