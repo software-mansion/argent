@@ -685,9 +685,26 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
     const key = screenKey(tree);
     const known = byKey.get(key);
     if (known) {
-      // Already mapped — the deep link is just another entrance to it.
+      // Already mapped — the deep link is another entrance to it.
       store.markEntry(known.id);
-      emit({ kind: "phase", message: `Deep link ${url} reached the known screen ${known.id}` });
+      if (known.nextAction < known.actions.length) {
+        // …but it still owes actions: the launch crawl only recorded it (a
+        // depth cap bottomed out there, or a spent budget) and never descended.
+        // The deep link is a fresh depth-0 origin from which that subtree now
+        // fits the budget — re-root the node here and explore it, instead of
+        // dropping exactly the deep screens deep links exist to reach.
+        known.depth = 0;
+        known.path = [];
+        known.entryUrl = url;
+        if (known.exhausted) {
+          known.exhausted = false;
+          store.patchNode(known.id, { exhausted: false });
+        }
+        const outcome = await explore(known);
+        if (outcome === "cancelled") return "cancelled";
+      } else {
+        emit({ kind: "phase", message: `Deep link ${url} reached the known screen ${known.id}` });
+      }
       continue;
     }
     // A screen no tap path reached: a genuine new entry point. Explore it under

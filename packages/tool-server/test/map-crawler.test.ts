@@ -417,6 +417,37 @@ describe("crawlApp — deep-link seeding (multiple entry points)", () => {
     expect(snap.edges[0]).toMatchObject({ from: "s0", to: a.id });
   });
 
+  it("a deep link onto a DEPTH-CAPPED known screen explores the subtree the cap dropped", async () => {
+    // Launch crawl bottoms out at maxDepth: Home(0) → A(1) → S(2, capped —
+    // recorded but never descended, so its "To T" action is owed). The deep link
+    // lands back on S as a fresh depth-0 origin; T (one tap from that entry, in
+    // budget) must now be discovered — the whole reason deep links exist.
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A"]),
+        a: screenTree("Screen A", ["To S"]),
+        s: screenTree("Screen S", ["To T"]),
+        t: screenTree("Screen T", []),
+      },
+      { home: { "To A": "a" }, a: { "To S": "s" }, s: { "To T": "t" } },
+      "home"
+    );
+    app.deepLinks = { "myapp://s": "s" };
+    const store = makeStore();
+    const result = await crawl(app, store, { maxDepth: 2 }, { deepLinks: ["myapp://s"] });
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    // Without the fix, S is capped and flagged an entry but T is never reached.
+    expect(snap.nodes.some((x) => x.title === "Screen S")).toBe(true);
+    expect(snap.nodes.some((x) => x.title === "Screen T")).toBe(true);
+    const s = snap.nodes.find((x) => x.title === "Screen S")!;
+    expect(s.entry).toBe(true);
+    // The subtree edge S → T was recorded by the re-exploration.
+    const t = snap.nodes.find((x) => x.title === "Screen T")!;
+    expect(snap.edges.some((e) => e.from === s.id && e.to === t.id)).toBe(true);
+  });
+
   it("a deep link that fails to open or leaves the app is skipped, and the crawl still completes", async () => {
     const app = new FakeApp(
       { home: screenTree("Home", ["To A"]), a: screenTree("Screen A", []) },
