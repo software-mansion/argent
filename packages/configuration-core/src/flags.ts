@@ -82,17 +82,27 @@ export interface FlagsPathOptions {
   homeDir?: string;
 }
 
-export function resolveProjectRoot(startDir: string): string {
-  const initial = path.resolve(startDir);
-  let current = initial;
+/**
+ * Walk up from `startDir` looking for a project marker. Returns the marker
+ * directory, or `null` when no marker exists anywhere up to the fs root —
+ * callers that need to distinguish "found a project" from the cwd fallback
+ * (e.g. to warn before materializing `.argent` in an arbitrary directory)
+ * use this; everything else goes through `resolveProjectRoot`.
+ */
+export function findProjectRoot(startDir: string): string | null {
+  let current = path.resolve(startDir);
   while (true) {
     for (const marker of PROJECT_MARKERS) {
       if (fs.existsSync(path.join(current, marker))) return current;
     }
     const parent = path.dirname(current);
-    if (parent === current) return initial;
+    if (parent === current) return null;
     current = parent;
   }
+}
+
+export function resolveProjectRoot(startDir: string): string {
+  return findProjectRoot(startDir) ?? path.resolve(startDir);
 }
 
 export function getFlagsPath(scope: FlagScope, options: FlagsPathOptions = {}): string {

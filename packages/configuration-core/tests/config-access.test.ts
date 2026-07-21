@@ -164,6 +164,26 @@ describe("listConfig", () => {
   });
 });
 
+describe("telemetry.enabled — opt-out default", () => {
+  it("reads as true (the opt-out default) when nothing is stored", () => {
+    expect(getConfigValueByKey("telemetry.enabled", opts())).toBe(true);
+    const entry = listConfig(opts()).find((e) => e.key === "telemetry.enabled")!;
+    expect(entry.effective).toBe(true);
+    expect(entry.global).toBeUndefined();
+  });
+
+  it("reflects a persisted opt-out from the global config file", () => {
+    // Written by hand — `setConfigValue` refuses manageCommand-delegated keys,
+    // matching how `argent telemetry disable` owns this write in production.
+    fs.mkdirSync(path.join(homeDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(homeDir, ".argent", "config.json"),
+      JSON.stringify({ telemetry: { enabled: false } })
+    );
+    expect(getConfigValueByKey("telemetry.enabled", opts())).toBe(false);
+  });
+});
+
 describe("coerceCliValue", () => {
   it("parses JSON scalars and arrays, falling back to a bare string", () => {
     expect(coerceCliValue("true")).toBe(true);

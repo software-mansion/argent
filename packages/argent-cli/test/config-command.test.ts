@@ -126,6 +126,35 @@ describe("argent config — set/get across scopes", () => {
     expect(output()).toContain("was not set at project scope");
     expect(fs.existsSync(projectCfg)).toBe(false);
   });
+
+  it("a project-scope write echoes the resolved project root", () => {
+    config(["set", "lens.agent", "codex", "--scope", "project"]);
+    // (Assert on the un-colorized segment after the bold key.)
+    expect(output()).toContain(`(project: ${projectDir}).`);
+    // A real project (a `.git` marker at projectDir) is not degenerate — no warning.
+    expect(errors()).toBe("");
+    logSpy.mockClear();
+    config(["unset", "lens.agent", "--scope", "project"]);
+    expect(output()).toContain(`(project: ${projectDir}).`);
+  });
+
+  it("warns when project scope resolves to the home directory", () => {
+    // Materialize ~/.argent via a global write, then run from a non-project dir
+    // under HOME: the marker walk stops at ~/.argent, so "project" IS global.
+    config(["set", "lens.agent", "claude"]);
+    const nested = path.join(homeDir, "not-a-project");
+    fs.mkdirSync(nested);
+    process.chdir(nested);
+    logSpy.mockClear();
+    config(["set", "lens.agent", "codex", "--scope", "project"]);
+    expect(errors()).toContain("resolved to the home directory");
+    expect(output()).toContain(`(project: ${homeDir}).`);
+    // The write landed in the global config file.
+    const globalCfg = JSON.parse(
+      fs.readFileSync(path.join(homeDir, ".argent", "config.json"), "utf8")
+    );
+    expect(globalCfg).toEqual({ lens: { agent: "codex" } });
+  });
 });
 
 describe("argent config — validation & errors", () => {
@@ -163,6 +192,16 @@ describe("argent config — list & json", () => {
     expect(lens.effective).toBe("codex");
     const telemetry = parsed.config.find((e: { key: string }) => e.key === "telemetry.enabled");
     expect(telemetry.manageCommand).toBe("argent telemetry");
+  });
+
+  it("telemetry.enabled reads as true (opt-out default) on a fresh install", () => {
+    config(["get", "telemetry.enabled"]);
+    expect(output()).toBe("true");
+    logSpy.mockClear();
+    config(["list", "--json"]);
+    const parsed = JSON.parse(output());
+    const telemetry = parsed.config.find((e: { key: string }) => e.key === "telemetry.enabled");
+    expect(telemetry.effective).toBe(true);
   });
 
   it("get --json emits a structured record", () => {

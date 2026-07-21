@@ -7,9 +7,12 @@
 // new top-level `argent` command. Values with a dedicated lifecycle command
 // (e.g. telemetry) are surfaced read-only and point the user at that command.
 
+import * as path from "node:path";
 import pc from "picocolors";
 import {
   CONFIG_SCHEMA,
+  configDir,
+  findProjectRoot,
   getConfigValueByKey,
   getConfigValueAtScope,
   setConfigValue,
@@ -147,11 +150,13 @@ parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a stri
   }
 
   const targetScope: FlagScope = scope ?? "global";
+  const warning = degenerateProjectScopeWarning(targetScope);
   try {
     // Echo the normalized value that was actually stored (asString trims,
     // asStringArray drops blanks, …), not the raw CLI input.
     const stored = setConfigValue(key, coerceCliValue(rawValue), targetScope);
-    console.log(`Set ${pc.bold(key)} = ${formatValuePlain(stored)} (${targetScope}).`);
+    if (warning) console.error(pc.yellow(warning));
+    console.log(`Set ${pc.bold(key)} = ${formatValuePlain(stored)} (${scopeLabel(targetScope)}).`);
   } catch (err) {
     reportError(err);
   }
@@ -179,11 +184,13 @@ other scope / the default on the next read.`);
   }
 
   const targetScope: FlagScope = scope ?? "global";
+  const warning = degenerateProjectScopeWarning(targetScope);
   try {
     const removed = unsetConfigValue(key, targetScope);
+    if (removed && warning) console.error(pc.yellow(warning));
     console.log(
       removed
-        ? `Unset ${pc.bold(key)} (${targetScope}).`
+        ? `Unset ${pc.bold(key)} (${scopeLabel(targetScope)}).`
         : pc.dim(`${key} was not set at ${targetScope} scope.`)
     );
   } catch (err) {
@@ -235,6 +242,43 @@ function parseScope(raw: string | undefined): FlagScope {
 
 function wantsHelp(argv: string[]): boolean {
   return argv.includes("--help") || argv.includes("-h");
+}
+
+/**
+ * `(global)` for the global scope; `(project: /resolved/root)` for the project
+ * scope, so a write always shows which directory "project" resolved to.
+ */
+function scopeLabel(scope: FlagScope): string {
+  if (scope === "global") return "global";
+  return `project: ${path.dirname(configDir("project"))}`;
+}
+
+/**
+ * A stderr warning when "project" scope resolves somewhere surprising: to the
+ * home directory (where the project config file IS the global one — `~/.argent`
+ * itself is a project marker, so any non-project cwd under $HOME lands here),
+ * or to the bare cwd because no marker was found up to the fs root. Must be
+ * called BEFORE the write — a project-scope `set` creates `.argent` in the
+ * resolved root, which would make the no-marker case undetectable afterwards.
+ */
+function degenerateProjectScopeWarning(scope: FlagScope): string | null {
+  if (scope !== "project") return null;
+  const projDir = configDir("project");
+  if (path.resolve(projDir) === path.resolve(configDir("global"))) {
+    return (
+      `WARNING: no project found between ${process.cwd()} and your home directory — ` +
+      `"project" scope resolved to the home directory, so this writes the GLOBAL ` +
+      `config file (${path.join(projDir, "config.json")}).`
+    );
+  }
+  if (findProjectRoot(process.cwd()) === null) {
+    return (
+      `WARNING: no project markers (.argent, .git, package.json) found above ` +
+      `${process.cwd()} — treating it as the project root and creating ` +
+      `${path.join(projDir, "config.json")}.`
+    );
+  }
+  return null;
 }
 
 /** JSON for arrays/objects, the bare string for strings, `String()` otherwise. */

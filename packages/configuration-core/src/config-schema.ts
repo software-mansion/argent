@@ -80,12 +80,17 @@ export function asStringArray(raw: unknown): string[] | undefined {
 export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "telemetry.enabled",
-    description: "Whether anonymous opt-out telemetry is enabled.",
+    description:
+      "Whether anonymous opt-out telemetry is enabled (on by default; environment opt-outs " +
+      "like DO_NOT_TRACK are not reflected here — `argent telemetry status` shows effective consent).",
     scopes: ["global"],
     parse: asBoolean,
     // A committed project file must never re-enable telemetry a user disabled
     // globally, so the more-restrictive (opt-out) value always wins.
     merge: "prioritize-restrictive",
+    // Telemetry is opt-out: with nothing stored, consent.ts treats it as
+    // enabled, and the config surface must report the same instead of "(unset)".
+    default: true,
     // Read-only under `argent config`: opt-in/out goes through the dedicated
     // command so the live client is drained/reset, not just the file rewritten.
     manageCommand: "argent telemetry",
