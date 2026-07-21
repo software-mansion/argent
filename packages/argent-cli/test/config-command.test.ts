@@ -16,7 +16,6 @@ let originalUserProfile: string | undefined;
 let originalCwd: string;
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errSpy: ReturnType<typeof vi.spyOn>;
-let exitSpy: ReturnType<typeof vi.spyOn>;
 
 class ExitError extends Error {
   constructor(public code: number) {
@@ -36,7 +35,7 @@ beforeEach(() => {
   process.chdir(projectDir);
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+  vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
     throw new ExitError(code ?? 0);
   }) as never);
 });
