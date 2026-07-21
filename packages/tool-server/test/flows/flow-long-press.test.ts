@@ -73,13 +73,15 @@ afterEach(async () => {
 });
 
 describe("long-press: parse/serialize", () => {
-  it("round-trips all three spellings", () => {
+  it("round-trips selector and point spellings", () => {
     const flow = {
       executionPrerequisite: "",
       steps: [
         { kind: "long-press" as const, selector: { text: "Row 3", loose: true } },
         { kind: "long-press" as const, selector: { identifier: "row-3" } },
         { kind: "long-press" as const, selector: { text: "Row 3", loose: true }, duration: 1200 },
+        { kind: "long-press" as const, x: 0.5, y: 0.6 },
+        { kind: "long-press" as const, x: 0.5, y: 0.6, duration: 1200 },
       ],
     };
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
@@ -94,6 +96,19 @@ describe("long-press: parse/serialize", () => {
     expect(steps).toEqual([
       { kind: "long-press", selector: { text: "Row 3", loose: true }, duration: 1200 },
       { kind: "long-press", selector: { text: "Row" } },
+    ]);
+  });
+
+  it("parses a raw point bare and under `on`", () => {
+    expect(
+      parseFlow(
+        "steps:\n" +
+          "  - long-press: { x: 0.5, y: 0.6 }\n" +
+          "  - long-press: { on: { x: 0.5, y: 0.6 }, duration: 1200 }\n"
+      ).steps
+    ).toEqual([
+      { kind: "long-press", x: 0.5, y: 0.6 },
+      { kind: "long-press", x: 0.5, y: 0.6, duration: 1200 },
     ]);
   });
 
@@ -112,6 +127,24 @@ describe("long-press: parse/serialize", () => {
         /duration needs a positive number of milliseconds/i
       );
     }
+  });
+
+  it("rejects malformed coordinate targets", () => {
+    expect(() => parseFlow('steps:\n  - long-press: { text: "Row", x: 0.5, y: 0.5 }\n')).toThrow(
+      /selector or x\/y coordinates, not both/i
+    );
+    expect(() => parseFlow("steps:\n  - long-press: { x: 0.5 }\n")).toThrow(
+      /needs numeric x and y/i
+    );
+    expect(() => parseFlow("steps:\n  - long-press: { x: 0.5, y: 0.5, z: 1 }\n")).toThrow(
+      /takes only \{ x, y \}/i
+    );
+    expect(() => parseFlow("steps:\n  - long-press: { x: 0.5, y: 0.5, duration: 900 }\n")).toThrow(
+      /options form takes a nested point/i
+    );
+    expect(() =>
+      parseFlow("steps:\n  - long-press: { on: { x: 1.5, y: 0.5 }, duration: 500 }\n")
+    ).toThrow(/normalized 0–1 fractions/i);
   });
 });
 
@@ -183,6 +216,31 @@ describe("long-press: execution", () => {
           toX: 0.5,
           toY: 0.45,
           durationMs: 900,
+        },
+      },
+    ]);
+  });
+
+  it("presses a raw point without resolving the tree", async () => {
+    currentTree = () => screen([]);
+    await writeFlow("press-point", {
+      executionPrerequisite: "",
+      steps: [{ kind: "long-press", x: 0.3, y: 0.7, duration: 1000 }],
+    });
+
+    const result = await run("press-point");
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0]).toMatchObject({ target: "(0.3, 0.7)" });
+    expect(result.calls).toEqual([
+      {
+        tool: "gesture-custom",
+        args: {
+          udid: DEVICE,
+          events: [
+            { type: "Down", x: 0.3, y: 0.7, delayMs: 0 },
+            { type: "Up", x: 0.3, y: 0.7, delayMs: 1000 },
+          ],
         },
       },
     ]);

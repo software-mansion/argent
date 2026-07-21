@@ -14,6 +14,7 @@ import {
   appIdForPlatform,
   assertSafeFlowName,
   chromiumLaunchSpec,
+  describeSelector,
   describeTextExpectation,
   getFlowPath,
   isE2eFlow,
@@ -23,7 +24,10 @@ import {
   type FlowSelector,
   type FlowStep,
   type Launch,
+  type WhenCondition,
+  LAUNCH_PLATFORMS,
 } from "./flow-utils";
+import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
@@ -32,6 +36,7 @@ import {
   runDirective,
   invokeOnDevice,
   ABORTED_OUTCOME,
+  probeWhenCondition,
   type ActionEnv,
   type DirectiveOutcome,
 } from "./flow-actions";
@@ -69,7 +74,7 @@ const zodSchema = z.object({
       "Device id to run against (iOS UDID, Android/Vega serial, Chromium id). Auto-detected when omitted."
     ),
   platform: z
-    .enum(["ios", "android", "chromium", "vega"])
+    .enum(LAUNCH_PLATFORMS)
     .optional()
     .describe("Restrict auto-detection to this platform when several devices are booted."),
   updateBaselines: z
@@ -98,7 +103,12 @@ export interface StepReport {
   index: number;
   kind: FlowStep["kind"];
   status: StepStatus;
-  /** Machine-readable explanation when the step did not pass. */
+  /**
+   * Machine-readable explanation of the outcome. Always set when the step did
+   * not pass; also set on some passing reports whose result is self-narrating —
+   * the `when:` guard marker (`condition met (…)`) and snapshot passes (diff
+   * percentage, baseline written/updated).
+   */
   reason?: string;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
@@ -126,6 +136,14 @@ export interface StepReport {
   snapshotKey?: string;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
+  /**
+   * Nesting depth for display: omitted at top level, +1 inside each block
+   * directive's expanded steps (a `when:` block's guarded steps, a `run:`
+   * fragment's steps). Renderers indent by it without knowing which directives
+   * nest — the report is a flat list with no block-end marker, so depth cannot
+   * be reconstructed downstream.
+   */
+  depth?: number;
 }
 
 export interface FlowRunResult {
@@ -133,6 +151,11 @@ export interface FlowRunResult {
   device: string;
   executionPrerequisite: string;
   ok: boolean;
+  /**
+   * The run was cancelled mid-flight — set so a FAIL whose step statuses are
+   * all pass/skip is self-explanatory. Absent on completed runs.
+   */
+  aborted?: boolean;
   passed: number;
   failed: number;
   skipped: number;
@@ -306,11 +329,33 @@ async function treeSourceGate(
  * against the CDP service directly, not via `launch-app` — the chromium launch
  * value is an app *path*, which `launch-app`'s bundleId grammar rejects (and
  * its chromium handler is this same viewport refresh anyway).
+ *
+ * Chromium boots exactly one app for the whole run, so only the first launch is
+ * real; a second one (always a nested e2e flow pulled in via `run:`) can't boot
+ * its own instance and is rejected rather than silently passing against the
+ * already-launched app (see `state.chromiumLaunched`).
  */
 async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
   const { registry, device, signal } = state;
 
   if (device.platform === "chromium") {
+    // Only the top-level flow's leading launch is honored: the runner boots that
+    // app (or attaches to a pinned one) before step 1, and `chromiumBootSpec`
+    // only ever consults the top-level flow. Any later launch — a nested e2e
+    // flow's own launch — would run against the already-launched (wrong) app
+    // while booting nothing, so fail loudly instead of passing a no-op. The
+    // first launch still works, keeping a plain chromium e2e flow usable.
+    if (state.chromiumLaunched) {
+      return {
+        ok: false,
+        reason:
+          `chromium launches only the top-level flow's app, once per run — a nested launch can't ` +
+          `boot its own instance and would run against the already-launched app. Nested chromium ` +
+          `e2e flows aren't supported: run this flow at the top level, or drop its launch step to ` +
+          `make it a fragment.`,
+      };
+    }
+    state.chromiumLaunched = true;
     if (state.chromiumBooted) {
       // already booted + fronted; just settle
       if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
@@ -367,6 +412,12 @@ interface ExecState extends ActionEnv {
   pinned: boolean;
   /** True when the runner booted the chromium app for this run (and owns its teardown). */
   chromiumBooted: boolean;
+  /**
+   * True once a chromium `launch` step has run. Chromium boots one app per run
+   * (the top-level flow's), so a later launch — a nested e2e flow's own — is
+   * rejected instead of silently passing against the already-launched app.
+   */
+  chromiumLaunched: boolean;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -386,11 +437,15 @@ export function createRunFlowTool(
     description: `Run a saved flow from the .argent/flows/ directory.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
-element and act on it (\`long-press: { on, duration }\` presses and holds); \`scroll-to\` scrolls
-(momentum-free) until a target is visible; \`await\` waits for a UI
+element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
+holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`);
+\`scroll-to\` scrolls (momentum-free) until a target is visible; \`await\` waits for a UI
 condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot against a stored baseline (a missing baseline fails the step — set updateBaselines
 to adopt the current screen); \`echo\` annotates; \`run\` executes a referenced fragment inline.
+A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
+checked once with the short assert grace — for one-sided divergences like interstitials and coach
+marks; a skipped block reports distinctly and failures inside an entered block are real failures.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. For a Chromium e2e flow the \`launch\`
@@ -453,17 +508,27 @@ returns a notice with the prerequisite instead of running.`,
         stopped: false,
         pinned: statusBarPinned,
         chromiumBooted: resolved.booted !== null,
+        chromiumLaunched: false,
         ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
       };
 
+      let aborted: boolean;
       try {
-        await execSteps(state, flow.steps, params.name, [params.name]);
+        await execSteps(state, flow.steps, {
+          flow: params.name,
+          runStack: [params.name],
+          depth: 0,
+        });
       } finally {
+        // Sample the cancel flag before teardown: a client disconnect during
+        // status-bar restore / chromium teardown lands after every step
+        // already ran, and must not flip a finished run to FAIL.
+        aborted = state.signal?.aborted === true;
         if (state.pinned) await restoreStatusBar(device);
         if (resolved.booted) await teardownBootedChromium(registry, resolved.booted);
       }
 
-      return summarize(params.name, device.id, flow.executionPrerequisite, state.reports);
+      return summarize(params.name, device.id, flow.executionPrerequisite, state.reports, aborted);
     },
   };
 }
@@ -583,15 +648,14 @@ function summarize(
   flowName: string,
   deviceId: string,
   executionPrerequisite: string,
-  steps: StepReport[]
+  steps: StepReport[],
+  aborted: boolean
 ): FlowRunResult {
   let passed = 0;
   let failed = 0;
   let skipped = 0;
   let errored = 0;
-  let hasSkippedReport = false;
   for (const s of steps) {
-    hasSkippedReport ||= s.status === "skip";
     // Echo is narration, not a test step — counting it would let the summary
     // disagree with the renderers' step numbering (which skips echo too).
     if (s.kind === "echo") continue;
@@ -604,11 +668,13 @@ function summarize(
     flow: flowName,
     device: deviceId,
     executionPrerequisite,
-    // A skip is never a successful omission: the runner only emits skips after
-    // a hard stop or cancellation. The former already has a fail/error report;
-    // the latter may contain skips alone, so include them in the verdict or an
-    // aborted run would be reported as PASS.
-    ok: failed === 0 && errored === 0 && !hasSkippedReport,
+    // A cancelled run must never read as PASS — it may contain skips alone
+    // (no fail/error report), so the verdict folds the abort in directly. A
+    // skip by itself is NOT a failure: an unmet `when:` guard skips its block
+    // as a successful omission, and a hard stop already carries its own
+    // fail/error report.
+    ok: failed === 0 && errored === 0 && !aborted,
+    ...(aborted ? { aborted: true } : {}),
     passed,
     failed,
     skipped,
@@ -636,27 +702,47 @@ function selectorLabel(sel: FlowSelector): string {
   return parts.join(" ");
 }
 
+/**
+ * One template for rendering an await/assert/when-guard UI condition,
+ * parameterized by selector spelling — {@link selectorLabel} for report
+ * targets, `describeSelector` for reason strings — so the two surfaces share
+ * a single shape and cannot drift.
+ */
+function conditionLabel(
+  cond: {
+    condition: WaitCondition;
+    selector: FlowSelector;
+    expectedText?: string;
+    textMatch?: TextMatchMode;
+  },
+  renderSelector: (sel: FlowSelector) => string
+): string {
+  const sel = renderSelector(cond.selector);
+  // A text condition checks expectedText against the element the selector
+  // locates; the other conditions are about the selector itself.
+  if (cond.condition === "text") {
+    return `${sel} ${describeTextExpectation(cond.expectedText, cond.textMatch)}`;
+  }
+  return `${cond.condition} ${sel}`;
+}
+
 /** Display-only "what this step acts on" for {@link StepReport.target}. */
 function stepTarget(step: FlowStep): string | undefined {
   switch (step.kind) {
     case "tap":
+    case "long-press":
       if (step.selector) return selectorLabel(step.selector);
       if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
       return undefined;
-    case "long-press":
-      return selectorLabel(step.selector);
     case "type":
       return `into ${selectorLabel(step.into)}`;
     case "await":
-    case "assert": {
-      const sel = selectorLabel(step.selector);
-      // A text condition checks expectedText against the element the selector
-      // locates; the other conditions are about the selector itself.
-      if (step.condition === "text") {
-        return `${sel} ${describeTextExpectation(step.expectedText, step.textMatch)}`;
-      }
-      return `${step.condition} ${sel}`;
-    }
+    case "assert":
+      return conditionLabel(step, selectorLabel);
+    case "when":
+      return step.condition.kind === "platform"
+        ? `platform ${step.condition.platform}`
+        : conditionLabel(step.condition, selectorLabel);
     case "scroll-to": {
       const dir = step.direction !== "down" ? ` (${step.direction})` : "";
       return `${selectorLabel(step.target)}${dir}`;
@@ -668,13 +754,36 @@ function stepTarget(step: FlowStep): string | undefined {
   }
 }
 
+/**
+ * Where a list of steps executes: the fragment they are attributed to
+ * (StepReport.flow), the `run:` chain for the cycle/depth guards, and the
+ * nesting depth block directives accumulate for display. Threaded as one value
+ * so a new block directive only has to hand its children {@link childScope}.
+ */
+interface StepScope {
+  flow: string;
+  runStack: string[];
+  depth: number;
+}
+
+/** The scope a block directive's children execute in — one level deeper. */
+function childScope(
+  scope: StepScope,
+  overrides: Partial<Omit<StepScope, "depth">> = {}
+): StepScope {
+  return { ...scope, ...overrides, depth: scope.depth + 1 };
+}
+
+/**
+ * The depth stamp for a report — omitted at top level, so a flow with no block
+ * directives produces a report byte-identical to the pre-depth shape.
+ */
+function depthOf(scope: StepScope): Pick<StepReport, "depth"> {
+  return scope.depth ? { depth: scope.depth } : {};
+}
+
 /** Execute a list of steps, appending reports to state. Honors hard-stop + abort. */
-async function execSteps(
-  state: ExecState,
-  steps: FlowStep[],
-  sourceFlow: string,
-  runStack: string[]
-): Promise<void> {
+async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope): Promise<void> {
   for (const step of steps) {
     const index = state.reports.length;
 
@@ -683,9 +792,16 @@ async function execSteps(
         index,
         kind: step.kind,
         status: "skip",
-        flow: sourceFlow,
+        flow: scope.flow,
         target: stepTarget(step),
+        ...depthOf(scope),
+        // Carry the echo's message so a skipped narration renders as a skip
+        // line rather than vanishing — matching reportBlockSkipped.
+        ...(step.kind === "echo" ? { message: step.message } : {}),
       });
+      // A when block's literal steps are known — expand them so the report
+      // keeps one line per authored step no matter where the stop landed.
+      if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope));
       continue;
     }
     if (state.signal?.aborted) {
@@ -695,40 +811,163 @@ async function execSteps(
         kind: step.kind,
         status: "skip",
         reason: "run aborted",
-        flow: sourceFlow,
+        flow: scope.flow,
         target: stepTarget(step),
+        ...depthOf(scope),
+        ...(step.kind === "echo" ? { message: step.message } : {}),
       });
+      if (step.kind === "when") {
+        reportBlockSkipped(state, step.steps, childScope(scope), "run aborted");
+      }
       continue;
     }
 
     if (step.kind === "run") {
-      await execRunStep(state, step, runStack);
+      await execRunStep(state, step, scope);
+      continue;
+    }
+    if (step.kind === "when") {
+      await execWhenStep(state, step, scope);
       continue;
     }
 
-    const report = await execLeafStep(state, step, index, sourceFlow);
+    const report = await execLeafStep(state, step, index, scope);
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
 }
 
+/** A compact rendering of a when guard for report reasons. */
+function describeWhenCondition(cond: WhenCondition): string {
+  if (cond.kind === "platform") return `platform ${cond.platform}`;
+  return conditionLabel(cond, describeSelector);
+}
+
+/**
+ * Report every step of a `when:` block that will not run as skipped — so a
+ * run where the block was skipped (unmet guard, errored guard, hard stop, or
+ * cancellation) produces the same report shape (one line per authored step,
+ * at the same depth) as a run where it entered, and reports stay comparable
+ * run-to-run. Nested when blocks expand (their literal steps are known); a
+ * `run:` composition stays one line, matching how post-hard-stop skips report
+ * a fragment that was never loaded. `scope` is the scope the steps would have
+ * executed in — already the block's child scope, not the marker's.
+ */
+function reportBlockSkipped(
+  state: ExecState,
+  steps: FlowStep[],
+  scope: StepScope,
+  reason?: string
+): void {
+  for (const step of steps) {
+    pushReport(state, {
+      index: state.reports.length,
+      kind: step.kind,
+      status: "skip",
+      reason,
+      // A `run:` line is attributed to the fragment it names, matching the
+      // executed marker in execRunStep; everything else belongs to the
+      // enclosing flow.
+      flow: step.kind === "run" ? step.flow : scope.flow,
+      target: stepTarget(step),
+      ...depthOf(scope),
+      ...(step.kind === "echo" ? { message: step.message } : {}),
+    });
+    if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope), reason);
+  }
+}
+
+/**
+ * Execute a `when:` block: evaluate the guard (a platform test is static; a UI
+ * condition probes with the short assert grace), then either expand the
+ * guarded steps inline — where failures are real failures, hard-stopping as
+ * usual — or report the whole block as skipped. An unreadable tree errors the
+ * step instead: "could not evaluate" is not "condition false", and silently
+ * skipping would let a broken tree source turn every guarded dismissal into a
+ * green no-op.
+ */
+async function execWhenStep(
+  state: ExecState,
+  step: Extract<FlowStep, { kind: "when" }>,
+  scope: StepScope
+): Promise<void> {
+  const index = state.reports.length;
+  const label = describeWhenCondition(step.condition);
+  const target = stepTarget(step);
+  // The marker sits at the enclosing depth; the guarded steps one deeper —
+  // whether they execute or report as skipped.
+  const marker = { index, kind: "when", flow: scope.flow, target, ...depthOf(scope) } as const;
+  const inner = childScope(scope);
+
+  let met: boolean;
+  if (step.condition.kind === "platform") {
+    // "ios-remote" is an iOS simulator driven through sim-remote — for a
+    // platform guard it IS ios. The parser deliberately rejects "ios-remote"
+    // as a guard spelling, so without this fold no guard could ever match on
+    // a remote sim and iOS-only blocks would silently skip there.
+    const platform = state.device.platform === "ios-remote" ? "ios" : state.device.platform;
+    met = platform === step.condition.platform;
+  } else {
+    const probe = await probeWhenCondition(state, step.condition);
+    if (probe.aborted) {
+      pushReport(state, { ...marker, status: "skip", reason: "run aborted" });
+      reportBlockSkipped(state, step.steps, inner, "run aborted");
+      return;
+    }
+    if (!probe.ok && probe.indeterminate) {
+      pushReport(state, {
+        ...marker,
+        status: "error",
+        reason: `could not evaluate when guard (${label}): ${probe.reason}`,
+      });
+      state.stopped = true;
+      reportBlockSkipped(state, step.steps, inner, "when guard errored");
+      return;
+    }
+    met = probe.ok;
+  }
+
+  if (!met) {
+    const n = step.steps.length;
+    pushReport(state, {
+      ...marker,
+      status: "skip",
+      reason: `condition not met (${label}) — block skipped (${n} step${n === 1 ? "" : "s"})`,
+    });
+    reportBlockSkipped(state, step.steps, inner, "when block skipped");
+    return;
+  }
+
+  // Marker for the block, then the guarded steps inline — same fragment
+  // attribution, one level deeper, failures hard-stop as anywhere else.
+  pushReport(state, { ...marker, status: "pass", reason: `condition met (${label})` });
+  await execSteps(state, step.steps, inner);
+}
+
 async function execRunStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "run" }>,
-  runStack: string[]
+  scope: StepScope
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
 
   const fail = (reason: string): void => {
-    pushReport(state, { index, kind: "run", status: "error", flow: target, reason });
+    pushReport(state, {
+      index,
+      kind: "run",
+      status: "error",
+      flow: target,
+      reason,
+      ...depthOf(scope),
+    });
     state.stopped = true;
   };
 
-  if (runStack.includes(target)) {
-    return fail(`cyclic flow reference: ${[...runStack, target].join(" → ")}`);
+  if (scope.runStack.includes(target)) {
+    return fail(`cyclic flow reference: ${[...scope.runStack, target].join(" → ")}`);
   }
-  if (runStack.length >= MAX_RUN_DEPTH) {
+  if (scope.runStack.length >= MAX_RUN_DEPTH) {
     return fail("max run depth exceeded");
   }
 
@@ -741,24 +980,29 @@ async function execRunStep(
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
-  if (isE2eFlow(fragment)) {
-    return fail(
-      `"${target}" is an e2e flow (starts with a launch step); only fragments can be run from another flow`
-    );
-  }
-
-  // Marker for the composition point, then expand the fragment's steps inline.
-  pushReport(state, { index, kind: "run", status: "pass", flow: target });
-  await execSteps(state, fragment.steps, target, [...runStack, target]);
+  // Marker for the composition point, then expand the fragment's steps inline,
+  // one level deeper, attributed to the fragment.
+  pushReport(state, { index, kind: "run", status: "pass", flow: target, ...depthOf(scope) });
+  await execSteps(
+    state,
+    fragment.steps,
+    childScope(scope, { flow: target, runStack: [...scope.runStack, target] })
+  );
 }
 
 async function execLeafStep(
   state: ExecState,
   step: FlowStep,
   index: number,
-  sourceFlow: string
+  scope: StepScope
 ): Promise<StepReport> {
-  const base = { index, kind: step.kind, flow: sourceFlow, target: stepTarget(step) } as const;
+  const base = {
+    index,
+    kind: step.kind,
+    flow: scope.flow,
+    target: stepTarget(step),
+    ...depthOf(scope),
+  } as const;
   const { registry, ctx, device, signal } = state;
 
   switch (step.kind) {

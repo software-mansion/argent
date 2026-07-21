@@ -155,20 +155,68 @@ describe("tap times: parse/serialize", () => {
     expect(() => parseFlow("steps:\n  - tap: { on: A, foo: 1 }\n")).toThrow(
       /accepts only \{ on, times \}/i
     );
-    expect(() => parseFlow("steps:\n  - tap: { on: A, x: 0.5, y: 0.5 }\n")).toThrow(
-      /selector or x\/y coordinates, not both/i
-    );
+    // Coordinates never sit next to option keys — the old mixed spelling and
+    // stray x/y both get the nested-point hint.
+    for (const mixed of ["{ on: A, x: 0.5, y: 0.5 }", "{ x: 0.5, y: 0.5, times: 2 }"]) {
+      expect(() => parseFlow(`steps:\n  - tap: ${mixed}\n`)).toThrow(
+        /options form takes a nested point/i
+      );
+    }
   });
 
-  it("validates the times value on both forms", () => {
+  it("validates the times value on both target kinds", () => {
     for (const bad of ["0", "11", "1.5", '"2"']) {
       expect(() => parseFlow(`steps:\n  - tap: { on: A, times: ${bad} }\n`)).toThrow(
         /times must be an integer between 1 and 10/i
       );
     }
-    expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, times: 0 }\n")).toThrow(
+    expect(() => parseFlow("steps:\n  - tap: { on: { x: 0.5, y: 0.5 }, times: 0 }\n")).toThrow(
       /times must be an integer between 1 and 10/i
     );
+  });
+});
+
+describe("tap targets: raw points", () => {
+  it("parses a point bare and under `on`", () => {
+    const steps = parseFlow(
+      "steps:\n" +
+        "  - tap: { x: 0.5, y: 0.6 }\n" +
+        "  - tap: { on: { x: 0.5, y: 0.6 }, times: 2 }\n"
+    ).steps;
+    expect(steps).toEqual([
+      { kind: "tap", x: 0.5, y: 0.6 },
+      { kind: "tap", x: 0.5, y: 0.6, times: 2 },
+    ]);
+  });
+
+  it("rejects a target mixing selector fields with coordinates", () => {
+    expect(() => parseFlow('steps:\n  - tap: { on: { text: "Row", x: 0.5, y: 0.5 } }\n')).toThrow(
+      /selector or x\/y coordinates, not both/i
+    );
+  });
+
+  it("rejects malformed points", () => {
+    expect(() => parseFlow('steps:\n  - tap: { x: "0.5", y: 0.5 }\n')).toThrow(
+      /needs numeric x and y/i
+    );
+    expect(() => parseFlow("steps:\n  - tap: { x: 0.5 }\n")).toThrow(/needs numeric x and y/i);
+    expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, z: 1 }\n")).toThrow(
+      /takes only \{ x, y \}/i
+    );
+  });
+
+  it("rejects out-of-range coordinates", () => {
+    for (const bad of [
+      "{ x: 250, y: 0.5 }",
+      "{ x: 0.5, y: -0.1 }",
+      "{ x: .nan, y: 0.5 }",
+      "{ x: 0.5, y: .inf }",
+    ]) {
+      expect(() => parseFlow(`steps:\n  - tap: ${bad}\n`)).toThrow(/normalized 0–1 fractions/i);
+    }
+    expect(parseFlow("steps:\n  - tap: { x: 0, y: 1 }\n").steps).toEqual([
+      { kind: "tap", x: 0, y: 1 },
+    ]);
   });
 });
 

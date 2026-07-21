@@ -12,7 +12,7 @@ import {
   bootstrapDylibPathTvos,
   tcpInjectionDylibs,
 } from "@argent/native-devtools-ios";
-import { SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
+import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { isTvOsSimulator } from "./ios-devices";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
@@ -123,7 +123,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
           "-bool",
           "true",
         ],
-        { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+        { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
       )
     )
   );
@@ -148,7 +148,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   const result = await execFileAsync(
     "xcrun",
     ["simctl", "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
-    { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+    { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
@@ -158,7 +158,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
     await execFileAsync(
       "xcrun",
       ["simctl", "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   }
 
@@ -177,7 +177,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
         "NATIVE_DEVTOOLS_IOS_CDP_PORT",
         String(endpoint.port),
       ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   } else {
     await execFileAsync(
@@ -191,7 +191,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
         "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
         endpoint.socketPath,
       ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   }
 
@@ -232,6 +232,8 @@ function parseUIKitApplicationBundleIds(stdout: string): Set<string> {
 async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
   const { stdout } = await execFileAsync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
     encoding: "utf8",
+    timeout: SIMCTL_SPAWN_TIMEOUT_MS,
+    killSignal: SIMCTL_KILL_SIGNAL,
   });
   return parseUIKitApplicationBundleIds(stdout);
 }

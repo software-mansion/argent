@@ -317,6 +317,63 @@ describe("flowRunToMcpContent", () => {
     });
   });
 
+  it("indents step labels by nesting depth, clamping hostile wire values", async () => {
+    const input: FlowExecuteResult = {
+      flow: "f",
+      steps: [
+        { index: 0, kind: "when", status: "pass", target: 'visible "Promo"' },
+        { index: 1, kind: "tap", status: "pass", target: '"Dismiss"', depth: 1 },
+        { index: 2, kind: "echo", status: "pass", message: "deep note", depth: 2 },
+        // Wire data is untrusted: a negative depth must not throw and a huge
+        // one must not allocate a huge line.
+        { index: 3, kind: "tap", status: "pass", target: '"A"', depth: -2 },
+        { index: 4, kind: "tap", status: "pass", target: '"B"', depth: 1e9 },
+        // The cap clamps, it does not discard: legitimate depth can exceed it
+        // (the producer's run-chain and when-nesting limits accumulate), so a
+        // too-deep step keeps the maximum indent rather than snapping flat.
+        { index: 5, kind: "tap", status: "pass", target: '"C"', depth: 20 },
+        { index: 6, kind: "tap", status: "pass", target: '"D"', depth: 21 },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+    const texts = blocks
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text);
+
+    expect(texts).toContain('[1] ✓ when visible "Promo"');
+    expect(texts).toContain('[2] ✓   tap "Dismiss"');
+    expect(texts).toContain("[3] ✓     deep note");
+    expect(texts).toContain('[4] ✓ tap "A"');
+    const cap = "  ".repeat(20);
+    expect(texts).toContain(`[5] ✓ ${cap}tap "B"`);
+    expect(texts).toContain(`[6] ✓ ${cap}tap "C"`);
+    expect(texts).toContain(`[7] ✓ ${cap}tap "D"`);
+  });
+
+  it("shifts snapshot artifact lines with the step's depth, matching the CLI renderer", async () => {
+    const input: FlowExecuteResult = {
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 2.10% > 1%",
+          target: '"home"',
+          depth: 1,
+          artifacts: { baseline: "/tmp/b.png" },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+    const artifactText = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.includes("baseline:")
+    );
+    // Two-space prefix, then the step's indent — under the indented label,
+    // not left of it.
+    expect(artifactText?.text).toBe("    baseline: /tmp/b.png");
+  });
+
   it("renders the new report shape: status glyphs, reasons, directive kinds, and summary", async () => {
     const input: FlowExecuteResult = {
       flow: "checkout",

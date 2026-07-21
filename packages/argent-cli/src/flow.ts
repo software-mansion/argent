@@ -29,6 +29,12 @@ export interface StepReport {
   message?: string;
   /** Human-readable step target (selector / snapshot name), set by the runner. */
   target?: string;
+  /**
+   * Nesting depth: absent/0 at top level, +1 inside each block directive
+   * (`when:` guarded steps, `run:` fragment steps). Renderers indent by it; a
+   * pre-depth tool-server sends none and the report renders flat, as before.
+   */
+  depth?: number;
   /** Baseline key stem (`<name>__<platform>-WxH`) on artifact-bearing snapshot steps. */
   snapshotKey?: string;
   /**
@@ -60,6 +66,26 @@ const STATUS_GLYPH: Record<StepReport["status"], string> = {
   error: "✗",
   skip: "·",
 };
+
+/**
+ * Display cap on the nesting indent — not a producer bound. The tool-server's
+ * run-chain and per-file when-nesting limits accumulate, so legitimate depth
+ * can exceed this; such steps keep the maximum indent rather than flattening.
+ * Depth also arrives over the wire, so the clamp doubles as a guard: a buggy
+ * or malicious server must not drive `repeat()` with a huge (multi-GB string)
+ * or negative (throwing) count.
+ */
+const MAX_RENDER_DEPTH = 20;
+
+/**
+ * Indentation for a step's nesting depth, applied to the label so the
+ * glyph/number columns stay aligned. Absent depth (a pre-depth tool-server)
+ * renders flat.
+ */
+function stepIndent(depth: number | undefined): string {
+  if (typeof depth !== "number" || !Number.isInteger(depth) || depth <= 0) return "";
+  return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
+}
 
 function printHelp(): void {
   console.log(`Usage: argent flow <subcommand> [options]
@@ -147,13 +173,42 @@ export function parseRunArgs(argv: string[]): {
   return out;
 }
 
+/**
+ * Render an echo step. Echo is narration, not a pass/fail step — one that RAN
+ * prints as a plain `› message` header with no index or glyph. A SKIPPED echo
+ * (its `when:` block didn't run, or a hard stop / cancellation reached it) must
+ * not print identically to one that ran, so it carries the skip glyph and its
+ * reason: one honest line per authored step, still unindexed so it keeps
+ * reading as narration rather than a numbered step. Returns undefined when
+ * there is no message to show.
+ */
+export function renderEchoLine(s: StepReport): string | undefined {
+  if (!s.message) return undefined;
+  const indent = stepIndent(s.depth);
+  if (s.status === "skip") {
+    const reason = s.reason ? ` — ${s.reason}` : "";
+    return `  ${STATUS_GLYPH.skip} ${indent}› ${s.message}${reason}`;
+  }
+  return `  ${indent}› ${s.message}`;
+}
+
 export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
   const what = s.tool ?? s.target;
   const label = what ? `${s.kind} ${what}` : s.kind;
   const reason = s.reason ? ` — ${s.reason}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-  return `  ${glyph} ${String(n).padStart(2)} ${label}${where}${reason}`;
+  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${label}${where}${reason}`;
+}
+
+/**
+ * A line printed under a step (warning, artifact path), padded so it sits
+ * under the step's label: the width of renderStepLine's `  ✓ NN ` prefix —
+ * which grows with the step number past 99 — then the step's depth indent.
+ * Shared by the buffered and live renderers so the two can't drift.
+ */
+export function renderUnderStepLine(s: StepReport, n: number, text: string): string {
+  return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
 }
 
 export function renderSummary(report: FlowReport, opts: { withDevice?: boolean } = {}): string {
@@ -324,18 +379,19 @@ export function renderReport(report: FlowReport): string {
   // Number only real steps so echo narration doesn't leave gaps in the sequence.
   let n = 0;
   for (const s of report.steps) {
-    // Echo is narration, not a pass/fail step — render its message as a plain
-    // line with no index or status glyph so it reads as a header between steps.
+    // Echo is narration, not a pass/fail step — render it as a header between
+    // steps (a skipped one is marked so it can't be mistaken for having run).
     if (s.kind === "echo") {
-      if (s.message) lines.push(`  › ${s.message}`);
+      const line = renderEchoLine(s);
+      if (line) lines.push(line);
       continue;
     }
     n++;
     lines.push(renderStepLine(s, n, report.flow));
-    if (s.warning) lines.push(`       ⚠ ${s.warning}`);
+    if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
-        if (typeof v === "string") lines.push(`       ${k}: ${v}`);
+        if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
       }
     }
   }
@@ -418,12 +474,13 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     if (liveSteps === 0) console.log(`Flow "${flowName}"`);
     liveSteps++;
     if (s.kind === "echo") {
-      if (s.message) console.log(`  › ${s.message}`);
+      const line = renderEchoLine(s);
+      if (line) console.log(line);
       return;
     }
     liveIndex++;
     console.log(renderStepLine(s, liveIndex, flowName));
-    if (s.warning) console.log(`       ⚠ ${s.warning}`);
+    if (s.warning) console.log(renderUnderStepLine(s, liveIndex, `⚠ ${s.warning}`));
   };
 
   let report: FlowReport;

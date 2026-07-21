@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,6 +33,7 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
   try {
     const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"], {
       timeout: 10_000,
+      killSignal: SIMCTL_KILL_SIGNAL,
     });
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];
