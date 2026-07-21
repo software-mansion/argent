@@ -100,13 +100,20 @@ function initializeStdioTimestampWrapper(): void {
  * that never answers within the timeout resolves `false`, so we still surface a
  * genuinely stuck port as a crash rather than deferring to a dead server.
  */
-export function probeArgentToolServer(host: string, port: number, timeoutMs = 500): Promise<boolean> {
+export function probeArgentToolServer(
+  host: string,
+  port: number,
+  timeoutMs = 500
+): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = http.request({ host, port, path: "/tools", method: "GET", timeout: timeoutMs }, (res) => {
-      const isArgentPeer = res.statusCode === 200 || res.statusCode === 401;
-      res.resume(); // drain the response so the socket can close
-      resolve(isArgentPeer);
-    });
+    const req = http.request(
+      { host, port, path: "/tools", method: "GET", timeout: timeoutMs },
+      (res) => {
+        const isArgentPeer = res.statusCode === 200 || res.statusCode === 401;
+        res.resume(); // drain the response so the socket can close
+        resolve(isArgentPeer);
+      }
+    );
     req.on("error", () => resolve(false)); // connection refused / reset / non-HTTP
     req.on("timeout", () => {
       req.destroy();
