@@ -97,6 +97,32 @@ describe("requireDarwin gating", () => {
     expect(r.keyboardPatchDylibPathTcp()).toBe(path.join(dir, "libKeyboardPatch.dylib"));
   });
 
+  it("resolves TCP dylibs from the default dylibs/tcp on linux (neutral, no override)", async () => {
+    // Without the tcp override env, the tcp dylib dir defaults to DYLIB_DIR/tcp —
+    // platform-NEUTRAL, exactly like the tcp ax-service's bin/tcp. Resolving from
+    // the base dir on a Linux host must land under tcp/, never a host-platform
+    // subdir, since these are darwin artifacts uploaded to the remote orchestrator.
+    setPlatform("linux");
+    const base = fs.mkdtempSync(path.join(tmpRoot, "dylibs-base-"));
+    const tcpDir = path.join(base, "tcp");
+    fs.mkdirSync(tcpDir, { recursive: true });
+    fs.writeFileSync(path.join(tcpDir, "libArgentInjectionBootstrap.dylib"), "");
+    fs.writeFileSync(path.join(tcpDir, "libNativeDevtoolsIos.dylib"), "");
+    fs.writeFileSync(path.join(tcpDir, "libKeyboardPatch.dylib"), "");
+    process.env.ARGENT_NATIVE_DEVTOOLS_DIR = base;
+    try {
+      const r = await loadResolver();
+      expect(r.bootstrapDylibPathTcp()).toBe(
+        path.join(tcpDir, "libArgentInjectionBootstrap.dylib")
+      );
+      expect(r.nativeDevtoolsDylibPathTcp()).toBe(path.join(tcpDir, "libNativeDevtoolsIos.dylib"));
+      expect(r.keyboardPatchDylibPathTcp()).toBe(path.join(tcpDir, "libKeyboardPatch.dylib"));
+    } finally {
+      if (originalDevtoolsDir === undefined) delete process.env.ARGENT_NATIVE_DEVTOOLS_DIR;
+      else process.env.ARGENT_NATIVE_DEVTOOLS_DIR = originalDevtoolsDir;
+    }
+  });
+
   it("throws a plain not-found (not a macOS-host error) for missing TCP dylibs on linux", async () => {
     // When the TCP artifacts haven't been downloaded, the file-existence check
     // gives a "not found" error — never the "requires a macOS host" gate.
