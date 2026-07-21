@@ -117,7 +117,9 @@ export class ConfigManagedElsewhereError extends Error {
 /**
  * Validate and persist a configuration value at a scope. `rawValue` is a
  * pre-parsed JSON value (the CLI coerces its string argument first); it is run
- * through the schema's validator, and the normalized result is stored.
+ * through the schema's validator, and the normalized result is stored. Returns
+ * the normalized value that was written, so callers can report exactly what
+ * landed on disk rather than the raw input.
  */
 export function setConfigValue(
   key: string,
@@ -125,13 +127,14 @@ export function setConfigValue(
   scope: FlagScope = "global",
   options: ConfigPathOptions = {},
   registry: readonly ConfigDefinition[] = CONFIG_SCHEMA
-): void {
+): unknown {
   const def = requireDefinition(key, registry);
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
   const parsed = def.parse(rawValue);
   if (parsed === undefined) throw new ConfigValidationError(key);
   updateConfig((config) => setAtPath(config, key, parsed), scope, options);
+  return parsed;
 }
 
 /**
@@ -147,6 +150,12 @@ export function unsetConfigValue(
   const def = requireDefinition(key, registry);
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
+  // Fast path for a no-op: if the key is absent at this scope there is nothing
+  // to remove, so skip the write path entirely. Otherwise `updateConfig` would
+  // mkdir the scope's `.argent` dir and rewrite an unchanged config.json —
+  // materializing a project file (and dirtying git status) for an unset that
+  // removed nothing.
+  if (getAtPath(readConfigObject(scope, options), key) === undefined) return false;
   let removed = false;
   updateConfig(
     (config) => {

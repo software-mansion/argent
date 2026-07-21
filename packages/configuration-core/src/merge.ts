@@ -23,6 +23,11 @@ export type MergePreset =
    * The more restrictive of the two wins — for booleans, `false` (opt-out) beats
    * `true`; for numbers, the smaller value. Use for privacy/permission toggles
    * where a committed project file must never loosen a stricter global choice.
+   *
+   * Caveat: the numeric rule hardcodes "smaller = stricter". Only apply this
+   * preset to a numeric config where a lower value is genuinely the safer bound.
+   * If larger is stricter (e.g. a retry cap, a minimum log level, a rate limit),
+   * do not use this preset — supply a custom `MergeFn` on the schema entry instead.
    */
   | "prioritize-restrictive"
   /** Arrays only: the de-duplicated union of both scopes (global first). */

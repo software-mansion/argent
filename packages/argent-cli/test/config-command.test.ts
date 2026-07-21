@@ -107,6 +107,22 @@ describe("argent config — set/get across scopes", () => {
     config(["get", "lens.agent"]);
     expect(output()).toBe("(unset)");
   });
+
+  it("set reports the normalized value that was stored", () => {
+    config(["set", "lens.agent", "  codex  "]);
+    // The message echoes the trimmed value that actually landed on disk.
+    expect(output()).toContain("Set lens.agent = codex (global).");
+    logSpy.mockClear();
+    config(["get", "lens.agent"]);
+    expect(output()).toBe("codex");
+  });
+
+  it("a no-op unset does not create the project config file", () => {
+    const projectCfg = path.join(projectDir, ".argent", "config.json");
+    config(["unset", "lens.agent", "--scope", "project"]);
+    expect(output()).toContain("was not set at project scope");
+    expect(fs.existsSync(projectCfg)).toBe(false);
+  });
 });
 
 describe("argent config — validation & errors", () => {

@@ -148,10 +148,10 @@ parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a stri
 
   const targetScope: FlagScope = scope ?? "global";
   try {
-    setConfigValue(key, coerceCliValue(rawValue), targetScope);
-    console.log(
-      `Set ${pc.bold(key)} = ${formatValuePlain(coerceCliValue(rawValue))} (${targetScope}).`
-    );
+    // Echo the normalized value that was actually stored (asString trims,
+    // asStringArray drops blanks, …), not the raw CLI input.
+    const stored = setConfigValue(key, coerceCliValue(rawValue), targetScope);
+    console.log(`Set ${pc.bold(key)} = ${formatValuePlain(stored)} (${targetScope}).`);
   } catch (err) {
     reportError(err);
   }

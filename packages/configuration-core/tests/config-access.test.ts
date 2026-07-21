@@ -130,6 +130,23 @@ describe("unsetConfigValue", () => {
     expect(getConfigValueByKey("lens.agent", opts())).toBeUndefined();
     expect(unsetConfigValue("lens.agent", "global", opts())).toBe(false);
   });
+
+  it("a no-op unset never materializes the scope's config file", () => {
+    const projectConfig = configFilePath("project", opts());
+    expect(fs.existsSync(projectConfig)).toBe(false);
+    // Nothing is stored at the project scope, so this removes nothing…
+    expect(unsetConfigValue("lens.agent", "project", opts())).toBe(false);
+    // …and must not create <project-root>/.argent/config.json to prove it.
+    expect(fs.existsSync(projectConfig)).toBe(false);
+  });
+});
+
+describe("setConfigValue — return value", () => {
+  it("returns the normalized (stored) value, not the raw input", () => {
+    // asString trims, so the stored/returned value is the trimmed form.
+    expect(setConfigValue("lens.agent", "  codex  ", "global", opts())).toBe("codex");
+    expect(getConfigValueByKey("lens.agent", opts())).toBe("codex");
+  });
 });
 
 describe("listConfig", () => {
