@@ -6069,6 +6069,14 @@
         mv.pos.clear();
         mv.layoutSig = null;
         mv.layoutPoll = 0;
+        // Reset the layout accumulators too: without this a second crawl in the
+        // same window inherits the prior graph's seed counter (so its root no
+        // longer lands at world centre) and stale world extents.
+        mv.unanchoredSeeded = 0;
+        mv.worldW = 0;
+        mv.worldH = 0;
+        mv.worldMinX = 0;
+        mv.worldMinY = 0;
         mapNodesEl.textContent = "";
         mapEdgeLayer.textContent = "";
         closeMapDetail();
