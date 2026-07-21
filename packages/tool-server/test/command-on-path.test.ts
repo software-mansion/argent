@@ -101,4 +101,13 @@ describe("commandOnPath", () => {
     execFileMock.mockReturnValue({ stdout: "C:\\work\\repo\\adb.exe\r\n", stderr: "" });
     expect(await commandOnPath("adb")).toBeNull();
   });
+
+  it("rejects names with shell/glob metacharacters without shelling out", async () => {
+    setPlatform("darwin");
+    for (const bad of ["adb; rm -rf /", "$(whoami)", "adb*", "a b", "`id`", ""]) {
+      expect(await commandOnPath(bad)).toBeNull();
+    }
+    // Guard short-circuits before any execFile — nothing was ever spawned.
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
 });

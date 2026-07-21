@@ -147,7 +147,7 @@ const HOST_PLATFORM_KEY =
   process.platform === "linux" && process.arch === "arm64" ? "linux-arm64" : process.platform;
 const BIN_DIR = path.join(ARGENT_PKG, "bin", HOST_PLATFORM_KEY);
 // win32 ships a PE `.exe` (simulator-server.exe); every other host an
-// extensionless binary. Mirrors serverBinaryBasename() in
+// extensionless binary. Mirrors simulatorServerBinaryName() in
 // @argent/native-devtools-ios and bundle-tools.cjs.
 const BIN_BASENAME = process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
 const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", HOST_PLATFORM_KEY, BIN_BASENAME);

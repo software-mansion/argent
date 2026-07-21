@@ -30,6 +30,12 @@ const execFileAsync = promisify(execFile);
  * the POSIX `/bin/sh` form (which silently never matches on Windows).
  */
 export async function commandOnPath(name: string): Promise<string | null> {
+  // Command names are bare binary names. Rejecting anything else keeps the
+  // POSIX branch's `/bin/sh -c` interpolation safe if a future caller passes
+  // untrusted input, and stops `where`'s glob matching (`adb*`) from resolving
+  // something the caller didn't ask for. Behaviour-neutral for every current
+  // caller (all pass fixed literals); a hostile/malformed name becomes `null`.
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) return null;
   try {
     if (process.platform === "win32") {
       const { stdout } = await execFileAsync("where", [name], { timeout: 2_000 });
