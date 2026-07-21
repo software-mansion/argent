@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as http from "node:http";
 import { homedir } from "node:os";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
@@ -85,6 +86,34 @@ function initializeStdioTimestampWrapper(): void {
     stream.write = ((chunk: string | Uint8Array, ...rest: unknown[]) =>
       orig(`[${new Date().toISOString()}] ${chunk}`, ...(rest as []))) as typeof stream.write;
   }
+}
+
+/**
+ * Probe whether a healthy argent tool-server is already listening on
+ * `host:port`. Used to tell a redundant/overlapping instance (which lost the
+ * bind with EADDRINUSE) that the port is owned by a live peer, so it can defer
+ * cleanly instead of crash-looping.
+ *
+ * An argent tool-server answers `GET /tools` with 200 (the tools JSON) or, when
+ * an auth token is configured, 401 — either proves a live argent peer. No token
+ * is sent: reachability + argent-shaped response is all we need. A wedged peer
+ * that never answers within the timeout resolves `false`, so we still surface a
+ * genuinely stuck port as a crash rather than deferring to a dead server.
+ */
+export function probeArgentToolServer(host: string, port: number, timeoutMs = 500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.request({ host, port, path: "/tools", method: "GET", timeout: timeoutMs }, (res) => {
+      const isArgentPeer = res.statusCode === 200 || res.statusCode === 401;
+      res.resume(); // drain the response so the socket can close
+      resolve(isArgentPeer);
+    });
+    req.on("error", () => resolve(false)); // connection refused / reset / non-HTTP
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.end();
+  });
 }
 
 export function start(): void {
@@ -480,14 +509,26 @@ export function start(): void {
           /* swallow */
         }
       });
-      // A bind failure (EADDRINUSE from a stale server still holding the port,
-      // EACCES on a privileged port) is the socket half of the startup
-      // restart-loop population this diagnostics work exists to surface. Route it
-      // through crashShutdown so `err.code` is captured as error_syscall on a
-      // reason:"crash" stop instead of exiting silently with no telemetry at all.
-      // `listening` is still false here (the listen callback never ran), so the
-      // crash is correctly phased as "startup"; crashShutdown handles teardown,
-      // telemetry drain, and exit.
+      // Bind failure handling. EACCES (privileged port) and other errors are
+      // genuine faults → crashShutdown, which captures `err.code` as
+      // error_syscall on a reason:"crash" stop and handles teardown + telemetry
+      // drain + exit.
+      //
+      // EADDRINUSE is special: it means another server already owns HOST:PORT.
+      // Unconditionally crashing feeds a supervisor respawn → re-bind → crash
+      // loop — the 0.16.0 crash telemetry's `toolserver_bind` population (one
+      // machine alone: 785 crashes, ~1s uptime, 0 tool calls served, never
+      // serving anything). If a healthy argent tool-server already answers on
+      // the port, this instance is redundant, so shut down cleanly (exit 0) and
+      // defer to the existing one instead of looping. Only when nothing healthy
+      // owns the port (a foreign holder, or a wedged peer) do we still crash, so
+      // a genuinely stuck port stays visible.
+      const bindSignal: FailureSignal = {
+        error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+        failure_stage: "toolserver_bind",
+        failure_area: "tool_server",
+        error_kind: "crash",
+      };
       server.on("error", (err: NodeJS.ErrnoException) => {
         eventLog?.error({
           type: "tool_server.bind_failed",
@@ -495,24 +536,38 @@ export function start(): void {
           host: HOST,
           port: PORT,
           failureSignal: {
-            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
-            failure_stage: "toolserver_bind",
-            failure_area: "tool_server",
-            error_kind: "crash",
+            error_code: bindSignal.error_code,
+            failure_stage: bindSignal.failure_stage,
+            failure_area: bindSignal.failure_area,
+            error_kind: bindSignal.error_kind,
           },
         });
         const code = err.code ? `${err.code}: ` : "";
-        crashShutdown(
-          `Failed to bind ${HOST}:${PORT}`,
-          `${code}${err.message}`,
-          {
-            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
-            failure_stage: "toolserver_bind",
-            failure_area: "tool_server",
-            error_kind: "crash",
-          },
-          err
-        );
+        const crashBind = () =>
+          crashShutdown(`Failed to bind ${HOST}:${PORT}`, `${code}${err.message}`, bindSignal, err);
+
+        if (err.code === "EADDRINUSE") {
+          void probeArgentToolServer(HOST, PORT).then((isArgentPeer) => {
+            if (!isArgentPeer) {
+              crashBind();
+              return;
+            }
+            process.stderr.write(
+              `Another argent tool-server already owns ${HOST}:${PORT}; deferring to it (redundant instance).\n`
+            );
+            eventLog?.info({
+              type: "tool_server.deferred_to_existing",
+              msg: `Deferred to an existing tool-server on ${HOST}:${PORT}.`,
+              host: HOST,
+              port: PORT,
+            });
+            // Clean stop (not a crash): removes this redundant instance from the
+            // reason:"crash" restart-loop population.
+            void shutdown?.(0);
+          });
+          return;
+        }
+        crashBind();
       });
       // Bolt the per-Chromium-device WebSocket upgrade handler onto the live
       // server. Must happen AFTER `listen()` so the http.Server instance
