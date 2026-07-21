@@ -334,6 +334,117 @@ describe("when: execution", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("stamps nesting depth identically whether a block enters or skips", async () => {
+    // Depth is display metadata for the renderers' indentation. Two invariants:
+    // top-level steps omit the field entirely (a flat flow's report stays
+    // byte-identical to the pre-depth shape), and a skipped block reports the
+    // same depths as an entered one, so runs stay comparable run-to-run.
+    await writeFlow("depths", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "What's new", loose: true },
+          },
+          steps: [
+            { kind: "tap", selector: { text: "Skip", loose: true } },
+            {
+              kind: "when",
+              condition: { kind: "platform", platform: "ios" },
+              steps: [{ kind: "echo", message: "nested" }],
+            },
+          ],
+        },
+        { kind: "echo", message: "after block" },
+      ],
+    });
+
+    currentTree = () =>
+      screen([
+        n({ label: "What's new", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.2 } }),
+        n({ label: "Skip", frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.1 } }),
+      ]);
+    const entered = await run("depths");
+    expect(entered.steps.map((s) => `${s.kind}:${s.status}:${s.depth ?? 0}`)).toEqual([
+      "when:pass:0",
+      "tap:pass:1",
+      "when:pass:1",
+      "echo:pass:2",
+      "echo:pass:0",
+    ]);
+    // Top level omits the field, not depth: 0.
+    expect(entered.steps[0].depth).toBeUndefined();
+    expect(entered.steps[4].depth).toBeUndefined();
+
+    currentTree = () =>
+      screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
+    const skipped = await run("depths");
+    expect(skipped.steps.map((s) => `${s.kind}:${s.status}:${s.depth ?? 0}`)).toEqual([
+      "when:skip:0",
+      "tap:skip:1",
+      "when:skip:1",
+      "echo:skip:2",
+      "echo:pass:0",
+    ]);
+    expect(skipped.steps.map((s) => `${s.kind}:${s.depth ?? 0}`)).toEqual(
+      entered.steps.map((s) => `${s.kind}:${s.depth ?? 0}`)
+    );
+    // The skip path, too, omits the field at top level rather than emitting 0
+    // (the ?? 0 maps above cannot tell the two apart).
+    expect(skipped.steps[0].depth).toBeUndefined();
+    expect(skipped.steps[4].depth).toBeUndefined();
+  });
+
+  it("stamps depth on a run: inside a when block — expanded entered, one line skipped", async () => {
+    await writeFlow("dismiss", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Skip", loose: true } }],
+    });
+    await writeFlow("run-in-when", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "What's new", loose: true },
+          },
+          steps: [{ kind: "run", flow: "dismiss" }],
+        },
+        { kind: "echo", message: "after block" },
+      ],
+    });
+
+    currentTree = () =>
+      screen([
+        n({ label: "What's new", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.2 } }),
+        n({ label: "Skip", frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.1 } }),
+      ]);
+    const entered = await run("run-in-when");
+    // when marker at top level, run marker one deep, the fragment's steps two.
+    expect(entered.steps.map((s) => `${s.kind}:${s.status}:${s.depth ?? 0}`)).toEqual([
+      "when:pass:0",
+      "run:pass:1",
+      "tap:pass:2",
+      "echo:pass:0",
+    ]);
+
+    currentTree = () =>
+      screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
+    const skipped = await run("run-in-when");
+    // A skipped block's run: line stays single (the fragment is never loaded),
+    // at the block's child depth via reportBlockSkipped.
+    expect(skipped.steps.map((s) => `${s.kind}:${s.status}:${s.depth ?? 0}`)).toEqual([
+      "when:skip:0",
+      "run:skip:1",
+      "echo:pass:0",
+    ]);
+  });
+
   it("treats a failure inside an entered block as a real failure (hard stop)", async () => {
     currentTree = () =>
       screen([n({ label: "What's new", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.2 } })]);
@@ -415,6 +526,9 @@ describe("when: execution", () => {
       "tap:skip",
       "echo:skip",
     ]);
+    // The hard-stop expansion keeps the block's depths: marker at top level
+    // (field omitted), authored steps one deeper — same as an executed block.
+    expect(result.steps.map((s) => s.depth)).toEqual([undefined, undefined, 1, 1]);
     expect(result.steps[1].reason).toBeUndefined();
     expect(result.steps[3].message).toBe("inside");
     expect(result.taps).toHaveLength(0);
@@ -639,6 +753,9 @@ describe("when: execution", () => {
       "echo:skip",
       "echo:skip",
     ]);
+    // The errored-guard expansion keeps the entered-block depths: marker and
+    // trailing echo at top level (field omitted), authored steps one deeper.
+    expect(result.steps.map((s) => s.depth)).toEqual([undefined, 1, 1, 2, undefined]);
     expect(result.steps[2].reason).toBe("when guard errored");
     expect(result.errored).toBe(1);
     expect(result.skipped).toBe(2); // tap + nested when marker; echo is narration
@@ -1033,6 +1150,9 @@ describe("when: run cancellation", () => {
       "echo:skip",
     ]);
     expect(result.steps.map((s) => s.reason)).toEqual(Array(5).fill("run aborted"));
+    // Abort skips keep the block's depths — top-level markers omit the field,
+    // authored steps sit one deeper — same shape as a clean run.
+    expect(result.steps.map((s) => s.depth)).toEqual([undefined, undefined, 1, 1, 2]);
     // The skipped nested echo keeps its message, matching reportBlockSkipped.
     expect(result.steps[4].message).toBe("nested");
     expect(result.taps).toHaveLength(0);
