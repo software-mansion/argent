@@ -437,6 +437,34 @@ describe("writeMapJson", () => {
     expect(fs.existsSync(outPath)).toBe(true);
   });
 
+  it("strips the DEL/C1 control bytes device text smuggles past JSON.stringify", () => {
+    // JSON.stringify escapes only C0 (U+0000-U+001F); DEL and the C1 range
+    // (U+007F-U+009F — e.g. the CSI/OSC introducers) survive literally and would
+    // fire an escape sequence when the artifact is viewed with cat/less. A
+    // malicious crawled app's AX label reaches node.title / edge action.label, so
+    // the writer must strip them, matching the stdout sanitizer.
+    const csi = String.fromCharCode(0x9b);
+    const osc = String.fromCharCode(0x9d);
+    const del = String.fromCharCode(0x7f);
+    const state = {
+      nodes: [{ id: "s0", title: `Settings${csi}2J${del}` }],
+      edges: [{ from: "s0", to: "s1", action: { label: `Tap${osc}0;evil` } }],
+    };
+    const outPath = path.join(dir, "graph.json");
+    writeMapJson(state, outPath);
+    const text = fs.readFileSync(outPath, "utf8");
+    // No raw DEL/C1 byte survived into the file.
+    const leaks = [...text].some((c) => c.charCodeAt(0) >= 0x7f && c.charCodeAt(0) <= 0x9f);
+    expect(leaks).toBe(false);
+    // The visible text is preserved — only the control bytes are removed.
+    const parsed = JSON.parse(text) as {
+      nodes: { title: string }[];
+      edges: { action: { label: string } }[];
+    };
+    expect(parsed.nodes[0]!.title).toBe("Settings2J");
+    expect(parsed.edges[0]!.action.label).toBe("Tap0;evil");
+  });
+
   it("defaults to ./argent-map.json when no path is given", () => {
     process.chdir(dir);
     const written = writeMapJson({ ok: true }, null);

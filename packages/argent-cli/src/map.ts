@@ -54,12 +54,18 @@ const FLAG_MAX = {
 const MAX_DEEP_LINKS = 20;
 
 // Device-sourced text (screen titles, element labels) comes from an arbitrary,
-// untrusted app and is printed to the user's terminal. Strip C0/C1 control
-// bytes and DEL so a crafted accessibility label can't smuggle ANSI/OSC escape
-// sequences (screen-clear, clipboard-write, title-set) through stdout. The
-// --json path is already safe — JSON.stringify escapes these.
+// untrusted app and reaches the user's terminal two ways: printed to stdout, and
+// written to the --json artifact (later viewed with cat/less). A crafted
+// accessibility label must not smuggle ANSI/OSC escape sequences (screen-clear,
+// clipboard-write, title-set) through either. stdout renders raw, so the whole
+// control range is stripped there; the --json file needs only the bytes
+// JSON.stringify leaves LITERAL — it escapes C0 (U+0000-U+001F) but NOT DEL/C1
+// (U+007F-U+009F, e.g. the CSI/OSC introducers) — since those are what would
+// otherwise survive into the file and fire when it is viewed.
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g;
+// (no-control-regex flags only C0, U+0000-U+001F, so this DEL/C1 range needs no disable)
+const JSON_LEAKING_CONTROL_CHARS = /[\x7f-\x9f]/g;
 function sanitizeDeviceText(text: string): string {
   return text.replace(CONTROL_CHARS, "");
 }
@@ -349,14 +355,32 @@ async function fetchMapState(baseUrl: string, token: string): Promise<unknown> {
   return res.json();
 }
 
+/** Recursively strip the control bytes JSON.stringify would emit LITERALLY
+ * (DEL + C1, U+007F-U+009F) from every string in the fetched map state, so the
+ * --json artifact can't carry a terminal escape sequence smuggled in through a
+ * device-sourced screen title or element label. C0 (U+0000-U+001F) is left to
+ * JSON.stringify, which escapes it safely. */
+function stripJsonControlChars(value: unknown): unknown {
+  if (typeof value === "string") return value.replace(JSON_LEAKING_CONTROL_CHARS, "");
+  if (Array.isArray(value)) return value.map(stripJsonControlChars);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = stripJsonControlChars(v);
+    return out;
+  }
+  return value;
+}
+
 /** Write an already-fetched map `state` to the `--json` output path (default
  * ./argent-map.json), creating parent directories as needed. Returns the
  * resolved path written. Shared by the normal-finish and cancel paths so a
- * cancelled crawl keeps the JSON artifact the user asked for. */
+ * cancelled crawl keeps the JSON artifact the user asked for. Device-sourced
+ * strings are stripped of the DEL/C1 bytes JSON.stringify would leave literal
+ * (see JSON_LEAKING_CONTROL_CHARS) so the file is safe to view in a terminal. */
 export function writeMapJson(state: unknown, jsonPath: string | null): string {
   const outPath = path.resolve(jsonPath ?? "argent-map.json");
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  fs.writeFileSync(outPath, JSON.stringify(state, null, 2) + "\n");
+  fs.writeFileSync(outPath, JSON.stringify(stripJsonControlChars(state), null, 2) + "\n");
   return outPath;
 }
 
