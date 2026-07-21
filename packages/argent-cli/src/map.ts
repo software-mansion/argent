@@ -559,6 +559,25 @@ export async function map(argv: string[], options: MapCommandOptions): Promise<v
       // discarding what the crawl covered before failing.
       console.error(`Partial map (${seen.screens} screen${seen.screens === 1 ? "" : "s"}):`);
       console.error(`  ${mapUrl}`);
+      // Honour a requested --json on the error path too. The cancel and
+      // normal-finish branches both persist the partial graph, so a crawl that
+      // threw AFTER mapping screens (e.g. a screenshot that rejected) must not
+      // silently drop the artifact the user explicitly asked for. The server has
+      // already finalized the store (status "failed").
+      if (args.json) {
+        const state = await fetchMapState(url, token).catch(() => null);
+        if (state !== null) {
+          try {
+            console.error(`  Wrote: ${writeMapJson(state, args.jsonPath)}`);
+          } catch (err) {
+            console.error(`map: failed to write the graph JSON: ${errMsg(err)}`);
+          }
+        } else {
+          console.error(
+            "map: could not fetch the partial graph, so --json output was not written."
+          );
+        }
+      }
     }
     return exitAfterFlush(1);
   }
