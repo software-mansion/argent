@@ -38,16 +38,17 @@ function scripted(states: DescribeNode[]) {
 }
 
 describe("fetchStableTree — sampled tree capture", () => {
-  it("settles and exits early on a stable screen (past the settle-sample floor)", async () => {
+  it("a uniformly stable screen samples the full budget and returns it", async () => {
     const stable = treeWithButtons(10);
     const s = scripted([stable, stable]);
     const result = await fetchStableTree(s.options);
     expect(result).toBe(stable);
-    // Three samples, not two: the early exit is held one read past a bare
-    // agreeing pair (MIN_SETTLE_SAMPLES) so an oscillation's fuller phase has a
-    // chance to appear before we commit to the current look.
-    expect(s.fetches()).toBe(3);
-    expect(s.sleeps).toHaveLength(2);
+    // A screen that reads identical every time is INDISTINGUISHABLE from an
+    // oscillation caught in its sparse phase (both just agree at one count), so
+    // the early exit must not fire — it never observed the tree grow to a peak
+    // (minCount === maxCount). It samples the whole budget and returns the tree.
+    expect(s.fetches()).toBe(5);
+    expect(s.sleeps).toHaveLength(4);
   });
 
   it("a sparse phase sampled first does not lock in before the fuller phase appears", async () => {
@@ -62,6 +63,25 @@ describe("fetchStableTree — sampled tree capture", () => {
     );
     const fullFirst = screenKey(
       await fetchStableTree(scripted([full, full, sparse, sparse, sparse]).options)
+    );
+    expect(sparseFirst).toBe(fullFirst);
+    expect(sparseFirst).toBe(screenKey(full));
+  });
+
+  it("a sparse phase leading for the whole settle floor still does not lock in before the fuller phase", async () => {
+    // The bite the plain floor missed: the sparse phase leads for the FIRST THREE
+    // reads (the settle floor), so the early-exit's `count === maxCount` guard is
+    // vacuously true — maxCount is only the fullest seen SO FAR, and nothing
+    // fuller has been sampled yet — and a naive floor commits to sparse at read 3,
+    // never sampling the fuller phase that arrives at read 4 (within the 5-sample
+    // budget). The capture must still hand back the fuller key.
+    const full = treeWithButtons(41);
+    const sparse = treeWithButtons(30);
+    const sparseFirst = screenKey(
+      await fetchStableTree(scripted([sparse, sparse, sparse, full, full]).options)
+    );
+    const fullFirst = screenKey(
+      await fetchStableTree(scripted([full, full, full, sparse, sparse]).options)
     );
     expect(sparseFirst).toBe(fullFirst);
     expect(sparseFirst).toBe(screenKey(full));

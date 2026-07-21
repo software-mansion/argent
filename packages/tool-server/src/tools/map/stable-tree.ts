@@ -12,13 +12,17 @@ import type { DescribeNode } from "../describe/contract";
  *
  * So the driver samples the tree several times and always returns the fullest
  * snapshot seen — the sparser states are subsets of it. Two consecutive samples
- * that agree on the fingerprint are only a cost signal that the screen has
- * settled, so it can stop describing early — but only once it has settled on its
- * FULLEST look (and past a small floor of samples), so a sparse phase sampled
- * first can't lock the capture in before the fuller phase appears. It still
- * hands back the fullest snapshot, never the current sample. A transient
- * describe failure on one sample is ridden out (the good samples are kept); only
- * an all-failed capture surfaces the error.
+ * that agree on the fingerprint are a cost signal that the screen has settled, so
+ * it can stop describing early — but ONLY once it has watched the tree climb to a
+ * peak and hold there: it has seen a strictly sparser sample, so the peak is one
+ * it grew INTO rather than just the first phase it landed in. That is what stops
+ * a sparse phase sampled first from locking the capture in before the fuller
+ * phase appears — a run of leading sparse reads is the fullest seen SO FAR, so
+ * "fullest look" alone is not enough; it keeps sampling until it has actually
+ * witnessed the tree be both sparser and fuller. It still hands back the fullest
+ * snapshot, never the current sample. A transient describe failure on one sample
+ * is ridden out (the good samples are kept); only an all-failed capture surfaces
+ * the error.
  *
  * Known limitation: "fullest wins" assumes sparser samples are subsets of the
  * fullest (AX dropping and refilling content). A transient that ADDS nodes — a
@@ -65,6 +69,7 @@ export async function fetchStableTree(options: StableTreeOptions): Promise<Descr
 
   let best: { tree: DescribeNode; count: number } | null = null;
   let maxCount = 0;
+  let minCount = Infinity;
   let prevKey: string | null = null;
   let lastError: unknown = null;
 
@@ -84,16 +89,33 @@ export async function fetchStableTree(options: StableTreeOptions): Promise<Descr
     }
     const count = countNodes(tree);
     maxCount = Math.max(maxCount, count);
+    minCount = Math.min(minCount, count);
     // ">=" so an equally-full later sample wins: it is the more recent look.
     if (!best || count >= best.count) best = { tree, count };
 
     const key = options.keyOf(tree);
-    // Settled — stop early to save describes, but only once we have settled on
-    // the FULLEST look seen this pass (`count === maxCount`) and past the floor:
-    // a sparse phase of an oscillation must never win over a fuller phase, or the
-    // same screen keys differently depending on sampling order. Hand back `best`
-    // (the fullest snapshot), never the current sample.
-    if (i + 1 >= MIN_SETTLE_SAMPLES && prevKey !== null && key === prevKey && count === maxCount) {
+    // Settled — stop early to save describes, but ONLY once we have watched the
+    // tree climb to a peak and hold there:
+    //   • two consecutive samples agree (`key === prevKey`) — the settle signal;
+    //   • the current sample is the fullest seen (`count === maxCount`);
+    //   • AND we have actually observed a strictly sparser sample
+    //     (`minCount < maxCount`), so `maxCount` is a peak we grew INTO, not just
+    //     the first phase we happened to land in.
+    // The last clause is the crux: without it the guard is vacuous when a sparse
+    // phase LEADS — `maxCount` is only the fullest seen SO FAR, so a run of sparse
+    // reads trivially satisfies `count === maxCount` and locks the capture to the
+    // sparse look before the fuller phase is ever sampled (keying the screen
+    // differently depending on which phase the visit began in). Requiring an
+    // observed sparser sample means a leading sparse phase never early-exits; it
+    // keeps sampling until the fuller phase appears (or the budget runs out).
+    // Always hands back `best` (the fullest snapshot), never the current sample.
+    if (
+      i + 1 >= MIN_SETTLE_SAMPLES &&
+      prevKey !== null &&
+      key === prevKey &&
+      count === maxCount &&
+      minCount < maxCount
+    ) {
       return best!.tree;
     }
     prevKey = key;
