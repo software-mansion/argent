@@ -102,6 +102,26 @@ export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: st
   }
 }
 
+/**
+ * Reject a start whose readiness resumed after the session was disposed
+ * (process shutdown). Call synchronously right before spawn, with no await
+ * between this check and the spawn/pendingChild stamp, so no capture is
+ * launched that dispose's teardown can no longer see and reap.
+ */
+export function assertNotDisposed(api: ScreenRecordingSessionApi, stage: string): void {
+  if (api.disposed) {
+    throw new FailureError(
+      `The tool-server is shutting down; screen recording was not started on device ${api.deviceId}.`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN,
+        failure_stage: stage,
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      }
+    );
+  }
+}
+
 /** Stat the finished video and reject an empty/missing container loudly. */
 export async function statNonEmptyOutput(outputFile: string, stage: string): Promise<number> {
   let size: number;

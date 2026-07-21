@@ -12,6 +12,7 @@ import {
 } from "../../../utils/screen-recording-reminder";
 import {
   assertNoActiveRecording,
+  assertNotDisposed,
   assertStoppableSession,
   clip,
   statNonEmptyOutput,
@@ -138,6 +139,11 @@ async function startScreenRecordingIosLocked(
     os.tmpdir(),
     `argent-screen-recording-${params.udid.slice(0, 8)}-${Date.now()}.mp4`
   );
+
+  // No await between here and `api.pendingChild = child` below: if dispose()
+  // ran (shutdown) while this start was suspended earlier, abort now rather
+  // than spawn a recorder the teardown can no longer reap.
+  assertNotDisposed(api, "ios_screen_recording_start");
 
   // h264 over the hevc default: universally decodable, and the whole point of
   // the artifact is to be watched/attached elsewhere.

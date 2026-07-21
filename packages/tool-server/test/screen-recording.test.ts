@@ -18,6 +18,7 @@ vi.mock("../src/utils/adb", () => ({
 
 import { spawn } from "child_process";
 import { adbShell, runAdb } from "../src/utils/adb";
+import { resolveAndroidBinary } from "../src/utils/android-binary";
 import {
   screenRecordingSessionBlueprint,
   type ScreenRecordingSessionApi,
@@ -38,6 +39,7 @@ import {
 const mockSpawn = vi.mocked(spawn);
 const mockAdbShell = vi.mocked(adbShell);
 const mockRunAdb = vi.mocked(runAdb);
+const mockResolveAndroidBinary = vi.mocked(resolveAndroidBinary);
 
 const IOS_UDID = "6DBF83B4-0000-0000-0000-000000000000";
 const ANDROID_SERIAL = "emulator-5554";
@@ -410,6 +412,25 @@ describe("iOS screen recording", () => {
     // A failed stop must still return the session to a startable state.
     expect(api.recordingActive).toBe(false);
     expect(api.outputFile).toBeNull();
+    expect(getActiveScreenRecordings()).toHaveLength(0);
+  });
+
+  it("aborts a start (no spawn) once the session has been disposed", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    const api = instance.api;
+    await instance.dispose(); // process shutdown: sets api.disposed
+
+    await expect(
+      startScreenRecordingIos(api, { udid: IOS_UDID, timeLimitSeconds: 180 })
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        getFailureSignal(err)?.error_code === FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+    );
+    // The guard sits before spawn, so no orphaned recordVideo is launched.
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(api.startPending).toBe(false);
     expect(getActiveScreenRecordings()).toHaveLength(0);
   });
 });
@@ -802,6 +823,93 @@ describe("Android screen recording", () => {
     releasePull!();
     const result = await firstStop;
     expect(result.sizeBytes).toBe(64);
+    await fs.rm(result.outputFile, { force: true });
+  });
+
+  it("a start that resumes after dispose (mid resolveAndroidBinary) does not spawn an orphan", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, androidDevice, {
+      device: androidDevice,
+    } as never);
+    const api = instance.api;
+
+    // Block the start inside resolveAndroidBinary so dispose can run while it is
+    // suspended (startPending set, but no child spawned / pendingChild yet).
+    let releaseResolve!: () => void;
+    mockResolveAndroidBinary.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseResolve = () => resolve("/fake/adb");
+        })
+    );
+    const startPromise = startScreenRecordingAndroid(api, {
+      udid: ANDROID_SERIAL,
+      timeLimitSeconds: 60,
+    });
+    // Suspended at resolveAndroidBinary: this is exactly the window dispose used
+    // to miss on Android (pendingChild still null).
+    expect(api.startPending).toBe(true);
+    expect(api.pendingChild).toBeNull();
+
+    await instance.dispose(); // server shutdown reaps the (empty) session
+    releaseResolve(); // start now resumes past resolveAndroidBinary
+
+    await expect(startPromise).rejects.toSatisfy(
+      (err: unknown) =>
+        getFailureSignal(err)?.error_code === FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+    );
+    // No device-side screenrecord is spawned after teardown.
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(api.startPending).toBe(false);
+    expect(getActiveScreenRecordings()).toHaveLength(0);
+  });
+
+  it("a delivered stop whose on-device rm fails keeps the file for the next start's sweep", async () => {
+    const { api, child } = await startAndroid(60);
+    vi.useRealTimers();
+
+    const onDeviceFile = api.androidOnDeviceFile!;
+    mockAdbShell.mockImplementation(async (_serial, command) => {
+      if (command.startsWith("kill -INT")) {
+        child.exit(0);
+        return "";
+      }
+      if (command.startsWith("rm -f")) throw new Error("adb rm failed"); // cleanup hiccup
+      return "";
+    });
+    mockRunAdb.mockImplementation(async (args) => {
+      if (args[2] === "pull") await fs.writeFile(args[4]!, Buffer.alloc(256, 1));
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await stopScreenRecordingAndroid(api);
+    // The video was still delivered and the reminder cleared...
+    expect(result.sizeBytes).toBe(256);
+    expect(api.pendingRetrieval).toBe(false);
+    expect(api.outputFile).toBeNull();
+    expect(getActiveScreenRecordings()).toHaveLength(0);
+    // ...but the un-removed /sdcard file is remembered so a later start sweeps it
+    // instead of orphaning it permanently.
+    expect(api.androidOnDeviceFile).toBe(onDeviceFile);
+
+    // Next start supersedes and removes the stranded file.
+    const next = fakeChild();
+    vi.useFakeTimers();
+    const startPromise = startScreenRecordingAndroid(api, {
+      udid: ANDROID_SERIAL,
+      timeLimitSeconds: 60,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    next.stdout.emit("data", Buffer.from("READY:9999\n"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await startPromise;
+    await vi.advanceTimersByTimeAsync(0); // fire-and-forget stale rm settles
+    expect(mockAdbShell).toHaveBeenCalledWith(
+      ANDROID_SERIAL,
+      `rm -f ${onDeviceFile}`,
+      expect.anything()
+    );
+    next.exit(0);
+
     await fs.rm(result.outputFile, { force: true });
   });
 });

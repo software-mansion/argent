@@ -13,6 +13,7 @@ import {
 } from "../../../utils/screen-recording-reminder";
 import {
   assertNoActiveRecording,
+  assertNotDisposed,
   assertStoppableSession,
   clip,
   statNonEmptyOutput,
@@ -185,6 +186,10 @@ async function startScreenRecordingAndroidLocked(
   // on-device capture so its exit event doubles as "the recording ended".
   const shellCommand =
     `screenrecord --time-limit ${timeLimitSeconds} ${onDeviceFile} & ` + `echo "READY:$!"; wait $!`;
+  // No await between here and `api.pendingChild = child` below: if dispose()
+  // ran (shutdown) across the `resolveAndroidBinary` hop above, abort now
+  // rather than spawn a device-side recorder the teardown can no longer reap.
+  assertNotDisposed(api, "android_screen_recording_start");
   const child = spawn(adbPath, ["-s", params.udid, "shell", shellCommand], {
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -342,6 +347,10 @@ export async function stopScreenRecordingAndroid(
   // the device": the finally below either fully resets the session, or keeps
   // it retrievable so this stop can be retried after e.g. a pull timeout.
   let delivered = false;
+  // Whether the post-pull on-device `rm` actually succeeded. If it didn't, the
+  // (already-pulled) mp4 is still on /sdcard, so we keep its path on the
+  // session for the next start's stale-sweep instead of orphaning it forever.
+  let onDeviceRemoved = false;
 
   try {
     const child = api.captureProcess;
@@ -411,7 +420,14 @@ export async function stopScreenRecordingAndroid(
     delivered = true;
     await adbShell(api.deviceId, `rm -f ${onDeviceFile}`, {
       timeoutMs: STOP_PROBE_TIMEOUT_MS,
-    }).catch(() => {});
+    })
+      .then(() => {
+        onDeviceRemoved = true;
+      })
+      .catch(() => {
+        // Swallowed: the video is already on the host, so a failed cleanup must
+        // not fail the stop. The path is preserved below for later cleanup.
+      });
 
     // Capture length, not wall-clock-since-start: after the cap fires the
     // recording is over even if stop arrives much later.
@@ -425,10 +441,13 @@ export async function stopScreenRecordingAndroid(
     api.androidDevicePid = null;
     if (delivered) {
       // Return the session to a fully startable state (same contract as the
-      // Android native-profiler stop).
+      // Android native-profiler stop). If the post-pull `rm` failed, the mp4 is
+      // still on /sdcard: keep its path (not null) so the next start's stale
+      // sweep removes it instead of leaking it permanently — the video is
+      // already delivered, so the reminder is still cleared below.
       api.pendingRetrieval = false;
       api.outputFile = null;
-      api.androidOnDeviceFile = null;
+      api.androidOnDeviceFile = onDeviceRemoved ? null : onDeviceFile;
       api.wallClockStartMs = null;
       api.wallClockEndMs = null;
       api.timeLimitSeconds = null;

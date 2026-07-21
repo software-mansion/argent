@@ -43,6 +43,15 @@ export interface ScreenRecordingSessionApi {
   /** True while a stop is running; a concurrent start/stop must not interleave. */
   stopPending: boolean;
   /**
+   * Set the moment dispose() begins (process shutdown). A start suspended at a
+   * pre-spawn await (iOS: before its synchronous spawn; Android: across the
+   * `resolveAndroidBinary` hop) checks this immediately before spawning and
+   * aborts — otherwise it would spawn a capture AFTER dispose already ran,
+   * orphaning a device-side recorder that `pendingChild` reaping can no longer
+   * see. Never reset (dispose is terminal for the instance).
+   */
+  disposed: boolean;
+  /**
    * True once the capture ended (cap, crash, failed pull) but the video has
    * not been handed over by `screen-recording-stop` yet — the state the
    * reminder note keeps pointing at.
@@ -145,6 +154,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       recordingActive: false,
       startPending: false,
       stopPending: false,
+      disposed: false,
       pendingRetrieval: false,
       captureProcess: null,
       pendingChild: null,
@@ -165,6 +175,10 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
     return {
       api: state,
       dispose: async () => {
+        // Synchronously, before any await: a start suspended at a pre-spawn
+        // await will observe this and abort instead of spawning an orphan the
+        // teardown below can no longer reap.
+        state.disposed = true;
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
