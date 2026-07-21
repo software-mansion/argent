@@ -11,6 +11,7 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
@@ -123,6 +124,11 @@ async function buildRemoteInstance(
 // character — defence-in-depth at the spawn sink, independent of the
 // per-tool zod schemas and the /preview device-list check.
 const SAFE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+// Physical-iOS support is experimental and opt-in. The sim-server factory is the
+// one chokepoint every physical-iPhone tool (tap/swipe/button/screenshot)
+// resolves through, so gating it here keeps the whole surface behind the flag.
+const PHYSICAL_IOS_DEVICES_FLAG = "physical-ios-devices";
 
 /**
  * The simulator-server subcommand that drives a given device. iOS simulators and
@@ -359,6 +365,17 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
           );
         }
         await ensureAutomationEnabled(device.id).catch(() => {});
+      } else if (!isFlagEnabled(PHYSICAL_IOS_DEVICES_FLAG)) {
+        // A physical iPhone (`kind === "device"`) is behind the opt-in flag.
+        throw new FailureError(
+          `Physical iOS support is disabled. Enable it with: argent enable ${PHYSICAL_IOS_DEVICES_FLAG}`,
+          {
+            error_code: FAILURE_CODES.CORE_DEVICE_FLAG_DISABLED,
+            failure_stage: "simulator_server_factory_physical_ios_flag",
+            failure_area: "tool_server",
+            error_kind: "unsupported",
+          }
+        );
       }
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
