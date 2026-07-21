@@ -828,6 +828,93 @@ describe("crawlApp — replay and backtracking", () => {
     expect(snap.edges.some((e) => e.from === u.id && e.to === t.id)).toBe(true);
   });
 
+  it("re-propagates a shorter depth through a SPENT hub, reviving a depth-capped descendant that now fits", async () => {
+    // The plain-crawl twin of the deep-link re-root. A hub is discovered the LONG
+    // way first (Home→Go Deep→Inter→Hub, depth 2), and exploring its only action
+    // records a depth-capped child, leaving the hub SPENT (owes nothing). Later
+    // Home's direct "Go Short" link lands back on the hub at depth 1. Because the
+    // hub owes no actions, neither owed-action revival branch fires — but its
+    // capped child's subtree is now within budget via the short route and must be
+    // recovered. Regression: Leaf (Home→Go Short→Hub→To Capped→To Leaf = 3 taps ≤
+    // maxDepth 3) was silently dropped because the spent hub's shorter depth never
+    // propagated to its already-recorded, depth-capped descendant.
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["Go Deep", "Go Short"]),
+        inter: screenTree("Inter", ["To Hub"]),
+        hub: screenTree("Hub", ["To Capped"]),
+        capped: screenTree("Capped", ["To Leaf"]),
+        leaf: screenTree("Leaf", []),
+      },
+      {
+        home: { "Go Deep": "inter", "Go Short": "hub" },
+        inter: { "To Hub": "hub" },
+        hub: { "To Capped": "capped" },
+        capped: { "To Leaf": "leaf" },
+      },
+      "home"
+    );
+    const store = makeStore();
+    await crawl(app, store, { maxDepth: 3 });
+    const snap = store.snapshot();
+
+    expect(snap.nodes.map((x) => x.title).sort()).toEqual([
+      "Capped",
+      "Home",
+      "Hub",
+      "Inter",
+      "Leaf",
+    ]);
+    const capped = snap.nodes.find((x) => x.title === "Capped")!;
+    const leaf = snap.nodes.find((x) => x.title === "Leaf")!;
+    expect(leaf).toBeDefined();
+    expect(snap.edges.some((e) => e.from === capped.id && e.to === leaf.id)).toBe(true);
+  });
+
+  it("re-propagates a shorter depth across a graph CYCLE without looping, recovering the capped tail", async () => {
+    // The re-propagation walks recorded edges, so a back-edge (Mid→Hub) forms a
+    // cycle it must not loop on. Hub is found deep (Home→Go Deep→A→Hub, depth 2),
+    // Mid below it links BACK to Hub (recorded during the deep crawl) and also to
+    // a depth-capped Capped→Leaf tail. When Home's short link re-roots Hub to
+    // depth 1, propagation flows Hub→Mid (2) then hits the Mid→Hub back-edge
+    // (candidate 3 ≥ Hub's new depth 1 → skipped, so it terminates) and Mid→Capped
+    // (3 < maxDepth 4 → Capped revived). The whole tail is recovered and the crawl
+    // still terminates.
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["Go Deep", "Go Short"]),
+        a: screenTree("Screen A", ["To Hub"]),
+        hub: screenTree("Hub", ["To Mid"]),
+        mid: screenTree("Mid", ["Back To Hub", "To Capped"]),
+        capped: screenTree("Capped", ["To Leaf"]),
+        leaf: screenTree("Leaf", []),
+      },
+      {
+        home: { "Go Deep": "a", "Go Short": "hub" },
+        a: { "To Hub": "hub" },
+        hub: { "To Mid": "mid" },
+        mid: { "Back To Hub": "hub", "To Capped": "capped" },
+        capped: { "To Leaf": "leaf" },
+      },
+      "home"
+    );
+    const store = makeStore();
+    await crawl(app, store, { maxDepth: 4 });
+    const snap = store.snapshot();
+
+    expect(snap.nodes.map((x) => x.title).sort()).toEqual([
+      "Capped",
+      "Home",
+      "Hub",
+      "Leaf",
+      "Mid",
+      "Screen A",
+    ]);
+    const capped = snap.nodes.find((x) => x.title === "Capped")!;
+    const leaf = snap.nodes.find((x) => x.title === "Leaf")!;
+    expect(snap.edges.some((e) => e.from === capped.id && e.to === leaf.id)).toBe(true);
+  });
+
   it("revives an exhausted-with-owed screen when a later tap lands back on it in budget", async () => {
     // Screen A owes "To Z" but gets marked exhausted when a replay can't get back
     // to it (its recorded path diverges). Later, tapping "To A" from Screen B

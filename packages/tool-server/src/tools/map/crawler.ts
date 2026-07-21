@@ -193,9 +193,24 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   const startedAt = driver.now();
 
   const byKey = new Map<string, CrawlNode>();
+  const byId = new Map<string, CrawlNode>();
   const crawlNodes: CrawlNode[] = [];
+  // Outgoing screen→screen edges (id → [{to, action}]), mirrored from the store
+  // as they are recorded, so a shorter-route revisit can re-propagate depth down
+  // the already-explored graph without re-deriving adjacency from the wire model.
+  const outEdges = new Map<string, { to: string; action: MapAction }[]>();
   let outsideNodeId: string | null = null;
   let screens = 0;
+
+  // Record a real screen→screen edge in BOTH the store (the wire graph) and the
+  // in-memory adjacency the depth re-propagation walks. The synthetic "outside"
+  // edge is intentionally NOT mirrored — it has no crawlable descendants.
+  function linkEdge(from: string, to: string, action: MapAction): void {
+    store.addEdge(from, to, action);
+    const list = outEdges.get(from);
+    if (list) list.push({ to, action });
+    else outEdges.set(from, [{ to, action }]);
+  }
 
   const aborted = (): boolean => signal?.aborted === true;
   const overTime = (): boolean => driver.now() - startedAt >= limits.timeBudgetMs;
@@ -270,6 +285,44 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
   }
 
   /**
+   * A shorter route to `root` was just found: push it down the already-explored
+   * graph. Any descendant this shortens has its depth/path/entry re-derived from
+   * the new route, and a descendant that was CAPPED at the depth budget but now
+   * fits (and still owes actions) is revived so the frontier backtrack replays to
+   * it and finishes its subtree. Depth is a traversal artifact, not a screen
+   * property — reaching a hub more shallowly can bring its whole subtree back
+   * within maxDepth, and that must hold whether or not the hub itself still owes
+   * actions (a spent hub still gates the depth of everything below it). This is
+   * the tap-path twin of the deep-link re-root. Terminates: a node is enqueued
+   * only when its depth STRICTLY decreases, and depth is a non-negative integer,
+   * so cycles cannot loop forever.
+   */
+  function repropagateShorterDepth(root: CrawlNode): void {
+    const queue: CrawlNode[] = [root];
+    while (queue.length) {
+      const parent = queue.shift()!;
+      for (const edge of outEdges.get(parent.id) ?? []) {
+        const child = byId.get(edge.to);
+        if (!child) continue;
+        const candidate = parent.depth + 1;
+        if (candidate >= child.depth) continue; // no improvement on this route
+        child.depth = candidate;
+        child.path = [...parent.path, edge.action];
+        child.entryUrl = parent.entryUrl;
+        if (
+          child.exhausted &&
+          child.nextAction < child.actions.length &&
+          child.depth < limits.maxDepth
+        ) {
+          child.exhausted = false;
+          store.patchNode(child.id, { exhausted: false });
+        }
+        queue.push(child);
+      }
+    }
+  }
+
+  /**
    * Record a newly discovered in-app screen: its store node and, for a
    * tap-reached screen, the edge from the screen that reached it. The parent
    * edge (when given) is added in the SAME synchronous store tick as the node —
@@ -310,9 +363,10 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
     };
     if (actions.length === 0) markExhausted(node);
     byKey.set(key, node);
+    byId.set(stored.id, node);
     crawlNodes.push(node);
     screens += 1;
-    if (parentEdge) store.addEdge(parentEdge.from, stored.id, parentEdge.action);
+    if (parentEdge) linkEdge(parentEdge.from, stored.id, parentEdge.action);
     const shot = await driver.screenshot(stored.id);
     if (shot) store.patchNode(stored.id, { screenshotPath: shot });
     emit({ kind: "screen", nodeId: stored.id, title: stored.title, depth, screens });
@@ -610,47 +664,46 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
 
       const known = byKey.get(key);
       if (known) {
-        store.addEdge(current.id, known.id, action);
-        // Revisit of an already-mapped screen still owing actions: keep crawling
-        // from right here — we are standing on it, and `current`'s remaining
-        // actions stay owed to the frontier backtrack. `depth` is a traversal
-        // artifact, not a screen property, so if this tap path reached the screen
-        // more shallowly than it was first recorded, adopt the shorter route:
-        // otherwise its stale-deep depth would cap children that are in fact
-        // within budget and drop reachable screens (the same reason the depth-cap
-        // and deep-link re-roots below reset depth).
+        linkEdge(current.id, known.id, action);
+        // `depth` is a traversal artifact, not a screen property. If this tap
+        // reached `known` more shallowly than it was first recorded, adopt the
+        // shorter route and PUSH IT down the already-explored graph: a hub first
+        // found deep then reached by a short link brings its whole subtree —
+        // including screens that capped out at the old depth — back within
+        // budget. This holds whether or not the hub itself still owes actions (a
+        // spent hub still gates its subtree's depth), so it runs BEFORE the
+        // owed-action branches. Without it a stale-deep hub silently drops
+        // reachable screens behind an action it already consumed. (Tap-path twin
+        // of the deep-link re-root.)
         const revisitDepth = current.depth + 1;
+        if (revisitDepth < known.depth) {
+          known.depth = revisitDepth;
+          known.path = [...current.path, action];
+          known.entryUrl = current.entryUrl;
+          repropagateShorterDepth(known);
+        }
+        // Still owes actions: keep crawling from right here — we are standing on
+        // it, and `current`'s remaining actions stay owed to the frontier.
         if (!known.exhausted && known.nextAction < known.actions.length) {
-          if (revisitDepth < known.depth) {
-            known.depth = revisitDepth;
-            known.path = [...current.path, action];
-            known.entryUrl = current.entryUrl;
-          }
           current = known;
           continue;
         }
-        // An exhausted screen that still owes actions was abandoned either at the
-        // depth cap (too deep to descend) or when a replay could not get back to
-        // it to finish its actions. Either way this tap just landed us on it, so
-        // the "couldn't reach it" reason is moot — revive it as long as exploring
-        // its owed actions yields in-budget children. `depth` is a traversal
-        // artifact: a strictly shorter path also lowers the recorded depth so the
-        // subtree is measured from here (the tap-path twin of the deep-link
-        // re-root below); an equal/deeper re-encounter keeps the recorded depth
-        // but still resumes, since we owe no navigation from where we stand.
-        if (known.exhausted && known.nextAction < known.actions.length) {
-          const revivedDepth = Math.min(known.depth, revisitDepth);
-          if (revivedDepth < limits.maxDepth) {
-            if (revisitDepth < known.depth) {
-              known.depth = revisitDepth;
-              known.path = [...current.path, action];
-              known.entryUrl = current.entryUrl;
-            }
-            known.exhausted = false;
-            store.patchNode(known.id, { exhausted: false });
-            current = known;
-            continue;
-          }
+        // Exhausted but still owing actions and within budget: it was abandoned
+        // at the depth cap (too deep to descend) or by a replay that could not
+        // get back to it. This tap just landed us on it, so the "couldn't reach
+        // it" reason is moot — resume its owed actions. Its depth was already
+        // lowered above if this route was shorter; an equal/deeper re-encounter
+        // keeps the recorded depth but still resumes, since we owe no navigation
+        // from where we stand.
+        if (
+          known.exhausted &&
+          known.nextAction < known.actions.length &&
+          known.depth < limits.maxDepth
+        ) {
+          known.exhausted = false;
+          store.patchNode(known.id, { exhausted: false });
+          current = known;
+          continue;
         }
         // Only when the landed screen is spent is it worth paying navigation to
         // get back to `current`.
