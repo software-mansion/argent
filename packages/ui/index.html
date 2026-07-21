@@ -6323,6 +6323,20 @@
           Math.max(THEME.mapMinStep, 0.01) / Math.max(THEME.mapMaxStep, 0.02),
           1 / iters
         );
+        // Nodes with at least one edge. A disconnected node (a deep-link entry —
+        // "a jump, not a tap", so no incoming edge) is exempt from the centering
+        // pull below: it has no spring to hold the spread the golden-angle seeding
+        // gave it, so a center-pull would just collapse every entry onto the
+        // centroid and overlap them — exactly what the spiral seeding placed them
+        // apart to avoid. Repulsion (which separates, and is range-capped so it
+        // cannot fling them away) is the only force left acting on them.
+        const connected = new Set();
+        for (const e of s.edges) {
+          if (e.from !== e.to) {
+            connected.add(e.from);
+            connected.add(e.to);
+          }
+        }
         const disp = new Map();
         for (const id of movableIds) disp.set(id, { x: 0, y: 0 });
         for (let it = 0; it < iters; it++) {
@@ -6400,6 +6414,7 @@
           cx /= ids.length;
           cy /= ids.length;
           for (const id of movableIds) {
+            if (!connected.has(id)) continue; // disconnected entries keep their spread
             const p = mv.pos.get(id);
             const d = disp.get(id);
             d.x += (cx - p.cx) * centerPull;
