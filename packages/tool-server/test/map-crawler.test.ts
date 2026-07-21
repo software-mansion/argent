@@ -705,6 +705,47 @@ describe("crawlApp — leaving the app", () => {
 });
 
 describe("crawlApp — replay and backtracking", () => {
+  it("does not restart-replay back to a spent current when its last tap lands on an exhausted screen", async () => {
+    // Home's two branches reconverge on a dead-end Shared screen; no back
+    // buttons, so returning anywhere costs a restart-replay. When the SECOND
+    // branch's last tap (B → Shared) lands on the already-mapped Shared, B is
+    // itself spent — restarting back to B would map nothing, so it must be
+    // skipped. The full graph is still discovered, with one fewer restart.
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To A", "To B"]),
+        a: screenTree("Screen A", ["To Shared"]),
+        b: screenTree("Screen B", ["To Shared"]),
+        shared: screenTree("Shared", []),
+      },
+      {
+        home: { "To A": "a", "To B": "b" },
+        a: { "To Shared": "shared" },
+        b: { "To Shared": "shared" },
+      },
+      "home"
+    );
+    const store = makeStore();
+    const result = await crawl(app, store);
+    const snap = store.snapshot();
+
+    expect(result).toBe("completed");
+    // Correctness unaffected: every screen and both reconverging edges are mapped.
+    expect(snap.nodes.map((x) => x.title).sort()).toEqual([
+      "Home",
+      "Screen A",
+      "Screen B",
+      "Shared",
+    ]);
+    const shared = snap.nodes.find((x) => x.title === "Shared")!;
+    const a = snap.nodes.find((x) => x.title === "Screen A")!;
+    const b = snap.nodes.find((x) => x.title === "Screen B")!;
+    expect(snap.edges.some((e) => e.from === a.id && e.to === shared.id)).toBe(true);
+    expect(snap.edges.some((e) => e.from === b.id && e.to === shared.id)).toBe(true);
+    // The wasted replay-to-spent-B is gone: launch + the one real backtrack only.
+    expect(app.restartCount).toBeLessThanOrEqual(2);
+  });
+
   it("marks a node exhausted when its replay diverges, and keeps crawling the rest", async () => {
     const app = new FakeApp(
       {

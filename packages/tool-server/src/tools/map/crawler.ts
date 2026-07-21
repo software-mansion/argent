@@ -454,6 +454,12 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
       }
     }
     if (aborted()) return null;
+    // The back tap didn't land anywhere useful. If `current` is already spent it
+    // owes no actions, so a restart-replay back to it — the most expensive step —
+    // would only be undone by the next iteration's immediate backtrack. Signal the
+    // caller (which will mark it exhausted) to drop straight to the frontier
+    // backtrack rather than pay to stand on a screen with nothing left to do.
+    if (current.nextAction >= current.actions.length) return null;
     const ok = await replayTo(
       current,
       `back navigation did not reach ${current.id}; replaying its path`
