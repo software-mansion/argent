@@ -269,13 +269,24 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
     store.patchNode(node.id, { exhausted: true });
   }
 
-  /** Record a newly discovered in-app screen (store node + screenshot). */
+  /**
+   * Record a newly discovered in-app screen: its store node and, for a
+   * tap-reached screen, the edge from the screen that reached it. The parent
+   * edge (when given) is added in the SAME synchronous store tick as the node —
+   * before the screenshot await below — so a preview poll, served on this one
+   * event loop and only at an await, can never observe the node without its
+   * parent edge. (A node seen edgeless is mis-seeded as a disconnected
+   * entry-island and then frozen there.) The screenshot is a late decorative
+   * enrichment: a poll landing during it sees the already-connected node with a
+   * pending thumbnail, which the UI fills in on the next poll.
+   */
   async function createNode(
     tree: DescribeNode,
     depth: number,
     path: MapAction[],
     entry: boolean,
-    entryUrl: string | null
+    entryUrl: string | null,
+    parentEdge?: { from: string; action: MapAction }
   ): Promise<CrawlNode> {
     const key = screenKey(tree);
     const actions = enumerateActions(tree, { platform, maxActions: limits.maxActionsPerScreen });
@@ -301,6 +312,7 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
     byKey.set(key, node);
     crawlNodes.push(node);
     screens += 1;
+    if (parentEdge) store.addEdge(parentEdge.from, stored.id, parentEdge.action);
     const shot = await driver.screenshot(stored.id);
     if (shot) store.patchNode(stored.id, { screenshotPath: shot });
     emit({ kind: "screen", nodeId: stored.id, title: stored.title, depth, screens });
@@ -652,15 +664,17 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
         continue;
       }
 
-      // A brand-new screen.
+      // A brand-new screen. Its parent edge is recorded atomically with the node
+      // (inside createNode, before the screenshot await) so a preview poll never
+      // catches it edgeless and strands it as a disconnected entry-island.
       const child = await createNode(
         tree,
         current.depth + 1,
         [...current.path, action],
         false,
-        current.entryUrl
+        current.entryUrl,
+        { from: current.id, action }
       );
-      store.addEdge(current.id, child.id, action);
       if (child.depth >= limits.maxDepth) {
         // Depth cap: record the screen but never descend into it.
         markExhausted(child);

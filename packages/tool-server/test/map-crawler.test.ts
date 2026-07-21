@@ -870,6 +870,33 @@ describe("crawlApp — replay and backtracking", () => {
     expect(a.exhausted).toBe(true); // fully explored by the end
   });
 
+  it("records a tap-discovered screen's parent edge atomically with the node (before its screenshot)", async () => {
+    // The screenshot await is the only yield between adding the node and adding
+    // its parent edge, so a preview poll served during it must still see the
+    // edge — otherwise the UI strands the child as a disconnected entry-island.
+    const app = new FakeApp(
+      { home: screenTree("Home", ["To A"]), a: screenTree("Screen A", []) },
+      { home: { "To A": "a" } },
+      "home"
+    );
+    const store = makeStore();
+    // Snapshot the edge count at the instant each node's screenshot is captured.
+    const edgesAtShot: Record<string, number> = {};
+    const realScreenshot = app.screenshot.bind(app);
+    app.screenshot = async (nodeId: string): Promise<string | null> => {
+      edgesAtShot[nodeId] = store.snapshot().edges.length;
+      return realScreenshot(nodeId);
+    };
+    await crawl(app, store);
+    const snap = store.snapshot();
+
+    const a = snap.nodes.find((n) => n.title === "Screen A")!;
+    expect(snap.edges.some((e) => e.to === a.id)).toBe(true);
+    // When A's screenshot was taken, its Home→A edge already existed (0 without
+    // the atomic-edge fix, since the edge was added only after createNode returned).
+    expect(edgesAtShot[a.id]).toBeGreaterThanOrEqual(1);
+  });
+
   it("marks a node exhausted when its replay diverges, and keeps crawling the rest", async () => {
     const app = new FakeApp(
       {
