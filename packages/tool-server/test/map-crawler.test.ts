@@ -828,6 +828,48 @@ describe("crawlApp — replay and backtracking", () => {
     expect(snap.edges.some((e) => e.from === u.id && e.to === t.id)).toBe(true);
   });
 
+  it("revives an exhausted-with-owed screen when a later tap lands back on it in budget", async () => {
+    // Screen A owes "To Z" but gets marked exhausted when a replay can't get back
+    // to it (its recorded path diverges). Later, tapping "To A" from Screen B
+    // lands directly on A again — we are standing on it, so its owed "To Z" (and
+    // Screen Z, reachable only through it) must still be explored, even though A
+    // is not reached by a shorter path. A replay-abandoned screen is not
+    // permanently dead once we are back on it within budget.
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["To M", "To A", "To B"]),
+        m: screenTree("Screen M", []),
+        a: screenTree("Screen A", ["Revisit M", "To Z"]),
+        b: screenTree("Screen B", ["To A"]),
+        z: screenTree("Screen Z", []),
+        decoy: screenTree("Decoy", []),
+      },
+      {
+        home: { "To M": "m", "To A": "a", "To B": "b" },
+        a: { "Revisit M": "m", "To Z": "z" },
+        b: { "To A": "a" },
+      },
+      "home"
+    );
+    // Once A has been discovered and the crawler tries to replay back to it, the
+    // launch screen's "To A" diverts to a decoy — so returnToCurrent(A) fails and
+    // A is marked exhausted with "To Z" still owed. (Restarts 1-2 are the clean
+    // root and the frontier replay that first reaches A, which must stay intact.)
+    app.onRestart = () => {
+      if (app.restartCount >= 3) app.transitions.home!["To A"] = "decoy";
+    };
+    const store = makeStore();
+    await crawl(app, store);
+    const snap = store.snapshot();
+
+    // Screen Z (reachable only through A's owed "To Z") is recovered, not lost.
+    const a = snap.nodes.find((x) => x.title === "Screen A")!;
+    const z = snap.nodes.find((x) => x.title === "Screen Z");
+    expect(z).toBeDefined();
+    expect(snap.edges.some((e) => e.from === a.id && e.to === z!.id)).toBe(true);
+    expect(a.exhausted).toBe(true); // fully explored by the end
+  });
+
   it("marks a node exhausted when its replay diverges, and keeps crawling the rest", async () => {
     const app = new FakeApp(
       {

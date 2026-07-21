@@ -617,25 +617,28 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
           current = known;
           continue;
         }
-        // A screen first discovered at the depth cap is flagged exhausted with
-        // its actions still owed (the only state in which an exhausted node keeps
-        // owed actions). If this shorter path is back inside the budget, re-root
-        // it here, clear the cap flag, and descend — reviving the subtree the
-        // deep-first discovery had to drop (the tap-path twin of the deep-link
-        // re-root below).
-        if (
-          known.exhausted &&
-          known.nextAction < known.actions.length &&
-          revisitDepth < known.depth &&
-          revisitDepth < limits.maxDepth
-        ) {
-          known.depth = revisitDepth;
-          known.path = [...current.path, action];
-          known.entryUrl = current.entryUrl;
-          known.exhausted = false;
-          store.patchNode(known.id, { exhausted: false });
-          current = known;
-          continue;
+        // An exhausted screen that still owes actions was abandoned either at the
+        // depth cap (too deep to descend) or when a replay could not get back to
+        // it to finish its actions. Either way this tap just landed us on it, so
+        // the "couldn't reach it" reason is moot — revive it as long as exploring
+        // its owed actions yields in-budget children. `depth` is a traversal
+        // artifact: a strictly shorter path also lowers the recorded depth so the
+        // subtree is measured from here (the tap-path twin of the deep-link
+        // re-root below); an equal/deeper re-encounter keeps the recorded depth
+        // but still resumes, since we owe no navigation from where we stand.
+        if (known.exhausted && known.nextAction < known.actions.length) {
+          const revivedDepth = Math.min(known.depth, revisitDepth);
+          if (revivedDepth < limits.maxDepth) {
+            if (revisitDepth < known.depth) {
+              known.depth = revisitDepth;
+              known.path = [...current.path, action];
+              known.entryUrl = current.entryUrl;
+            }
+            known.exhausted = false;
+            store.patchNode(known.id, { exhausted: false });
+            current = known;
+            continue;
+          }
         }
         // Only when the landed screen is spent is it worth paying navigation to
         // get back to `current`.
