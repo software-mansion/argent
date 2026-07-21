@@ -115,51 +115,35 @@ describe("discovery does not surface simulators as physical devices", () => {
   });
 });
 
-describe("button — CoreDevice HID mapping on physical iOS", () => {
-  const press = async (button: string) => {
-    const coreDevice = { button: vi.fn().mockResolvedValue(undefined) };
-    const res = await buttonTool.execute(
-      { coreDevice } as never,
-      {
-        udid: PHYSICAL_UDID,
-        button,
-      } as never
-    );
-    return { coreDevice, res };
-  };
-
-  it("maps the four supported buttons to their pymobiledevice3 HID names", async () => {
-    for (const [argent, hid] of [
-      ["home", "home"],
-      ["power", "lock"],
-      ["volumeUp", "volume-up"],
-      ["volumeDown", "volume-down"],
-    ]) {
-      const { coreDevice, res } = await press(argent);
-      expect(coreDevice.button).toHaveBeenCalledWith(hid);
-      expect(res).toEqual({ pressed: argent });
-    }
-  });
-
-  it("rejects buttons with no CoreDevice HID equivalent", async () => {
-    // appSwitch / actionButton exist on iOS but have no HID button.
-    await expect(press("appSwitch")).rejects.toBeInstanceOf(UnsupportedOperationError);
-    await expect(press("actionButton")).rejects.toBeInstanceOf(UnsupportedOperationError);
-  });
-
-  it("does not resolve the CoreDevice service for a button with no HID equivalent", () => {
-    // services() runs before execute() (the registry resolves services first),
-    // so eagerly resolving coreDevice here would pay for tunnel setup —
-    // possibly a macOS admin prompt — just to reject the button afterward.
-    for (const button of ["appSwitch", "actionButton"]) {
+describe("button on physical iOS routes to the sim-server ios_device controller", () => {
+  // The argent-side name→HID mapping is gone: a physical iPhone drives the
+  // sim-server `ios_device` subcommand over the same transport as a simulator,
+  // and the Consumer-page HID mapping lives in the sim-server controller. Only
+  // the four hardware buttons are supported; appSwitch/actionButton have no
+  // HID equivalent and are rejected (the fire-and-forget transport could not
+  // otherwise surface the controller's rejection).
+  it("resolves the simulator-server for the four hardware buttons", () => {
+    for (const button of ["home", "power", "volumeUp", "volumeDown"]) {
       const services = buttonTool.services!({ udid: PHYSICAL_UDID, button } as never);
+      expect(services.simulatorServer).toBeDefined();
       expect(services.coreDevice).toBeUndefined();
     }
   });
 
-  it("still resolves the CoreDevice service for a supported button", () => {
-    const services = buttonTool.services!({ udid: PHYSICAL_UDID, button: "home" } as never);
-    expect(services.coreDevice).toBeDefined();
+  it("rejects buttons with no physical-iOS HID equivalent", async () => {
+    const press = (button: string) =>
+      buttonTool.execute({} as never, { udid: PHYSICAL_UDID, button } as never);
+    await expect(press("appSwitch")).rejects.toBeInstanceOf(UnsupportedOperationError);
+    await expect(press("actionButton")).rejects.toBeInstanceOf(UnsupportedOperationError);
+  });
+
+  it("does not resolve any service for an unsupported button (no wasted spawn)", () => {
+    // services() runs before execute(); resolving the sim-server for a button
+    // execute() will reject anyway would pay a spawn + ready-wait for nothing.
+    for (const button of ["appSwitch", "actionButton"]) {
+      const services = buttonTool.services!({ udid: PHYSICAL_UDID, button } as never);
+      expect(services.simulatorServer).toBeUndefined();
+    }
   });
 });
 
@@ -197,73 +181,32 @@ describe("launch-app enforces the physical-iOS flag (no bypass)", () => {
   });
 });
 
-describe("gesture-swipe routes physical iOS to the CoreDevice backend", () => {
-  it("forwards normalized coords and duration to coreDevice.swipe", async () => {
-    const coreDevice = { swipe: vi.fn().mockResolvedValue(undefined) };
-    const res = await gestureSwipeTool.execute(
-      { coreDevice } as never,
-      {
-        udid: PHYSICAL_UDID,
-        fromX: 0.5,
-        fromY: 0.7,
-        toX: 0.5,
-        toY: 0.3,
-        durationMs: 250,
-      } as never
-    );
-    expect(coreDevice.swipe).toHaveBeenCalledWith(0.5, 0.7, 0.5, 0.3, 250);
-    expect(res).toMatchObject({ swiped: true });
-  });
-
-  it("defaults the duration to 300ms when omitted", async () => {
-    const coreDevice = { swipe: vi.fn().mockResolvedValue(undefined) };
-    await gestureSwipeTool.execute(
-      { coreDevice } as never,
-      {
-        udid: PHYSICAL_UDID,
-        fromX: 0.2,
-        fromY: 0.2,
-        toX: 0.8,
-        toY: 0.8,
-      } as never
-    );
-    expect(coreDevice.swipe).toHaveBeenCalledWith(0.2, 0.2, 0.8, 0.8, 300);
-  });
-
-  // `settle` (momentum-free swipe) is a simulator/emulator behavior: it is built
-  // out of an eased train of individual touch events. CoreDevice instead performs
-  // one HID drag with a fixed linear trajectory, so the flag cannot be honored —
-  // and silently dropping it would return a flinging swipe while the caller
-  // believes it scrolled a deterministic distance.
-  const settlingSwipe = {
+describe("gesture-swipe on physical iOS routes to the sim-server ios_device controller", () => {
+  const swipe = {
     udid: PHYSICAL_UDID,
     fromX: 0.5,
     fromY: 0.7,
     toX: 0.5,
     toY: 0.3,
-    settle: true,
   };
 
-  it("rejects settle:true instead of silently performing a flinging swipe", async () => {
-    const coreDevice = { swipe: vi.fn().mockResolvedValue(undefined) };
-    await expect(
-      gestureSwipeTool.execute({ coreDevice } as never, settlingSwipe as never)
-    ).rejects.toBeInstanceOf(UnsupportedOperationError);
-    expect(coreDevice.swipe).not.toHaveBeenCalled();
+  it("resolves the simulator-server, not a CoreDevice backend", () => {
+    const services = gestureSwipeTool.services!(swipe as never);
+    expect(services.simulatorServer).toBeDefined();
+    expect(services.coreDevice).toBeUndefined();
   });
 
-  it("does not resolve the CoreDevice service for a settling swipe", () => {
-    // services() runs before execute(), so eagerly resolving coreDevice would pay
-    // for tunnel setup just to reject the swipe afterward (cf. `button` above).
-    expect(gestureSwipeTool.services!(settlingSwipe as never).coreDevice).toBeUndefined();
-    // ...but a plain swipe still resolves it.
-    expect(
-      gestureSwipeTool.services!({ ...settlingSwipe, settle: false } as never).coreDevice
-    ).toBeDefined();
+  it("supports settle on physical iOS too (same interpolated Move-sample path as a simulator)", () => {
+    // The sim-server `ios_device` controller replays the eased Move samples the
+    // generic swipe path emits, so `settle` is honored — unlike the old
+    // fixed-trajectory CoreDevice HID drag, which had to reject it.
+    const services = gestureSwipeTool.services!({ ...swipe, settle: true } as never);
+    expect(services.simulatorServer).toBeDefined();
+    expect(services.coreDevice).toBeUndefined();
   });
 
   it("still honors settle on a simulator (no regression to simulator support)", () => {
-    const services = gestureSwipeTool.services!({ ...settlingSwipe, udid: SIM_UDID } as never);
+    const services = gestureSwipeTool.services!({ ...swipe, udid: SIM_UDID, settle: true } as never);
     expect(services.simulatorServer).toBeDefined();
     expect(services.coreDevice).toBeUndefined();
   });
