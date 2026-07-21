@@ -360,6 +360,25 @@ export function writeMapJson(state: unknown, jsonPath: string | null): string {
   return outPath;
 }
 
+/**
+ * Force a cancelled crawl's fetched state to report status "cancelled". On
+ * Ctrl-C the abort tears down the streaming call and the CLI reads /preview/map
+ * immediately, which can win the race against the server's between-steps
+ * finalize and still report "running". The user cancelled, so the persisted
+ * --json artifact must say so rather than look like an in-progress crawl.
+ * Returns a shallow copy (or the value unchanged when already terminal).
+ */
+export function asCancelledState(state: unknown): unknown {
+  if (
+    state !== null &&
+    typeof state === "object" &&
+    (state as { status?: unknown }).status === "running"
+  ) {
+    return { ...(state as Record<string, unknown>), status: "cancelled" };
+  }
+  return state;
+}
+
 function printHelp(): void {
   process.stdout.write(
     `Usage: argent map <bundleId> [options]\n\n` +
@@ -522,7 +541,7 @@ export async function map(argv: string[], options: MapCommandOptions): Promise<v
     if (args.json) {
       if (state !== null) {
         try {
-          console.log(`  Wrote: ${writeMapJson(state, args.jsonPath)}`);
+          console.log(`  Wrote: ${writeMapJson(asCancelledState(state), args.jsonPath)}`);
         } catch (err) {
           console.error(`map: failed to write the graph JSON: ${errMsg(err)}`);
         }

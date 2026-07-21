@@ -9,6 +9,7 @@ import {
   formatProgressLine,
   formatMapSummary,
   writeMapJson,
+  asCancelledState,
 } from "../src/map.js";
 import { FlagParseException } from "../src/flag-parser.js";
 
@@ -444,5 +445,36 @@ describe("writeMapJson", () => {
     // the raw `dir` would spuriously differ.
     expect(written).toBe(path.resolve("argent-map.json"));
     expect(fs.existsSync(written)).toBe(true);
+  });
+});
+
+describe("asCancelledState", () => {
+  it("stamps a snapshot still marked running as cancelled (Ctrl-C race), keeping the rest", () => {
+    // The abort can win the race against the server's between-steps finalize, so
+    // the state read right after Ctrl-C still says "running"; the artifact the
+    // user asked for must not misreport a cancelled crawl as in-progress.
+    const raced = {
+      status: "running",
+      finishedAt: null,
+      stats: { screens: 3 },
+      nodes: [{ id: "s0" }],
+    };
+    const out = asCancelledState(raced) as typeof raced;
+    expect(out.status).toBe("cancelled");
+    expect(out.stats).toEqual({ screens: 3 });
+    expect(out.nodes).toEqual([{ id: "s0" }]);
+    expect(raced.status).toBe("running"); // input not mutated
+  });
+
+  it("leaves an already-finalized snapshot untouched", () => {
+    const cancelled = { status: "cancelled", finishedAt: 123 };
+    expect(asCancelledState(cancelled)).toBe(cancelled);
+    const completed = { status: "completed", finishedAt: 456 };
+    expect(asCancelledState(completed)).toBe(completed);
+  });
+
+  it("tolerates non-object states", () => {
+    expect(asCancelledState(null)).toBeNull();
+    expect(asCancelledState("nope")).toBe("nope");
   });
 });
