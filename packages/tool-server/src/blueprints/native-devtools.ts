@@ -567,7 +567,19 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       // written — lands on our listener.
       await host.startProxy(udid, endpoint.port!);
     } else {
-      server.listen(socketPath);
+      // Mirror the TCP branch above (and ax-service's startListener): attach an
+      // error handler so a bind failure — EEXIST from a stale socket a crashed
+      // run left behind (the pre-unlink above covers the common case) or
+      // EADDRINUSE from a concurrent instance racing on the same per-UDID path —
+      // rejects into the watcher-retry path instead of surfacing as an unhandled
+      // 'error' event that crashes the entire tool-server.
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(socketPath, () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
     }
 
     // Tolerate ensureEnv failure: throwing here would leak `server` — the

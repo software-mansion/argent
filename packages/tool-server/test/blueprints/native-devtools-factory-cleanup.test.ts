@@ -62,6 +62,10 @@ const UDID = "FACTORY1-1111-1111-1111-111111111111";
 const device: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 const SOCKET_PATH = `/tmp/argent-nd-${UDID.slice(0, 8)}.sock`;
 
+const UDID_BIND = "FACTORY2-2222-2222-2222-222222222222";
+const deviceBind: DeviceInfo = { id: UDID_BIND, platform: "ios", kind: "simulator" };
+const SOCKET_PATH_BIND = `/tmp/argent-nd-${UDID_BIND.slice(0, 8)}.sock`;
+
 beforeEach(() => {
   execFileMock.mockReset();
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -72,6 +76,16 @@ afterEach(() => {
     fs.unlinkSync(SOCKET_PATH);
   } catch {
     /* expected when dispose already unlinked */
+  }
+  try {
+    fs.rmdirSync(SOCKET_PATH_BIND);
+  } catch {
+    /* only present for the bind-failure test */
+  }
+  try {
+    fs.unlinkSync(SOCKET_PATH_BIND);
+  } catch {
+    /* ignore */
   }
   vi.restoreAllMocks();
 });
@@ -146,5 +160,23 @@ describe("nativeDevtoolsBlueprint factory — failure tolerance", () => {
     expect(setenvCallCount).toBe(1);
 
     await instance.dispose();
+  });
+
+  it("rejects instead of crashing when the unix socket cannot be bound", async () => {
+    // All simctl calls succeed so ensureEnv is not the source of failure —
+    // the listen bind is.
+    execFileMock.mockImplementation(() => ({ stdout: "", stderr: "" }));
+
+    // Occupy the per-UDID socket path with a directory. The factory's pre-unlink
+    // can't remove it (EISDIR, swallowed) and `server.listen(socketPath)` then
+    // emits an 'error' (EADDRINUSE). Before the fix the unix branch had no error
+    // handler, so this surfaced as an unhandled 'error' event that crashed the
+    // entire tool-server process. It must now reject the factory instead, which
+    // the registry turns into a retryable ServiceInitializationError.
+    fs.mkdirSync(SOCKET_PATH_BIND);
+
+    await expect(
+      nativeDevtoolsBlueprint.factory({}, deviceBind, { device: deviceBind })
+    ).rejects.toThrow();
   });
 });
