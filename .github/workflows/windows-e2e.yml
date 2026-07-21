@@ -43,6 +43,7 @@ on:
       - "packages/tool-server/test/stop-metro-netstat.test.ts"
       - "packages/tool-server/test/device-shutdown.test.ts"
       - "packages/native-devtools-ios/src/index.ts"
+      - "packages/native-devtools-ios/test/index.test.ts"
       - "packages/argent/scripts/bundle-tools.cjs"
       - "packages/argent/scripts/argent-simulator-server.cjs"
       - "scripts/dev.cjs"
