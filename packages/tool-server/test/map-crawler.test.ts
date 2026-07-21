@@ -746,6 +746,45 @@ describe("crawlApp — replay and backtracking", () => {
     expect(app.restartCount).toBeLessThanOrEqual(2);
   });
 
+  it("re-roots a depth-capped screen reached again by a shorter tap path and explores its subtree", async () => {
+    // Screen B is reachable deep (Home→A→B, landing at the depth cap) and
+    // shallow (Home→B, one tap). Discovered deep first, B is recorded at the cap
+    // with its "Go C" action owed; the shorter Home→B revisit must re-root B
+    // inside the budget so Screen C — two taps from the root, within maxDepth —
+    // is not dropped purely because of Home's button order. (The tap-path twin
+    // of the deep-link re-root exercised above.)
+    const app = new FakeApp(
+      {
+        home: screenTree("Home", ["Go A", "Go B"]),
+        a: screenTree("Screen A", ["Go B"]),
+        b: screenTree("Screen B", ["Go C"]),
+        c: screenTree("Screen C", []),
+      },
+      {
+        home: { "Go A": "a", "Go B": "b" },
+        a: { "Go B": "b" },
+        b: { "Go C": "c" },
+      },
+      "home"
+    );
+    const store = makeStore();
+    await crawl(app, store, { maxDepth: 2 });
+    const snap = store.snapshot();
+
+    expect(snap.nodes.map((x) => x.title).sort()).toEqual([
+      "Home",
+      "Screen A",
+      "Screen B",
+      "Screen C",
+    ]);
+    const home = snap.nodes.find((x) => x.title === "Home")!;
+    const b = snap.nodes.find((x) => x.title === "Screen B")!;
+    const c = snap.nodes.find((x) => x.title === "Screen C")!;
+    // The shorter Home→B edge and the revived B→C edge both exist.
+    expect(snap.edges.some((e) => e.from === home.id && e.to === b.id)).toBe(true);
+    expect(snap.edges.some((e) => e.from === b.id && e.to === c.id)).toBe(true);
+  });
+
   it("marks a node exhausted when its replay diverges, and keeps crawling the rest", async () => {
     const app = new FakeApp(
       {

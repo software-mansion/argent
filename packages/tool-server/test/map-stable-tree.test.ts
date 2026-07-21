@@ -38,13 +38,59 @@ function scripted(states: DescribeNode[]) {
 }
 
 describe("fetchStableTree — sampled tree capture", () => {
-  it("exits after two agreeing samples on a stable screen", async () => {
+  it("settles and exits early on a stable screen (past the settle-sample floor)", async () => {
     const stable = treeWithButtons(10);
     const s = scripted([stable, stable]);
     const result = await fetchStableTree(s.options);
     expect(result).toBe(stable);
-    expect(s.fetches()).toBe(2);
-    expect(s.sleeps).toHaveLength(1);
+    // Three samples, not two: the early exit is held one read past a bare
+    // agreeing pair (MIN_SETTLE_SAMPLES) so an oscillation's fuller phase has a
+    // chance to appear before we commit to the current look.
+    expect(s.fetches()).toBe(3);
+    expect(s.sleeps).toHaveLength(2);
+  });
+
+  it("a sparse phase sampled first does not lock in before the fuller phase appears", async () => {
+    const full = treeWithButtons(41);
+    const sparse = treeWithButtons(30);
+    // Capture begins in the sparse phase (two sparse reads) before the screen
+    // swings to its fuller phase. A naive exit on the first agreeing pair would
+    // commit to the sparse look and never see `full`, keying the screen
+    // differently than a visit that began in the full phase.
+    const sparseFirst = screenKey(
+      await fetchStableTree(scripted([sparse, sparse, full, full, full]).options)
+    );
+    const fullFirst = screenKey(
+      await fetchStableTree(scripted([full, full, sparse, sparse, sparse]).options)
+    );
+    expect(sparseFirst).toBe(fullFirst);
+    expect(sparseFirst).toBe(screenKey(full));
+  });
+
+  it("rides out a transient describe failure, keeping the good sample already captured", async () => {
+    const full = treeWithButtons(12);
+    let calls = 0;
+    const result = await fetchStableTree({
+      fetch: () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.resolve(full)
+          : Promise.reject(new Error("transient AX glitch"));
+      },
+      keyOf: screenKey,
+      sleep: () => Promise.resolve(),
+    });
+    expect(result).toBe(full);
+  });
+
+  it("throws the underlying device error when every sample fails", async () => {
+    await expect(
+      fetchStableTree({
+        fetch: () => Promise.reject(new Error("device offline")),
+        keyOf: screenKey,
+        sleep: () => Promise.resolve(),
+      })
+    ).rejects.toThrow("device offline");
   });
 
   it("returns the fullest snapshot when the tree decays mid-capture", async () => {

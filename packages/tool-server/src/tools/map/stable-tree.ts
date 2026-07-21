@@ -11,12 +11,14 @@ import type { DescribeNode } from "../describe/contract";
  * revisit and makes back-navigation verification fail.
  *
  * So the driver samples the tree several times and always returns the fullest
- * snapshot seen — the sparser states are subsets of it, so this is
- * order-independent: the same oscillating screen mints one key no matter which
- * phase it happened to sample first. Two consecutive samples that agree on the
- * fingerprint (while about as full as the fullest seen) are only a cost signal:
- * the screen has settled, so stop describing early — but still hand back the
- * fullest snapshot, never the current sample.
+ * snapshot seen — the sparser states are subsets of it. Two consecutive samples
+ * that agree on the fingerprint are only a cost signal that the screen has
+ * settled, so it can stop describing early — but only once it has settled on its
+ * FULLEST look (and past a small floor of samples), so a sparse phase sampled
+ * first can't lock the capture in before the fuller phase appears. It still
+ * hands back the fullest snapshot, never the current sample. A transient
+ * describe failure on one sample is ridden out (the good samples are kept); only
+ * an all-failed capture surfaces the error.
  */
 
 export interface StableTreeOptions {
@@ -33,12 +35,13 @@ export interface StableTreeOptions {
 const DEFAULT_MAX_SAMPLES = 5;
 const DEFAULT_GAP_MS = 350;
 
-// The early exit only fires when the agreeing, settled samples are at least
-// this full relative to the fullest seen — so a still-filling tree keeps
-// sampling until it is close to complete rather than exiting on early chrome.
-// (Correctness no longer rides on this ratio: the exit returns the fullest
-// snapshot regardless; the ratio only tunes how eagerly we stop describing.)
-const FULLNESS_RATIO = 0.9;
+// Never stop early before this many samples. A screen that oscillates (the
+// Settings root flips 41 ⇄ 30 nodes seconds apart) can present its sparse phase
+// for the first couple of reads; exiting on that first agreeing pair would lock
+// the capture to the sparse look and key the screen differently than a visit
+// that happened to begin in the full phase. Taking a few reads first gives the
+// fuller phase a chance to appear before we commit.
+const MIN_SETTLE_SAMPLES = 3;
 
 function countNodes(node: DescribeNode): number {
   let count = 1;
@@ -53,25 +56,43 @@ export async function fetchStableTree(options: StableTreeOptions): Promise<Descr
   let best: { tree: DescribeNode; count: number } | null = null;
   let maxCount = 0;
   let prevKey: string | null = null;
+  let lastError: unknown = null;
 
   for (let i = 0; i < maxSamples; i++) {
     if (i > 0) await options.sleep(gapMs);
-    const tree = await options.fetch();
+    let tree: DescribeNode;
+    try {
+      tree = await options.fetch();
+    } catch (err) {
+      // A transient describe failure on one sample (a flaky AX read, an adb
+      // timeout — exactly the post-navigation instability this sampler exists to
+      // ride out) must not discard a good tree already captured this pass. Keep
+      // the best so far and try the next sample; the error only surfaces if
+      // EVERY sample fails.
+      lastError = err;
+      continue;
+    }
     const count = countNodes(tree);
     maxCount = Math.max(maxCount, count);
     // ">=" so an equally-full later sample wins: it is the more recent look.
     if (!best || count >= best.count) best = { tree, count };
 
     const key = options.keyOf(tree);
-    // Settled (two agreeing keys, and this stable state is close to the fullest
-    // we've seen) — stop early to save describes, but return `best`, not the
-    // current sample: a sparse phase of an oscillation must never win over a
-    // fuller phase already captured, or the same screen keys differently
-    // depending on sampling order.
-    if (prevKey !== null && key === prevKey && count >= FULLNESS_RATIO * maxCount) {
+    // Settled — stop early to save describes, but only once we have settled on
+    // the FULLEST look seen this pass (`count === maxCount`) and past the floor:
+    // a sparse phase of an oscillation must never win over a fuller phase, or the
+    // same screen keys differently depending on sampling order. Hand back `best`
+    // (the fullest snapshot), never the current sample.
+    if (i + 1 >= MIN_SETTLE_SAMPLES && prevKey !== null && key === prevKey && count === maxCount) {
       return best!.tree;
     }
     prevKey = key;
   }
-  return best!.tree;
+  if (!best) {
+    // Every sample threw — surface the real device error instead of a
+    // null-deref, so the caller sees why the screen was unreadable.
+    if (lastError instanceof Error) throw lastError;
+    throw new Error("fetchStableTree: no readable tree sampled");
+  }
+  return best.tree;
 }

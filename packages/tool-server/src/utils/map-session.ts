@@ -99,11 +99,13 @@ export class MapSessionStore {
   private openWindow = false;
   /**
    * Per-crawl directory the driver copies screenshots into
-   * (`<tmpdir>/argent-map/<crawlId>`). Doubles as the serving allowlist for
-   * `GET /preview/map/screenshot/:nodeId` — that route refuses any path that
-   * does not resolve inside this directory. Survives finalize (thumbnails stay
-   * servable for the finished map); replaced — and the previous one deleted —
-   * on the next `begin`.
+   * (`<tmpdir>/argent-map/<pid>-<crawlId>`). The `<pid>` prefix marks the owning
+   * tool-server process so a concurrent server's stale-dir sweep can spare a dir
+   * this live process is still serving (see {@link sweepStaleScreenshotDirs}).
+   * Doubles as the serving allowlist for `GET /preview/map/screenshot/:nodeId` —
+   * that route refuses any path that does not resolve inside this directory.
+   * Survives finalize (thumbnails stay servable for the finished map); replaced —
+   * and the previous one deleted — on the next `begin`.
    */
   private screenshotDirPath: string | null = null;
 
@@ -157,7 +159,7 @@ export class MapSessionStore {
     this.nodes = [];
     this.edges = [];
     this.openWindow = input.openWindow;
-    this.screenshotDirPath = path.join(os.tmpdir(), "argent-map", crawlId);
+    this.screenshotDirPath = path.join(os.tmpdir(), "argent-map", `${process.pid}-${crawlId}`);
 
     this.events.emit("changed");
     this.events.emit("mapSessionChanged", true);
@@ -321,20 +323,35 @@ export class MapSessionStore {
   }
 }
 
-// A crawl runs for at most the maximum time budget (30 min) plus settle slack,
-// and its screenshot dir's mtime is bumped every time a screen thumbnail lands
-// in it — so a dir untouched for an hour belongs to a process that is gone.
-// One hour is a comfortable margin above the longest possible live crawl.
+// A crawl runs for at most the maximum time budget (30 min) plus settle slack;
+// an hour untouched is a comfortable margin above the longest possible live
+// crawl. Age is only the fallback signal though — a FINISHED map keeps being
+// served (its dir mtime frozen) long after the crawl ended, so age alone would
+// reap a live process's finished-map thumbnails. The owner-pid check below is
+// the primary guard; age just reaps leftovers of processes that are gone.
 const STALE_SCREENSHOT_DIR_MS = 60 * 60 * 1000;
+
+/** Whether a process id is still running (EPERM = alive but not ours). */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
 /**
  * Delete orphaned per-crawl screenshot directories under the shared
- * `argent-map` parent whose mtime is older than {@link STALE_SCREENSHOT_DIR_MS}
- * — leftovers from tool-servers that exited without finalizing. Age-based on
- * purpose: an active crawl (this process's or another's) keeps writing into its
- * dir, so its mtime stays recent and it is spared. Fully best-effort: a missing
- * parent, an unreadable entry, or a racing delete must never throw into
- * `begin()` / the crawl path.
+ * `argent-map` parent — leftovers from tool-servers that exited without
+ * finalizing. Dirs are named `<ownerPid>-<crawlId>`: a dir whose owner process
+ * is still alive is spared outright (it may be serving a finished map's
+ * thumbnails long after its mtime went cold — a concurrent server must not
+ * delete it out from under the owner). Only dirs whose owner is gone (or whose
+ * name predates the pid prefix) fall through to the age check
+ * ({@link STALE_SCREENSHOT_DIR_MS}). Fully best-effort: a missing parent, an
+ * unreadable entry, or a racing delete must never throw into `begin()` / the
+ * crawl path.
  */
 function sweepStaleScreenshotDirs(parent: string): void {
   let entries: fs.Dirent[];
@@ -346,6 +363,11 @@ function sweepStaleScreenshotDirs(parent: string): void {
   const cutoff = Date.now() - STALE_SCREENSHOT_DIR_MS;
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    const dash = entry.name.indexOf("-");
+    const ownerPid = dash > 0 ? Number(entry.name.slice(0, dash)) : NaN;
+    // A live owner still holds this dir (finished maps stay served) — never reap
+    // it. Unparseable/legacy names fall through to the age-based reap.
+    if (Number.isInteger(ownerPid) && ownerPid > 0 && isProcessAlive(ownerPid)) continue;
     const dir = path.join(parent, entry.name);
     try {
       if (fs.statSync(dir).mtimeMs < cutoff) {

@@ -173,6 +173,38 @@ describe("MapSessionStore — session lifecycle", () => {
       fs.rmSync(sandbox, { recursive: true, force: true });
     }
   });
+
+  it("begin spares an aged dir a live tool-server still owns, reaps a dead owner's", () => {
+    // Dirs are named `<ownerPid>-<crawlId>`. A finished map keeps being served
+    // (its dir mtime frozen) long after the crawl ended, so age alone would let
+    // a concurrent server delete a live owner's thumbnails. The owner-pid check
+    // spares any dir a running process owns and reaps only exited processes'.
+    const realTmp = process.env.TMPDIR;
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "map-sweep-owner-"));
+    process.env.TMPDIR = sandbox;
+    try {
+      const parent = path.join(sandbox, "argent-map");
+      const live = path.join(parent, `${process.pid}-live`); // this (running) process
+      const dead = path.join(parent, "2147483646-dead"); // a pid past any real one
+      for (const dir of [live, dead]) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "s0.png"), "x");
+      }
+      // Age BOTH two hours past the one-hour cutoff — only ownership differs.
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      fs.utimesSync(live, old, old);
+      fs.utimesSync(dead, old, old);
+
+      begin(new MapSessionStore());
+
+      expect(fs.existsSync(live)).toBe(true); // live owner keeps its finished-map thumbnails
+      expect(fs.existsSync(dead)).toBe(false); // exited owner's leftover reaped
+    } finally {
+      if (realTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = realTmp;
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("MapSessionStore — graph mutations", () => {

@@ -602,12 +602,35 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
         // Revisit of an already-mapped screen. If it still has unexplored
         // actions, keep crawling from right here — we are already standing on
         // it, and `current`'s remaining actions stay owed to the frontier
-        // backtrack. Only when the landed screen is spent is it worth paying
-        // navigation to get back to `current`.
+        // backtrack.
         if (!known.exhausted && known.nextAction < known.actions.length) {
           current = known;
           continue;
         }
+        // A screen first discovered at the depth cap is flagged exhausted with
+        // its actions still owed (the only state in which an exhausted node
+        // keeps owed actions). If this tap path reached it more shallowly and
+        // that shorter depth is back inside the budget, re-root it here and
+        // descend: depth is a traversal artifact, not a screen property, so a
+        // shorter route revives the subtree the deep-first discovery had to drop
+        // — the tap-path twin of the deep-link re-root below.
+        const revisitDepth = current.depth + 1;
+        if (
+          known.exhausted &&
+          known.nextAction < known.actions.length &&
+          revisitDepth < known.depth &&
+          revisitDepth < limits.maxDepth
+        ) {
+          known.depth = revisitDepth;
+          known.path = [...current.path, action];
+          known.entryUrl = current.entryUrl;
+          known.exhausted = false;
+          store.patchNode(known.id, { exhausted: false });
+          current = known;
+          continue;
+        }
+        // Only when the landed screen is spent is it worth paying navigation to
+        // get back to `current`.
         const landed = await returnToCurrent(current, tree);
         if (aborted()) {
           store.cancel();
