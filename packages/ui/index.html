@@ -2157,6 +2157,9 @@
         mapRepulsion: cssNum("--map-repulsion", 46000),
         mapRepulsionCap: cssNum("--map-repulsion-cap", 540),
         mapCenterPull: cssNum("--map-center-pull", 0.013),
+        mapNodeGap: cssNum("--map-node-gap", 16),
+        mapCollideK: cssNum("--map-collide-k", 0.5),
+        mapSeparatePasses: cssNum("--map-separate-passes", 24),
         mapMaxStep: cssNum("--map-max-step", 62),
         mapMinStep: cssNum("--map-min-step", 0.5),
         mapIters: cssNum("--map-iters", 170),
@@ -6317,6 +6320,11 @@
         const rep = THEME.mapRepulsion;
         const repCap2 = THEME.mapRepulsionCap * THEME.mapRepulsionCap;
         const centerPull = THEME.mapCenterPull;
+        // Minimum centre-to-centre offsets that clear the opaque cards, plus a gap.
+        const sepW = THEME.mapNodeW + THEME.mapNodeGap;
+        const sepH = THEME.mapNodeH + THEME.mapNodeGap;
+        const collideK = THEME.mapCollideK;
+        const separatePasses = Math.max(0, Math.round(THEME.mapSeparatePasses));
         const iters = Math.max(1, Math.round(THEME.mapIters));
         let temp = THEME.mapMaxStep;
         const cool = Math.pow(
@@ -6377,6 +6385,31 @@
                 p.x -= fx;
                 p.y -= fy;
               }
+              // Minimum-separation (anti-occlusion): the cards are opaque boxes,
+              // so any centre offset inside the WxH footprint paints one card on
+              // top of another. Soft inverse-square repulsion alone (weak and
+              // range-capped) can't guarantee clearance on dense graphs, so push
+              // any overlapping pair apart along the axis of LEAST penetration —
+              // the short way out — hard enough to beat the springs/centre-pull
+              // that drew them together.
+              const penX = sepW - Math.abs(dx);
+              const penY = sepH - Math.abs(dy);
+              if (penX > 0 && penY > 0) {
+                let cfx = 0;
+                let cfy = 0;
+                if (penX < penY) cfx = (dx >= 0 ? penX : -penX) * collideK;
+                else cfy = (dy >= 0 ? penY : -penY) * collideK;
+                if (ai) {
+                  const p = disp.get(ids[i]);
+                  p.x += cfx;
+                  p.y += cfy;
+                }
+                if (bj) {
+                  const p = disp.get(ids[j]);
+                  p.x -= cfx;
+                  p.y -= cfy;
+                }
+              }
             }
           }
           // Edge springs toward the target length.
@@ -6430,6 +6463,53 @@
             p.cy += d.y * scale;
           }
           temp *= cool;
+        }
+
+        // The force settle above still leaves cards overlapping on dense graphs —
+        // its cooling clamp gets too small in late iterations to push them fully
+        // apart. The cards are opaque, so finish with dedicated de-overlap passes:
+        // a direct positional constraint (Gauss-Seidel) that slides each still-
+        // overlapping pair apart along the axis of least penetration.
+        //
+        // This resolves EVERY overlapping pair, frozen ones included — not just
+        // the movable set the force loop integrates. A node freezes after one
+        // revision to pin the skeleton, but when the graph streams in one node at
+        // a time two edge-connected cards can freeze while still stacked (the
+        // spring pulled them together in the same revision they both froze), and
+        // then neither is movable so a movable-only pass could never part them.
+        // Running de-overlap over all nodes fixes that. It stays a DETERMINISTIC
+        // per-structural-revision solve — bounded, fixed iteration order, and it
+        // only moves cards that actually penetrate — so it converges to a stable
+        // zero-overlap arrangement and an unchanged structure re-solves to the
+        // same positions (no live per-frame jitter).
+        for (let pass = 0; pass < separatePasses; pass++) {
+          let moved = false;
+          for (let i = 0; i < ids.length; i++) {
+            const a = mv.pos.get(ids[i]);
+            for (let j = i + 1; j < ids.length; j++) {
+              const b = mv.pos.get(ids[j]);
+              let dx = a.cx - b.cx;
+              let dy = a.cy - b.cy;
+              if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) {
+                dx = i < j ? 0.13 : -0.13;
+                dy = 0.017;
+              }
+              const penX = sepW - Math.abs(dx);
+              const penY = sepH - Math.abs(dy);
+              if (penX <= 0 || penY <= 0) continue;
+              moved = true;
+              let mx = 0;
+              let my = 0;
+              if (penX < penY) mx = dx >= 0 ? penX : -penX;
+              else my = dy >= 0 ? penY : -penY;
+              // Split the correction evenly; every card can yield now.
+              a.cx += mx * 0.5;
+              a.cy += my * 0.5;
+              b.cx -= mx * 0.5;
+              b.cy -= my * 0.5;
+            }
+          }
+          if (!moved) break;
         }
       }
 
