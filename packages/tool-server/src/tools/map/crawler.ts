@@ -246,12 +246,19 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
     }
     // A non-empty tree can still belong to another app: iOS' describe reads
     // whichever app is frontmost, so a tap that opened Safari / Settings / the
-    // share sheet returns that foreign app's tree looking perfectly in-app.
-    // Ask the driver whether our target is actually on screen; a confident "no"
-    // is "left the app". This runs BEFORE the resource-id heuristic so a foreign
-    // tree never seeds the Android package set (which would poison later reads).
+    // share sheet returns that foreign app's tree looking perfectly in-app. Ask
+    // the driver whether our target is actually on screen — this is the primary,
+    // authoritative signal when it can answer:
+    //   false → left the app (before the resource-id heuristic runs, so a foreign
+    //           tree never seeds the Android package set and poisons later reads);
+    //   true  → our own task is on top, so the tree IS in-app even when its only
+    //           qualified ids belong to a third-party SDK (an embedded player /
+    //           maps view) that the resource-id fallback would misread as foreign.
+    // Only when it cannot tell (null) do we fall back to that heuristic.
     if (driver.isTargetForeground) {
-      if ((await driver.isTargetForeground()) === false) return null;
+      const foreground = await driver.isTargetForeground();
+      if (foreground === false) return null;
+      if (foreground === true) return tree;
     }
     return looksOutside(tree) ? null : tree;
   }

@@ -6026,6 +6026,9 @@
         worldH: 0,
         worldMinX: 0, // left/top extent of the graph (≤0); the edge SVG covers
         worldMinY: 0, // the negative region so arcs into it are not clipped
+        unanchoredSeeded: 0, // running count of neighbourless-seeded nodes; PERSISTS
+        // across layout revisions so each disconnected entry (deep links land one
+        // per revision) takes the next golden-angle slot instead of all seeding at 0
         detailId: null, // node id the detail overlay is open for
         detailShotFor: null, // node id the big screenshot was last loaded for
         activitySeen: null, // startedAt of the last crawl the user viewed on Map
@@ -6244,8 +6247,13 @@
         const anchorCy = priorN ? priorCy / priorN : base;
 
         // Seed each new node deterministically, in discovery order so an earlier
-        // new node is already placed when a later one anchors to it.
-        let unanchored = 0;
+        // new node is already placed when a later one anchors to it. `unanchored`
+        // PERSISTS across revisions (mv.unanchoredSeeded): deep-link entries arrive
+        // one per structural revision, each with no placed neighbour, so a
+        // per-call counter would seed every one at slot 0 — the same wedge — and,
+        // since nodes freeze after one revision, they'd overlap forever. Carrying
+        // the count forward hands each disconnected seed the next golden-angle slot.
+        let unanchored = mv.unanchoredSeeded || 0;
         for (const n of s.nodes) {
           if (mv.pos.has(n.id)) continue;
           const rng = mapHashRng(n.id);
@@ -6278,6 +6286,7 @@
           }
           mv.pos.set(n.id, { cx, cy, placedAt: poll });
         }
+        mv.unanchoredSeeded = unanchored; // carry the slot count into the next revision
 
         // Movable = nodes still inside their freeze window. Frozen nodes exert
         // forces but never move, so the skeleton is pinned as the graph grows.

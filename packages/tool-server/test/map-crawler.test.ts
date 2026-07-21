@@ -639,6 +639,38 @@ describe("crawlApp — leaving the app", () => {
     expect(snap.nodes.some((x) => x.title === "Screen A")).toBe(true);
     expect(snap.stats.restarts).toBe(0);
   });
+
+  it("Android: a confident in-app foreground keeps an SDK-namespaced screen the resource-id tell would drop", async () => {
+    // An in-app screen whose only qualified ids belong to a third-party SDK
+    // (an embedded player / maps view) — foreign to the learned app package, so
+    // the resource-id fallback flags it "outside". But our own task is on top
+    // (isTargetForeground === true), so it must be mapped, not dropped.
+    const home = n("android.widget.FrameLayout", [0, 0, 1, 1], {}, [
+      n("AXHeading", [0.1, 0.02, 0.8, 0.05], {
+        label: "Home",
+        identifier: "com.example.app:id/root",
+      }),
+      n("AXButton", [0.1, 0.2, 0.8, 0.08], {
+        label: "Open player",
+        clickable: true,
+        identifier: "com.example.app:id/open",
+      }),
+    ]);
+    const sdk = n("android.widget.FrameLayout", [0, 0, 1, 1], {}, [
+      n("AXHeading", [0.1, 0.02, 0.8, 0.05], {
+        label: "Player",
+        identifier: "com.google.android.exoplayer2:id/exo_content",
+      }),
+    ]);
+    const app = new FakeApp({ home, sdk }, { home: { "Open player": "sdk" } }, "home", "android");
+    const store = makeStore("android");
+    await crawl(app, store, {}, { platform: "android" });
+    const snap = store.snapshot();
+    // The SDK screen is mapped, and no spurious "outside" edge/relaunch fired.
+    expect(snap.nodes.some((x) => x.title === "Player")).toBe(true);
+    expect(snap.nodes.some((x) => x.outside)).toBe(false);
+    expect(snap.stats.restarts).toBe(0);
+  });
 });
 
 describe("crawlApp — replay and backtracking", () => {
