@@ -19,6 +19,16 @@ import type { DescribeNode } from "../describe/contract";
  * hands back the fullest snapshot, never the current sample. A transient
  * describe failure on one sample is ridden out (the good samples are kept); only
  * an all-failed capture surfaces the error.
+ *
+ * Known limitation: "fullest wins" assumes sparser samples are subsets of the
+ * fullest (AX dropping and refilling content). A transient that ADDS nodes — a
+ * snackbar/toast/tooltip/banner shown during the sampling window — violates that:
+ * the inflated sample wins and its overlay enters the screenKey, so the same
+ * screen can key differently across visits (a duplicate graph node, plus
+ * recovery restart-replays). There is no structural way to tell such an additive
+ * transient apart from a modal sheet that genuinely SHOULD be mapped, nor from
+ * ordinary AX content-drop, so returning the fullest sample is an accepted
+ * trade-off favouring the far more common AX-decay case.
  */
 
 export interface StableTreeOptions {

@@ -726,6 +726,16 @@ async function runCrawl(opts: CrawlAppOptions): Promise<"completed" | "cancelled
     const known = byKey.get(key);
     if (known) {
       // Already mapped — the deep link is another entrance to it.
+      //
+      // Known limitation: a subtree reachable ONLY through an action this screen
+      // already CONSUMED during the launch crawl (so the landed screen itself
+      // owes nothing) is not re-walked from the new depth-0 origin — e.g. a deep
+      // link onto a fully-explored ancestor of a depth-capped screen. Recovering
+      // it would need re-propagating depth through already-traversed edges; the
+      // common recovery cases (landing on the capped screen itself, an ancestor
+      // that still owes actions, or a shorter tap path) are handled, and this
+      // narrow topology is left for a follow-up rather than re-walking every
+      // deep-linked hub's whole explored subtree.
       store.markEntry(known.id);
       if (known.nextAction < known.actions.length) {
         // …but it still owes actions: the launch crawl only recorded it (a
