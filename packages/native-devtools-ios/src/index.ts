@@ -36,6 +36,29 @@ function requireDylibIn(dir: string, name: string): string {
   return p;
 }
 
+// The TCP-transport artifacts (`*Tcp` accessors) are only needed for ios-remote
+// (sim-remote) devices, and are built/downloaded separately from the default
+// unix-socket set — so they can be legitimately absent in a local/dev build or
+// an older package. When one is missing the caller (spawnAxDaemonRemote /
+// native-devtools setup) throws deep inside the ax-service factory, where
+// `describe` swallows it into a "reboot the simulator" hint that has nothing to
+// do with the real cause. Give an actionable, self-explaining error instead:
+// name the exact path, the env override that relocates the lookup, and how to
+// produce the binary.
+function requireTcpArtifact(dir: string, name: string, kind: "binary" | "dylib", envVar: string): string {
+  const p = path.join(dir, name);
+  if (!fs.existsSync(p)) {
+    throw new Error(
+      `TCP-transport ${kind} not found: ${p}. This ${kind} is required to drive an ` +
+        `ios-remote (sim-remote) device over the QUIC tunnel. It ships in the argent ` +
+        `package under bin/<platform>/tcp/ and dylibs/tcp/; if you are running a local ` +
+        `build, produce it with \`npm run build:ios-binaries:tcp\`. To point the lookup ` +
+        `at a directory that already contains it, set ${envVar}=<dir>.`
+    );
+  }
+  return p;
+}
+
 export const bootstrapDylibPath = () => {
   requireDarwin("bootstrapDylibPath");
   return requireDylibIn(DYLIB_DIR, "libArgentInjectionBootstrap.dylib");
@@ -50,7 +73,12 @@ export const keyboardPatchDylibPath = () => {
 };
 
 export const bootstrapDylibPathTcp = () => {
-  return requireDylibIn(DYLIB_TCP_DIR, "libArgentInjectionBootstrap.dylib");
+  return requireTcpArtifact(
+    DYLIB_TCP_DIR,
+    "libArgentInjectionBootstrap.dylib",
+    "dylib",
+    "ARGENT_NATIVE_DEVTOOLS_TCP_DIR"
+  );
 };
 
 export const bootstrapDylibPathTvos = () => {
@@ -62,10 +90,20 @@ export const nativeDevtoolsDylibPathTvos = () => {
   return requireDylibIn(DYLIB_TVOS_DIR, "libNativeDevtoolsIos.dylib");
 };
 export const nativeDevtoolsDylibPathTcp = () => {
-  return requireDylibIn(DYLIB_TCP_DIR, "libNativeDevtoolsIos.dylib");
+  return requireTcpArtifact(
+    DYLIB_TCP_DIR,
+    "libNativeDevtoolsIos.dylib",
+    "dylib",
+    "ARGENT_NATIVE_DEVTOOLS_TCP_DIR"
+  );
 };
 export const keyboardPatchDylibPathTcp = () => {
-  return requireDylibIn(DYLIB_TCP_DIR, "libKeyboardPatch.dylib");
+  return requireTcpArtifact(
+    DYLIB_TCP_DIR,
+    "libKeyboardPatch.dylib",
+    "dylib",
+    "ARGENT_NATIVE_DEVTOOLS_TCP_DIR"
+  );
 };
 
 /**
@@ -143,7 +181,12 @@ export function axServiceBinaryPath(): string {
 }
 
 export function axServiceBinaryPathTcp(): string {
-  return requireBinIn(platformTcpBinDir(), "ax-service");
+  return requireTcpArtifact(
+    platformTcpBinDir(),
+    "ax-service",
+    "binary",
+    "ARGENT_SIMULATOR_SERVER_TCP_DIR"
+  );
 }
 
 // tvOS control binaries. tvos-ax-service is `simctl spawn`d into an

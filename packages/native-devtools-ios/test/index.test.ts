@@ -106,6 +106,22 @@ describe("requireDarwin gating", () => {
     const r = await loadResolver();
     expect(() => r.bootstrapDylibPathTcp()).toThrow(/dylib not found/);
     expect(() => r.bootstrapDylibPathTcp()).not.toThrow(/requires a macOS host/);
+    // The error must be self-servicing: name the override env var so a user
+    // hitting a stale/dev build learns how to relocate the lookup.
+    expect(() => r.bootstrapDylibPathTcp()).toThrow(/ARGENT_NATIVE_DEVTOOLS_TCP_DIR/);
+  });
+
+  it("throws an actionable not-found (naming the override env) for a missing TCP ax-service", async () => {
+    // A missing TCP ax-service otherwise surfaces deep in describe as a
+    // misleading "reboot the simulator" hint; the resolver error must instead
+    // point at the override env so the real cause is diagnosable.
+    setPlatform("darwin");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-tcp-missing-"));
+    fs.mkdirSync(path.join(dir, "darwin", "tcp"), { recursive: true });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(() => r.axServiceBinaryPathTcp()).toThrow(/TCP-transport binary not found/);
+    expect(() => r.axServiceBinaryPathTcp()).toThrow(/ARGENT_SIMULATOR_SERVER_TCP_DIR/);
   });
 
   it("throws with a root-cause message on linux for ax-service", async () => {
