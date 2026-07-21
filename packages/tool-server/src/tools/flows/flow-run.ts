@@ -440,7 +440,9 @@ ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`ty
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`);
 \`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
-(\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`await\` waits
+(\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
+two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
+when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device orientation); \`await\` waits
 for a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot against a stored baseline (a missing baseline fails the step — set updateBaselines
 to adopt the current screen); \`echo\` annotates; \`run\` executes a referenced fragment inline.
@@ -752,6 +754,10 @@ function stepTarget(step: FlowStep): string | undefined {
       const scale = `scale ${step.scale}`;
       return step.selector ? `${selectorLabel(step.selector)} (${scale})` : scale;
     }
+    case "rotate": {
+      const by = `by ${step.by}°`;
+      return step.selector ? `${selectorLabel(step.selector)} (${by})` : by;
+    }
     case "snapshot":
       return `"${step.name}"`;
     default:
@@ -1028,7 +1034,8 @@ async function execLeafStep(
     case "await":
     case "assert":
     case "scroll-to":
-    case "pinch": {
+    case "pinch":
+    case "rotate": {
       // A directive that *throws* (vs. reporting a failed outcome) — e.g. a
       // touch gesture on a focus-driven TV target — must still land in the
       // structured report rather than abort the whole run unreported.

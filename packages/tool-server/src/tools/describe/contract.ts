@@ -95,6 +95,12 @@ export interface DescribeTreeData {
   source: DescribeSource;
   should_restart?: boolean;
   hint?: string;
+  // Screen size the frames were normalized against, in the source's native
+  // units (Android px, iOS pt) — only the aspect ratio is comparable across
+  // sources. Optional: populated by the flow tree adapters that know it (the
+  // rotate directive's physical-circle geometry reads it); other paths leave
+  // it unset.
+  screen?: { width: number; height: number };
 }
 
 // Public describe-tool response. The full JSON `tree` (the previous payload's
