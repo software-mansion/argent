@@ -143,6 +143,13 @@ export function hostPlatformKey(): string {
   }
   return process.platform;
 }
+// The binary is an extensionless ELF/Mach-O on POSIX hosts but a `.exe` (PE)
+// on Windows — matching the per-platform artifact the simulator-server release
+// publishes (simulator-server-argent-windows.exe). Centralised so the path
+// resolver, the dispatcher shim, and bundle-tools agree on the on-disk name.
+export function simulatorServerBinaryName(): string {
+  return process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
+}
 function platformBinDir(): string {
   return path.join(BIN_DIR, hostPlatformKey());
 }
@@ -159,17 +166,18 @@ function tcpBinDir(): string {
 }
 
 export function simulatorServerBinaryPath(): string {
-  const p = path.join(platformBinDir(), "simulator-server");
+  const binaryName = simulatorServerBinaryName();
+  const p = path.join(platformBinDir(), binaryName);
   if (!fs.existsSync(p)) {
     // Help callers who set ARGENT_SIMULATOR_SERVER_DIR to a flat dir (the old
     // pre-Linux-support layout where simulator-server lived at the root).
-    const flat = path.join(BIN_DIR, "simulator-server");
+    const flat = path.join(BIN_DIR, binaryName);
     const migrationHint = fs.existsSync(flat)
       ? ` Found a binary at the old flat path ${flat}; move it to ${p} or update ARGENT_SIMULATOR_SERVER_DIR to point at the parent of the platform subdirectory.`
       : "";
     throw new Error(
       `simulator-server binary not found for platform "${hostPlatformKey()}" at ${p}. ` +
-        `Supported hosts today: darwin, linux (x86_64 and arm64).${migrationHint}`
+        `Supported hosts today: darwin, linux (x86_64 and arm64), win32.${migrationHint}`
     );
   }
   return p;

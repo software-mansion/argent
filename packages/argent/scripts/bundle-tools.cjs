@@ -114,8 +114,13 @@ const TVOS_HID_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tvos-hid-daemon");
 const TVOS_AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/tvos-ax-service");
 const TVOS_HID_BIN_DEST = path.resolve(BIN_DIR, "darwin/tvos-hid-daemon");
 // Host platform keys (see hostPlatformKey() in @argent/native-devtools-ios):
-// darwin is a universal binary; Linux ships one single-arch ELF per key.
-const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux", "linux-arm64"];
+// darwin is a universal binary; Linux ships one single-arch ELF per key;
+// win32 ships a PE `.exe` (named simulator-server.exe, not simulator-server).
+const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux", "linux-arm64", "win32"];
+// The simulator-server file name per host key — extensionless everywhere
+// except Windows, where it's a `.exe`.
+const simulatorServerFileName = (platform) =>
+  platform === "win32" ? "simulator-server.exe" : "simulator-server";
 // Generated module pinning the Perfetto version that stamps the bundled
 // trace_processor.wasm. esbuild inlines it into every bundle via the
 // @argent/native-devtools-android alias.
@@ -609,9 +614,10 @@ buildBundle({
 // (the publish pipeline) — a Linux contributor running `npm run pack` locally
 // can't produce the macOS binary, so don't block them on its absence.
 for (const platform of SUPPORTED_HOST_PLATFORMS) {
-  const src = path.join(BIN_SRC_ROOT, platform, "simulator-server");
+  const binaryFile = simulatorServerFileName(platform);
+  const src = path.join(BIN_SRC_ROOT, platform, binaryFile);
   const destDir = path.join(BIN_DIR, platform);
-  const dest = path.join(destDir, "simulator-server");
+  const dest = path.join(destDir, binaryFile);
   if (fs.existsSync(src)) {
     fs.mkdirSync(destDir, { recursive: true });
     fs.copyFileSync(src, dest);
