@@ -84,6 +84,31 @@ describe("argent config — set/get across scopes", () => {
     expect(projCfg).toEqual({ lens: { agent: "codex" } });
   });
 
+  it("an additive array key (ios.additionalDeviceSets) unions the scopes instead of shadowing", () => {
+    config([
+      "set",
+      "ios.additionalDeviceSets",
+      '["/tmp/sets/a","/tmp/sets/b"]',
+      "--scope",
+      "global",
+    ]);
+    config([
+      "set",
+      "ios.additionalDeviceSets",
+      '["/tmp/sets/b","/tmp/sets/c"]',
+      "--scope",
+      "project",
+    ]);
+    logSpy.mockClear();
+    // Effective value = global baseline + project extras, deduplicated.
+    config(["get", "ios.additionalDeviceSets"]);
+    expect(output()).toBe('["/tmp/sets/a","/tmp/sets/b","/tmp/sets/c"]');
+    logSpy.mockClear();
+    // Each scope still stores (and reports) only its own entries.
+    config(["get", "ios.additionalDeviceSets", "--scope", "project"]);
+    expect(output()).toBe('["/tmp/sets/b","/tmp/sets/c"]');
+  });
+
   it("get --scope shows only that scope's stored value", () => {
     config(["set", "lens.agent", "claude", "--scope", "global"]);
     config(["set", "lens.agent", "codex", "--scope", "project"]);
