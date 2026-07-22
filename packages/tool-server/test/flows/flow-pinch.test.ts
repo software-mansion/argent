@@ -266,6 +266,27 @@ describe("pinch: execution", () => {
     expect((args.endCenterX as number) + half).toBeLessThanOrEqual(0.98 + 1e-9);
   });
 
+  it("forwards vertical centroid drift for a tall target near the bottom edge", async () => {
+    currentTree = () =>
+      screen([n({ label: "Portrait", frame: { x: 0.475, y: 0.55, width: 0.05, height: 0.45 } })]);
+    await writeFlow("pinch-portrait", {
+      executionPrerequisite: "",
+      steps: [{ kind: "pinch", selector: { text: "Portrait", loose: true }, scale: 4 }],
+    });
+
+    const result = await run("pinch-portrait");
+
+    expect(result.ok).toBe(true);
+    const args = result.calls[0]!.args;
+    expect(args.angle).toBe(90);
+    expect(args.centerX).toBeCloseTo(0.5, 9);
+    expect(args.centerY).toBeCloseTo(0.775, 9);
+    expect(args.startDistance).toBeCloseTo(0.24, 9);
+    expect(args.endDistance).toBeCloseTo(0.96, 9);
+    expect(args.endCenterY).toBeCloseTo(0.5, 9);
+    expect(args).not.toHaveProperty("endCenterX");
+  });
+
   it("picks the platform's guards: same edge target pinches horizontally on iOS, vertically on Android", async () => {
     currentTree = () =>
       screen([n({ label: "Edge", frame: { x: 0, y: 0.45, width: 0.3, height: 0.1 } })]);

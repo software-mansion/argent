@@ -116,8 +116,12 @@ describe("buildAxisCandidate / selectPinchCandidate", () => {
     expect(selected!.end / selected!.start).toBeCloseTo(4, 9);
     expect(selected!.endCenter).toBeGreaterThan(0.15); // drifted inward
     // Final pointers stay inside the screen inset.
-    expect(selected!.endCenter - selected!.end / 2).toBeGreaterThanOrEqual(SCREEN_EDGE_INSET - 1e-9);
-    expect(selected!.endCenter + selected!.end / 2).toBeLessThanOrEqual(1 - SCREEN_EDGE_INSET + 1e-9);
+    expect(selected!.endCenter - selected!.end / 2).toBeGreaterThanOrEqual(
+      SCREEN_EDGE_INSET - 1e-9
+    );
+    expect(selected!.endCenter + selected!.end / 2).toBeLessThanOrEqual(
+      1 - SCREEN_EDGE_INSET + 1e-9
+    );
   });
 
   it("keeps Down points within the screen inset when the centroid sits inside a guard", () => {
@@ -173,6 +177,56 @@ describe("buildAxisCandidate / selectPinchCandidate", () => {
     expect(
       buildAxisCandidate({ angle: 0, center: { x: 0, y: 0.5 }, per: 4, guards: IOS_GUARDS })
     ).toBeUndefined();
+  });
+
+  it("prefers fully edge-safe candidates over axis-only safe candidates", () => {
+    const mk = (overrides: Partial<PinchCandidate>): PinchCandidate => ({
+      angle: 0,
+      start: 0.1,
+      end: 0.13,
+      endCenter: 0.5,
+      travel: 0.03,
+      viable: true,
+      axisSafe: true,
+      fullyEdgeSafe: true,
+      clearance: -1,
+      ...overrides,
+    });
+    const fullyEdgeSafe = mk({ angle: 90 });
+    const axisSafe = mk({
+      fullyEdgeSafe: false,
+      clearance: 1,
+      travel: 0.9,
+    });
+
+    // Deliberately make both later tie-breakers favor axisSafe: the safety
+    // boundary itself must decide this comparison.
+    expect(selectPinchCandidate([axisSafe, fullyEdgeSafe])).toBe(fullyEdgeSafe);
+  });
+
+  it("prefers axis-only safe candidates over candidates unsafe on their own axis", () => {
+    const mk = (overrides: Partial<PinchCandidate>): PinchCandidate => ({
+      angle: 0,
+      start: 0.1,
+      end: 0.13,
+      endCenter: 0.5,
+      travel: 0.03,
+      viable: true,
+      axisSafe: true,
+      fullyEdgeSafe: false,
+      clearance: -1,
+      ...overrides,
+    });
+    const axisSafe = mk({ angle: 90 });
+    const unsafe = mk({
+      axisSafe: false,
+      clearance: 1,
+      travel: 0.9,
+    });
+
+    // Deliberately make both later tie-breakers favor unsafe: the safety
+    // boundary itself must decide this comparison.
+    expect(selectPinchCandidate([unsafe, axisSafe])).toBe(axisSafe);
   });
 
   it("prefers greater starting clearance, then greater travel, among unsafe candidates", () => {
