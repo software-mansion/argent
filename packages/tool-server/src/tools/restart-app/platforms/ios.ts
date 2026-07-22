@@ -12,6 +12,7 @@ import {
   type NativeDevtoolsApi,
 } from "../../../blueprints/native-devtools";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -35,12 +36,12 @@ export function makeIosImpl(
       const blocked = await precheckNativeDevtools(nativeDevtools, udid);
       if (blocked) return blocked;
       try {
-        await execFileAsync("xcrun", ["simctl", "terminate", udid, bundleId]);
+        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]));
       } catch {
         // App may not be running — ignore
       }
       try {
-        await execFileAsync("xcrun", ["simctl", "launch", udid, bundleId]);
+        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["launch", udid, bundleId]));
       } catch (err) {
         throw new FailureError(
           `Failed to restart iOS app ${bundleId} on ${udid}.`,
