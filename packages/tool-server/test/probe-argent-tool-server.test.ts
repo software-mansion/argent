@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as http from "node:http";
-import { probeArgentToolServer } from "../src/index";
+import { probeArgentToolServer } from "../src/utils/probe-argent-tool-server";
 
 // Bind an ephemeral loopback server with a given handler; returns its port.
 function listen(handler: http.RequestListener): Promise<{ port: number; server: http.Server }> {

@@ -1,5 +1,4 @@
 import * as path from "node:path";
-import * as http from "node:http";
 import { homedir } from "node:os";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
@@ -17,6 +16,7 @@ import {
 import { createHttpApp } from "./http";
 import { attachRegistryEventLogger, createToolServerEventLog } from "./event-log";
 import { createRegistry } from "./utils/setup-registry";
+import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
 import { createPreviewWindowManager } from "./utils/preview-window";
@@ -88,41 +88,6 @@ function initializeStdioTimestampWrapper(): void {
   }
 }
 
-/**
- * Probe whether a healthy argent tool-server is already listening on
- * `host:port`. Used to tell a redundant/overlapping instance (which lost the
- * bind with EADDRINUSE) that the port is owned by a live peer, so it can defer
- * cleanly instead of crash-looping.
- *
- * An argent tool-server answers `GET /tools` with 200 (the tools JSON) or, when
- * an auth token is configured, 401 — either proves a live argent peer. No token
- * is sent: reachability + argent-shaped response is all we need. A wedged peer
- * that never answers within the timeout resolves `false`, so we still surface a
- * genuinely stuck port as a crash rather than deferring to a dead server.
- */
-export function probeArgentToolServer(
-  host: string,
-  port: number,
-  timeoutMs = 500
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const req = http.request(
-      { host, port, path: "/tools", method: "GET", timeout: timeoutMs },
-      (res) => {
-        const isArgentPeer = res.statusCode === 200 || res.statusCode === 401;
-        res.resume(); // drain the response so the socket can close
-        resolve(isArgentPeer);
-      }
-    );
-    req.on("error", () => resolve(false)); // connection refused / reset / non-HTTP
-    req.on("timeout", () => {
-      req.destroy();
-      resolve(false);
-    });
-    req.end();
-  });
-}
-
 export function start(): void {
   initializeStdioTimestampWrapper();
 
@@ -137,7 +102,7 @@ export function start(): void {
   // crash arriving mid-shutdown would be swallowed by the re-entrancy guard and
   // the in-flight shutdown(0) would exit 0, hiding the crash from supervisors.
   let finalExitCode = 0;
-  let shutdownReason: "idle" | "signal" | "crash" = "signal";
+  let shutdownReason: "idle" | "signal" | "crash" | "deferred" = "signal";
   let shutdownFailureSignal: FailureSignal | null = null;
   // Anonymous crash detail (class name, syscall, stack fingerprint, phase),
   // merged into the final toolserver:stop only on a real crash. Left null on
@@ -537,21 +502,25 @@ export function start(): void {
         error_kind: "crash",
       };
       server.on("error", (err: NodeJS.ErrnoException) => {
-        eventLog?.error({
-          type: "tool_server.bind_failed",
-          msg: `Tool server failed to bind ${HOST}:${PORT}.`,
-          host: HOST,
-          port: PORT,
-          failureSignal: {
-            error_code: bindSignal.error_code,
-            failure_stage: bindSignal.failure_stage,
-            failure_area: bindSignal.failure_area,
-            error_kind: bindSignal.error_kind,
-          },
-        });
         const code = err.code ? `${err.code}: ` : "";
-        const crashBind = () =>
+        // The crash-tagged bind_failed event is emitted only on the legs that
+        // actually crash — a clean deferral must not count as a bind crash in
+        // the event log any more than in the stop-reason telemetry.
+        const crashBind = () => {
+          eventLog?.error({
+            type: "tool_server.bind_failed",
+            msg: `Tool server failed to bind ${HOST}:${PORT}.`,
+            host: HOST,
+            port: PORT,
+            failureSignal: {
+              error_code: bindSignal.error_code,
+              failure_stage: bindSignal.failure_stage,
+              failure_area: bindSignal.failure_area,
+              error_kind: bindSignal.error_kind,
+            },
+          });
           crashShutdown(`Failed to bind ${HOST}:${PORT}`, `${code}${err.message}`, bindSignal, err);
+        };
 
         if (err.code === "EADDRINUSE") {
           void probeArgentToolServer(HOST, PORT).then((isArgentPeer) => {
@@ -569,7 +538,11 @@ export function start(): void {
               port: PORT,
             });
             // Clean stop (not a crash): removes this redundant instance from the
-            // reason:"crash" restart-loop population.
+            // reason:"crash" restart-loop population. Stamped "deferred" (not the
+            // default "signal") so a supervisor that relaunches on ANY exit still
+            // shows up in the stop-reason telemetry as a deferral loop rather
+            // than blending into ordinary SIGINT/SIGTERM churn.
+            shutdownReason = "deferred";
             void shutdown?.(0);
           });
           return;
