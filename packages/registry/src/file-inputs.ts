@@ -125,6 +125,21 @@ export interface ResolvedFileInput {
   viaUpload: boolean;
 }
 
+// ── Flow-name contract ───────────────────────────────────────────────
+
+/** Path-safe flow-name charset: no separators, no "..", no spaces. */
+const FLOW_NAME_CHARSET = "[A-Za-z0-9_-]+";
+
+/**
+ * The one authoritative flow-name pattern — shared by the tool-server's flow
+ * tools, the CLI's artifact export, and the client-write path gate so the
+ * contract cannot drift between packages.
+ */
+export const FLOW_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}$`);
+
+/** `<flow-name>.yaml` filename check, derived from the same charset. */
+export const FLOW_FILE_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}\\.yaml$`);
+
 /** Discriminant key identifying a client-write directive inside a tool result. */
 export const CLIENT_FILE_MARKER = "__argentClientFile" as const;
 

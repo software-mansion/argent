@@ -5,7 +5,7 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 ## Overview
 
-A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` directory. Each recorded step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`, or — for an e2e flow — headlessly with `argent flow run <name>`.
+A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` directory. Each recorded step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`, or — for an e2e flow — headlessly with an explicit YAML path such as `argent flow run .argent/flows/checkout.yaml`.
 
 Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
 
@@ -14,7 +14,7 @@ Flows store **no device id**: the runner binds a device (the single booted one, 
 - **e2e** — begins with a `launch:` step, which starts that app from scratch (terminate + relaunch), so the flow controls its own start state. No `executionPrerequisite`. May `run:` other flows, and (on iOS/Android) may itself be a `run:` target — when nested, its `launch` runs inline, restarting the app for that sub-scenario. **Chromium is the exception:** the runner boots one Electron app per run (the top-level flow's), so a nested chromium e2e flow's `launch` can't boot its own instance and fails the run — keep chromium e2e flows top-level. Record one by adding a `restart-app` of the app under test as the **first** step — it is captured as the `launch` step.
 - **fragment** — doesn't begin with a launch; runs against the device's current state. May declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time.
 
-Both run via `argent flow run <name>` — a fragment simply runs against whatever is on screen (its prerequisite is printed as a reminder). Only e2e flows are meaningful CI/suite entries, since only they give a deterministic verdict from a clean start.
+Both run via `argent flow run <flow.yaml>` — a fragment simply runs against whatever is on screen (its prerequisite is printed as a reminder). The CLI requires the explicit `.yaml` file path and never resolves a bare saved-flow name. Only e2e flows are meaningful CI/suite entries, since only they give a deterministic verdict from a clean start.
 
 ### Step directives
 
@@ -33,7 +33,7 @@ Beyond raw `tool:` steps and `echo:`, flows support declarative directives inter
 | `wait`       | `- wait: 500`                                                                                                                                                        | pause for a fixed number of milliseconds (last resort — prefer `await`)                                                                                         |
 | `assert`     | `- assert: { visible: Welcome }`                                                                                                                                     | check a condition, hard-fail if it never holds                                                                                                                  |
 | `snapshot`   | `- snapshot: home` or `- snapshot: { name: home, maxMismatch: 0.5, cropOn: { id: order-summary } }`                                                                  | diff a screenshot — or one element's region — against a stored baseline                                                                                         |
-| `run`        | `- run: login`                                                                                                                                                       | execute another flow's steps inline (fragment or e2e)                                                                                                           |
+| `run`        | `- run: login`                                                                                                                                                       | execute the sibling `<flow-directory>/login.yaml` steps inline (fragment or e2e); the value remains a sibling flow name, not a path                             |
 | `when`       | `- when: { visible: "What's new" }` + `steps: [...]`                                                                                                                 | run a guarded step block only when the condition holds (no else)                                                                                                |
 
 ### Selectors
@@ -118,7 +118,11 @@ Since a `tv-remote` path is positional (like a coordinate tap), gate each naviga
 
 ### Standalone runner
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). `snapshot` baselines live in `.argent/flows/__baselines__/<flow>/`, keyed by platform + resolution; a `snapshot` step **fails** when no baseline exists for the run's device class, so seed baselines with `--update-baselines` and have the user review and commit `__baselines__/` — and pin the device class in CI (`--device`/`--platform`, same simulator model) so runs compare against the committed key. The status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs. `--output <dir>` writes each failed snapshot's baseline/current/diff images to `<dir>/<flow>/` — a stable path for CI artifact upload.
+`argent flow run <flow.yaml> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). Pass an explicit `.yaml` file path, relative to the current directory or absolute; the CLI does not resolve bare saved-flow names. The filename (minus `.yaml`) names the run's report and artifacts, so it must contain only letters, numbers, `_`, or `-`. `argent flow list` prints runnable paths for flows saved under `.argent/flows/`.
+
+The standalone command uses only the auto-started local tool server. It is unavailable while `ARGENT_TOOLS_URL` or `argent link` routing is active; unset `ARGENT_TOOLS_URL` or run `argent unlink` first. This restriction applies only to the CLI: an agent may continue calling `flow-execute` with `name` and `project_root`, including through a remote tool server.
+
+`snapshot` baselines live beside the flow file in `<flow-directory>/__baselines__/<flow>/` (for a saved flow, `.argent/flows/__baselines__/<flow>/`), keyed by platform + resolution; a `snapshot` step **fails** when no baseline exists for the run's device class, so seed baselines with `--update-baselines` and have the user review and commit `__baselines__/` — and pin the device class in CI (`--device`/`--platform`, same simulator model) so runs compare against the committed key. The status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs. `--output <dir>` writes each failed snapshot's baseline/current/diff images to `<dir>/<flow>/` — a stable path for CI artifact upload.
 
 ## Tools
 

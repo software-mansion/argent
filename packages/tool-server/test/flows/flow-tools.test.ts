@@ -487,6 +487,53 @@ describe("flow-add-step", () => {
     ]);
   });
 
+  it("records a flow-execute of a sibling flow_path as a run: directive", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-path", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    const result = await tool.execute(
+      {},
+      {
+        command: "flow-execute",
+        args: JSON.stringify({
+          flow_path: path.join(tmpDir, ".argent", "flows", "login.yaml"),
+          project_root: tmpDir,
+        }),
+      }
+    );
+
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login" }]);
+  });
+
+  it("warns that a flow_path outside the recording's flow directory cannot replay", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-outside", project_root: tmpDir });
+    const outside = path.join(tmpDir, "elsewhere.yaml");
+    await fs.writeFile(outside, "steps:\n  - echo: hi\n", "utf8");
+
+    const result = await tool.execute(
+      {},
+      {
+        command: "flow-execute",
+        args: JSON.stringify({ flow_path: outside, project_root: tmpDir }),
+      }
+    );
+
+    expect(result.message).toMatch(/outside the recording's flow directory and cannot replay/i);
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      { kind: "tool", name: "flow-execute", args: { flow_path: outside, project_root: tmpDir } },
+    ]);
+  });
+
   it("throws on invalid JSON in args", async () => {
     const registry = createMockRegistry({
       tap: { result: { ok: true } },

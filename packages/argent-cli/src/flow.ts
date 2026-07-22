@@ -1,7 +1,10 @@
 import * as fsp from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import * as path from "node:path";
+import { FLOW_NAME_PATTERN } from "@argent/registry";
 import {
   createToolsClient,
+  getResolvedToolsUrl,
   isArtifactHandle,
   materializeArtifacts,
   type MaterializeContext,
@@ -90,14 +93,18 @@ function stepIndent(depth: number | undefined): string {
 function printHelp(): void {
   console.log(`Usage: argent flow <subcommand> [options]
 
-Run a saved flow without an LLM in the loop. Flows live in
-\`.argent/flows/<name>.yaml\` under the current working directory. A flow that
-begins with a \`launch\` step runs its app from scratch; any other flow (a
-fragment) runs against the device's current state — handy while authoring one.
+Run a YAML flow file without an LLM in the loop. Paths are resolved from the
+current working directory and may point anywhere on the local filesystem; the
+filename (minus .yaml) names the run's report and artifacts, so it must
+contain only letters, numbers, "_", or "-". A flow that begins with a \`launch\`
+step runs its app from scratch; any other flow (a fragment) runs against the
+device's current state — handy while authoring one.
+Runs require the auto-started local tool server;
+ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
 
 Subcommands:
-  run <name>        Run a flow and report pass/fail (exit code reflects result)
-  list              List flows in .argent/flows
+  run <flow.yaml>   Run a YAML file and report pass/fail (exit reflects result)
+  list              List runnable YAML paths in .argent/flows
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
@@ -109,14 +116,14 @@ Options (run):
   --help, -h             Show this help
 
 Examples:
-  argent flow run checkout --platform ios
-  argent flow run checkout --device <UDID> --update-baselines
-  argent flow run checkout --output flow-artifacts --json
+  argent flow run .argent/flows/checkout.yaml --platform ios
+  argent flow run ../shared-flows/checkout.yaml --device <UDID> --update-baselines
+  argent flow run /tmp/checkout.yaml --output flow-artifacts --json
 `);
 }
 
 export function parseRunArgs(argv: string[]): {
-  name?: string;
+  flowPath?: string;
   device?: string;
   platform?: string;
   output?: string;
@@ -127,8 +134,12 @@ export function parseRunArgs(argv: string[]): {
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
     if (!tok.startsWith("-")) {
-      // The first bare token is the flow name; later ones stay ignored.
-      if (!out.name) out.name = tok;
+      if (out.flowPath) {
+        throw new FlagParseException(
+          `unexpected argument ${JSON.stringify(tok)}; flow run accepts one YAML file path`
+        );
+      }
+      out.flowPath = tok;
       continue;
     }
     // Accept `--flag=value` alongside `--flag value`, like the `argent run` /
@@ -259,14 +270,17 @@ export function renderArtifactLines(report: FlowReport): string[] {
 }
 
 /**
- * Names spliced into artifact-export destinations. Mirrors the tool-server's
+ * Names spliced into artifact-export destinations. The shared
  * FLOW_NAME_PATTERN, which every legitimate `report.flow` and `snapshotKey`
  * already satisfies (`assertSafeFlowName`'d flow name; `<name>__<platform>-WxH`
  * key). Re-checked here because the destination root is an operator-chosen
  * filesystem path (`--output`) and the values arrive over the wire — a
  * malicious or buggy server must not steer the copy outside that directory.
  */
-const SAFE_ARTIFACT_NAME = /^[A-Za-z0-9_-]+$/;
+const SAFE_ARTIFACT_NAME = FLOW_NAME_PATTERN;
+
+/** The filename stem becomes the runner's internal flow/report name. */
+const SAFE_FLOW_NAME = FLOW_NAME_PATTERN;
 
 /**
  * Copy each failed snapshot's artifacts into a durable, globbable location —
@@ -425,15 +439,17 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return;
   }
 
-  const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
-
   if (sub === "list") {
     const dir = path.join(process.cwd(), ".argent", "flows");
     try {
       const entries = await fsp.readdir(dir);
-      const names = entries.filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, ""));
-      if (names.length === 0) console.log("No flows found in .argent/flows");
-      else console.log(names.join("\n"));
+      // Only paths `flow run` accepts: it also rejects stems failing SAFE_FLOW_NAME.
+      const paths = entries
+        .filter((f) => f.endsWith(".yaml") && SAFE_FLOW_NAME.test(path.basename(f, ".yaml")))
+        .sort()
+        .map((f) => path.join(".argent", "flows", f));
+      if (paths.length === 0) console.log("No flows found in .argent/flows");
+      else console.log(paths.join("\n"));
     } catch {
       console.log("No .argent/flows directory in the current working directory.");
     }
@@ -464,16 +480,82 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     }
     throw err;
   }
-  if (!args.name) {
-    console.error("argent flow run <name> requires a flow name.");
+  if (!args.flowPath) {
+    console.error("argent flow run <flow.yaml> requires a YAML file path.");
     printHelp();
     return exitAfterFlush(2);
   }
-  const flowName = args.name;
+
+  const projectRoot = process.cwd();
+  const suppliedPath = args.flowPath;
+  if (path.extname(suppliedPath) !== ".yaml") {
+    const isBareSavedName =
+      !suppliedPath.includes("/") &&
+      !suppliedPath.includes("\\") &&
+      path.extname(suppliedPath) === "" &&
+      SAFE_FLOW_NAME.test(suppliedPath);
+    if (isBareSavedName) {
+      console.error(
+        `Expected a YAML file path. Saved-flow name lookup is no longer supported.\n` +
+          `Did you mean: argent flow run .argent/flows/${suppliedPath}.yaml`
+      );
+    } else if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
+      // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
+      console.error(
+        `Flow extension must be lowercase .yaml, not ${path.extname(suppliedPath)}: ${suppliedPath}`
+      );
+    } else {
+      console.error(`Flow path must end in .yaml: ${suppliedPath}`);
+    }
+    return exitAfterFlush(2);
+  }
+
+  const flowName = path.basename(suppliedPath, ".yaml");
+  if (!SAFE_FLOW_NAME.test(flowName)) {
+    console.error(
+      `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`
+    );
+    return exitAfterFlush(2);
+  }
+
+  const flowPath = path.resolve(projectRoot, suppliedPath);
+  try {
+    const stat = await fsp.stat(flowPath);
+    if (!stat.isFile()) {
+      console.error(`Flow path is not a file: ${flowPath}`);
+      return exitAfterFlush(2);
+    }
+    await fsp.access(flowPath, fsConstants.R_OK);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const detail = code === "ENOENT" ? "Flow file not found" : "Could not read flow file";
+    console.error(`${detail}: ${flowPath}`);
+    return exitAfterFlush(2);
+  }
+
+  // CLI runs rely on the caller and tool-server sharing a filesystem: sibling
+  // `run:` files and `__baselines__` are resolved beside this YAML. Keep the
+  // flow-execute tool itself remotely callable, but reject CLI routing that
+  // cannot guarantee those local filesystem semantics. This deliberately
+  // rejects even single-file flows that could run remotely — the CLI cannot
+  // tell them apart without parsing the flow.
+  const routing = await getResolvedToolsUrl();
+  if (routing.source !== "none") {
+    const recovery =
+      routing.source === "env"
+        ? "Unset ARGENT_TOOLS_URL and try again."
+        : "Run `argent unlink` and try again.";
+    console.error(
+      `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`
+    );
+    return exitAfterFlush(2);
+  }
+
+  const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 
   const payload: Record<string, unknown> = {
-    name: flowName,
-    project_root: process.cwd(),
+    flow_path: flowPath,
+    project_root: projectRoot,
     // Headless runs never block on the LLM prerequisite handshake.
     prerequisiteAcknowledged: true,
   };

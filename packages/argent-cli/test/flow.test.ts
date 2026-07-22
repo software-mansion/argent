@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fsp from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { Writable } from "node:stream";
 import { exitAfterFlush, flow, parseRunArgs } from "../src/flow.js";
 import { FlagParseException } from "../src/flag-parser.js";
@@ -12,12 +15,21 @@ const toolsClientMock = vi.hoisted(() => ({
 const materializeArtifactsMock = vi.hoisted(() =>
   vi.fn(async (data: unknown) => ({ result: data, images: [] }))
 );
+const getResolvedToolsUrlMock = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<{ url: string | null; source: "none" | "env" | "link" }> => ({
+      url: null,
+      source: "none",
+    })
+  )
+);
 
 vi.mock("@argent/tools-client", async (importOriginal) => ({
   // Keep the real isArtifactHandle — the display-path fallback under test
   // must recognize genuine wire handles.
   ...(await importOriginal<typeof import("@argent/tools-client")>()),
   createToolsClient: vi.fn(() => toolsClientMock),
+  getResolvedToolsUrl: getResolvedToolsUrlMock,
   materializeArtifacts: materializeArtifactsMock,
 }));
 
@@ -65,48 +77,59 @@ function report(overrides: Record<string, unknown> = {}): Record<string, unknown
 }
 
 describe("parseRunArgs", () => {
-  it("returns documented defaults with just a name", () => {
-    expect(parseRunArgs(["checkout"])).toEqual({
-      name: "checkout",
+  it("returns documented defaults with just a flow path", () => {
+    expect(parseRunArgs(["../flows/checkout.yaml"])).toEqual({
+      flowPath: "../flows/checkout.yaml",
       updateBaselines: false,
       json: false,
     });
   });
 
-  it("parses every run flag alongside the name", () => {
+  it("parses every run flag alongside the path", () => {
     expect(
-      parseRunArgs(["checkout", "--device", "SIM-1", "--platform", "ios", "--update-baselines"])
+      parseRunArgs([
+        "checkout.yaml",
+        "--device",
+        "SIM-1",
+        "--platform",
+        "ios",
+        "--update-baselines",
+      ])
     ).toEqual({
-      name: "checkout",
+      flowPath: "checkout.yaml",
       device: "SIM-1",
       platform: "ios",
       updateBaselines: true,
       json: false,
     });
-    expect(parseRunArgs(["--json", "checkout"]).json).toBe(true);
+    expect(parseRunArgs(["--json", "checkout.yaml"]).json).toBe(true);
   });
 
   it("throws when --device is the final token", () => {
-    expect(() => parseRunArgs(["checkout", "--device"])).toThrow(FlagParseException);
-    expect(() => parseRunArgs(["checkout", "--device"])).toThrow("--device requires a value");
+    expect(() => parseRunArgs(["checkout.yaml", "--device"])).toThrow(FlagParseException);
+    expect(() => parseRunArgs(["checkout.yaml", "--device"])).toThrow("--device requires a value");
   });
 
   it("throws when --platform is the final token", () => {
-    expect(() => parseRunArgs(["checkout", "--platform"])).toThrow("--platform requires a value");
+    expect(() => parseRunArgs(["checkout.yaml", "--platform"])).toThrow(
+      "--platform requires a value"
+    );
   });
 
   it("treats a following flag as a missing value, not as the value", () => {
-    expect(() => parseRunArgs(["checkout", "--device", "--json"])).toThrow(
+    expect(() => parseRunArgs(["checkout.yaml", "--device", "--json"])).toThrow(
       "--device requires a value"
     );
-    expect(() => parseRunArgs(["checkout", "--platform", "--update-baselines"])).toThrow(
+    expect(() => parseRunArgs(["checkout.yaml", "--platform", "--update-baselines"])).toThrow(
       "--platform requires a value"
     );
   });
 
   it("accepts the --flag=value form for every value-taking flag", () => {
-    expect(parseRunArgs(["checkout", "--device=SIM-1", "--platform=ios", "--output=dir"])).toEqual({
-      name: "checkout",
+    expect(
+      parseRunArgs(["checkout.yaml", "--device=SIM-1", "--platform=ios", "--output=dir"])
+    ).toEqual({
+      flowPath: "checkout.yaml",
       device: "SIM-1",
       platform: "ios",
       output: "dir",
@@ -116,8 +139,8 @@ describe("parseRunArgs", () => {
   });
 
   it("mixes = and space-separated forms freely", () => {
-    expect(parseRunArgs(["checkout", "--device=SIM-1", "--platform", "ios"])).toEqual({
-      name: "checkout",
+    expect(parseRunArgs(["checkout.yaml", "--device=SIM-1", "--platform", "ios"])).toEqual({
+      flowPath: "checkout.yaml",
       device: "SIM-1",
       platform: "ios",
       updateBaselines: false,
@@ -127,40 +150,42 @@ describe("parseRunArgs", () => {
 
   it("does not consume the next token when the value was inline", () => {
     // Guards the index bookkeeping: --device=SIM-1 must not swallow --json.
-    const out = parseRunArgs(["checkout", "--device=SIM-1", "--json"]);
+    const out = parseRunArgs(["checkout.yaml", "--device=SIM-1", "--json"]);
     expect(out.device).toBe("SIM-1");
     expect(out.json).toBe(true);
   });
 
   it("throws when a boolean flag is given an inline value", () => {
-    expect(() => parseRunArgs(["checkout", "--json=true"])).toThrow(FlagParseException);
-    expect(() => parseRunArgs(["checkout", "--json=true"])).toThrow("--json does not take a value");
-    expect(() => parseRunArgs(["checkout", "--update-baselines=1"])).toThrow(
+    expect(() => parseRunArgs(["checkout.yaml", "--json=true"])).toThrow(FlagParseException);
+    expect(() => parseRunArgs(["checkout.yaml", "--json=true"])).toThrow(
+      "--json does not take a value"
+    );
+    expect(() => parseRunArgs(["checkout.yaml", "--update-baselines=1"])).toThrow(
       "--update-baselines does not take a value"
     );
   });
 
   it("throws when an inline value is empty", () => {
-    expect(() => parseRunArgs(["checkout", "--device="])).toThrow("--device requires a value");
+    expect(() => parseRunArgs(["checkout.yaml", "--device="])).toThrow("--device requires a value");
   });
 
   it("rejects unknown flags instead of silently dropping them", () => {
-    expect(() => parseRunArgs(["checkout", "--verbose"])).toThrow(FlagParseException);
-    expect(() => parseRunArgs(["checkout", "--verbose"])).toThrow(/unknown flag/);
+    expect(() => parseRunArgs(["checkout.yaml", "--verbose"])).toThrow(FlagParseException);
+    expect(() => parseRunArgs(["checkout.yaml", "--verbose"])).toThrow(/unknown flag/);
     // A typo'd value flag must not fall back to device auto-detection.
-    expect(() => parseRunArgs(["checkout", "--platfrom=ios"])).toThrow(/unknown flag/);
+    expect(() => parseRunArgs(["checkout.yaml", "--platfrom=ios"])).toThrow(/unknown flag/);
   });
 
-  it("still ignores extra bare positionals (only flags are rejected)", () => {
-    expect(parseRunArgs(["checkout", "extra"])).toEqual({
-      name: "checkout",
-      updateBaselines: false,
-      json: false,
-    });
+  it("rejects extra positional arguments", () => {
+    expect(() => parseRunArgs(["checkout.yaml", "extra.yaml"])).toThrow(
+      "flow run accepts one YAML file path"
+    );
   });
 });
 
 describe("argent flow run", () => {
+  let tempRoot: string;
+  let checkoutPath: string;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let logs: string[];
   let errs: string[];
@@ -169,8 +194,19 @@ describe("argent flow run", () => {
 
   const opts = { paths: {} as never };
 
+  beforeAll(async () => {
+    tempRoot = await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-flow-"));
+    checkoutPath = path.join(tempRoot, "checkout.yaml");
+    await fsp.writeFile(checkoutPath, "steps: []\n", "utf8");
+  });
+
+  afterAll(async () => {
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    getResolvedToolsUrlMock.mockResolvedValue({ url: null, source: "none" });
     toolsClientMock.callTool.mockResolvedValue({ data: report() });
     logs = [];
     errs = [];
@@ -187,10 +223,19 @@ describe("argent flow run", () => {
     errSpy.mockRestore();
   });
 
-  it("forwards name, device, platform, and updateBaselines to flow-execute and exits 0 on pass", async () => {
+  it("resolves the YAML path and forwards flags to flow-execute", async () => {
+    const relativeCheckoutPath = path.relative(process.cwd(), checkoutPath);
     await expect(
       flow(
-        ["run", "checkout", "--device", "SIM-1", "--platform", "ios", "--update-baselines"],
+        [
+          "run",
+          relativeCheckoutPath,
+          "--device",
+          "SIM-1",
+          "--platform",
+          "ios",
+          "--update-baselines",
+        ],
         opts
       )
     ).rejects.toThrow("process.exit:0");
@@ -198,7 +243,7 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
       "flow-execute",
       {
-        name: "checkout",
+        flow_path: checkoutPath,
         project_root: process.cwd(),
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -228,13 +273,13 @@ describe("argent flow run", () => {
 
   it("forwards --flag=value forms to flow-execute like the space-separated ones", async () => {
     await expect(
-      flow(["run", "checkout", "--platform=ios", "--device=SIM-1"], opts)
+      flow(["run", checkoutPath, "--platform=ios", "--device=SIM-1"], opts)
     ).rejects.toThrow("process.exit:0");
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
       "flow-execute",
       {
-        name: "checkout",
+        flow_path: checkoutPath,
         project_root: process.cwd(),
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -260,10 +305,114 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain("unknown flag");
   });
 
-  it("exits 2 when no flow name is given", async () => {
+  it("exits 2 when no flow path is given", async () => {
     await expect(flow(["run"], opts)).rejects.toThrow("process.exit:2");
-    expect(errs.join("\n")).toContain("requires a flow name");
+    expect(errs.join("\n")).toContain("requires a YAML file path");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects a saved-flow name with a migration hint", async () => {
+    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(errs.join("\n")).toContain("Saved-flow name lookup is no longer supported");
+    expect(errs.join("\n")).toContain("argent flow run .argent/flows/checkout.yaml");
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing and invalid YAML paths before routing or tool invocation", async () => {
+    await expect(flow(["run", path.join(tempRoot, "missing.yaml")], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+    expect(errs.join("\n")).toContain("Flow file not found");
+
+    errs.length = 0;
+    await expect(flow(["run", path.join(tempRoot, "checkout.yml")], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+    expect(errs.join("\n")).toContain("Flow path must end in .yaml");
+
+    errs.length = 0;
+    await expect(flow(["run", path.join(tempRoot, "unsafe name.yaml")], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+    expect(errs.join("\n")).toContain("Flow filename must have a non-empty name");
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("names the lowercase requirement when only the extension's case is wrong", async () => {
+    await expect(flow(["run", path.join(tempRoot, "Checkout.YAML")], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(errs.join("\n")).toContain("Flow extension must be lowercase .yaml, not .YAML");
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["env", "Unset ARGENT_TOOLS_URL"],
+    ["link", "argent unlink"],
+  ] as const)("rejects %s routing without invoking flow-execute", async (source, recovery) => {
+    getResolvedToolsUrlMock.mockResolvedValue({
+      url: "http://example.test:4141",
+      source,
+    });
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+    expect(errs.join("\n")).toContain("requires the auto-started local tool server");
+    expect(errs.join("\n")).toContain(recovery);
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("lists runnable YAML paths without consulting remote routing", async () => {
+    const listRoot = path.join(tempRoot, "list-project");
+    const flowsDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "z-last.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "a-first.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "ignored.yml"), "steps: []\n"),
+    ]);
+    getResolvedToolsUrlMock.mockResolvedValue({
+      url: "http://example.test:4141",
+      source: "env",
+    });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toBe(
+      [".argent/flows/a-first.yaml", ".argent/flows/z-last.yaml"].join("\n")
+    );
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("omits .yaml files whose names `flow run` would reject", async () => {
+    const listRoot = path.join(tempRoot, "list-unsafe-project");
+    const flowsDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "sign.in.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "sign-in.yaml"), "steps: []\n"),
+    ]);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    // Silently omitted, like non-.yaml entries — every printed path is runnable.
+    expect(logs.join("\n")).toBe(".argent/flows/sign-in.yaml");
   });
 
   it("renders the report — echo lines unnumbered, real steps numbered, reasons and fragment tags shown — and exits 1 on failure", async () => {
@@ -283,7 +432,7 @@ describe("argent flow run", () => {
       }),
     });
 
-    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:1");
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
 
     const out = logs.join("\n");
     expect(out).toContain('Flow "checkout" on SIM-1');
@@ -303,7 +452,7 @@ describe("argent flow run", () => {
       }),
     });
 
-    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:0");
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
 
     const out = logs.join("\n");
     expect(out).toMatch(/⚠ {2}1 snapshot/);
@@ -312,7 +461,7 @@ describe("argent flow run", () => {
   });
 
   it("prints the raw report with --json", async () => {
-    await expect(flow(["run", "checkout", "--json"], opts)).rejects.toThrow("process.exit:0");
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:0");
     expect(JSON.parse(logs.join("\n"))).toEqual(report());
   });
 
@@ -339,7 +488,7 @@ describe("argent flow run", () => {
       }),
     });
 
-    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:1");
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
 
     // Nothing to download: paths come straight off the handles, and the
     // server URL is never even resolved.
@@ -366,7 +515,7 @@ describe("argent flow run", () => {
       }),
     });
 
-    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:0");
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
 
     expect(materializeArtifactsMock).not.toHaveBeenCalled();
     const out = logs.join("\n");
@@ -399,7 +548,7 @@ describe("argent flow run", () => {
       }),
     });
 
-    await expect(flow(["run", "checkout", "--output", "flow-artifacts"], opts)).rejects.toThrow(
+    await expect(flow(["run", checkoutPath, "--output", "flow-artifacts"], opts)).rejects.toThrow(
       "process.exit:1"
     );
 
@@ -431,7 +580,7 @@ describe("argent flow run", () => {
       }),
     });
 
-    await expect(flow(["run", "checkout", "--json"], opts)).rejects.toThrow("process.exit:1");
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:1");
 
     expect(materializeArtifactsMock).not.toHaveBeenCalled();
     const parsed = JSON.parse(logs.join("\n")) as {
@@ -458,7 +607,7 @@ describe("argent flow run", () => {
       }),
     });
 
-    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:1");
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
 
     expect(materializeArtifactsMock).not.toHaveBeenCalled();
     const out = logs.join("\n");
@@ -469,7 +618,7 @@ describe("argent flow run", () => {
   it("exits 1 with the error message when the tool call fails", async () => {
     toolsClientMock.callTool.mockRejectedValue(new Error("tool-server unreachable"));
 
-    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:1");
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
     expect(errs.join("\n")).toContain("tool-server unreachable");
   });
 
@@ -478,7 +627,7 @@ describe("argent flow run", () => {
       data: { flow: "checkout", notice: "prerequisite", executionPrerequisite: "logged in" },
     });
 
-    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:2");
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
     expect(errs.join("\n")).toContain('"checkout" did not produce a run report');
   });
 
@@ -490,18 +639,28 @@ describe("argent flow run", () => {
   it("prints help and returns (no exit) with no subcommand", async () => {
     await flow([], opts);
     expect(logs.join("\n")).toContain("Usage: argent flow");
+    expect(logs.join("\n")).toContain(
+      "filename (minus .yaml) names the run's report and artifacts"
+    );
+    expect(logs.join("\n")).toContain('contain only letters, numbers, "_", or "-"');
+    expect(logs.join("\n")).toContain(
+      "ARGENT_TOOLS_URL and `argent link` routing are not supported"
+    );
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
   it("prints help instead of running when --help follows the flow name", async () => {
     await flow(["run", "checkout", "--help"], opts);
     expect(logs.join("\n")).toContain("Options (run):");
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
   it("prints help instead of running when -h trails other run flags", async () => {
     await flow(["run", "checkout", "--device", "SIM-1", "-h"], opts);
     expect(logs.join("\n")).toContain("Usage: argent flow");
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 });

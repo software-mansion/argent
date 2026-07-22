@@ -129,33 +129,48 @@ const RUN_TARGET_COMMAND = "flow-execute";
  * recording's `.argent/flows` dir (host-resolved composition, design §12). An
  * e2e target's `launch` simply runs inline. So we keep the raw step only when
  * the target can't be resolved as a sibling, or the recording is remote (the
- * host can't read the client's sibling files to validate).
+ * host can't read the client's sibling files to validate). A `flow_path`
+ * target composes the same way (as its basename stem) when it names a sibling
+ * `.yaml` of the recording; any other flow_path cannot replay at all — a raw
+ * `tool:` step has no file-input boundary to resolve it through.
  */
 async function captureRunTarget(
   session: RecordingSession | null,
   args: Record<string, unknown>
 ): Promise<{ flow?: string; warning?: string }> {
-  const name = args.name;
-  if (typeof name !== "string") {
+  const name = typeof args.name === "string" ? args.name : undefined;
+  const flowPath = typeof args.flow_path === "string" ? args.flow_path : undefined;
+  if (name === undefined && flowPath === undefined) {
     return { warning: "flow-execute call had no flow name; kept the raw step" };
   }
   if (!session || session.persist !== "host") {
     return {
-      warning: `kept the raw flow-execute step — run: composition is host-resolved, so a remote recording can't reference "${name}" portably`,
+      warning: `kept the raw flow-execute step — run: composition is host-resolved, so a remote recording can't reference "${name ?? flowPath}" portably`,
     };
   }
+  const flowsDir = path.dirname(session.filePath);
+  if (
+    name === undefined &&
+    (path.extname(flowPath!) !== ".yaml" ||
+      path.resolve(path.dirname(flowPath!)) !== path.resolve(flowsDir))
+  ) {
+    return {
+      warning: `flow_path "${flowPath}" is outside the recording's flow directory and cannot replay as a recorded step; kept the raw flow-execute step`,
+    };
+  }
+  const stem = name ?? path.basename(flowPath!, ".yaml");
   try {
-    assertSafeFlowName(name);
+    assertSafeFlowName(stem);
     // Resolve against the recording's own flows dir (the running flow-execute
     // may have mutated the active-project-root global), not getFlowsDir().
     // Parsing validates the sibling exists and is a well-formed flow; a failure
     // falls through to keeping the raw step.
-    const fragPath = path.join(path.dirname(session.filePath), `${name}.yaml`);
+    const fragPath = path.join(flowsDir, `${stem}.yaml`);
     parseFlow(await fs.readFile(fragPath, "utf8"));
-    return { flow: name };
+    return { flow: stem };
   } catch (err) {
     return {
-      warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,
+      warning: `could not resolve "${stem}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,
     };
   }
 }

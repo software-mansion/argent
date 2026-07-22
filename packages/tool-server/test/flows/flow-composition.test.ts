@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry } from "@argent/registry";
+import { ArtifactStore, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
@@ -83,6 +83,72 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1].flow).toBe("login");
     expect(result.steps[3].flow).toBe("main");
     expect(result.ok).toBe(true);
+  });
+
+  it("resolves run: fragments beside an explicit top-level flow_path", async () => {
+    const externalDir = path.join(tmpDir, "external-flows");
+    const mainPath = path.join(externalDir, "main.yaml");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(
+      path.join(externalDir, "login.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "sibling fragment" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      mainPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "login" }],
+      }),
+      "utf8"
+    );
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    const result = asRun(
+      await runFlow.execute(
+        {},
+        { project_root: tmpDir, flow_path: mainPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_path: { clientPath: mainPath, presentOnHost: true, viaUpload: false },
+          },
+        }
+      )
+    );
+
+    expect(result.flow).toBe("main");
+    expect(result.steps.map((step) => `${step.kind}:${step.status}`)).toEqual([
+      "run:pass",
+      "echo:pass",
+    ]);
+    expect(result.steps[1]).toMatchObject({ flow: "login", message: "sibling fragment" });
+  });
+
+  it("names the lowercase requirement when only the flow_path extension's case is wrong", async () => {
+    const upperPath = path.join(tmpDir, "Main.YAML");
+    await fs.writeFile(
+      upperPath,
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "hi" }] }),
+      "utf8"
+    );
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    await expect(
+      runFlow.execute(
+        {},
+        { project_root: tmpDir, flow_path: upperPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_path: { clientPath: upperPath, presentOnHost: true, viaUpload: false },
+          },
+        }
+      )
+    ).rejects.toThrow('flow files must use the lowercase .yaml extension, not ".YAML"');
   });
 
   it("stamps nesting depth on expanded fragment steps (omitted at top level)", async () => {

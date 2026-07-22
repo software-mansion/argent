@@ -9,7 +9,11 @@ import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recordi
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
-import { createRunFlowTool, resolveFlowFilePath } from "../../src/tools/flows/flow-run";
+import {
+  createRunFlowTool,
+  resolveFlowFilePath,
+  resolveFlowSource,
+} from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import {
   clearActiveFlow,
@@ -203,6 +207,111 @@ describe("flow replay with a boundary-resolved flow_file", () => {
     } finally {
       await fs.rm(uploaded, { force: true });
     }
+  });
+});
+
+describe("flow replay with an explicit boundary-resolved flow_path", () => {
+  it("advertises exactly one of name and flow_path as the flow source", () => {
+    const runFlow = createRunFlowTool(createMockRegistry());
+
+    expect(runFlow.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        flow_path: { type: "string" },
+      },
+      oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
+    });
+  });
+
+  it("accepts a co-located path verified by the boundary and derives its logical name", async () => {
+    const flowPath = path.join(os.tmpdir(), `external-flow-${Date.now()}.yaml`);
+    await fs.writeFile(
+      flowPath,
+      ["executionPrerequisite: ''", "steps:", "  - echo: from explicit path", ""].join("\n")
+    );
+    try {
+      const runFlow = createRunFlowTool(createMockRegistry());
+      const result = await runFlow.execute(
+        {},
+        {
+          project_root: CLIENT_ROOT,
+          flow_path: flowPath,
+          device: "00000000-0000-0000-0000-0000000000ab",
+        },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_path: { clientPath: flowPath, presentOnHost: true, viaUpload: false },
+          },
+        }
+      );
+
+      expect(result).toMatchObject({
+        flow: path.basename(flowPath, ".yaml"),
+        steps: [{ kind: "echo", status: "pass", message: "from explicit path" }],
+      });
+    } finally {
+      await fs.rm(flowPath, { force: true });
+    }
+  });
+
+  it("rejects a raw unwrapped flow_path even when the file exists", async () => {
+    const flowPath = path.join(os.tmpdir(), `raw-flow-${Date.now()}.yaml`);
+    await fs.writeFile(flowPath, ["executionPrerequisite: ''", "steps: []", ""].join("\n"));
+    try {
+      const runFlow = createRunFlowTool(createMockRegistry());
+      await expect(
+        runFlow.execute(
+          {},
+          {
+            project_root: CLIENT_ROOT,
+            flow_path: flowPath,
+            device: "00000000-0000-0000-0000-0000000000ab",
+          }
+        )
+      ).rejects.toThrow("flow_path file-input boundary");
+    } finally {
+      await fs.rm(flowPath, { force: true });
+    }
+  });
+
+  it("rejects boundary metadata for a different co-located path", () => {
+    const flowPath = path.join(os.tmpdir(), "selected.yaml");
+    expect(() =>
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+        clientPath: path.join(os.tmpdir(), "different.yaml"),
+        presentOnHost: true,
+        viaUpload: false,
+      })
+    ).toThrow("flow_path file-input boundary");
+  });
+
+  it("rejects an uploaded flow_path because its sibling filesystem is unavailable", () => {
+    const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
+    expect(() =>
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+        clientPath: path.join(CLIENT_ROOT, "flows", "caller-visible.yaml"),
+        presentOnHost: false,
+        viaUpload: true,
+      })
+    ).toThrow("explicit flow paths require a co-located client and tool server");
+  });
+
+  it("rejects direct callers that provide both flow sources", () => {
+    expect(() =>
+      resolveFlowSource(
+        { name: "saved", project_root: CLIENT_ROOT, flow_path: "/tmp/explicit.yaml" },
+        undefined,
+        { clientPath: "/tmp/explicit.yaml", presentOnHost: true, viaUpload: false }
+      )
+    ).toThrow("exactly one flow source");
+  });
+
+  it("rejects direct callers that provide neither flow source", () => {
+    expect(() => resolveFlowSource({ project_root: CLIENT_ROOT })).toThrow(
+      "exactly one flow source"
+    );
   });
 });
 

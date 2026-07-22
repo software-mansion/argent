@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import { createTarGzFile } from "@argent/archive";
+import { FLOW_FILE_NAME_PATTERN } from "@argent/registry";
 
 /** Must match the tool-server's wire contract (`@argent/registry` file-inputs.ts). */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
@@ -242,7 +243,7 @@ function isAllowedClientFilePath(p: string): boolean {
   const segments = p.split(/[\\/]+/);
   if (segments.includes("..")) return false;
   const file = segments[segments.length - 1] ?? "";
-  if (!/^[A-Za-z0-9_-]+\.yaml$/.test(file)) return false;
+  if (!FLOW_FILE_NAME_PATTERN.test(file)) return false;
   return segments[segments.length - 3] === ".argent" && segments[segments.length - 2] === "flows";
 }
 

@@ -2,7 +2,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
-import { CLIENT_FILE_MARKER, type ClientFileDirective } from "@argent/registry";
+import { CLIENT_FILE_MARKER, FLOW_NAME_PATTERN, type ClientFileDirective } from "@argent/registry";
 import {
   hasVisibleText,
   selectorFieldsSchema,
@@ -107,8 +107,6 @@ export function clearActiveProjectRoot(): void {
 export function getFlowsDir(): string {
   return path.join(requireActiveProjectRoot(), FLOWS_DIR_NAME);
 }
-
-const FLOW_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export function assertSafeFlowName(name: string): void {
   if (!FLOW_NAME_PATTERN.test(name)) {
