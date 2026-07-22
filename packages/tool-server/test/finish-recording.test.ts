@@ -7,9 +7,10 @@ import {
 describe("computeWatermarkBox", () => {
   it("sizes the box relative to frame width and pins it bottom-left", () => {
     // 886x1920 portrait: 0.26*886=230 wide, height keeps the 900:237 logo
-    // aspect (snapped even -> 60), 0.03*886~=26 margin, y = 1920 - h - margin.
+    // aspect (snapped even -> 60), side inset 0.03*886~=26, bottom inset
+    // 0.018*886~=16 (a touch lower), y = 1920 - h - bottomMargin.
     const box = computeWatermarkBox({ width: 886, height: 1920 });
-    expect(box).toEqual({ w: 230, h: 60, x: 26, y: 1834 });
+    expect(box).toEqual({ w: 230, h: 60, x: 26, y: 1844 });
   });
 
   it("keeps every dimension even (yuv420p 4:2:0 crop/scale requirement)", () => {
