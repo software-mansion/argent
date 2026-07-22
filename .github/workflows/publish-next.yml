@@ -128,8 +128,9 @@ jobs:
       # native-devtools variants the remote code path spawns/injects over a
       # sim-remote-tunnelled TCP socket. Absent from 0.15.0 because the release
       # never built them; gate the publish so they can't silently regress again.
-      # (Host=darwin here, so axServiceBinaryPathTcp() resolves bin/darwin/tcp.)
-      - run: test -x packages/argent/bin/darwin/tcp/ax-service
+      # (bin/tcp is platform-NEUTRAL — axServiceBinaryPathTcp() resolves
+      # bin/tcp on every host, never a bin/<platform>/tcp subdir.)
+      - run: test -x packages/argent/bin/tcp/ax-service
       - run: test -f packages/argent/dylibs/tcp/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tcp/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/tcp/libArgentInjectionBootstrap.dylib

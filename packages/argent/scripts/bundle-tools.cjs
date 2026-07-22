@@ -100,10 +100,13 @@ const ESM_REQUIRE_BANNER = {
 // only lives under darwin/.
 const BIN_SRC_ROOT = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin");
 const AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/ax-service");
-const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tcp/ax-service");
+// The tcp ax-service lives in a platform-NEUTRAL bin/tcp/ (not bin/darwin/tcp/):
+// it is uploaded to the remote macOS orchestrator, so it must resolve from any
+// host platform. Matches tcpBinDir() in native-devtools-ios/src/index.ts.
+const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
-const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
+const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "tcp/ax-service");
 // argent-device-auth: macOS host helper for the branded physical-iOS tunnel
 // auth prompt. Best-effort — only present once argent-private publishes the
 // signed binary; until then physical iOS falls back to the osascript prompt.

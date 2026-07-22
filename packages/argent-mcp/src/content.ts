@@ -225,6 +225,12 @@ export type FlowStepResult = {
   /** Human-readable step target (selector / snapshot name), set by the runner. */
   target?: string;
   /**
+   * Nesting depth: absent/0 at top level, +1 inside each block directive
+   * (`when:` guarded steps, `run:` fragment steps). The label is indented by
+   * it; a pre-depth tool-server sends none and the report renders flat.
+   */
+  depth?: number;
+  /**
    * Snapshot-step artifacts keyed by role (baseline/current/diff). Values are
    * artifact handles on current tool-servers; treated as untrusted wire data
    * here, so anything else renders as text or is skipped.
@@ -252,6 +258,22 @@ const STATUS_GLYPH: Record<string, string> = {
   error: "✗",
   skip: "·",
 };
+
+/**
+ * Display cap on the nesting indent — not a producer bound. The tool-server's
+ * run-chain and per-file when-nesting limits accumulate, so legitimate depth
+ * can exceed this; such steps keep the maximum indent rather than flattening.
+ * Depth is also untrusted wire data, so the clamp doubles as a guard: a buggy
+ * or malicious server must not drive `repeat()` with a huge (multi-GB string)
+ * or negative (throwing) count.
+ */
+const MAX_RENDER_DEPTH = 20;
+
+/** Indentation for a step's nesting depth; absent/invalid depth renders flat. */
+function stepIndent(depth: unknown): string {
+  if (typeof depth !== "number" || !Number.isInteger(depth) || depth <= 0) return "";
+  return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
+}
 
 function stepLabel(step: FlowStepResult): string {
   if (step.kind === "echo") return step.message ?? "";
@@ -293,7 +315,10 @@ export async function flowRunToMcpContent(
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
     const warning = step.warning ? ` ⚠ ${step.warning}` : "";
-    blocks.push({ type: "text", text: `[${num}] ${glyph}${stepLabel(step)}${suffix}${warning}` });
+    blocks.push({
+      type: "text",
+      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning}`,
+    });
 
     // Surface a step's own content (e.g. a screenshot) only when it actually
     // returned one.
@@ -304,7 +329,7 @@ export async function flowRunToMcpContent(
     // Snapshot steps carry artifacts instead of a result — list their paths,
     // and inline the annotated diff image when the assertion failed.
     if (isRecord(step.artifacts)) {
-      blocks.push(...(await stepArtifactBlocks(step.artifacts, step.status, ctx)));
+      blocks.push(...(await stepArtifactBlocks(step.artifacts, step.status, ctx, step.depth)));
     }
   }
 
@@ -328,12 +353,14 @@ export async function flowRunToMcpContent(
  * tool-server paths (or filenames) without pulling the bytes over the wire —
  * the same economy flow-visual.ts applies by omitting artifacts on a clean
  * pass. A legacy string[] (pre-handle tool-servers) renders its paths as
- * plain text.
+ * plain text. Lines shift with the step's depth indent so they stay attached
+ * to a nested step's label, matching the CLI renderer.
  */
 async function stepArtifactBlocks(
   artifacts: Record<string, unknown>,
   status: string | undefined,
-  ctx?: ContentContext
+  ctx?: ContentContext,
+  depth?: number
 ): Promise<ContentBlock[]> {
   const failed = status === "fail" || status === "error";
   const entries: [string, string][] = [];
@@ -356,9 +383,10 @@ async function stepArtifactBlocks(
     }
   }
 
+  const indent = stepIndent(depth);
   const blocks: ContentBlock[] =
     entries.length > 0
-      ? [{ type: "text", text: entries.map(([k, v]) => `  ${k}: ${v}`).join("\n") }]
+      ? [{ type: "text", text: entries.map(([k, v]) => `  ${indent}${k}: ${v}`).join("\n") }]
       : [];
   if (diffImage) blocks.push(diffImage);
   return blocks;

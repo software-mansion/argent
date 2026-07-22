@@ -4,6 +4,7 @@ import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { UnsupportedOperationError } from "../../../utils/capability";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
+import { httpDeepLinkNote } from "../deep-link-note";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +37,6 @@ export const iosImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult
         { cause: err instanceof Error ? err : new Error(String(err)) }
       );
     }
-    return { opened: true, url: params.url };
+    return { opened: true, url: params.url, note: httpDeepLinkNote(params.url) };
   },
 };
