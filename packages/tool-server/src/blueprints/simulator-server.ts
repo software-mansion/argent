@@ -11,6 +11,7 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
@@ -124,21 +125,29 @@ async function buildRemoteInstance(
 // per-tool zod schemas and the /preview device-list check.
 const SAFE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
+// Physical-iOS support is experimental and opt-in. The sim-server factory is the
+// one chokepoint every physical-iPhone tool (tap/swipe/button/screenshot)
+// resolves through, so gating it here keeps the whole surface behind the flag.
+const PHYSICAL_IOS_DEVICES_FLAG = "physical-ios-devices";
+
 /**
  * The simulator-server subcommand that drives a given device. iOS simulators and
- * Android emulators each have their own controller; a physical Android phone is
- * a third controller (`android_device`) that runs the screen-sharing agent over
- * adb and decodes its H264 stream, so it is selected by `kind === "device"`
- * rather than by platform alone.
+ * Android emulators each have their own controller; a physical device is a
+ * separate controller selected by `kind === "device"` rather than by platform
+ * alone — a physical Android phone drives `android_device` (screen-sharing agent
+ * over adb), and a physical iPhone drives `ios_device` (Apple CoreDevice over
+ * USB), so physical iOS is "just another sim-server subcommand" like the rest.
  */
-function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_device" {
-  if (device.platform === "ios") return "ios";
+function subcommandForDevice(
+  device: DeviceInfo
+): "ios" | "ios_device" | "android" | "android_device" {
+  if (device.platform === "ios") return device.kind === "device" ? "ios_device" : "ios";
   return device.kind === "device" ? "android_device" : "android";
 }
 
 function spawnSimulatorServerProcess(
   udid: string,
-  subcommand: "ios" | "android" | "android_device"
+  subcommand: "ios" | "ios_device" | "android" | "android_device"
 ): Promise<{
   proc: ChildProcess;
   apiUrl: string;
@@ -332,42 +341,42 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       return buildRemoteInstance(device);
     }
 
-    if (device.platform === "ios" && device.kind === "device") {
-      // Physical iPhones are driven over CoreDevice (see core-device blueprint),
-      // not the simulator-server. Only screenshot/gesture-tap/gesture-swipe/button
-      // route physical iOS to that backend; any other tool lands here, so fail
-      // with a clear message instead of spawning a simulator-server that can't
-      // attach to a hardware UDID.
-      throw new FailureError(
-        `simulator-server cannot drive the physical iOS device ${device.id}. ` +
-          `Physical iPhones support screenshot, gesture-tap, gesture-swipe, button, and launch-app only.`,
-        {
-          error_code: FAILURE_CODES.SIMULATOR_SERVER_PHYSICAL_DEVICE_UNSUPPORTED,
-          failure_stage: "simulator_server_factory_platform",
-          failure_area: "tool_server",
-          error_kind: "unsupported",
-        }
-      );
-    }
-
     if (device.platform === "ios") {
-      // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
-      // cannot drive the Apple TV focus engine. Its transport (`sendCommand`) is
-      // fire-and-forget, so a tvOS touch/key would silently no-op while the tool
-      // still reported success. Reject here — the one chokepoint every gesture /
-      // keyboard / paste / rotate tool resolves through — and point at the tv-*
-      // tools instead. screenshot avoids this guard by branching to `xcrun`
-      // before it ever resolves this service.
-      if (await isTvOsSimulator(device.id)) {
-        throw new UnsupportedOperationError(
-          SIMULATOR_SERVER_NAMESPACE,
-          device,
-          "this is an Apple TV (tvOS) simulator — touch, paste and rotate " +
-            "input are not available. Use `describe` to read focus, `tv-remote` for remote " +
-            "presses, and `keyboard` to type (see the argent-tv-interact skill)"
+      // A physical iPhone (`kind === "device"`) drives the `ios_device`
+      // controller over Apple CoreDevice; it needs none of the simulator-only
+      // prep below (no `xcrun simctl` tvOS probe, no automation toggle — those
+      // target sim runtimes and would just error on a hardware UDID), so fall
+      // straight through to the spawn.
+      if (device.kind !== "device") {
+        // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
+        // cannot drive the Apple TV focus engine. Its transport (`sendCommand`) is
+        // fire-and-forget, so a tvOS touch/key would silently no-op while the tool
+        // still reported success. Reject here — the one chokepoint every gesture /
+        // keyboard / paste / rotate tool resolves through — and point at the tv-*
+        // tools instead. screenshot avoids this guard by branching to `xcrun`
+        // before it ever resolves this service.
+        if (await isTvOsSimulator(device.id)) {
+          throw new UnsupportedOperationError(
+            SIMULATOR_SERVER_NAMESPACE,
+            device,
+            "this is an Apple TV (tvOS) simulator — touch, paste and rotate " +
+              "input are not available. Use `describe` to read focus, `tv-remote` for remote " +
+              "presses, and `keyboard` to type (see the argent-tv-interact skill)"
+          );
+        }
+        await ensureAutomationEnabled(device.id).catch(() => {});
+      } else if (!isFlagEnabled(PHYSICAL_IOS_DEVICES_FLAG)) {
+        // A physical iPhone (`kind === "device"`) is behind the opt-in flag.
+        throw new FailureError(
+          `Physical iOS support is disabled. Enable it with: argent enable ${PHYSICAL_IOS_DEVICES_FLAG}`,
+          {
+            error_code: FAILURE_CODES.CORE_DEVICE_FLAG_DISABLED,
+            failure_stage: "simulator_server_factory_physical_ios_flag",
+            failure_area: "tool_server",
+            error_kind: "unsupported",
+          }
         );
       }
-      await ensureAutomationEnabled(device.id).catch(() => {});
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
       // through adb (gRPC bridge / screen-sharing agent respectively).

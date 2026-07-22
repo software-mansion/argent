@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
+import type { CoreDeviceAxTree } from "../blueprints/core-device";
 import { toSimulatorNetworkError } from "./format-error";
 import { sleep } from "./timing";
 import {
@@ -143,6 +144,44 @@ async function simulatorPost<T>(
   }
 
   return { res, body };
+}
+
+/**
+ * Read a physical iPhone's on-screen accessibility tree (`describe`) via the
+ * simulator-server's CoreDevice axAudit endpoint. The response shape matches the
+ * describe adapter's input (elements in reading order + best-effort geometry).
+ */
+export async function httpAxTree(
+  api: SimulatorServerApi,
+  limit?: number,
+  signal?: AbortSignal
+): Promise<CoreDeviceAxTree> {
+  const reqBody: Record<string, unknown> = {};
+  if (limit !== undefined) reqBody.limit = limit;
+
+  const { res, body } = await simulatorPost<CoreDeviceAxTree & { error?: string }>(
+    "Describe",
+    api,
+    "/api/ax-tree",
+    reqBody,
+    signal
+  );
+
+  if (!res.ok || body.error) {
+    throw new FailureError(
+      `describe failed: ${body.error ?? `HTTP ${res.status}`}. ` +
+        `Ensure the device is awake and the simulator-server is running.`,
+      {
+        error_code: FAILURE_CODES.SIMULATOR_HTTP_ERROR_RESPONSE,
+        failure_stage: "simulator_axtree_http_response",
+        failure_area: "tool_server",
+        error_kind: "network",
+        network_failure: "invalid_response",
+      }
+    );
+  }
+
+  return { elements: body.elements ?? [], screen: body.screen };
 }
 
 export function getScreenshotScale(): number {
