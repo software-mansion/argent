@@ -50,8 +50,10 @@ export function parseNetstatListeningPids(netstatOutput: string, port: number): 
  *
  * - POSIX: `lsof -ti tcp:<port> -sTCP:LISTEN` — one PID per line, exits
  *   non-zero when the port is free.
- * - Windows: `netstat -ano`, then filter TCP rows in the LISTENING state whose
- *   local address ends in `:<port>` and read the trailing PID column. `lsof`
+ * - Windows: `netstat -ano`, then keep TCP rows whose local address ends in
+ *   `:<port>` and whose foreign endpoint is a wildcard — the locale-independent
+ *   listener signature; the localized State column is deliberately not used (see
+ *   parseNetstatListeningPids) — and read the trailing PID column. `lsof`
  *   doesn't exist on Windows, so the prior implementation threw ENOENT there.
  *
  * Both run without a shell, so `port` (already an int by the time it reaches

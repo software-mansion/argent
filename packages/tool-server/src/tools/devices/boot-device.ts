@@ -694,16 +694,19 @@ async function attemptBoot(params: {
   // On Windows the emulator hangs mid-boot when spawned with stdio:"ignore":
   // a detached process whose stdout/stderr are NUL never reaches
   // sys.boot_completed (verified on windows-latest — the identical flag set
-  // boots fine when given real handles). Redirect its output to a throwaway log
+  // boots fine when given real handles). Redirect its output to a per-AVD log
   // file so it has valid write handles, mirroring a `emulator ... > log` launch.
-  // POSIX is unchanged: "ignore" works there, and detaching keeps the emulator
-  // alive across a tool-server restart.
+  // The name is fixed per AVD and truncated on open ("w"), so repeated boots
+  // reuse one file instead of littering temp with a new log every boot — only
+  // one emulator per AVD can run at a time (the AVD is lock-guarded), so there
+  // is no concurrent writer to clobber. POSIX is unchanged: "ignore" works
+  // there, and detaching keeps the emulator alive across a tool-server restart.
   let emulatorLogFd: number | undefined;
   let stdio: StdioOptions = "ignore";
   if (process.platform === "win32") {
     const safeName = params.avdName.replace(/[^\w.-]/g, "_");
-    const logPath = join(tmpdir(), `argent-emulator-${safeName}-${Date.now()}.log`);
-    emulatorLogFd = openSync(logPath, "a");
+    const logPath = join(tmpdir(), `argent-emulator-${safeName}.log`);
+    emulatorLogFd = openSync(logPath, "w");
     stdio = ["ignore", emulatorLogFd, emulatorLogFd];
   }
   const child = spawn(params.emulatorBinary, params.emulatorArgs, {
