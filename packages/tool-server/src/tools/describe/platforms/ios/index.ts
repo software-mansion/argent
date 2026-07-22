@@ -7,7 +7,11 @@ import {
   NativeDevtoolsApi,
 } from "../../../../blueprints/native-devtools";
 import { isPhysicalIos } from "../../../../utils/device-info";
-import { coreDeviceRef, type CoreDeviceApi } from "../../../../blueprints/core-device";
+import {
+  simulatorServerRef,
+  type SimulatorServerApi,
+} from "../../../../blueprints/simulator-server";
+import { httpAxTree } from "../../../../utils/simulator-client";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
@@ -95,15 +99,19 @@ export async function describeIos(
   // on-screen accessibility tree app-free via the iOS-26+ axAudit service (the
   // `…axAuditDaemon.remoteserver.shim.remote` DTX daemon). This works in ANY app
   // and on the home screen — the same VoiceOver-style walk. It needs the RSDCheckin
-  // handshake that iOS 26 added (the sidecar performs it); without it the daemon
+  // handshake that iOS 26 added (the sim-server performs it); without it the daemon
   // drops the connection on the first byte. Apple exposes no per-element geometry
   // on hardware, so frames are exact only for elements the accessibility audit
   // flags and interpolated for the rest (see the adapter + hint). The two
   // simulator backends below can't run against hardware (they shell `simctl spawn`).
   if (isPhysicalIos(device)) {
-    const ref = coreDeviceRef(device);
-    const coreDevice = await registry.resolveService<CoreDeviceApi>(ref.urn, ref.options);
-    const axtree = await coreDevice.axtree();
+    // The physical iPhone is driven by the radon simulator-server over CoreDevice;
+    // it reads the on-screen accessibility tree app-free via the axAudit service
+    // and serves it on `/api/ax-tree` (same VoiceOver-style walk the sidecar did,
+    // now native in the sim-server — no pmd3 tunnel from argent).
+    const ref = simulatorServerRef(device);
+    const api = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
+    const axtree = await httpAxTree(api);
     return {
       tree: adaptCoreDeviceAxToDescribeResult(axtree),
       source: "coredevice-ax",

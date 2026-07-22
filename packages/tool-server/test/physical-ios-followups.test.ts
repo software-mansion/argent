@@ -206,7 +206,11 @@ describe("gesture-swipe on physical iOS routes to the sim-server ios_device cont
   });
 
   it("still honors settle on a simulator (no regression to simulator support)", () => {
-    const services = gestureSwipeTool.services!({ ...swipe, udid: SIM_UDID, settle: true } as never);
+    const services = gestureSwipeTool.services!({
+      ...swipe,
+      udid: SIM_UDID,
+      settle: true,
+    } as never);
     expect(services.simulatorServer).toBeDefined();
     expect(services.coreDevice).toBeUndefined();
   });
@@ -238,26 +242,34 @@ describe("tools unsupported on physical iOS reject with UnsupportedOperationErro
   });
 
   // describe is NOT in the unsupported set: on a physical iPhone it returns the
-  // real on-screen accessibility tree via the CoreDevice axtree() snapshot
-  // (works in-app and on the home screen). A stub service stands in here.
+  // real on-screen accessibility tree served by the simulator-server's CoreDevice
+  // axAudit endpoint (`/api/ax-tree`), which works in-app and on the home screen.
+  // A stub simulator-server api + fetch stand in here.
   it("describe — returns the CoreDevice accessibility tree (source coredevice-ax), not a rejection", async () => {
     const registry = {
-      resolveService: async () => ({
-        axtree: async () => ({
-          screen: { w: 393, h: 852 },
-          elements: [
-            { caption: "General, Button", id: "e1", rect: "{{16, 100}, {361, 44}}" },
-            { caption: "Accessibility, Button", id: "e2" },
-          ],
-        }),
-      }),
+      resolveService: async () => ({ apiUrl: "http://sim.test" }),
     };
-    const result = await describeIos(registry as never, device, {});
-    expect(result.source).toBe("coredevice-ax");
-    const flat = JSON.stringify(result.tree);
-    expect(flat).toContain("General");
-    expect(flat).toContain("Accessibility");
-    expect(result.hint).toContain("screenshot");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        screen: { w: 393, h: 852 },
+        elements: [
+          { caption: "General, Button", id: "e1", rect: "{{16, 100}, {361, 44}}" },
+          { caption: "Accessibility, Button", id: "e2" },
+        ],
+      }),
+    } as Response);
+    try {
+      const result = await describeIos(registry as never, device, {});
+      expect(result.source).toBe("coredevice-ax");
+      const flat = JSON.stringify(result.tree);
+      expect(flat).toContain("General");
+      expect(flat).toContain("Accessibility");
+      expect(result.hint).toContain("screenshot");
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
 
