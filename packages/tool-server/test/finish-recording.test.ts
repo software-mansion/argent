@@ -6,11 +6,11 @@ import {
 
 describe("computeWatermarkBox", () => {
   it("sizes the box relative to frame width and pins it bottom-left", () => {
-    // 886x1920 portrait: 0.26*886=230 wide, height keeps the 900:237 logo
-    // aspect (snapped even -> 60), side inset 0.03*886~=26, bottom inset
+    // 886x1920 portrait: 0.286*886~=254 wide, height keeps the 900:277 logo
+    // aspect (snapped even -> 78), side inset 0.03*886~=26, bottom inset
     // 0.018*886~=16 (a touch lower), y = 1920 - h - bottomMargin.
     const box = computeWatermarkBox({ width: 886, height: 1920 });
-    expect(box).toEqual({ w: 230, h: 60, x: 26, y: 1844 });
+    expect(box).toEqual({ w: 254, h: 78, x: 26, y: 1826 });
   });
 
   it("keeps every dimension even (yuv420p 4:2:0 crop/scale requirement)", () => {

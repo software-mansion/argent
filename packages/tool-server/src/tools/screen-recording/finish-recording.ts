@@ -34,7 +34,7 @@ const FFPROBE_FALLBACK_PATHS = [
 
 // Watermark geometry, all relative to the frame WIDTH so it scales with any
 // device resolution.
-const WATERMARK_WIDTH_FRACTION = 0.26; // watermark width as a fraction of frame width
+const WATERMARK_WIDTH_FRACTION = 0.286; // watermark width as a fraction of frame width
 const WATERMARK_MARGIN_FRACTION = 0.03; // inset from the left edge
 const WATERMARK_BOTTOM_MARGIN_FRACTION = 0.018; // inset from the bottom edge (sits a touch lower than the side inset)
 const WATERMARK_OPACITY = 0.2; // 0.2 opaque == 80% transparent (per request)
