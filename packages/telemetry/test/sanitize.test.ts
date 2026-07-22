@@ -388,6 +388,22 @@ describe("sanitize", () => {
     });
   });
 
+  it("passes the 'deferred' stop reason through", () => {
+    // Emitted by a redundant tool-server instance that lost the port bind to a
+    // healthy peer and exited cleanly; must not be scrubbed to undefined.
+    expect(
+      sanitize("toolserver:stop", {
+        reason: "deferred",
+        uptime_ms: 950,
+        total_tool_calls: 0,
+      })
+    ).toEqual({
+      reason: "deferred",
+      uptime_ms: 950,
+      total_tool_calls: 0,
+    });
+  });
+
   it("allows static failure signal fields on crash stop events", () => {
     expect(
       sanitize("toolserver:stop", {

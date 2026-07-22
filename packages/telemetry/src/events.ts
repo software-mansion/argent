@@ -175,7 +175,10 @@ export interface CliRunFailProps extends FailureTelemetryProps {
 export type ToolserverStartProps = Record<string, never>;
 
 export interface ToolserverStopProps extends FailureTelemetryProps {
-  reason: "idle" | "signal" | "crash";
+  // "deferred": a redundant instance lost the port bind (EADDRINUSE) to a
+  // healthy argent peer and exited cleanly in its favor — kept distinct from
+  // "signal" so a supervisor relaunch loop over deferrals stays identifiable.
+  reason: "idle" | "signal" | "crash" | "deferred";
   uptime_ms: number;
   total_tool_calls: number;
   // Crash-only diagnostics (see crash-diagnostics.ts). All anonymous: a coded
