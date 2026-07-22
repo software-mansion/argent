@@ -44,6 +44,13 @@ const FRAME_INTERVAL_MS = 1000 / OUTPUT_FPS;
 const MAX_CATCHUP_FRAMES = 5;
 /** Skip a tick while ffmpeg is this far behind rather than buffering in Node. */
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
+/**
+ * How long a screen may sit unchanged before trimming kicks in. The first
+ * second of every still stretch is kept so pauses read naturally; past it the
+ * duplicate frames are dropped until the screen changes again. Only used when
+ * `trimStatic` is on.
+ */
+const STATIC_GRACE_MS = 1_000;
 const STREAM_CONNECT_TIMEOUT_MS = 10_000;
 const FIRST_FRAME_TIMEOUT_MS = 10_000;
 /** Hold briefly after spawn so bad args fail the start instead of the stop. */
@@ -128,10 +135,36 @@ export function framesDue(startedAtMs: number, nowMs: number): number {
   return Math.floor(((nowMs - startedAtMs) * OUTPUT_FPS) / 1000);
 }
 
+/**
+ * Whether two frames show the same picture. A cheap reference check short-
+ * circuits the common "no new frame arrived" case (the stream hands back the
+ * same Buffer object until it decodes a new one); only a genuinely new arrival
+ * pays the byte compare, which — being exact — flags a change down to a single
+ * pixel, matching the "even by a couple of pixels counts" intent. Byte equality
+ * is stronger than a hash (no collisions) and native-fast.
+ */
+function sameFrame(a: Buffer | null, b: Buffer | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.equals(b);
+}
+
 function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
   const child = api.captureProcess;
-  const startedAt = api.wallClockStartMs ?? Date.now();
-  let written = 0;
+  const trim = api.trimStatic;
+  api.framesWritten = 0;
+
+  // Pacing baseline. `framesDue(paceBaseMs, now) + paceBaseFrames` is the frame
+  // count the wall clock calls for. In trim mode the baseline is re-anchored
+  // every time a dead stretch is skipped, so the gap contributes no output
+  // frames while active stretches still play back at real-time speed.
+  let paceBaseMs = api.wallClockStartMs ?? Date.now();
+  let paceBaseFrames = 0;
+  // Trim bookkeeping: the last distinct picture and when it last changed.
+  let lastFrame: Buffer | null = null;
+  let lastChangeMs = paceBaseMs;
+  let dead = false;
+
   api.pumpTimer = setInterval(() => {
     const stdin = child?.stdin;
     if (!stdin || !stdin.writable) return;
@@ -140,11 +173,34 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
     // Never queue in Node: if ffmpeg is behind, drop this tick's frames and let
     // the counter catch up once it drains.
     if (stdin.writableLength > MAX_BUFFERED_BYTES) return;
-    const missing = Math.min(framesDue(startedAt, Date.now()) - written, MAX_CATCHUP_FRAMES);
+    const now = Date.now();
+
+    if (trim) {
+      if (!sameFrame(frame, lastFrame)) {
+        lastFrame = frame;
+        lastChangeMs = now;
+      }
+      if (now - lastChangeMs > STATIC_GRACE_MS) {
+        // Beyond the grace with no change: stop emitting. Nothing is written
+        // until the screen moves again, collapsing the dead stretch.
+        dead = true;
+        return;
+      }
+      if (dead) {
+        // Leaving a dead stretch: re-anchor pacing to now so the skipped gap
+        // does not translate into a burst of catch-up frames.
+        dead = false;
+        paceBaseMs = now;
+        paceBaseFrames = api.framesWritten;
+      }
+    }
+
+    const target = paceBaseFrames + framesDue(paceBaseMs, now);
+    const missing = Math.min(target - api.framesWritten, MAX_CATCHUP_FRAMES);
     for (let i = 0; i < missing; i++) {
       if (!stdin.writable) return;
       stdin.write(frame);
-      written++;
+      api.framesWritten++;
     }
   }, FRAME_INTERVAL_MS);
 }
@@ -179,7 +235,7 @@ function finalizeCapture(api: ScreenRecordingSessionApi): void {
 
 export async function startCapture(
   api: ScreenRecordingSessionApi,
-  params: { streamUrl: string; timeLimitSeconds: number; watermark: boolean }
+  params: { streamUrl: string; timeLimitSeconds: number; watermark: boolean; trimStatic: boolean }
 ): Promise<StartRecordingResult> {
   assertNoActiveRecording(api, "screen_recording_start");
   // Set synchronously (no await between the assert and here) so an overlapping
@@ -197,7 +253,7 @@ export async function startCapture(
 
 async function startCaptureLocked(
   api: ScreenRecordingSessionApi,
-  params: { streamUrl: string; timeLimitSeconds: number; watermark: boolean }
+  params: { streamUrl: string; timeLimitSeconds: number; watermark: boolean; trimStatic: boolean }
 ): Promise<StartRecordingResult> {
   const ffmpeg = await resolveFfmpeg();
   if (!ffmpeg) {
@@ -288,6 +344,8 @@ async function startCaptureLocked(
   api.outputFile = outputFile;
   api.logoFile = logoFile;
   api.watermarkSkipped = watermarkSkipped;
+  api.trimStatic = params.trimStatic;
+  api.framesWritten = 0;
   api.captureProcess = child;
   api.frameStream = stream;
   api.recordingActive = true;
@@ -410,6 +468,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const outputFile = api.outputFile!;
   const logoFile = api.logoFile;
   const startedAtMs = api.wallClockStartMs;
+  const trimStatic = api.trimStatic;
   const endedEarly = api.recordingTimedOut || api.recordingExitedUnexpectedly;
   // Read before finalizing: closing the stream ourselves would look like a drop.
   // Fall back to the error stopPump stashed if the cap/crash already tore the
@@ -476,11 +535,25 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     }
 
     const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
-    // Capture length, not wall-clock-since-start: after the cap fires (or the
-    // encoder dies) the recording is over even if stop arrives much later.
-    const durationMs =
+    // Wall-clock capture length: after the cap fires (or the encoder dies) the
+    // recording is over even if stop arrives much later.
+    const wallClockMs =
       startedAtMs === null ? null : (api.wallClockEndMs ?? Date.now()) - startedAtMs;
-    return { outputFile, sizeBytes: size, durationMs, ...(warning ? { warning } : {}) };
+    // durationMs is the length of the video the caller actually gets. With
+    // trimming that is shorter than the wall clock — it counts only the frames
+    // that survived (each output frame is 1/OUTPUT_FPS of a second).
+    const durationMs = trimStatic
+      ? Math.round((api.framesWritten / OUTPUT_FPS) * 1_000)
+      : wallClockMs;
+    const trimmedMs =
+      trimStatic && wallClockMs !== null ? Math.max(0, wallClockMs - durationMs!) : undefined;
+    return {
+      outputFile,
+      sizeBytes: size,
+      durationMs,
+      ...(trimmedMs !== undefined ? { wallClockMs: wallClockMs!, trimmedMs } : {}),
+      ...(warning ? { warning } : {}),
+    };
   } catch (err) {
     // A stop only throws when the container is missing or empty
     // (statNonEmptyOutput). Drop that dead-weight 0-byte temp so a retry doesn't
@@ -508,6 +581,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.outputFile = null;
     api.logoFile = null;
     api.watermarkSkipped = null;
+    api.framesWritten = 0;
     api.wallClockStartMs = null;
     api.wallClockEndMs = null;
     api.timeLimitSeconds = null;

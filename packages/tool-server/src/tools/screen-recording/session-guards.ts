@@ -14,8 +14,16 @@ export interface StopRecordingFile {
   /** Host path of the finalized video (registered as an artifact by the tool). */
   outputFile: string;
   sizeBytes: number;
-  /** Wall-clock capture length; null when the session lost its start stamp. */
+  /**
+   * Length of the returned video; null when the session lost its start stamp.
+   * With static-frame trimming this is shorter than the wall clock — it counts
+   * only the frames that survived.
+   */
   durationMs: number | null;
+  /** Real elapsed recording time. Present only when trimming actually applied. */
+  wallClockMs?: number;
+  /** How much wall-clock time trimming removed. Present only when trimming applied. */
+  trimmedMs?: number;
   warning?: string;
 }
 
