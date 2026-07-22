@@ -7,6 +7,7 @@ export {
   setFlag,
   unsetFlag,
   isFlagEnabled,
+  isFeatureEnabled,
   type FlagScope,
   type FlagDefinition,
   type FlagsPathOptions,

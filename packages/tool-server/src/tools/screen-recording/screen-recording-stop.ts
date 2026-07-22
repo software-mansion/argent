@@ -7,9 +7,11 @@ import {
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { stopScreenRecordingIos } from "./platforms/ios";
 import { stopScreenRecordingAndroid } from "./platforms/android";
+import { finishRecording } from "./finish-recording";
 import type { StopRecordingFile } from "./platforms/shared";
 
 const zodSchema = z.object({
@@ -61,12 +63,24 @@ Fails if no recording (running or finished-but-unretrieved) exists for the given
       stopped = await stopScreenRecordingAndroid(api);
     }
 
+    // Finish the raw capture before handing it over: normalize to a constant
+    // 30fps (recordVideo / screenrecord emit variable-framerate video that
+    // stutters on playback) and overlay the corner watermark unless it has been
+    // turned off (`argent disable video-watermark`). Read live per-call so the
+    // flag takes effect without restarting the long-lived tool-server. The step
+    // is best-effort — it falls back to the raw capture with a warning, so a
+    // recording is never lost to post-processing.
+    const finished = await finishRecording(stopped.outputFile, {
+      watermark: isFeatureEnabled("video-watermark"),
+    });
+
     // Resolve the store only after a successful stop — the "no active
     // recording" error path never needs it.
     const artifacts = requireArtifacts(ctx);
-    const video = await artifacts.register(stopped.outputFile, { mimeType: "video/mp4" });
+    const video = await artifacts.register(finished.outputFile, { mimeType: "video/mp4" });
     const result: ScreenRecordingStopResult = { video, durationMs: stopped.durationMs };
-    if (stopped.warning) result.warning = stopped.warning;
+    const warning = [stopped.warning, finished.warning].filter(Boolean).join(" ");
+    if (warning) result.warning = warning;
     return result;
   },
 };

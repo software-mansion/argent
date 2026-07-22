@@ -1,0 +1,21 @@
+<!--
+  Screen-recording corner watermark — DESIGN SOURCE.
+
+  This is the target artwork ("Argent / By @swmansion") the recording
+  watermark will eventually render. Until the final logo is signed off, the
+  finishing step (finish-recording.ts) overlays a translucent PLACEHOLDER
+  SQUARE via ffmpeg drawbox rather than rasterizing this file, so no SVG
+  rasterizer is required at runtime. When the artwork is final, swap the
+  drawbox placeholder for an `overlay` of a rasterized copy of this SVG.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
+  <rect x="8" y="8" width="224" height="224" rx="28"
+        fill="#000000" fill-opacity="0.35"
+        stroke="#ffffff" stroke-opacity="0.5" stroke-width="3" />
+  <text x="120" y="112" text-anchor="middle"
+        font-family="-apple-system, Helvetica, Arial, sans-serif"
+        font-size="44" font-weight="700" fill="#ffffff" fill-opacity="0.92">Argent</text>
+  <text x="120" y="150" text-anchor="middle"
+        font-family="-apple-system, Helvetica, Arial, sans-serif"
+        font-size="21" font-weight="400" fill="#ffffff" fill-opacity="0.7">By @swmansion</text>
+</svg>
