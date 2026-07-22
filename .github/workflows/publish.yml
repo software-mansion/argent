@@ -56,17 +56,22 @@ jobs:
       # both Linux keys (x86_64 "linux" and arm64 "linux-arm64") are gated by
       # ARGENT_REQUIRE_LINUX_BINARY so the existing release pipeline keeps
       # working until radon's Linux artifacts are reliably present — flip the
-      # env var to "1" once that lands. The inventory always logs what shipped
-      # so a silently-missing Linux binary shows up in the run.
+      # env var to "1" once that lands. win32 is gated the same way: it needs
+      # radon's Windows argent build (radon PR #134) merged plus one
+      # build-sim-server dispatch to publish the asset. The inventory always
+      # logs every platform so a silently-missing binary shows up in the run.
       - name: Verify per-platform simulator-server binaries
         env:
           ARGENT_REQUIRE_LINUX_BINARY: "0"
+          ARGENT_REQUIRE_WINDOWS_BINARY: "0"
         run: |
           set -e
           missing=0
           echo "simulator-server inventory:"
-          for plat in darwin linux linux-arm64; do
-            p="packages/argent/bin/${plat}/simulator-server"
+          for plat in darwin linux linux-arm64 win32; do
+            bin="simulator-server"
+            if [[ "$plat" == "win32" ]]; then bin="simulator-server.exe"; fi
+            p="packages/argent/bin/${plat}/${bin}"
             if [[ -x "$p" ]]; then
               size=$(wc -c <"$p")
               echo "  ✓ ${plat}: ${p} (${size} bytes; $(file -b "$p"))"
@@ -74,6 +79,7 @@ jobs:
               echo "  ✗ ${plat}: ${p} — missing"
               if [[ "$plat" == "darwin" ]]; then missing=1; fi
               if [[ "$plat" == linux* && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
+              if [[ "$plat" == "win32" && "${ARGENT_REQUIRE_WINDOWS_BINARY}" == "1" ]]; then missing=1; fi
             fi
           done
           [[ "$missing" == "0" ]] || { echo "::error::required simulator-server binary missing"; exit 1; }
@@ -92,8 +98,9 @@ jobs:
       # native-devtools variants the remote code path spawns/injects over a
       # sim-remote-tunnelled TCP socket. Absent from 0.15.0 because the release
       # never built them; gate the publish so they can't silently regress again.
-      # (Host=darwin here, so axServiceBinaryPathTcp() resolves bin/darwin/tcp.)
-      - run: test -x packages/argent/bin/darwin/tcp/ax-service
+      # (bin/tcp is platform-NEUTRAL — axServiceBinaryPathTcp() resolves
+      # bin/tcp on every host, never a bin/<platform>/tcp subdir.)
+      - run: test -x packages/argent/bin/tcp/ax-service
       - run: test -f packages/argent/dylibs/tcp/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tcp/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/tcp/libArgentInjectionBootstrap.dylib

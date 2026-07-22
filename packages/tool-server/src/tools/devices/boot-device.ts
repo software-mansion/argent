@@ -1,4 +1,7 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type StdioOptions } from "node:child_process";
+import { openSync, closeSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 import {
@@ -688,11 +691,38 @@ async function attemptBoot(params: {
   // returned as booted rather than destroyed.
   tearDownIfUnready: boolean;
 }): Promise<{ serial: string }> {
+  // On Windows the emulator hangs mid-boot when spawned with stdio:"ignore":
+  // a detached process whose stdout/stderr are NUL never reaches
+  // sys.boot_completed (verified on windows-latest — the identical flag set
+  // boots fine when given real handles). Redirect its output to a per-AVD log
+  // file so it has valid write handles, mirroring a `emulator ... > log` launch.
+  // The name is fixed per AVD and truncated on open ("w"), so repeated boots
+  // reuse one file instead of littering temp with a new log every boot — only
+  // one emulator per AVD can run at a time (the AVD is lock-guarded), so there
+  // is no concurrent writer to clobber. POSIX is unchanged: "ignore" works
+  // there, and detaching keeps the emulator alive across a tool-server restart.
+  let emulatorLogFd: number | undefined;
+  let stdio: StdioOptions = "ignore";
+  if (process.platform === "win32") {
+    const safeName = params.avdName.replace(/[^\w.-]/g, "_");
+    const logPath = join(tmpdir(), `argent-emulator-${safeName}.log`);
+    emulatorLogFd = openSync(logPath, "w");
+    stdio = ["ignore", emulatorLogFd, emulatorLogFd];
+  }
   const child = spawn(params.emulatorBinary, params.emulatorArgs, {
     detached: true,
-    stdio: "ignore",
+    stdio,
   });
   child.unref();
+  // The spawned child inherited its own handle for the log fd; close the
+  // parent's copy so a descriptor doesn't leak per boot. No-op on POSIX.
+  if (emulatorLogFd !== undefined) {
+    try {
+      closeSync(emulatorLogFd);
+    } catch {
+      // best-effort — the child keeps its own handle regardless
+    }
+  }
 
   let earlyExitError: Error | null = null;
   child.on("exit", (code, signal) => {

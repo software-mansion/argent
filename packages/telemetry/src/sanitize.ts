@@ -244,7 +244,7 @@ export const ALLOWED: ValidatorMap = {
   },
   "toolserver:start": {},
   "toolserver:stop": {
-    reason: oneOf(["idle", "signal", "crash"] as const),
+    reason: oneOf(["idle", "signal", "crash", "deferred"] as const),
     uptime_ms: DURATION_MS,
     total_tool_calls: COUNT,
     ...FAILURE_SIGNAL,

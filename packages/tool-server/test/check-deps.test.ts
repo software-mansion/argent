@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const execFileMock = vi.fn();
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return { ...actual, execFile: (...args: unknown[]) => execFileMock(...args) };
-});
+// `probe()` resolves PATH deps (xcrun, etc.) through `commandOnPath`, which
+// abstracts the `command -v` (POSIX) / `where` (Windows) difference. Mock it so
+// these tests stay platform-agnostic instead of asserting a `/bin/sh` shape
+// that wouldn't run on a Windows host.
+const commandOnPathMock = vi.fn();
+vi.mock("../src/utils/command-on-path", () => ({
+  commandOnPath: (name: string) => commandOnPathMock(name),
+}));
 
 // `probe()` now special-cases adb / emulator to use `resolveAndroidBinary`
 // (which adds an `$ANDROID_HOME` fallback on top of PATH). Mock the resolver
@@ -25,28 +28,15 @@ import {
 } from "../src/utils/check-deps";
 
 /**
- * The real `command -v` uses execFile's error-on-nonzero-exit contract. We
- * mimic that: when the shell command would succeed, invoke the node-style
- * callback with `(null, stdout, stderr)`; when it would fail, pass an
- * Error. This matches how `promisify(execFile)` sees the result.
+ * `commandOnPath` returns the resolved absolute path on a hit, or `null` on a
+ * miss. Both the PATH probe (xcrun) and the Android resolver follow that
+ * contract, so model them the same way: `null` for a dep the test wants
+ * treated as missing, an absolute path otherwise.
  */
 function stubProbe(missing: readonly string[]): void {
-  // PATH probe (used for xcrun and any non-Android dep): mock /bin/sh `command -v <dep>`
-  execFileMock.mockImplementation(
-    (
-      _cmd: string,
-      args: string[],
-      _opts: unknown,
-      cb: (err: Error | null, stdout?: string, stderr?: string) => void
-    ) => {
-      const script = args[1] ?? "";
-      const dep = script.replace("command -v ", "").trim();
-      if (missing.includes(dep)) cb(new Error(`not found: ${dep}`));
-      else cb(null, `/usr/bin/${dep}\n`, "");
-    }
+  commandOnPathMock.mockImplementation(async (name: string) =>
+    missing.includes(name) ? null : `/usr/bin/${name}`
   );
-  // Android resolver path (used for adb / emulator): return null when the
-  // caller wants the dep treated as missing, otherwise an absolute path.
   resolveAndroidBinaryMock.mockImplementation(async (name: string) => {
     return missing.includes(name) ? null : `/usr/bin/${name}`;
   });
@@ -55,7 +45,7 @@ function stubProbe(missing: readonly string[]): void {
 describe("check-deps", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
-    execFileMock.mockReset();
+    commandOnPathMock.mockReset();
     resolveAndroidBinaryMock.mockReset();
   });
 
@@ -91,13 +81,13 @@ describe("check-deps", () => {
     await ensureDeps(["xcrun"]);
     await ensureDeps(["xcrun"]);
     await ensureDeps(["xcrun"]);
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(commandOnPathMock).toHaveBeenCalledTimes(1);
   });
 
   it("is a no-op when the deps array is empty", async () => {
     stubProbe([]);
     await ensureDeps([]);
-    expect(execFileMock).not.toHaveBeenCalled();
+    expect(commandOnPathMock).not.toHaveBeenCalled();
   });
 
   it("ensureDep is the single-dep form of ensureDeps", async () => {

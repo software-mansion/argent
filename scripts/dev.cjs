@@ -146,8 +146,12 @@ console.log("✓ Dispatcher TypeScript built\n");
 const HOST_PLATFORM_KEY =
   process.platform === "linux" && process.arch === "arm64" ? "linux-arm64" : process.platform;
 const BIN_DIR = path.join(ARGENT_PKG, "bin", HOST_PLATFORM_KEY);
-const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", HOST_PLATFORM_KEY, "simulator-server");
-const BIN_DEST = path.join(BIN_DIR, "simulator-server");
+// win32 ships a PE `.exe` (simulator-server.exe); every other host an
+// extensionless binary. Mirrors simulatorServerBinaryName() in
+// @argent/native-devtools-ios and bundle-tools.cjs.
+const BIN_BASENAME = process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
+const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", HOST_PLATFORM_KEY, BIN_BASENAME);
+const BIN_DEST = path.join(BIN_DIR, BIN_BASENAME);
 fs.mkdirSync(BIN_DIR, { recursive: true });
 if (fs.existsSync(BIN_SRC)) {
   fs.copyFileSync(BIN_SRC, BIN_DEST);
