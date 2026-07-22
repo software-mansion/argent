@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { DeviceInfo } from "@argent/registry";
 import { adbShell } from "./adb";
+import { simctlArgsForUdid } from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,22 +25,24 @@ const DEMO_BROADCAST = "am broadcast -a com.android.systemui.demo";
 export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
   try {
     if (device.platform === "ios") {
-      await execFileAsync("xcrun", [
-        "simctl",
-        "status_bar",
-        device.id,
-        "override",
-        "--time",
-        "9:37",
-        "--batteryState",
-        "charged",
-        "--batteryLevel",
-        "100",
-        "--wifiBars",
-        "3",
-        "--cellularBars",
-        "4",
-      ]);
+      await execFileAsync(
+        "xcrun",
+        await simctlArgsForUdid(device.id, [
+          "status_bar",
+          device.id,
+          "override",
+          "--time",
+          "9:37",
+          "--batteryState",
+          "charged",
+          "--batteryLevel",
+          "100",
+          "--wifiBars",
+          "3",
+          "--cellularBars",
+          "4",
+        ])
+      );
       return true;
     }
     if (device.platform === "android") {
@@ -78,7 +81,10 @@ export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
 export async function restoreStatusBar(device: DeviceInfo): Promise<boolean> {
   try {
     if (device.platform === "ios") {
-      await execFileAsync("xcrun", ["simctl", "status_bar", device.id, "clear"]);
+      await execFileAsync(
+        "xcrun",
+        await simctlArgsForUdid(device.id, ["status_bar", device.id, "clear"])
+      );
     } else if (device.platform === "android") {
       try {
         await adbShell(device.id, `${DEMO_BROADCAST} -e command exit`);

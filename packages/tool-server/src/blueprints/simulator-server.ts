@@ -15,6 +15,7 @@ import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/nat
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
 import { isTvOsSimulator } from "../utils/ios-devices";
+import { deviceSetForUdid } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import { openMoqClient } from "../utils/moq-client";
 import { createMoqTransport } from "../utils/simulator-client";
@@ -136,7 +137,7 @@ function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_d
   return device.kind === "device" ? "android_device" : "android";
 }
 
-function spawnSimulatorServerProcess(
+async function spawnSimulatorServerProcess(
   udid: string,
   subcommand: "ios" | "android" | "android_device"
 ): Promise<{
@@ -145,13 +146,17 @@ function spawnSimulatorServerProcess(
   streamUrl: string;
 }> {
   if (!SAFE_SIMULATOR_DEVICE_ID.test(udid)) {
-    return Promise.reject(
-      new Error(`Refusing to start simulator-server for unsafe device id "${udid}".`)
-    );
+    throw new Error(`Refusing to start simulator-server for unsafe device id "${udid}".`);
   }
+  // An iOS simulator in an additional CoreSimulator set is only reachable when
+  // the binary is told which set to attach through (same `--device-set` flag
+  // Radon IDE passes for its own devices); default-set devices keep the bare
+  // argv so behavior there is byte-for-byte unchanged.
+  const deviceSet = subcommand === "ios" ? await deviceSetForUdid(udid) : null;
   const { BINARY_PATH, BINARY_DIR } = getPaths();
   return new Promise((resolve, reject) => {
     const args = [subcommand, "--id", udid];
+    if (deviceSet) args.push("--device-set", deviceSet);
 
     const proc = spawn(BINARY_PATH, args, {
       cwd: BINARY_DIR,
