@@ -9,14 +9,12 @@ import {
 } from "@argent/registry";
 import type { ChildProcess } from "child_process";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
-import { adbShell } from "../utils/adb";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 
-// Cross-platform session for the `screen-recording-*` tools: iOS drives an
-// `xcrun simctl io recordVideo` child that writes the file host-side, Android
-// an `adb shell screenrecord` child whose file lives on the device until stop
-// pulls it. Mirrors the native-profiler session shape so start/stop branch
-// only in the platform helpers.
+// Session for the `screen-recording-*` tools. One shape for every platform:
+// frames come from simulator-server's MJPEG stream and are paced into an ffmpeg
+// child that writes the mp4 host-side, so there is nothing device-side to clean
+// up. Mirrors the native-profiler session shape.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
 type ScreenRecordingSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
@@ -44,20 +42,19 @@ export interface ScreenRecordingSessionApi {
   stopPending: boolean;
   /**
    * Set the moment dispose() begins (process shutdown). A start suspended at a
-   * pre-spawn await (iOS: before its synchronous spawn; Android: across the
-   * `resolveAndroidBinary` hop) checks this immediately before spawning and
-   * aborts — otherwise it would spawn a capture AFTER dispose already ran,
-   * orphaning a device-side recorder that `pendingChild` reaping can no longer
-   * see. Never reset (dispose is terminal for the instance).
+   * pre-spawn await (resolving ffmpeg, connecting to the frame stream) checks
+   * this immediately before spawning and aborts — otherwise it would spawn an
+   * encoder AFTER dispose already ran, orphaning a process that `pendingChild`
+   * reaping can no longer see. Never reset (dispose is terminal).
    */
   disposed: boolean;
   /**
-   * True once the capture ended (cap, crash, failed pull) but the video has
-   * not been handed over by `screen-recording-stop` yet — the state the
-   * reminder note keeps pointing at.
+   * True once the capture ended (cap, crash) but the video has not been handed
+   * over by `screen-recording-stop` yet — the state the reminder note keeps
+   * pointing at.
    */
   pendingRetrieval: boolean;
-  /** iOS: the recordVideo child. Android: the host-side `adb shell` child. */
+  /** The ffmpeg child encoding the paced frames into the output file. */
   captureProcess: ChildProcess | null;
   /**
    * Child spawned by an in-flight start that has not stamped the session yet
@@ -65,25 +62,20 @@ export interface ScreenRecordingSessionApi {
    * that is mid-startup at shutdown — `captureProcess` is success-only.
    */
   pendingChild: ChildProcess | null;
-  /**
-   * Host path of the video. iOS: written there directly by recordVideo.
-   * Android: destination `screen-recording-stop` pulls the on-device file to.
-   */
+  /** Host path ffmpeg is writing the video to. */
   outputFile: string | null;
-  /** Android-only: the mp4 path on the device while recording. */
-  androidOnDeviceFile: string | null;
-  /** Android-only: on-device screenrecord PID (SIGINT target for stop). */
-  androidDevicePid: number | null;
+  /** Temp copy of the watermark logo ffmpeg reads; removed when the capture ends. */
+  logoFile: string | null;
+  /** Live subscription to simulator-server's frame stream. */
+  frameStream: { readonly error: Error | null; close(): void } | null;
+  /** Interval pacing frames onto the fixed output frame rate. */
+  pumpTimer: NodeJS.Timeout | null;
   wallClockStartMs: number | null;
   /** When the capture stopped producing frames (cap fired, process exited, stop signaled). */
   wallClockEndMs: number | null;
-  /** Cap applied to this capture, after per-platform clamping. */
+  /** Auto-stop cap applied to this capture. */
   timeLimitSeconds: number | null;
-  /**
-   * iOS: host timer that SIGINTs recordVideo at the cap. Android: safety timer
-   * slightly past the cap that reaps a hung adb child (screenrecord self-stops
-   * at its --time-limit, so this only fires when the device went unreachable).
-   */
+  /** Timer that ends the capture at the cap. */
   recordingTimeout: NodeJS.Timeout | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
@@ -91,12 +83,11 @@ export interface ScreenRecordingSessionApi {
 }
 
 // Dispose only fires on process shutdown, where an in-flight recording is
-// being abandoned. Give recordVideo one short SIGINT grace so the file it
-// leaves behind has a chance to be playable, then SIGKILL — shutdown must not
-// be held up by a slow finalize.
-const DISPOSE_SIGINT_GRACE_MS = 1_500;
+// being abandoned. Closing ffmpeg's stdin is what finalizes the container, so
+// give that one short grace before SIGKILL — shutdown must not be held up by a
+// slow finalize, but a playable file is worth a moment.
+const DISPOSE_FINALIZE_GRACE_MS = 1_500;
 const DISPOSE_REAP_MS = 1_000;
-const ANDROID_DISPOSE_ADB_TIMEOUT_MS = 5_000;
 
 function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.recordingActive = false;
@@ -105,8 +96,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.pendingRetrieval = false;
   state.captureProcess = null;
   state.pendingChild = null;
-  state.androidOnDeviceFile = null;
-  state.androidDevicePid = null;
+  state.frameStream = null;
   state.recordingTimedOut = false;
   state.recordingExitedUnexpectedly = false;
   state.lastExitInfo = null;
@@ -159,8 +149,9 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       captureProcess: null,
       pendingChild: null,
       outputFile: null,
-      androidOnDeviceFile: null,
-      androidDevicePid: null,
+      logoFile: null,
+      frameStream: null,
+      pumpTimer: null,
       wallClockStartMs: null,
       wallClockEndMs: null,
       timeLimitSeconds: null,
@@ -183,6 +174,13 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
         }
+        // Stop producing frames first: the pump would otherwise keep writing
+        // into a pipe we are about to close.
+        if (state.pumpTimer) {
+          clearInterval(state.pumpTimer);
+          state.pumpTimer = null;
+        }
+        state.frameStream?.close();
 
         // A start still mid-readiness at shutdown has a live child that
         // `captureProcess` (success-only) can't see — reap it here or it
@@ -196,50 +194,19 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         }
 
         try {
-          if (state.platform === "ios") {
-            const child = state.captureProcess;
-            if (state.recordingActive && child) {
+          const child = state.captureProcess;
+          if (child) {
+            // Closing stdin is ffmpeg's normal finalize path, so the abandoned
+            // file still has a chance to be playable.
+            if (child.stdin?.writable) child.stdin.end();
+            if (!(await waitForChildExit(child, DISPOSE_FINALIZE_GRACE_MS))) {
               try {
-                child.kill("SIGINT");
+                child.kill("SIGKILL");
               } catch {
                 // already dead
               }
-              if (!(await waitForChildExit(child, DISPOSE_SIGINT_GRACE_MS))) {
-                try {
-                  child.kill("SIGKILL");
-                } catch {
-                  // already dead
-                }
-                await waitForChildExit(child, DISPOSE_REAP_MS);
-              }
+              await waitForChildExit(child, DISPOSE_REAP_MS);
             }
-            return;
-          }
-
-          // Android: the capture and its file live on the device; the host adb
-          // child follows once the device-side shell ends. Best-effort — the
-          // device may already be gone at shutdown.
-          if (state.recordingActive && state.androidDevicePid) {
-            await adbShell(state.deviceId, `kill -INT ${state.androidDevicePid}`, {
-              timeoutMs: ANDROID_DISPOSE_ADB_TIMEOUT_MS,
-            }).catch(() => {});
-          }
-          // Remove the on-device file whether the capture is live OR ended but
-          // never retrieved — after shutdown nothing can pull it, so leaving it
-          // would leak a large mp4 on the device's storage.
-          if (state.androidOnDeviceFile) {
-            await adbShell(state.deviceId, `rm -f ${state.androidOnDeviceFile}`, {
-              timeoutMs: ANDROID_DISPOSE_ADB_TIMEOUT_MS,
-            }).catch(() => {});
-          }
-          const child = state.captureProcess;
-          if (child) {
-            try {
-              child.kill("SIGKILL");
-            } catch {
-              // already dead
-            }
-            await waitForChildExit(child, DISPOSE_REAP_MS);
           }
         } finally {
           clearLiveState(state);

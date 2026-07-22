@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  buildWatermarkGraph,
-  computeWatermarkBox,
-} from "../src/tools/screen-recording/finish-recording";
+import { buildWatermarkGraph, computeWatermarkBox } from "../src/tools/screen-recording/watermark";
 
 describe("computeWatermarkBox", () => {
   it("sizes the box relative to frame width and pins it bottom-left", () => {

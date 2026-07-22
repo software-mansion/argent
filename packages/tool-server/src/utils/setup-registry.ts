@@ -63,7 +63,7 @@ import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native
 import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
 import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
-import { screenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
+import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
 import { screenRecordingStopTool } from "../tools/screen-recording/screen-recording-stop";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
 import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit-query";
@@ -119,7 +119,7 @@ export function createRegistry(): Registry {
   registry.registerTool(openUrlTool);
   registry.registerTool(createScreenshotTool(registry));
   registry.registerTool(screenshotDiffTool);
-  registry.registerTool(screenRecordingStartTool);
+  registry.registerTool(createScreenRecordingStartTool(registry));
   registry.registerTool(screenRecordingStopTool);
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);

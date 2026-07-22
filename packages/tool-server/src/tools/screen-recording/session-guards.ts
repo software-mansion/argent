@@ -1,10 +1,10 @@
 import { promises as fs } from "fs";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import type { ScreenRecordingSessionApi } from "../../../blueprints/screen-recording-session";
+import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
 
 export interface StartRecordingResult {
   status: "recording";
-  /** Cap actually applied (Android clamps to screenrecord's 180s maximum). */
+  /** Auto-stop cap applied to this capture. */
   timeLimitSeconds: number;
   /** Host path the finished video will land at once stop is called. */
   outputFile: string;
@@ -57,7 +57,7 @@ export function assertNoActiveRecording(api: ScreenRecordingSessionApi, stage: s
  * (time limit, crash, earlier failed pull) with a file still to hand over —
  * the "finalized, awaiting retrieval" recovery the reminder note keeps
  * pointing at. A second stop overlapping a running one is rejected: two
- * concurrent finalize/pull sequences would race into the same host file.
+ * concurrent finalize sequences would race into the same host file.
  */
 export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: string): void {
   if (api.startPending) {

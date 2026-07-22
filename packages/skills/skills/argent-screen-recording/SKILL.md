@@ -5,10 +5,10 @@ description: Record a video of an iOS simulator or Android emulator/device scree
 
 ## 1. Tools
 
-- `screen-recording-start` — start capturing the screen of a booted device to a video file. iOS simulators record via `simctl io recordVideo` (h264 mp4); Android emulators/devices record on-device via `screenrecord`.
+- `screen-recording-start` — start capturing the screen of a booted device to a video file. Frames come from the same simulator-server backend that `screenshot` and the interaction tools already use, and are encoded live to h264 mp4 (constant 30 fps, device-native resolution).
 - `screen-recording-stop` — stop the capture, finalize the container, and retrieve the video as a downloadable artifact (`video.hostPath` for co-located clients).
 
-One recording per device at a time; different devices can record concurrently.
+One recording per device at a time; different devices can record concurrently. Recording does not disturb anything else reading the device — a preview window can stay open on the same screen.
 
 ---
 
@@ -24,17 +24,19 @@ A recording does not stop itself before its `timeLimitSeconds` cap, and a forgot
 ## 3. Workflow
 
 1. Ensure the target device is booted and the app is in the state you want the video to open on (`list-devices`, `launch-app`, `argent-device-interact`).
-2. Call `screen-recording-start` with `udid` and a `timeLimitSeconds` slightly above the expected interaction length (default 180; Android hard-caps at 180 — larger values are clamped and the applied cap is returned).
+2. Call `screen-recording-start` with `udid` and a `timeLimitSeconds` slightly above the expected interaction length (default 180, max 600).
 3. Set the end-of-recording reminder described in §2 — this step is not optional.
 4. Drive the interaction to capture: gestures, navigation, typing (`argent-device-interact`). Prefer `run-sequence` for tight multi-step interactions so tool-call latency does not pad the video.
-5. Call `screen-recording-stop` with the same `udid`. It returns `{ video, durationMs, warning? }`; `video` is an artifact — use its `hostPath` locally or download it via the artifacts endpoint. On stop the raw capture is finished with ffmpeg: normalized to a constant 30 fps (the raw `recordVideo`/`screenrecord` output is variable-framerate and stutters on playback) and stamped with the Argent corner watermark (auto-contrasted per pixel against whatever is behind it).
-6. Check `warning`: it reports cap-triggered stops, early process exits, possibly-truncated containers, and any finishing fallback. Verify the file plays (or at least has a sane size) before presenting it to the user.
+5. Call `screen-recording-stop` with the same `udid`. It returns `{ video, durationMs, warning? }`; `video` is an artifact — use its `hostPath` locally or download it via the artifacts endpoint. The video is already final when stop returns (the watermark is stamped during capture, not in a second pass), so stop takes well under a second.
+6. Check `warning`: it reports cap-triggered stops, early encoder exits, a dropped frame stream, and possibly-truncated containers. Verify the file plays (or at least has a sane size) before presenting it to the user.
 
 ---
 
 ## 4. Platform notes and limits
 
-- **iOS**: simulators only (no physical iPhones), including tvOS simulators. The mp4 is written host-side; stopping SIGINTs recordVideo and waits for the container to finalize — expect stop to take a second or two on long captures. The video's timeline only advances while the screen changes, so a fully static screen produces a much shorter (even near-zero-length) video than the wall-clock recording window.
-- **Android**: works on emulators and physical devices. `screenrecord` caps a segment at 180 s and records at the device's native resolution; secure screens (DRM, some password fields) come out black. The file is pulled from `/sdcard` on stop and removed from the device.
-- **Unsupported**: Chromium apps, Vega/Fire TV, and remote (`remote:`-prefixed) simulators. For a single still frame use `screenshot`; for a replayable interaction script use `argent-create-flow` instead of a video.
-- **Finishing (ffmpeg)**: stop re-encodes the capture to 30 fps and overlays the watermark — the Argent logo + "By @swmansion", bottom-left, faint (20% opacity) and per-pixel contrast-matched to the background (light logo over dark UI, dark logo over light UI). This needs `ffmpeg` on the host (plus `ffprobe`, for the frame size, to place the watermark); if either is missing it degrades gracefully — no ffmpeg returns the raw variable-framerate capture, no ffprobe still normalizes to 30 fps but skips the watermark — and `warning` says which. The watermark is on by default — turn it off with `argent disable video-watermark` (re-enable with `argent enable video-watermark`); the 30 fps normalization always applies when ffmpeg is present.
+- **What can be recorded**: anything simulator-server drives — iOS simulators, Android emulators, and physical Android devices. The only length limit is `timeLimitSeconds` (max 600).
+- **The timeline is wall-clock accurate**: a device only emits a frame when its screen changes, so captured frames are re-paced onto a steady 30 fps timeline. A recording of a completely still screen is still a full-length video (and compresses to almost nothing), and `durationMs` matches the time you actually recorded.
+- **Android**: records at the device's native resolution; secure screens (DRM, some password fields) come out black.
+- **Unsupported**: tvOS simulators, physical iPhones, Chromium apps, Vega/Fire TV, and remote (`remote:`-prefixed) simulators — none of them expose a readable frame stream. For a single still frame use `screenshot`; for a replayable interaction script use `argent-create-flow` instead of a video.
+- **ffmpeg is required**: it is the encoder, so `screen-recording-start` fails up front with an install hint if it is missing (`brew install ffmpeg`). It is resolved from `PATH` plus the usual Homebrew prefixes.
+- **Watermark**: the Argent logo + "By @swmansion" is stamped bottom-left while encoding, faint (20% opacity) and per-pixel contrast-matched to the background (light logo over dark UI, dark logo over light UI). On by default — turn it off with `argent disable video-watermark` (re-enable with `argent enable video-watermark`). The flag is read when the recording starts.
