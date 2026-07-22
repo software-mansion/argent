@@ -105,6 +105,20 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     merge: "prioritize-local",
     example: "claude",
   },
+  {
+    key: "ios.additionalDeviceSets",
+    description:
+      "Additional CoreSimulator device-set directories whose simulators argent should see " +
+      "alongside the default set. Absolute paths (or ~/…); relative entries resolve against " +
+      "the project root (project scope) or home (global scope).",
+    scopes: ["project", "global"],
+    parse: asStringArray,
+    // Additive: the scopes extend each other rather than shadow — a repo's
+    // committed device sets are appended to the user's global ones (global
+    // baseline first, project extras after, deduplicated).
+    merge: "union",
+    example: '["~/DeviceSets/ci"]',
+  },
 ] as const;
 
 /** Look up a schema entry by key, or `undefined` when the key is unknown. */
