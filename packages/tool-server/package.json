@@ -24,7 +24,7 @@
     "@clack/prompts": "^1.6.0",
     "@fails-components/webtransport": "^1.6.3",
     "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
-    "@moq/lite": "^0.2.4",
+    "@moq/lite": "^0.3.0",
     "@moq/net": "^0.1.1",
     "bunyan": "^1.8.15",
     "bytes": "^3.1.2",
