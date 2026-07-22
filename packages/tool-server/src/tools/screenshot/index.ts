@@ -9,6 +9,7 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-c
 import { resolveDevice } from "../../utils/device-info";
 import { getScreenshotScale, httpScreenshot } from "../../utils/simulator-client";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { simctlArgsForUdid } from "../../utils/ios-device-sets";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
@@ -84,7 +85,9 @@ async function tvScreenshot(
     os.tmpdir(),
     `argent-tv-screenshot-${udid.slice(0, 8)}-${process.hrtime.bigint()}.png`
   );
-  await execFileAsync("xcrun", ["simctl", "io", udid, "screenshot", file], { signal });
+  await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["io", udid, "screenshot", file]), {
+    signal,
+  });
   // Downscale in place unless full-res was requested, mirroring the iOS/Android
   // default. `sips -Z` caps the longest *actual* side, and capture size isn't
   // fixed (4K sim is 3840 wide, non-4K is 1920), so scale against the real
