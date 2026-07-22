@@ -1,25 +1,76 @@
 import { describe, it, expect } from "vitest";
-import { buildVideoFilter } from "../src/tools/screen-recording/finish-recording";
+import {
+  buildWatermarkGraph,
+  computeWatermarkBox,
+} from "../src/tools/screen-recording/finish-recording";
 
-describe("finish-recording video filter", () => {
-  it("always normalizes to a constant 30fps", () => {
-    expect(buildVideoFilter(false)).toBe("fps=30");
-    expect(buildVideoFilter(true)).toMatch(/^fps=30,/);
+describe("computeWatermarkBox", () => {
+  it("sizes the box relative to frame width and pins it bottom-left", () => {
+    // 886x1920 portrait: 0.26*886=230 wide, height keeps the 900:237 logo
+    // aspect (snapped even -> 60), 0.03*886~=26 margin, y = 1920 - h - margin.
+    const box = computeWatermarkBox({ width: 886, height: 1920 });
+    expect(box).toEqual({ w: 230, h: 60, x: 26, y: 1834 });
   });
 
-  it("omits the watermark when disabled", () => {
-    expect(buildVideoFilter(false)).not.toContain("drawbox");
+  it("keeps every dimension even (yuv420p 4:2:0 crop/scale requirement)", () => {
+    for (const dims of [
+      { width: 886, height: 1920 },
+      { width: 1170, height: 2532 },
+      { width: 2048, height: 2732 },
+      { width: 1920, height: 886 },
+    ]) {
+      const box = computeWatermarkBox(dims);
+      for (const v of [box.w, box.h, box.x, box.y]) expect(v % 2).toBe(0);
+    }
   });
 
-  it("overlays the watermark in the bottom-left when enabled", () => {
-    const vf = buildVideoFilter(true);
-    // two drawbox passes: translucent fill + a lighter border, both anchored to
-    // the bottom-left corner and sized relative to the frame width.
-    const boxes = vf.match(/drawbox=/g) ?? [];
-    expect(boxes).toHaveLength(2);
-    expect(vf).toContain("x=iw*0.03");
-    expect(vf).toContain("y=ih-iw*0.16-iw*0.03");
-    expect(vf).toContain("color=black@0.35:t=fill");
-    expect(vf).toContain("color=white@0.5:t=3");
+  it("scales with resolution (wider frame -> wider watermark)", () => {
+    const phone = computeWatermarkBox({ width: 886, height: 1920 });
+    const tablet = computeWatermarkBox({ width: 2048, height: 2732 });
+    expect(tablet.w).toBeGreaterThan(phone.w);
+    // aspect of the box tracks the logo aspect on both
+    expect(phone.w / phone.h).toBeCloseTo(tablet.w / tablet.h, 1);
+  });
+
+  it("never places the box off the top of a tiny frame", () => {
+    const box = computeWatermarkBox({ width: 100, height: 20 });
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.w).toBeGreaterThanOrEqual(2);
+    expect(box.h).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("buildWatermarkGraph", () => {
+  const graph = buildWatermarkGraph({ width: 886, height: 1920 });
+
+  it("normalizes to a constant 30fps before overlaying", () => {
+    expect(graph.startsWith("[0:v]fps=30,")).toBe(true);
+  });
+
+  it("fades the whole watermark to 20% opacity (80% transparent)", () => {
+    expect(graph).toContain("colorchannelmixer=aa=0.2");
+  });
+
+  it("derives a near-black twin of the white logo for light backgrounds", () => {
+    expect(graph).toContain("colorchannelmixer=rr=0.08:gg=0.08:bb=0.08");
+  });
+
+  it("chooses per pixel via a background-luma mask + maskedmerge", () => {
+    // ramp: white logo where bg luma <= 90, near-black where >= 165
+    expect(graph).toContain("lut=y='clip((165-val)/75*255,0,255)'");
+    expect(graph).toContain("maskedmerge");
+  });
+
+  it("samples the mask from exactly where the stamp lands (aligned crop+overlay)", () => {
+    const box = computeWatermarkBox({ width: 886, height: 1920 });
+    const crop = graph.match(/crop=(\d+):(\d+):(\d+):(\d+)/);
+    const overlay = graph.match(/overlay=(\d+):(\d+)/);
+    expect(crop).not.toBeNull();
+    expect(overlay).not.toBeNull();
+    // crop x/y must equal overlay x/y, else the mask reads the wrong region
+    expect(crop?.[3]).toBe(String(box.x));
+    expect(crop?.[4]).toBe(String(box.y));
+    expect(overlay?.[1]).toBe(String(box.x));
+    expect(overlay?.[2]).toBe(String(box.y));
   });
 });
