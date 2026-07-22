@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
 import { getFailureSignal, FAILURE_CODES, type DeviceInfo } from "@argent/registry";
 import type { ChildProcess } from "child_process";
 
@@ -30,7 +32,7 @@ import {
 } from "../src/blueprints/screen-recording-session";
 import { startCapture, stopCapture, framesDue } from "../src/tools/screen-recording/capture";
 import { openMjpegStream, readJpegDimensions } from "../src/tools/screen-recording/mjpeg-stream";
-import { resolveFfmpeg } from "../src/tools/screen-recording/watermark";
+import { resolveFfmpeg, writeLogoTemp } from "../src/tools/screen-recording/watermark";
 import {
   __resetActiveScreenRecordingsForTesting,
   getActiveScreenRecordings,
@@ -229,6 +231,27 @@ describe("screen-recording session blueprint", () => {
     expect(api.pumpTimer).toBeNull();
     expect(getActiveScreenRecordings()).toHaveLength(0);
   });
+
+  it("removes the watermark temp file it would otherwise abandon", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    const api = instance.api;
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    // Use a real temp file so the removal is observable.
+    const logo = path.join(os.tmpdir(), `argent-test-logo-${process.pid}.png`);
+    await fs.writeFile(logo, Buffer.alloc(8, 1));
+    vi.mocked(writeLogoTemp).mockResolvedValueOnce(logo);
+    await startAndSettle(api, { watermark: true });
+    expect(api.logoFile).toBe(logo);
+
+    await instance.dispose();
+
+    await expect(fs.access(logo)).rejects.toThrow();
+    expect(api.logoFile).toBeNull();
+  });
 });
 
 describe("screen recording capture", () => {
@@ -264,6 +287,27 @@ describe("screen recording capture", () => {
     // graph must carry a concrete crop box rather than a placeholder.
     expect(args[args.indexOf("-filter_complex") + 1]).toContain("crop=378:116:40:2728");
     expect(args).toContain("/tmp/fake-logo.png");
+  });
+
+  it("still records, and says so, when the frame size cannot be read", async () => {
+    const api = await makeSession(iosDevice);
+    // A frame whose JPEG header carries no SOF marker: nothing to size the
+    // watermark box from.
+    const headerless = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    fakeStream({ latest: headerless, waitForFirstFrame: vi.fn(async () => headerless) });
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+
+    await startAndSettle(api, { watermark: true });
+    const args = mockSpawn.mock.calls[0]![1] as string[];
+    expect(args).not.toContain("-filter_complex");
+
+    await fs.writeFile(api.outputFile!, Buffer.alloc(32, 1));
+    const outputFile = api.outputFile!;
+    const result = await stopCapture(api);
+
+    expect(result.warning).toContain("watermark was not applied");
+    await fs.rm(outputFile, { force: true });
   });
 
   it("omits the filter graph entirely when the watermark is disabled", async () => {

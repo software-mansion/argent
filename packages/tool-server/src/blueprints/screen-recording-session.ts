@@ -8,6 +8,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import type { ChildProcess } from "child_process";
+import { promises as fs } from "fs";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 
@@ -66,6 +67,8 @@ export interface ScreenRecordingSessionApi {
   outputFile: string | null;
   /** Temp copy of the watermark logo ffmpeg reads; removed when the capture ends. */
   logoFile: string | null;
+  /** Why the watermark was requested but not drawn; surfaced by stop's warning. */
+  watermarkSkipped: string | null;
   /** Live subscription to simulator-server's frame stream. */
   frameStream: { readonly error: Error | null; close(): void } | null;
   /** Interval pacing frames onto the fixed output frame rate. */
@@ -150,6 +153,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       pendingChild: null,
       outputFile: null,
       logoFile: null,
+      watermarkSkipped: null,
       frameStream: null,
       pumpTimer: null,
       wallClockStartMs: null,
@@ -209,6 +213,13 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
             }
           }
         } finally {
+          // The logo temp is normally removed by stop; shutdown abandons that
+          // path, so clean it up here rather than leaking one file per
+          // abandoned recording.
+          if (state.logoFile) {
+            await fs.rm(state.logoFile, { force: true }).catch(() => {});
+            state.logoFile = null;
+          }
           clearLiveState(state);
           // The reminder must not outlive the process that owns the capture.
           clearActiveScreenRecording(state.deviceId);

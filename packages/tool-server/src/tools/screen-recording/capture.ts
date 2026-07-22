@@ -205,6 +205,7 @@ async function startCaptureLocked(
 
   const stream = await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS);
   let logoFile: string | null = null;
+  let watermarkSkipped: string | null = null;
   let child: ReturnType<typeof spawn>;
   try {
     // The first frame proves the device is actually drawing, and its JPEG
@@ -216,6 +217,11 @@ async function startCaptureLocked(
     if (dims) {
       logoFile = await writeLogoTemp();
       graph = buildWatermarkGraph(dims);
+    } else if (params.watermark) {
+      // Only an unreadable JPEG header gets here. Record anyway — a video
+      // without the stamp beats no video — but say so rather than handing back
+      // a silently unwatermarked file.
+      watermarkSkipped = "the frame size could not be read from the video stream";
     }
 
     // No await between here and `api.pendingChild = child`: if dispose() ran
@@ -265,6 +271,7 @@ async function startCaptureLocked(
   api.lastExitInfo = null;
   api.outputFile = outputFile;
   api.logoFile = logoFile;
+  api.watermarkSkipped = watermarkSkipped;
   api.captureProcess = child;
   api.frameStream = stream;
   api.recordingActive = true;
@@ -388,7 +395,9 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const logoFile = api.logoFile;
   const startedAtMs = api.wallClockStartMs;
   const endedEarly = api.recordingTimedOut || api.recordingExitedUnexpectedly;
+  // Read before finalizing: closing the stream ourselves would look like a drop.
   const streamError = api.frameStream?.error ?? null;
+  const watermarkSkipped = api.watermarkSkipped;
   let warning: string | undefined;
 
   try {
@@ -434,6 +443,12 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         `the video may freeze on its last received frame.`;
     }
 
+    if (watermarkSkipped) {
+      warning = [warning, `The watermark was not applied (${watermarkSkipped}).`]
+        .filter(Boolean)
+        .join(" ");
+    }
+
     const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
     // Capture length, not wall-clock-since-start: after the cap fires (or the
     // encoder dies) the recording is over even if stop arrives much later.
@@ -452,6 +467,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.captureProcess = null;
     api.outputFile = null;
     api.logoFile = null;
+    api.watermarkSkipped = null;
     api.wallClockStartMs = null;
     api.wallClockEndMs = null;
     api.timeLimitSeconds = null;
