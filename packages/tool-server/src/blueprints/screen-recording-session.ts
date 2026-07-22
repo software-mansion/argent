@@ -73,6 +73,10 @@ export interface ScreenRecordingSessionApi {
   frameStream: { readonly error: Error | null; close(): void } | null;
   /** Interval pacing frames onto the fixed output frame rate. */
   pumpTimer: NodeJS.Timeout | null;
+  /** Drop unchanged frames past a short grace so dead stretches don't pad the video. */
+  trimStatic: boolean;
+  /** Frames the pump has fed the encoder; the output video's length in frames. */
+  framesWritten: number;
   wallClockStartMs: number | null;
   /** When the capture stopped producing frames (cap fired, process exited, stop signaled). */
   wallClockEndMs: number | null;
@@ -156,6 +160,8 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       watermarkSkipped: null,
       frameStream: null,
       pumpTimer: null,
+      trimStatic: true,
+      framesWritten: 0,
       wallClockStartMs: null,
       wallClockEndMs: null,
       timeLimitSeconds: null,

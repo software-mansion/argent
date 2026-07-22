@@ -143,12 +143,15 @@ async function makeSession(device: DeviceInfo): Promise<ScreenRecordingSessionAp
  */
 async function startAndSettle(
   api: ScreenRecordingSessionApi,
-  params: { timeLimitSeconds?: number; watermark?: boolean } = {}
+  params: { timeLimitSeconds?: number; watermark?: boolean; trimStatic?: boolean } = {}
 ): Promise<Awaited<ReturnType<typeof startCapture>>> {
   const promise = startCapture(api, {
     streamUrl: STREAM_URL,
     timeLimitSeconds: params.timeLimitSeconds ?? 180,
     watermark: params.watermark ?? false,
+    // Default off in the helper so pacing/duration tests exercise the plain
+    // wall-clock path; trim-specific tests opt in explicitly.
+    trimStatic: params.trimStatic ?? false,
   });
   // Mark it handled: a start that rejects while the timers below are being
   // advanced would otherwise surface as an unhandled rejection, even though
@@ -362,6 +365,7 @@ describe("screen recording capture", () => {
       streamUrl: STREAM_URL,
       timeLimitSeconds: 30,
       watermark: false,
+      trimStatic: false,
     });
     await vi.advanceTimersByTimeAsync(1);
     child.stderr.emit("data", Buffer.from("Unrecognized option 'bogus'\n"));
@@ -403,11 +407,17 @@ describe("screen recording capture", () => {
       streamUrl: STREAM_URL,
       timeLimitSeconds: 30,
       watermark: false,
+      trimStatic: false,
     });
 
     // Second start lands while the first is still inside its grace.
     await expect(
-      startCapture(api, { streamUrl: STREAM_URL, timeLimitSeconds: 30, watermark: false })
+      startCapture(api, {
+        streamUrl: STREAM_URL,
+        timeLimitSeconds: 30,
+        watermark: false,
+        trimStatic: false,
+      })
     ).rejects.toThrow(/already in flight|already running/i);
 
     await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
@@ -422,6 +432,7 @@ describe("screen recording capture", () => {
       streamUrl: STREAM_URL,
       timeLimitSeconds: 30,
       watermark: false,
+      trimStatic: false,
     });
 
     try {
@@ -545,6 +556,114 @@ describe("frame pump", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(child.stdin.writes).toHaveLength(writesAtStop);
+    await fs.rm(outputFile, { force: true });
+  });
+});
+
+describe("static-frame trimming", () => {
+  it("defaults on for a new session", async () => {
+    const api = await makeSession(iosDevice);
+    expect(api.trimStatic).toBe(true);
+  });
+
+  it("keeps only the grace window of a long static stretch", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream({ frameCount: 1 });
+    const child = fakeChild();
+    await startAndSettle(api, { trimStatic: true });
+    child.stdin.writes.length = 0;
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    // ~1s of held frames (the grace), then nothing for the remaining 4s.
+    expect(child.stdin.writes.length).toBeGreaterThanOrEqual(27);
+    expect(child.stdin.writes.length).toBeLessThanOrEqual(34);
+  });
+
+  it("does NOT trim when the same stretch is recorded with trimStatic off", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream({ frameCount: 1 });
+    const child = fakeChild();
+    await startAndSettle(api, { trimStatic: false });
+    child.stdin.writes.length = 0;
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    // Full 5s of the timeline, ~150 frames.
+    expect(child.stdin.writes.length).toBeGreaterThanOrEqual(140);
+  });
+
+  it("resumes emitting the moment the screen changes after a dead stretch", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream({ frameCount: 1 });
+    const child = fakeChild();
+    await startAndSettle(api, { trimStatic: true });
+
+    await vi.advanceTimersByTimeAsync(4_000); // long static — trimmed after 1s
+    const framesAfterStatic = api.framesWritten;
+    child.stdin.writes.length = 0;
+
+    const moved = fakeJpeg(640, 480); // a genuinely different picture
+    stream.latest = moved;
+    await vi.advanceTimersByTimeAsync(500);
+
+    // New content is written, and the skipped 3s did not become catch-up frames.
+    expect(child.stdin.writes.length).toBeGreaterThan(0);
+    expect(child.stdin.writes.every((w) => w.equals(moved))).toBe(true);
+    expect(api.framesWritten - framesAfterStatic).toBeLessThanOrEqual(20);
+  });
+
+  it("treats a byte-identical new frame as no change (stays trimmed)", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream({ frameCount: 1 });
+    const child = fakeChild();
+    await startAndSettle(api, { trimStatic: true });
+
+    await vi.advanceTimersByTimeAsync(2_000); // trimmed after the grace
+    child.stdin.writes.length = 0;
+
+    // A NEW buffer object, but the same pixels: must not un-trim.
+    stream.latest = fakeJpeg(1320, 2868);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(child.stdin.writes).toHaveLength(0);
+  });
+
+  it("reports the trimmed length plus the wall clock and how much was cut", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream({ frameCount: 1 });
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { trimStatic: true });
+
+    await vi.advanceTimersByTimeAsync(5_000); // 5s wall clock, ~1s of kept frames
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+
+    const result = await stopCapture(api);
+
+    expect(result.durationMs).toBeGreaterThanOrEqual(800);
+    expect(result.durationMs).toBeLessThanOrEqual(1_300);
+    expect(result.wallClockMs).toBeGreaterThanOrEqual(4_800);
+    expect(result.trimmedMs).toBeGreaterThan(3_000);
+    await fs.rm(outputFile, { force: true });
+  });
+
+  it("omits wallClockMs/trimmedMs when trimming is off", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream({ frameCount: 1 });
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { trimStatic: false });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+
+    const result = await stopCapture(api);
+
+    expect(result.wallClockMs).toBeUndefined();
+    expect(result.trimmedMs).toBeUndefined();
     await fs.rm(outputFile, { force: true });
   });
 });

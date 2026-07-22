@@ -27,8 +27,10 @@ A recording does not stop itself before its `timeLimitSeconds` cap, and a forgot
 2. Call `screen-recording-start` with `udid` and a `timeLimitSeconds` slightly above the expected interaction length (default 180, max 600).
 3. Set the end-of-recording reminder described in §2 — this step is not optional.
 4. Drive the interaction to capture: gestures, navigation, typing (`argent-device-interact`). Prefer `run-sequence` for tight multi-step interactions so tool-call latency does not pad the video.
-5. Call `screen-recording-stop` with the same `udid`. It returns `{ video, durationMs, warning? }`; `video` is an artifact — use its `hostPath` locally or download it via the artifacts endpoint. The video is already final when stop returns (the watermark is stamped during capture, not in a second pass), so stop takes well under a second.
+5. Call `screen-recording-stop` with the same `udid`. It returns `{ video, durationMs, wallClockMs?, trimmedMs?, warning? }`; `video` is an artifact — use its `hostPath` locally or download it via the artifacts endpoint. The video is already final when stop returns (the watermark is stamped during capture, not in a second pass), so stop takes well under a second.
 6. Check `warning`: it reports cap-triggered stops, early encoder exits, a dropped frame stream, and possibly-truncated containers. Verify the file plays (or at least has a sane size) before presenting it to the user.
+
+**Static-frame trimming (on by default).** Stretches where the screen does not change are collapsed: the first second of each still stretch is kept so pauses read naturally, then unchanged frames are dropped until something moves again (a change of even a couple of pixels counts). So you can leave a recording running across slow steps, waits, or thinking time without padding the clip with dead air — a 40-second session with 5 seconds of real activity comes back as a ~5-7 second video. When trimming removed anything, stop also returns `wallClockMs` (real elapsed time) and `trimmedMs` (how much was cut); `durationMs` is always the length of the video you actually get. Pass `trimStatic: false` to `screen-recording-start` when you want a faithful real-time recording (e.g. to measure how long something took on screen).
 
 ---
 
