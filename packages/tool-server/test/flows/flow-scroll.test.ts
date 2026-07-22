@@ -948,6 +948,81 @@ describe("scroll-to directive", () => {
     expect(swipes[0].toY - swipes[0].fromY).toBeCloseTo(0.105, 5);
   });
 
+  it("nudges a right-scrolled target clear of a flush right-edge landing", async () => {
+    // Horizontal mirror of the down case: scrolling `right`, the entry edge is
+    // the RIGHT screen edge. Target at 0.87..0.97 → clearance 0.03, deficit
+    // 0.07, nudge 0.105 — and to reveal content on the right the finger
+    // travels LEFT (toX < fromX), the vertical anchor unmoved.
+    const flush = screen([
+      n({ label: "Card 9", frame: { x: 0.87, y: 0.45, width: 0.1, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      n({ label: "Card 9", frame: { x: 0.75, y: 0.45, width: 0.1, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("edge-nudge-right", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Card 9" }, direction: "right" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "edge-nudge-right", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromX).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromX - swipes[0].toX).toBeCloseTo(0.105, 5);
+    expect(swipes[0].toY).toBeCloseTo(swipes[0].fromY, 5);
+  });
+
+  it("nudges a left-scrolled target clear of a flush left-edge landing", async () => {
+    // Left mirror: the entry edge is the LEFT screen edge. Target at 0.03..0.13
+    // → clearance 0.03, deficit 0.07, nudge 0.105 — and for a left-scroll the
+    // finger travels RIGHT (toX > fromX).
+    const flush = screen([
+      n({ label: "Back chip", frame: { x: 0.03, y: 0.45, width: 0.1, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      n({ label: "Back chip", frame: { x: 0.15, y: 0.45, width: 0.1, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("edge-nudge-left", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Back chip" }, direction: "left" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "edge-nudge-left", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromX).toBeCloseTo(0.5, 5);
+    expect(swipes[0].toX - swipes[0].fromX).toBeCloseTo(0.105, 5);
+    expect(swipes[0].toY).toBeCloseTo(swipes[0].fromY, 5);
+  });
+
   it("nudges via the chromium wheel path with an explicit deltaY", async () => {
     // The device id shape selects the platform (chromium-cdp-<port> →
     // chromium), so the same flush landing goes out as a gesture-scroll wheel
@@ -991,5 +1066,51 @@ describe("scroll-to directive", () => {
     expect(scrolls).toHaveLength(1);
     expect(scrolls[0].deltaY).toBeCloseTo(0.12, 5);
     expect(scrolls[0].x).toBeCloseTo(0.5, 5);
+  });
+
+  it("nudges via the chromium wheel path with an explicit deltaX", async () => {
+    // Horizontal wheel mirror: a right-scroll landing flush at 0.88..0.98
+    // (clearance 0.02, deficit 0.08) goes out as one gesture-scroll whose
+    // deltaX is +0.12 — positive reveals content to the right — with no
+    // deltaY and no touch swipe.
+    const flush = screen([
+      n({ label: "Card 9", frame: { x: 0.88, y: 0.45, width: 0.1, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      n({ label: "Card 9", frame: { x: 0.7, y: 0.45, width: 0.1, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const scrolls: ScrollCall[] = [];
+    const registry = mockRegistry(
+      swipes,
+      () => {
+        nudged = true;
+      },
+      scrolls
+    );
+
+    await writeFlow("edge-nudge-wheel-x", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Card 9" }, direction: "right" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute(
+        {},
+        { name: "edge-nudge-wheel-x", project_root: tmpDir, device: CHROMIUM_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+    expect(scrolls).toHaveLength(1);
+    expect(scrolls[0].deltaX).toBeCloseTo(0.12, 5);
+    expect(scrolls[0].deltaY).toBeUndefined();
+    expect(scrolls[0].y).toBeCloseTo(0.5, 5);
   });
 });
