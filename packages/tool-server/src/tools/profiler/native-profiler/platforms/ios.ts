@@ -4,6 +4,7 @@ import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
 import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
+import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import {
   listenForDarwinNotification,
@@ -107,11 +108,15 @@ interface DetectedApp {
 export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
   let launchctlOutput: string;
   try {
-    launchctlOutput = execFileSync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
-    });
+    launchctlOutput = execFileSync(
+      "xcrun",
+      simctlArgsForUdidSync(udid, ["spawn", udid, "launchctl", "list"]),
+      {
+        encoding: "utf-8",
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
+      }
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
@@ -246,7 +251,7 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
     // is ever interpolated into a shell. Each stage buffers its full stdout in Node
     // rather than the OS pipe, so both raise maxBuffer to run-with-timeout.ts's 256 MiB;
     // Node's 1 MiB default would throw ENOBUFS on a well-populated simulator.
-    const listAppsPlist = execFileSync("xcrun", ["simctl", "listapps", udid], {
+    const listAppsPlist = execFileSync("xcrun", simctlArgsForUdidSync(udid, ["listapps", udid]), {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
       maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
@@ -279,10 +284,14 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
 function getAppBundlePath(udid: string, bundleId: string): string {
   let appPath: string;
   try {
-    appPath = execFileSync("xcrun", ["simctl", "get_app_container", udid, bundleId, "app"], {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-    }).trim();
+    appPath = execFileSync(
+      "xcrun",
+      simctlArgsForUdidSync(udid, ["get_app_container", udid, bundleId, "app"]),
+      {
+        encoding: "utf-8",
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      }
+    ).trim();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
@@ -487,6 +496,9 @@ export async function startNativeProfilerIos(
   api: NativeProfilerSessionApi,
   params: IosStartParams
 ): Promise<{ status: "recording"; pid: number; traceFile: string }> {
+  // Warm the UDID → device-set cache so the synchronous simctl helpers below
+  // (enumerate/list/terminate/launch via execFileSync) target the right set.
+  await deviceSetForUdid(params.device_id);
   if (api.profilingActive) {
     throw new FailureError(
       `A native profiling session is already running (PID: ${api.capturePid}).`,
@@ -558,10 +570,18 @@ export async function startNativeProfilerIos(
     // Terminate any running instance so xctrace owns a clean cold launch with the
     // env var set from process start (best-effort; not-running is fine).
     try {
-      execFileSync("xcrun", ["simctl", "terminate", params.device_id, info.CFBundleIdentifier], {
-        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-        stdio: "ignore",
-      });
+      execFileSync(
+        "xcrun",
+        simctlArgsForUdidSync(params.device_id, [
+          "terminate",
+          params.device_id,
+          info.CFBundleIdentifier,
+        ]),
+        {
+          timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+          stdio: "ignore",
+        }
+      );
       // The terminate SUCCEEDED, so the app was actually running and we own killing
       // it. Only now mark it for best-effort relaunch on a later start failure — if
       // the app was NOT running (terminate throws below), relaunching would foreground
@@ -714,10 +734,18 @@ export async function startNativeProfilerIos(
     // dead app — the default attach path never terminates, so only this path needs it.
     if (mallocRelaunchBundleId) {
       try {
-        execFileSync("xcrun", ["simctl", "launch", params.device_id, mallocRelaunchBundleId], {
-          timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-          stdio: "ignore",
-        });
+        execFileSync(
+          "xcrun",
+          simctlArgsForUdidSync(params.device_id, [
+            "launch",
+            params.device_id,
+            mallocRelaunchBundleId,
+          ]),
+          {
+            timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+            stdio: "ignore",
+          }
+        );
       } catch {
         // best-effort restore; surface the original start failure regardless
       }

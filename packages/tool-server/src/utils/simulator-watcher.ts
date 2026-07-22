@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Registry } from "@argent/registry";
@@ -6,23 +7,55 @@ import {
   nativeDevtoolsRef,
   type NativeDevtoolsApi,
 } from "../blueprints/native-devtools";
+import {
+  configuredAdditionalDeviceSets,
+  rememberDeviceSet,
+  simctlPrefix,
+  type DeviceSetPath,
+} from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
 
 const POLL_INTERVAL_MS = 10_000;
 
-async function getBootedUdids(): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"]);
+async function getBootedUdidsInSet(deviceSet: DeviceSetPath): Promise<Set<string>> {
+  const { stdout } = await execFileAsync("xcrun", [
+    ...simctlPrefix(deviceSet),
+    "list",
+    "devices",
+    "--json",
+  ]);
   const data = JSON.parse(stdout) as {
     devices: Record<string, Array<{ udid: string; state: string }>>;
   };
   const udids = new Set<string>();
   for (const devices of Object.values(data.devices)) {
     for (const device of devices) {
-      if (device.state === "Booted") udids.add(device.udid);
+      if (device.state === "Booted") {
+        udids.add(device.udid);
+        // Warm the UDID → device-set map so the injection path (ios-host's
+        // simctl spawn family) targets the right set for this device.
+        rememberDeviceSet(device.udid, deviceSet);
+      }
     }
   }
   return udids;
+}
+
+/**
+ * Booted simulators across the default set and every configured additional
+ * set. Any queryable set failing throws (the poll skips the tick rather than
+ * mistaking a transient error for "everything shut down"); a configured set
+ * whose directory doesn't exist reads as empty — querying it would make
+ * simctl materialize the directory.
+ */
+async function getBootedUdids(): Promise<Set<string>> {
+  const sets: DeviceSetPath[] = [
+    null,
+    ...configuredAdditionalDeviceSets().filter((p) => fs.existsSync(p)),
+  ];
+  const perSet = await Promise.all(sets.map(getBootedUdidsInSet));
+  return new Set(perSet.flatMap((s) => [...s]));
 }
 
 async function initUdid(
