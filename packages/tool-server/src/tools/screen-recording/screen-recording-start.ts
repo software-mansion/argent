@@ -9,11 +9,16 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isFeatureEnabled } from "@argent/configuration-core";
-import { startCapture } from "./capture";
+import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
+import { startCapture, type PointerControl } from "./capture";
 import type { StartRecordingResult } from "./session-guards";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
 const MAX_TIME_LIMIT_SECONDS = 600;
+/** Comet-tail frames left behind a moving touch, so swipes/drags read as motion. */
+const POINTER_TRAIL_LENGTH = 8;
+/** Bound each pointer toggle so a wedged sim-server never stalls start/stop. */
+const POINTER_REQUEST_TIMEOUT_MS = 2_000;
 
 const zodSchema = z.object({
   udid: z
@@ -39,6 +44,14 @@ const zodSchema = z.object({
         "The returned durationMs is the trimmed length; wallClockMs/trimmedMs report what was removed. " +
         "Set false to keep a faithful real-time recording."
     ),
+  showTouches: z
+    .boolean()
+    .optional()
+    .describe(
+      "Default true. Draw simulator-server's touch visualizer into the recording: a pulse marks each " +
+        "tap, a comet trail follows swipes and drags, and paired markers show two-finger pinch/rotate, so " +
+        "the video makes clear where every interaction landed. Set false to record the raw screen with no overlay."
+    ),
 });
 
 const capability = {
@@ -54,6 +67,7 @@ export function createScreenRecordingStartTool(
     capability,
     description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
 By default stretches where the screen does not change are trimmed out (see trimStatic), so a long session with only brief activity comes back as a short clip instead of minutes of dead air.
+By default every tap, swipe, drag, pinch and rotate is drawn into the video as an on-screen touch marker (see showTouches), so the recording shows where each interaction landed.
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses — immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior — for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile } — the video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
@@ -109,6 +123,39 @@ Fails if a recording is already running on the device, the device is not booted,
         );
       }
 
+      // Touch visualizer: capture.ts arms it right after the encoder is live and
+      // restores it to off when the recording ends. It drives the same
+      // simulator-server instance resolved above; the toggles are best-effort
+      // (a failure only costs the overlay, surfaced as a warning at stop), and
+      // remote sims never reach here — they are gated out by the stream check.
+      const showTouches = params.showTouches ?? true;
+      const pointer: PointerControl | undefined = showTouches
+        ? {
+            async enable() {
+              // Set the comet trail first so the very first swipe already leaves
+              // one; the returned success reflects the show toggle (the overlay
+              // itself), since the trail is only a cosmetic enhancement.
+              await setPointerTrail(
+                simulator,
+                POINTER_TRAIL_LENGTH,
+                AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS)
+              );
+              return setPointerVisible(
+                simulator,
+                true,
+                AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS)
+              );
+            },
+            async disable() {
+              await setPointerVisible(
+                simulator,
+                false,
+                AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS)
+              );
+            },
+          }
+        : undefined;
+
       // Read the flag live per call so `argent enable/disable video-watermark`
       // takes effect without restarting the long-lived tool-server.
       return startCapture(api, {
@@ -116,6 +163,7 @@ Fails if a recording is already running on the device, the device is not booted,
         timeLimitSeconds,
         watermark: isFeatureEnabled("video-watermark"),
         trimStatic: params.trimStatic ?? true,
+        pointer,
       });
     },
   };

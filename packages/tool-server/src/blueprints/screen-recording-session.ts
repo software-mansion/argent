@@ -77,6 +77,10 @@ export interface ScreenRecordingSessionApi {
   trimStatic: boolean;
   /** Frames the pump has fed the encoder; the output video's length in frames. */
   framesWritten: number;
+  /** Restore the touch visualizer to off; set while it is on for this recording. */
+  pointerDisable: (() => Promise<void>) | null;
+  /** The touch visualizer was requested but simulator-server would not enable it. */
+  pointerFailed: boolean;
   wallClockStartMs: number | null;
   /** When the capture stopped producing frames (cap fired, process exited, stop signaled). */
   wallClockEndMs: number | null;
@@ -104,6 +108,8 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.captureProcess = null;
   state.pendingChild = null;
   state.frameStream = null;
+  state.pointerDisable = null;
+  state.pointerFailed = false;
   state.recordingTimedOut = false;
   state.recordingExitedUnexpectedly = false;
   state.lastExitInfo = null;
@@ -162,6 +168,8 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       pumpTimer: null,
       trimStatic: true,
       framesWritten: 0,
+      pointerDisable: null,
+      pointerFailed: false,
       wallClockStartMs: null,
       wallClockEndMs: null,
       timeLimitSeconds: null,
@@ -191,6 +199,14 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           state.pumpTimer = null;
         }
         state.frameStream?.close();
+
+        // Restore the touch visualizer if this recording turned it on — the
+        // overlay is sim-server global state that must not outlive the capture.
+        if (state.pointerDisable) {
+          const disable = state.pointerDisable;
+          state.pointerDisable = null;
+          await disable().catch(() => {});
+        }
 
         // A start still mid-readiness at shutdown has a live child that
         // `captureProcess` (success-only) can't see — reap it here or it

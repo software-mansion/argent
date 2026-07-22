@@ -102,6 +102,57 @@ export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown
 }
 
 /**
+ * Toggle simulator-server's on-screen touch visualizer (its "pointer" overlay).
+ * When on, every touch argent sends is drawn into the frame stream server-side —
+ * a pulse for a tap, a comet trail for a swipe/drag, two markers for a two-finger
+ * pinch/rotate — which is what makes those gestures visible in a screen
+ * recording. Needs the streaming/pointer simulator-server build (the bundled
+ * argent one has it). Best-effort: returns false instead of throwing, so a
+ * recording is never lost to a pointer toggle.
+ */
+export function setPointerVisible(
+  api: SimulatorServerApi,
+  show: boolean,
+  signal?: AbortSignal
+): Promise<boolean> {
+  return pointerPost(api, { show }, signal);
+}
+
+/** Length of the fading comet trail behind a moving touch (0 disables it). */
+export function setPointerTrail(
+  api: SimulatorServerApi,
+  trail: number,
+  signal?: AbortSignal
+): Promise<boolean> {
+  return pointerPost(api, { trail }, signal);
+}
+
+async function pointerPost(
+  api: SimulatorServerApi,
+  body: { show: boolean } | { trail: number },
+  signal?: AbortSignal
+): Promise<boolean> {
+  // Remote (MoQ) sims expose no HTTP pointer endpoint; recording gates them out,
+  // so the stubbed apiUrl simply makes this fetch fail and return false.
+  try {
+    const res = await fetch(`${api.apiUrl}/api/pointer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) return false;
+    const parsed = (await res.json().catch(() => null)) as {
+      status?: string;
+      error?: string;
+    } | null;
+    return parsed?.status === "ok";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * POST to a simulator-server endpoint, handling network errors and non-JSON
  * responses uniformly.  Callers handle domain-specific response validation.
  */

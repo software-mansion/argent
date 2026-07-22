@@ -24,13 +24,15 @@ A recording does not stop itself before its `timeLimitSeconds` cap, and a forgot
 ## 3. Workflow
 
 1. Ensure the target device is booted and the app is in the state you want the video to open on (`list-devices`, `launch-app`, `argent-device-interact`).
-2. Call `screen-recording-start` with `udid` and a `timeLimitSeconds` slightly above the expected interaction length (default 180, max 600).
+2. Call `screen-recording-start` with `udid` and a `timeLimitSeconds` slightly above the expected interaction length (default 180, max 600). Taps and swipes are drawn into the video by default (see the touch-visualizer note below); pass `showTouches: false` for a clean raw-screen capture.
 3. Set the end-of-recording reminder described in §2 — this step is not optional.
 4. Drive the interaction to capture: gestures, navigation, typing (`argent-device-interact`). Prefer `run-sequence` for tight multi-step interactions so tool-call latency does not pad the video.
 5. Call `screen-recording-stop` with the same `udid`. It returns `{ video, durationMs, wallClockMs?, trimmedMs?, warning? }`; `video` is an artifact — use its `hostPath` locally or download it via the artifacts endpoint. The video is already final when stop returns (the watermark is stamped during capture, not in a second pass), so stop takes well under a second.
 6. Check `warning`: it reports cap-triggered stops, early encoder exits, a dropped frame stream, and possibly-truncated containers. Verify the file plays (or at least has a sane size) before presenting it to the user.
 
 **Static-frame trimming (on by default).** Stretches where the screen does not change are collapsed: the first second of each still stretch is kept so pauses read naturally, then unchanged frames are dropped until something moves again (a change of even a couple of pixels counts). So you can leave a recording running across slow steps, waits, or thinking time without padding the clip with dead air — a 40-second session with 5 seconds of real activity comes back as a ~5-7 second video. When trimming removed anything, stop also returns `wallClockMs` (real elapsed time) and `trimmedMs` (how much was cut); `durationMs` is always the length of the video you actually get. Pass `trimStatic: false` to `screen-recording-start` when you want a faithful real-time recording (e.g. to measure how long something took on screen).
+
+**Touch visualizer (on by default).** Every interaction argent drives is drawn straight into the video: a pulse marks each tap, a fading comet trail follows swipes and drags, and paired markers show the two contact points of a pinch or rotate. This makes a recording self-explanatory — a viewer can see _where_ each gesture landed rather than watching the UI react to an invisible finger. It is rendered by simulator-server into the frame stream (nothing is composited host-side), so it costs nothing extra and never appears in a `screenshot`. Pass `showTouches: false` to `screen-recording-start` to record the raw screen with no overlay (e.g. when capturing exactly what the user would see). If simulator-server cannot enable it, the recording still succeeds and stop returns a `warning` saying touches are not shown.
 
 ---
 

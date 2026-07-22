@@ -38,6 +38,19 @@ import { buildWatermarkGraph, resolveFfmpeg, writeLogoTemp } from "./watermark";
  * nothing once encoded.
  */
 
+/**
+ * Turns simulator-server's touch visualizer on for the life of a recording and
+ * back off afterwards. Built by the start tool from the resolved sim-server
+ * handle; capture.ts only arms it and stores the teardown, staying decoupled
+ * from the sim-server client.
+ */
+export interface PointerControl {
+  /** Enable the overlay; resolves false if the sim-server would not turn it on. */
+  enable(): Promise<boolean>;
+  /** Restore the overlay to off. Best-effort — never throws. */
+  disable(): Promise<void>;
+}
+
 export const OUTPUT_FPS = 30;
 const FRAME_INTERVAL_MS = 1000 / OUTPUT_FPS;
 /** Cap a catch-up burst so a stalled pipe cannot trigger a write storm. */
@@ -195,6 +208,13 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
   }, FRAME_INTERVAL_MS);
 }
 
+/** Restore the touch visualizer to off. Best-effort, idempotent, never throws. */
+export async function disablePointer(api: ScreenRecordingSessionApi): Promise<void> {
+  const disable = api.pointerDisable;
+  api.pointerDisable = null;
+  if (disable) await disable().catch(() => {});
+}
+
 /** Stop pacing and release the stream subscription; safe to call repeatedly. */
 function stopPump(api: ScreenRecordingSessionApi): void {
   if (api.pumpTimer) {
@@ -220,7 +240,13 @@ function finalizeCapture(api: ScreenRecordingSessionApi): void {
 
 export async function startCapture(
   api: ScreenRecordingSessionApi,
-  params: { streamUrl: string; timeLimitSeconds: number; watermark: boolean; trimStatic: boolean }
+  params: {
+    streamUrl: string;
+    timeLimitSeconds: number;
+    watermark: boolean;
+    trimStatic: boolean;
+    pointer?: PointerControl;
+  }
 ): Promise<StartRecordingResult> {
   assertNoActiveRecording(api, "screen_recording_start");
   // Set synchronously (no await between the assert and here) so an overlapping
@@ -238,7 +264,13 @@ export async function startCapture(
 
 async function startCaptureLocked(
   api: ScreenRecordingSessionApi,
-  params: { streamUrl: string; timeLimitSeconds: number; watermark: boolean; trimStatic: boolean }
+  params: {
+    streamUrl: string;
+    timeLimitSeconds: number;
+    watermark: boolean;
+    trimStatic: boolean;
+    pointer?: PointerControl;
+  }
 ): Promise<StartRecordingResult> {
   const ffmpeg = await resolveFfmpeg();
   if (!ffmpeg) {
@@ -339,6 +371,15 @@ async function startCaptureLocked(
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
   startPump(api, stream);
 
+  if (params.pointer) {
+    // Arm the touch visualizer before returning, so the very first interaction
+    // is already drawn into the recording. Store the teardown first so a
+    // shutdown racing this await still restores the overlay. Best-effort: a
+    // failure only costs the touch markers, surfaced as a warning at stop.
+    api.pointerDisable = params.pointer.disable;
+    api.pointerFailed = !(await params.pointer.enable());
+  }
+
   api.recordingTimeout = setTimeout(() => {
     api.recordingTimeout = null;
     // Ownership guard: if a newer capture stamped the session, this timer is
@@ -352,6 +393,7 @@ async function startCaptureLocked(
     api.pendingRetrieval = true;
     markScreenRecordingFinalized(api.deviceId, `it hit its ${params.timeLimitSeconds}s time limit`);
     finalizeCapture(api);
+    void disablePointer(api);
   }, params.timeLimitSeconds * 1_000);
 
   child.on("exit", (code, signal) => {
@@ -371,6 +413,7 @@ async function startCaptureLocked(
       api.wallClockEndMs = Date.now();
       api.pendingRetrieval = true;
       stopPump(api);
+      void disablePointer(api);
       markScreenRecordingFinalized(api.deviceId, "the recording process exited unexpectedly");
     }
   });
@@ -457,6 +500,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   // Read before finalizing: closing the stream ourselves would look like a drop.
   const streamError = api.frameStream?.error ?? null;
   const watermarkSkipped = api.watermarkSkipped;
+  const pointerFailed = api.pointerFailed;
   let warning: string | undefined;
 
   try {
@@ -507,6 +551,14 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         .filter(Boolean)
         .join(" ");
     }
+    if (pointerFailed) {
+      warning = [
+        warning,
+        "The touch visualizer could not be enabled on simulator-server, so touches are not shown in this video.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
 
     const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
     // Wall-clock capture length: after the cap fires (or the encoder dies) the
@@ -534,6 +586,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     // unlike a device-side capture there is nothing a retried stop could
     // recover.
     stopPump(api);
+    await disablePointer(api);
     api.recordingActive = false;
     api.stopPending = false;
     api.pendingRetrieval = false;
@@ -541,6 +594,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.outputFile = null;
     api.logoFile = null;
     api.watermarkSkipped = null;
+    api.pointerFailed = false;
     api.framesWritten = 0;
     api.wallClockStartMs = null;
     api.wallClockEndMs = null;

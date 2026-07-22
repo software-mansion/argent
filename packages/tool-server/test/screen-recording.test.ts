@@ -30,7 +30,14 @@ import {
   screenRecordingSessionBlueprint,
   type ScreenRecordingSessionApi,
 } from "../src/blueprints/screen-recording-session";
-import { startCapture, stopCapture, framesDue } from "../src/tools/screen-recording/capture";
+import {
+  startCapture,
+  stopCapture,
+  framesDue,
+  type PointerControl,
+} from "../src/tools/screen-recording/capture";
+import { setPointerTrail, setPointerVisible } from "../src/utils/simulator-client";
+import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { openMjpegStream, readJpegDimensions } from "../src/tools/screen-recording/mjpeg-stream";
 import { resolveFfmpeg, writeLogoTemp } from "../src/tools/screen-recording/watermark";
 import {
@@ -129,6 +136,13 @@ function fakeChild(): FakeChild {
   return child;
 }
 
+/** A PointerControl whose enable/disable calls are observable. */
+function fakePointer(enableResult = true) {
+  const enable = vi.fn(async () => enableResult);
+  const disable = vi.fn(async () => {});
+  return { enable, disable } satisfies PointerControl;
+}
+
 async function makeSession(device: DeviceInfo): Promise<ScreenRecordingSessionApi> {
   // The payload argument is unused by this factory; options carry the device.
   const instance = await screenRecordingSessionBlueprint.factory({}, device, {
@@ -143,7 +157,12 @@ async function makeSession(device: DeviceInfo): Promise<ScreenRecordingSessionAp
  */
 async function startAndSettle(
   api: ScreenRecordingSessionApi,
-  params: { timeLimitSeconds?: number; watermark?: boolean; trimStatic?: boolean } = {}
+  params: {
+    timeLimitSeconds?: number;
+    watermark?: boolean;
+    trimStatic?: boolean;
+    pointer?: PointerControl;
+  } = {}
 ): Promise<Awaited<ReturnType<typeof startCapture>>> {
   const promise = startCapture(api, {
     streamUrl: STREAM_URL,
@@ -152,6 +171,7 @@ async function startAndSettle(
     // Default off in the helper so pacing/duration tests exercise the plain
     // wall-clock path; trim-specific tests opt in explicitly.
     trimStatic: params.trimStatic ?? false,
+    pointer: params.pointer,
   });
   // Mark it handled: a start that rejects while the timers below are being
   // advanced would otherwise surface as an unhandled rejection, even though
@@ -665,6 +685,164 @@ describe("static-frame trimming", () => {
     expect(result.wallClockMs).toBeUndefined();
     expect(result.trimmedMs).toBeUndefined();
     await fs.rm(outputFile, { force: true });
+  });
+});
+
+describe("touch visualizer", () => {
+  it("enables the overlay at start and restores it to off at stop", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    const pointer = fakePointer();
+
+    await startAndSettle(api, { pointer });
+    expect(pointer.enable).toHaveBeenCalledTimes(1);
+    expect(pointer.disable).not.toHaveBeenCalled();
+    expect(api.pointerFailed).toBe(false);
+    expect(api.pointerDisable).toBe(pointer.disable);
+
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+    const result = await stopCapture(api);
+
+    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(api.pointerDisable).toBeNull();
+    expect(result.warning).toBeUndefined();
+    await fs.rm(outputFile, { force: true });
+  });
+
+  it("restores the overlay when the time-limit cap fires", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    const pointer = fakePointer();
+
+    await startAndSettle(api, { timeLimitSeconds: 5, pointer });
+    await vi.advanceTimersByTimeAsync(5_000); // cap fires
+
+    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(api.recordingTimedOut).toBe(true);
+  });
+
+  it("restores the overlay when the encoder dies unexpectedly", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    const pointer = fakePointer();
+    await startAndSettle(api, { pointer });
+
+    child.exit(1); // crash mid-capture
+
+    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(api.recordingExitedUnexpectedly).toBe(true);
+  });
+
+  it("restores the overlay on session dispose", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    const api = instance.api;
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    const pointer = fakePointer();
+    await startAndSettle(api, { pointer });
+
+    await instance.dispose();
+
+    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(api.pointerDisable).toBeNull();
+  });
+
+  it("warns at stop when the overlay could not be enabled", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    const pointer = fakePointer(false); // sim-server refused the toggle
+
+    await startAndSettle(api, { pointer });
+    expect(api.pointerFailed).toBe(true);
+
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+    const result = await stopCapture(api);
+
+    // Even a failed enable is still restored to off, best-effort.
+    expect(pointer.disable).toHaveBeenCalled();
+    expect(result.warning).toContain("touch visualizer could not be enabled");
+    expect(api.pointerFailed).toBe(false); // reset for the next recording
+    await fs.rm(outputFile, { force: true });
+  });
+
+  it("leaves the pointer untouched when no control is supplied", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+
+    await startAndSettle(api); // showTouches off → no PointerControl
+    expect(api.pointerDisable).toBeNull();
+    expect(api.pointerFailed).toBe(false);
+
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+    const result = await stopCapture(api);
+
+    expect(result.warning).toBeUndefined();
+    await fs.rm(outputFile, { force: true });
+  });
+});
+
+describe("touch visualizer wire protocol", () => {
+  const fakeApi = { apiUrl: "http://127.0.0.1:65500" } as SimulatorServerApi;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("setPointerVisible POSTs {show} and reads status ok", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ status: "ok" }))
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(setPointerVisible(fakeApi, true)).resolves.toBe(true);
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("http://127.0.0.1:65500/api/pointer");
+    expect(init).toMatchObject({ method: "POST" });
+    expect(JSON.parse(init!.body as string)).toEqual({ show: true });
+  });
+
+  it("setPointerTrail POSTs {trail}", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ status: "ok" }))
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(setPointerTrail(fakeApi, 8)).resolves.toBe(true);
+    expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).toEqual({ trail: 8 });
+  });
+
+  it("returns false on an error response body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "pointer feature disabled" })))
+    );
+    await expect(setPointerVisible(fakeApi, true)).resolves.toBe(false);
+  });
+
+  it("returns false when the request throws (unreachable / aborted)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("ECONNREFUSED");
+      })
+    );
+    await expect(setPointerVisible(fakeApi, false)).resolves.toBe(false);
   });
 });
 
