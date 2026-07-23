@@ -762,4 +762,136 @@ describe("materializeArtifacts durable destination", () => {
     // The original is untouched.
     expect(await readFile(join(dir, "clip.mp4"), "utf8")).toBe("EXISTING");
   });
+
+  // ── #551 review follow-ups (hardening + coverage) ─────────────
+  const absent = async (p: string) => {
+    try {
+      await readFile(p);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  // A remote server that streams `maxChunks` chunks on demand, counting pulls so
+  // a test can prove the client aborted early instead of draining the whole body.
+  const countingStream = (chunkBytes: number, maxChunks: number, contentLength?: number) => {
+    const state = { pulls: 0 };
+    const impl = (async () => ({
+      ok: true,
+      headers: {
+        get: (k: string) =>
+          k.toLowerCase() === "content-length" && contentLength != null
+            ? String(contentLength)
+            : null,
+      },
+      body: new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (state.pulls >= maxChunks) return c.close();
+          state.pulls++;
+          c.enqueue(new Uint8Array(chunkBytes));
+        },
+      }),
+    })) as unknown as typeof fetch;
+    return { impl, state };
+  };
+
+  it("refuses a durable download with a non-numeric/absent size (the memory cap can't be NaN-bypassed)", async () => {
+    // `size` is unvalidated JSON from a possibly hostile server; an absent or
+    // non-numeric value must not make the readCapped cap `NaN` (which never
+    // trips) and let an unbounded body buffer into memory.
+    for (const badSize of [undefined, "x", {}, NaN, 1.5, -3]) {
+      const { impl, state } = countingStream(64 * 1024, 300);
+      const h = {
+        [ARTIFACT_MARKER]: true,
+        id: "x",
+        filename: "clip.mp4",
+        mimeType: "video/mp4",
+        saveDir: ".argent/recordings",
+        size: badSize,
+      } as unknown as ArtifactHandle;
+      const { result } = await materializeArtifacts(
+        { video: h },
+        { toolsUrl: "http://remote:3001", fetchImpl: impl }
+      );
+      expect((result as { video: string | null }).video, String(badSize)).toBeNull();
+      expect(state.pulls, String(badSize)).toBe(0); // rejected before any download — body never touched
+      expect(await absent(join(projectRoot, ".argent/recordings", "clip.mp4"))).toBe(true);
+    }
+  });
+
+  it("aborts the stream early when the body over-streams past the declared size (the cap binds, not just the length check)", async () => {
+    // 64 KiB chunks with size:8 — the cap (= size) is exceeded on the first
+    // chunk, so the reader is cancelled after ~1 pull rather than draining 300.
+    // If MAX/reader.cancel were removed, all 300 would be buffered yet the test
+    // would still go green via the length-mismatch check — so assert the abort.
+    const { impl, state } = countingStream(64 * 1024, 300);
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "over",
+      filename: "o.mp4",
+      mimeType: "video/mp4",
+      size: 8,
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: impl }
+    );
+    expect((result as { video: string | null }).video).toBeNull();
+    expect(state.pulls).toBeLessThan(5); // aborted early, NOT fully drained (would be 300)
+    expect(await absent(join(projectRoot, ".argent/recordings", "o.mp4"))).toBe(true);
+  });
+
+  it("rejects a durable download whose Content-Length already exceeds the cap, before reading the body", async () => {
+    const { impl, state } = countingStream(8, 300, 5_000_000_000); // CL = 5 GB, size = 1 KiB
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "cl",
+      filename: "cl.mp4",
+      mimeType: "video/mp4",
+      size: 1024,
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: impl }
+    );
+    expect((result as { video: string | null }).video).toBeNull();
+    expect(state.pulls).toBeLessThanOrEqual(1); // header check fired; the body is not drained
+  });
+
+  it("co-located copy never clobbers an existing recording — lands as `name (2).ext`", async () => {
+    const dir = join(projectRoot, ".argent/recordings");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "clip.mp4"), Buffer.from("EXISTING"));
+    const hostDir = await mkdtemp(join(tmpdir(), "argent-host-"));
+    const hostPath = join(hostDir, "argent-clip.mp4");
+    await writeFile(hostPath, Buffer.from(MP4));
+    const st = await stat(hostPath);
+    try {
+      const h: ArtifactHandle = {
+        [ARTIFACT_MARKER]: true,
+        id: "colo",
+        filename: "clip.mp4",
+        mimeType: "video/mp4",
+        size: st.size,
+        hostPath,
+        mtimeMs: st.mtimeMs,
+        saveDir: ".argent/recordings",
+      };
+      const throwingFetch: typeof fetch = (async () => {
+        throw new Error("fetch must not be called when the file is already local");
+      }) as unknown as typeof fetch;
+      const { result } = await materializeArtifacts(
+        { video: h },
+        { toolsUrl: "http://localhost:3001", fetchImpl: throwingFetch }
+      );
+      const out = (result as { video: string }).video;
+      expect(out).toBe(join(dir, "clip (2).mp4")); // co-located copy also lands alongside
+      expect(Buffer.from(await readFile(out))).toEqual(Buffer.from(MP4));
+      expect(await readFile(join(dir, "clip.mp4"), "utf8")).toBe("EXISTING"); // original intact
+    } finally {
+      await rm(hostDir, { recursive: true, force: true });
+    }
+  });
 });

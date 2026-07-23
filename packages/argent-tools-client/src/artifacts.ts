@@ -448,15 +448,21 @@ export async function materializeArtifacts(
             return finalPath;
           }
           // Remote download. A durable file survives cache GC, so it must have a
-          // known, verified size: refuse a `size:0` handle (its length can't be
-          // checked) and cap the streamed bytes, so a linked tool-server can't
-          // persist an unbounded or under-declared body under `.argent/`.
-          if (value.size <= 0) return null;
+          // known, verified size: refuse anything but a positive integer within
+          // the cap — a `size:0`, absent, NaN, or over-cap value can't bound the
+          // download. (`size` arrives as unvalidated JSON from a possibly hostile
+          // server and `isArtifactHandle` doesn't check it, so a non-numeric size
+          // would make the `readCapped` cap `NaN` and never trip, letting an
+          // unbounded body buffer into client memory — the exact DoS the cap
+          // exists to prevent.) The cap can then be `value.size` directly.
+          if (!Number.isInteger(value.size) || value.size <= 0 || value.size > MAX_DURABLE_BYTES) {
+            return null;
+          }
           const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
             headers: authHeaders,
           });
           if (!res.ok) return null;
-          const data = await readCapped(res, Math.min(value.size, MAX_DURABLE_BYTES));
+          const data = await readCapped(res, value.size);
           if (!data || data.length !== value.size) return null;
           const finalPath = await writeDurableUnique(saveTarget.dir, filename, (p) =>
             writeFile(p, data, { flag: "wx" })
