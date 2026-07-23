@@ -23,8 +23,9 @@ import {
  *
  * This lives under flows/ (not the describe layer) on purpose: it's a flow-only
  * concern, and the describe path is untouched. When native-devtools is
- * unavailable it throws rather than letting the caller degrade to the AX tree —
- * see `fetchFlowTree` for why a silent fallback would flip flow outcomes.
+ * unavailable — or the target returns no windows — it throws rather than
+ * degrade to the AX tree; see `fetchFlowTree` for why a silent fallback would
+ * flip flow outcomes.
  */
 
 // ── getFullHierarchy → DescribeNode adapter ──────────────────────────────────
@@ -249,7 +250,8 @@ const FULL_HIERARCHY_FIELDS = [
 /**
  * Query the raw UIView tree via native-devtools `getFullHierarchy` and adapt
  * it. Throws — with the reason — when native-devtools is unavailable / not yet
- * connected / errored: flows never degrade to the AX tree (see
+ * connected / errored, or when the resolved target returns no windows (a
+ * non-injectable or backgrounded app): flows never degrade to the AX tree (see
  * `fetchFlowTree`), so the caller's retry loop either rides out a transient
  * failure or surfaces this message as the step's failure reason.
  */
@@ -288,6 +290,19 @@ export async function queryFullHierarchyTree(
 
   if (rawResult.error) {
     throw new Error(`getFullHierarchy failed for ${target.bundleId}: ${rawResult.error}`);
+  }
+
+  // No windows is an untrustworthy read (non-injectable app, backgrounded, or a
+  // window not yet attached), not a blank screen — and an empty tree is the one
+  // thing a `hidden`/absent check accepts, so trusting it would false-pass.
+  // Key on raw windows, not flattened children: windows-but-no-leaves is a
+  // genuinely sparse, trusted screen.
+  if (!Array.isArray(rawResult.windows) || rawResult.windows.length === 0) {
+    throw new Error(
+      `getFullHierarchy returned no windows for ${target.bundleId} — the app is not injectable ` +
+        `(e.g. an Apple system app) or has no readable foreground window, so flows cannot resolve ` +
+        `selectors against its view hierarchy`
+    );
   }
 
   return { tree: adaptFullHierarchyToDescribeResult(rawResult), source: "native-devtools" };
