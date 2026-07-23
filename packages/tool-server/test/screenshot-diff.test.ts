@@ -133,6 +133,58 @@ describe("diffPngFiles", () => {
     expect(diff.height).toBe(20);
   });
 
+  it("hard-fails same-aspect resolution differences when normalizeSizes is false", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    // Exactly 2x with the same aspect ratio — the default path (test above)
+    // resamples and compares; normalizeSizes: false must bail instead, since
+    // for images whose dimensions carry meaning the drift IS the failure.
+    await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
+    await writePng(currentPath, 20, 40, { r: 30, g: 60, b: 90 });
+
+    const result = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      normalizeSizes: false,
+    });
+
+    expect(result).toMatchObject({
+      mismatchPercentage: 0,
+      dimensionMismatch: {
+        expected: { width: 10, height: 20 },
+        actual: { width: 20, height: 40 },
+      },
+    });
+    expect(result.diffPath).toBeUndefined();
+    expect(result.contextDiffPath).toBeUndefined();
+  });
+
+  it("compares equal-dimension images normally under normalizeSizes: false", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    // The pass path every matching cropOn comparison takes: identical
+    // dimensions must flow through to a normal pixel compare, not a bail.
+    await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
+    await writePng(currentPath, 10, 20, { r: 30, g: 60, b: 90 }, [
+      ...rectPixels(2, 10, 3, 2, { r: 255, g: 0, b: 0 }),
+    ]);
+
+    const result = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      topMask: "none",
+      normalizeSizes: false,
+    });
+
+    expect(result.dimensionMismatch).toBeUndefined();
+    expect(result.differentPixels).toBe(6);
+    expect(result.diffPath).toBe(path.join(dir, "current-diff.png"));
+  });
+
   it("merges same-line fragments but keeps separate rows distinct", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");
