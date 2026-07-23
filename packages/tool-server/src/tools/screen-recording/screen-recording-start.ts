@@ -29,6 +29,16 @@ const zodSchema = z.object({
       `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}, max ${MAX_TIME_LIMIT_SECONDS}). ` +
         `Set it to slightly more than the interaction you plan to capture.`
     ),
+  trimStatic: z
+    .boolean()
+    .optional()
+    .describe(
+      "Default true. Collapse stretches where the screen does not change: the first second of " +
+        "each still stretch is kept, then unchanged frames are dropped until something moves again, " +
+        "so a long recording with brief activity comes back short instead of full of dead air. " +
+        "The returned durationMs is the trimmed length; wallClockMs/trimmedMs report what was removed. " +
+        "Set false to keep a faithful real-time recording."
+    ),
 });
 
 const capability = {
@@ -42,7 +52,8 @@ export function createScreenRecordingStartTool(
   return {
     id: "screen-recording-start",
     capability,
-    description: `Start recording the device screen to a video file (h264 mp4, constant 30fps at the device's native resolution).
+    description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
+By default stretches where the screen does not change are trimmed out (see trimStatic), so a long session with only brief activity comes back as a short clip instead of minutes of dead air.
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses — immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior — for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile } — the video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
@@ -104,6 +115,7 @@ Fails if a recording is already running on the device, the device is not booted,
         streamUrl,
         timeLimitSeconds,
         watermark: isFeatureEnabled("video-watermark"),
+        trimStatic: params.trimStatic ?? true,
       });
     },
   };
