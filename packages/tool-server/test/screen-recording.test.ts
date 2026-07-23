@@ -869,12 +869,15 @@ describe("touch visualizer", () => {
 
     // A cap- or crash-ended recording leaves `pointerFailed` set: only stop and a
     // fresh start clear it, and neither the cap nor the crash path runs stop's
-    // reset. Simulate that residue directly rather than via a real cap-then-start
-    // — reaching it that way would depend on the session admitting a new start
-    // while a finalized recording still awaits retrieval, which is exactly the
-    // path the `pendingRetrieval` admission guard forbids. What this asserts is
-    // only that a fresh start scrubs the flag, however it got set, so an
-    // overlay-free recording never inherits a spurious touch-visualizer warning.
+    // reset. Set that residue directly instead of driving a real cap-then-start.
+    // On this branch such a start is still admitted (assertNoActiveRecording gates
+    // only on recordingActive/startPending/stopPending), but #517's guard — already
+    // on origin/feat/screen-recording, not yet in this base — additionally rejects a
+    // start while a finalized recording awaits retrieval (`pendingRetrieval`), so a
+    // cap-then-start would throw once the stack rebases. Driving the flag in
+    // directly keeps this test valid under both guards; it asserts only that a fresh
+    // start scrubs the flag, so an overlay-free recording never inherits a spurious
+    // touch-visualizer warning.
     api.pointerFailed = true;
 
     fakeStream();
@@ -969,6 +972,42 @@ describe("touch visualizer wire protocol", () => {
 
     // Serialized: trail, then show:true, then show:false last → overlay ends off.
     expect(ops).toEqual([{ trail: 8 }, { show: true }, { show: false }]);
+  });
+
+  it("disable() still issues show:false when no enable is in flight", async () => {
+    // The ordinary stop path: enable() has already resolved (enabling === null),
+    // so disable() takes the non-parked branch. It must still send show:false —
+    // otherwise a plain stop would leave the overlay on for the next screenshot.
+    const ops: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      ops.push(JSON.parse(init!.body as string) as Record<string, unknown>);
+      return new Response(JSON.stringify({ status: "ok" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const control = makePointerControl(fakeApi);
+    await control.enable(); // fully settles → enabling back to null
+    await control.disable(); // idle path, nothing to await first
+
+    expect(ops).toEqual([{ trail: 8 }, { show: true }, { show: false }]);
+  });
+
+  it("enable() reflects the show result even when the trail request fails", async () => {
+    // The trail is only cosmetic, so a non-ok trail must not make enable() report
+    // the overlay as failed: enable() returns the show toggle's result. Otherwise
+    // stop would warn "touch visualizer could not be enabled" on a video that does
+    // show touches.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string) as Record<string, unknown>;
+        const payload = "trail" in body ? { error: "trail unsupported" } : { status: "ok" };
+        return new Response(JSON.stringify(payload));
+      })
+    );
+
+    const control = makePointerControl(fakeApi);
+    await expect(control.enable()).resolves.toBe(true);
   });
 });
 
