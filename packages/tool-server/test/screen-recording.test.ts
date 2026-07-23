@@ -670,6 +670,33 @@ describe("static-frame trimming", () => {
     await fs.rm(outputFile, { force: true });
   });
 
+  it("omits wallClockMs/trimmedMs when trimming is on but nothing was static", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream({ frameCount: 1 });
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { trimStatic: true });
+
+    // Drive continuous motion: a fresh, distinct frame every tick so the pump
+    // never crosses the static grace and trims nothing.
+    const frameIntervalMs = 1000 / 30;
+    for (let i = 0; i < 90; i++) {
+      // A distinct picture each tick (trailing byte differs) — never static.
+      stream.latest = Buffer.concat([fakeJpeg(1320, 2868), Buffer.from([i])]);
+      await vi.advanceTimersByTimeAsync(frameIntervalMs);
+    }
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+
+    const result = await stopCapture(api);
+
+    // Nothing was trimmed, so the trim-only fields must be absent — a small
+    // rounding gap between framesWritten and the wall clock is not "trimming".
+    expect(result.wallClockMs).toBeUndefined();
+    expect(result.trimmedMs).toBeUndefined();
+    await fs.rm(outputFile, { force: true });
+  });
+
   it("omits wallClockMs/trimmedMs when trimming is off", async () => {
     const api = await makeSession(iosDevice);
     fakeStream({ frameCount: 1 });

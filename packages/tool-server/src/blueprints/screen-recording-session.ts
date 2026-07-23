@@ -81,6 +81,8 @@ export interface ScreenRecordingSessionApi {
   pointerDisable: (() => Promise<void>) | null;
   /** The touch visualizer was requested but simulator-server would not enable it. */
   pointerFailed: boolean;
+  /** Whether trimming ever collapsed a static stretch (crossed the grace and dropped frames). */
+  trimmedAnyFrames: boolean;
   wallClockStartMs: number | null;
   /** When the capture stopped producing frames (cap fired, process exited, stop signaled). */
   wallClockEndMs: number | null;
@@ -170,6 +172,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       framesWritten: 0,
       pointerDisable: null,
       pointerFailed: false,
+      trimmedAnyFrames: false,
       wallClockStartMs: null,
       wallClockEndMs: null,
       timeLimitSeconds: null,
