@@ -126,6 +126,11 @@ SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
 When: Explicit visual regression, screenshot diff, compare screenshots, before/after visual comparison requests, or visible UI changes where stable pixel comparison would add useful evidence.
 
+SCREEN RECORDING (VIDEO CAPTURE)
+Skill: `argent-screen-recording`
+When: The user wants a video of the device screen — recording a flow, interaction, animation, or bug reproduction as a clip, or documenting app behavior beyond what a still screenshot shows. Covers the start → interact → stop lifecycle, the reminder discipline that keeps a recording from being left running, and retrieving the mp4 artifact.
+Prompt keywords: record, recording, screen recording, video, capture video, clip, mp4
+
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
 When: Project is react-native, starting Metro or running the iOS or Android app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app.

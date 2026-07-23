@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { resolveDevice } from "./device-info";
+import { resolveAndroidBinary } from "./android-binary";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,7 +25,10 @@ export async function shutdownOwnedDevice(id: string): Promise<void> {
   if (platform === "ios") {
     await execFileAsync("xcrun", ["simctl", "shutdown", id]).catch(() => {});
   } else if (platform === "android") {
-    await execFileAsync("adb", ["-s", id, "emu", "kill"]).catch(() => {});
+    // Resolve adb like every other android path (SDK fallback off-PATH — on
+    // Windows adb usually isn't on PATH at all); bare "adb" as a last resort.
+    const adb = (await resolveAndroidBinary("adb")) ?? "adb";
+    await execFileAsync(adb, ["-s", id, "emu", "kill"]).catch(() => {});
   }
 }
 
@@ -62,7 +66,8 @@ export async function shutdownDevice(id: string): Promise<ShutdownResult> {
       return { ok: true };
     }
     if (device.platform === "android" && device.kind === "emulator") {
-      await execFileAsync("adb", ["-s", id, "emu", "kill"]);
+      const adb = (await resolveAndroidBinary("adb")) ?? "adb";
+      await execFileAsync(adb, ["-s", id, "emu", "kill"]);
       return { ok: true };
     }
     return {

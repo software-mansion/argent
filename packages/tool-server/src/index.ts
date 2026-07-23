@@ -16,6 +16,7 @@ import {
 import { createHttpApp } from "./http";
 import { attachRegistryEventLogger, createToolServerEventLog } from "./event-log";
 import { createRegistry } from "./utils/setup-registry";
+import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
 import { createPreviewWindowManager } from "./utils/preview-window";
@@ -119,7 +120,7 @@ export function start(): void {
   // crash arriving mid-shutdown would be swallowed by the re-entrancy guard and
   // the in-flight shutdown(0) would exit 0, hiding the crash from supervisors.
   let finalExitCode = 0;
-  let shutdownReason: "idle" | "signal" | "crash" = "signal";
+  let shutdownReason: "idle" | "signal" | "crash" | "deferred" = "signal";
   let shutdownFailureSignal: FailureSignal | null = null;
   // Anonymous crash detail (class name, syscall, stack fingerprint, phase),
   // merged into the final toolserver:stop only on a real crash. Left null on
@@ -541,39 +542,73 @@ export function start(): void {
           /* swallow */
         }
       });
-      // A bind failure (EADDRINUSE from a stale server still holding the port,
-      // EACCES on a privileged port) is the socket half of the startup
-      // restart-loop population this diagnostics work exists to surface. Route it
-      // through crashShutdown so `err.code` is captured as error_syscall on a
-      // reason:"crash" stop instead of exiting silently with no telemetry at all.
-      // `listening` is still false here (the listen callback never ran), so the
-      // crash is correctly phased as "startup"; crashShutdown handles teardown,
-      // telemetry drain, and exit.
+      // Bind failure handling. EACCES (privileged port) and other errors are
+      // genuine faults → crashShutdown, which captures `err.code` as
+      // error_syscall on a reason:"crash" stop and handles teardown + telemetry
+      // drain + exit.
+      //
+      // EADDRINUSE is special: it means another server already owns HOST:PORT.
+      // Unconditionally crashing feeds a supervisor respawn → re-bind → crash
+      // loop — the 0.16.0 crash telemetry's `toolserver_bind` population (one
+      // machine alone: 785 crashes, ~1s uptime, 0 tool calls served, never
+      // serving anything). If a healthy argent tool-server already answers on
+      // the port, this instance is redundant, so shut down cleanly (exit 0) and
+      // defer to the existing one instead of looping. Only when nothing healthy
+      // owns the port (a foreign holder, or a wedged peer) do we still crash, so
+      // a genuinely stuck port stays visible.
+      const bindSignal: FailureSignal = {
+        error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
+        failure_stage: "toolserver_bind",
+        failure_area: "tool_server",
+        error_kind: "crash",
+      };
       server.on("error", (err: NodeJS.ErrnoException) => {
-        eventLog?.error({
-          type: "tool_server.bind_failed",
-          msg: `Tool server failed to bind ${HOST}:${PORT}.`,
-          host: HOST,
-          port: PORT,
-          failureSignal: {
-            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
-            failure_stage: "toolserver_bind",
-            failure_area: "tool_server",
-            error_kind: "crash",
-          },
-        });
         const code = err.code ? `${err.code}: ` : "";
-        crashShutdown(
-          `Failed to bind ${HOST}:${PORT}`,
-          `${code}${err.message}`,
-          {
-            error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
-            failure_stage: "toolserver_bind",
-            failure_area: "tool_server",
-            error_kind: "crash",
-          },
-          err
-        );
+        // The crash-tagged bind_failed event is emitted only on the legs that
+        // actually crash — a clean deferral must not count as a bind crash in
+        // the event log any more than in the stop-reason telemetry.
+        const crashBind = () => {
+          eventLog?.error({
+            type: "tool_server.bind_failed",
+            msg: `Tool server failed to bind ${HOST}:${PORT}.`,
+            host: HOST,
+            port: PORT,
+            failureSignal: {
+              error_code: bindSignal.error_code,
+              failure_stage: bindSignal.failure_stage,
+              failure_area: bindSignal.failure_area,
+              error_kind: bindSignal.error_kind,
+            },
+          });
+          crashShutdown(`Failed to bind ${HOST}:${PORT}`, `${code}${err.message}`, bindSignal, err);
+        };
+
+        if (err.code === "EADDRINUSE") {
+          void probeArgentToolServer(HOST, PORT).then((isArgentPeer) => {
+            if (!isArgentPeer) {
+              crashBind();
+              return;
+            }
+            process.stderr.write(
+              `Another argent tool-server already owns ${HOST}:${PORT}; deferring to it (redundant instance).\n`
+            );
+            eventLog?.info({
+              type: "tool_server.deferred_to_existing",
+              msg: `Deferred to an existing tool-server on ${HOST}:${PORT}.`,
+              host: HOST,
+              port: PORT,
+            });
+            // Clean stop (not a crash): removes this redundant instance from the
+            // reason:"crash" restart-loop population. Stamped "deferred" (not the
+            // default "signal") so a supervisor that relaunches on ANY exit still
+            // shows up in the stop-reason telemetry as a deferral loop rather
+            // than blending into ordinary SIGINT/SIGTERM churn.
+            shutdownReason = "deferred";
+            void shutdown?.(0);
+          });
+          return;
+        }
+        crashBind();
       });
       // Bolt the per-Chromium-device WebSocket upgrade handler onto the live
       // server. Must happen AFTER `listen()` so the http.Server instance

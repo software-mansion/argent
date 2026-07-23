@@ -2,6 +2,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell } from "../../../utils/adb";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
+import { httpDeepLinkNote } from "../deep-link-note";
 
 export const androidImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult> = {
   requires: ["adb"],
@@ -27,6 +28,6 @@ export const androidImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlRe
         error_kind: "subprocess",
       });
     }
-    return { opened: true, url: params.url };
+    return { opened: true, url: params.url, note: httpDeepLinkNote(params.url) };
   },
 };

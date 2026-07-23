@@ -283,6 +283,64 @@ function getNativeDevtoolsSocketPath(udid: string): string {
   return `/tmp/argent-nd-${udid.slice(0, 8)}.sock`;
 }
 
+/**
+ * Bind the per-UDID unix socket with the same guarded, self-healing treatment
+ * the TCP branch gets. Exported for testing.
+ *
+ * Without an "error" listener a bind failure — EADDRINUSE from a live/concurrent
+ * per-UDID server, or EEXIST from a socket a concurrent server re-created in the
+ * window after the caller's pre-unlink — fires an unhandled "error" event, which
+ * Node throws as an uncaught exception and crashes the whole tool-server at
+ * startup. That is the dominant crash source in 0.16.0 telemetry (native-devtools
+ * socket bind, EADDRINUSE/EEXIST across ~14 users). Here that becomes a rejected
+ * promise carrying a coded FailureError, so the factory's retry + failure-
+ * telemetry path handles it and only this one service fails.
+ *
+ * On EADDRINUSE/EEXIST the stale entry is cleared and the bind retried once — a
+ * self-heal for the unlink→listen race with a concurrent same-UDID server.
+ */
+export function bindNativeDevtoolsUnixSocket(
+  server: net.Server,
+  socketPath: string
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let retried = false;
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    const onError = (err: NodeJS.ErrnoException) => {
+      if ((err.code === "EADDRINUSE" || err.code === "EEXIST") && !retried) {
+        retried = true;
+        try {
+          fs.unlinkSync(socketPath);
+        } catch {
+          /* nothing to remove */
+        }
+        server.listen(socketPath);
+        return;
+      }
+      server.off("listening", onListening);
+      server.off("error", onError);
+      server.close();
+      reject(
+        new FailureError(
+          `native-devtools failed to bind unix socket ${socketPath}: ${err.code ?? err.message}`,
+          {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_SOCKET_BIND_FAILED,
+            failure_stage: "native_devtools_socket_bind",
+            failure_area: "tool_server",
+            error_kind: "network",
+          }
+        )
+      );
+    };
+    server.on("error", onError);
+    server.once("listening", onListening);
+    server.listen(socketPath);
+  });
+}
+
 export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, DeviceInfo> = {
   namespace: NATIVE_DEVTOOLS_NAMESPACE,
 
@@ -567,7 +625,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       // written — lands on our listener.
       await host.startProxy(udid, endpoint.port!);
     } else {
-      server.listen(socketPath);
+      await bindNativeDevtoolsUnixSocket(server, socketPath);
     }
 
     // Tolerate ensureEnv failure: throwing here would leak `server` — the

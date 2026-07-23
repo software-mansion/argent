@@ -80,6 +80,45 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("stamps nesting depth on expanded fragment steps (omitted at top level)", async () => {
+    await writeFlow("inner", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "deepest" }],
+    });
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "tap", args: { x: 0.5 } },
+        { kind: "run", flow: "inner" },
+      ],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "login" },
+        { kind: "echo", message: "done" },
+      ],
+    });
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    const result = asRun(
+      await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE })
+    );
+
+    // Each run marker sits at its enclosing depth; the fragment it expands runs
+    // one deeper. Top-level steps omit the field entirely, so a flow with no
+    // block directives reports byte-identically to the pre-depth shape.
+    expect(result.steps.map((s) => `${s.kind}:${s.depth ?? 0}`)).toEqual([
+      "run:0",
+      "tool:1",
+      "run:1",
+      "echo:2",
+      "echo:0",
+    ]);
+    expect(result.steps[0].depth).toBeUndefined();
+    expect(result.steps[4].depth).toBeUndefined();
+  });
+
   it("expands a referenced e2e flow inline, launch step and all", async () => {
     await writeFlow("other-e2e", {
       executionPrerequisite: "",
@@ -119,6 +158,14 @@ describe("flow composition (run:)", () => {
     );
     const errored = result.steps.find((s) => s.status === "error");
     expect(errored?.reason).toMatch(/cyclic/i);
+    // The cycle is detected two fragments down; its error marker keeps that
+    // depth (the fail() path stamps depthOf(scope) like the success marker),
+    // so the error line renders inside the block that caused it.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.depth ?? 0}`)).toEqual([
+      "run:pass:0",
+      "run:pass:1",
+      "run:error:2",
+    ]);
   });
 
   it("executes a leading launch step from scratch (restart-app) and reports it", async () => {

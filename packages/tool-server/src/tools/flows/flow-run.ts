@@ -136,6 +136,14 @@ export interface StepReport {
   snapshotKey?: string;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
+  /**
+   * Nesting depth for display: omitted at top level, +1 inside each block
+   * directive's expanded steps (a `when:` block's guarded steps, a `run:`
+   * fragment's steps). Renderers indent by it without knowing which directives
+   * nest — the report is a flat list with no block-end marker, so depth cannot
+   * be reconstructed downstream.
+   */
+  depth?: number;
 }
 
 export interface FlowRunResult {
@@ -431,8 +439,9 @@ Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch)
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`);
-\`scroll-to\` scrolls (momentum-free) until a target is visible; \`await\` waits for a UI
-condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
+\`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
+(\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`await\` waits
+for a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot against a stored baseline (a missing baseline fails the step — set updateBaselines
 to adopt the current screen); \`echo\` annotates; \`run\` executes a referenced fragment inline.
 A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
@@ -506,7 +515,11 @@ returns a notice with the prerequisite instead of running.`,
 
       let aborted: boolean;
       try {
-        await execSteps(state, flow.steps, params.name, [params.name]);
+        await execSteps(state, flow.steps, {
+          flow: params.name,
+          runStack: [params.name],
+          depth: 0,
+        });
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
         // status-bar restore / chromium teardown lands after every step
@@ -735,6 +748,10 @@ function stepTarget(step: FlowStep): string | undefined {
       const dir = step.direction !== "down" ? ` (${step.direction})` : "";
       return `${selectorLabel(step.target)}${dir}`;
     }
+    case "pinch": {
+      const scale = `scale ${step.scale}`;
+      return step.selector ? `${selectorLabel(step.selector)} (${scale})` : scale;
+    }
     case "snapshot":
       return `"${step.name}"`;
     default:
@@ -742,13 +759,36 @@ function stepTarget(step: FlowStep): string | undefined {
   }
 }
 
+/**
+ * Where a list of steps executes: the fragment they are attributed to
+ * (StepReport.flow), the `run:` chain for the cycle/depth guards, and the
+ * nesting depth block directives accumulate for display. Threaded as one value
+ * so a new block directive only has to hand its children {@link childScope}.
+ */
+interface StepScope {
+  flow: string;
+  runStack: string[];
+  depth: number;
+}
+
+/** The scope a block directive's children execute in — one level deeper. */
+function childScope(
+  scope: StepScope,
+  overrides: Partial<Omit<StepScope, "depth">> = {}
+): StepScope {
+  return { ...scope, ...overrides, depth: scope.depth + 1 };
+}
+
+/**
+ * The depth stamp for a report — omitted at top level, so a flow with no block
+ * directives produces a report byte-identical to the pre-depth shape.
+ */
+function depthOf(scope: StepScope): Pick<StepReport, "depth"> {
+  return scope.depth ? { depth: scope.depth } : {};
+}
+
 /** Execute a list of steps, appending reports to state. Honors hard-stop + abort. */
-async function execSteps(
-  state: ExecState,
-  steps: FlowStep[],
-  sourceFlow: string,
-  runStack: string[]
-): Promise<void> {
+async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope): Promise<void> {
   for (const step of steps) {
     const index = state.reports.length;
 
@@ -757,15 +797,16 @@ async function execSteps(
         index,
         kind: step.kind,
         status: "skip",
-        flow: sourceFlow,
+        flow: scope.flow,
         target: stepTarget(step),
+        ...depthOf(scope),
         // Carry the echo's message so a skipped narration renders as a skip
         // line rather than vanishing — matching reportBlockSkipped.
         ...(step.kind === "echo" ? { message: step.message } : {}),
       });
       // A when block's literal steps are known — expand them so the report
       // keeps one line per authored step no matter where the stop landed.
-      if (step.kind === "when") reportBlockSkipped(state, step.steps, sourceFlow);
+      if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope));
       continue;
     }
     if (state.signal?.aborted) {
@@ -775,24 +816,27 @@ async function execSteps(
         kind: step.kind,
         status: "skip",
         reason: "run aborted",
-        flow: sourceFlow,
+        flow: scope.flow,
         target: stepTarget(step),
+        ...depthOf(scope),
         ...(step.kind === "echo" ? { message: step.message } : {}),
       });
-      if (step.kind === "when") reportBlockSkipped(state, step.steps, sourceFlow, "run aborted");
+      if (step.kind === "when") {
+        reportBlockSkipped(state, step.steps, childScope(scope), "run aborted");
+      }
       continue;
     }
 
     if (step.kind === "run") {
-      await execRunStep(state, step, runStack);
+      await execRunStep(state, step, scope);
       continue;
     }
     if (step.kind === "when") {
-      await execWhenStep(state, step, sourceFlow, runStack);
+      await execWhenStep(state, step, scope);
       continue;
     }
 
-    const report = await execLeafStep(state, step, index, sourceFlow);
+    const report = await execLeafStep(state, step, index, scope);
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
@@ -807,16 +851,17 @@ function describeWhenCondition(cond: WhenCondition): string {
 /**
  * Report every step of a `when:` block that will not run as skipped — so a
  * run where the block was skipped (unmet guard, errored guard, hard stop, or
- * cancellation) produces the same report shape (one line per authored step)
- * as a run where it entered, and reports stay comparable run-to-run. Nested
- * when blocks expand (their literal steps are known); a `run:` composition
- * stays one line, matching how post-hard-stop skips report a fragment that
- * was never loaded.
+ * cancellation) produces the same report shape (one line per authored step,
+ * at the same depth) as a run where it entered, and reports stay comparable
+ * run-to-run. Nested when blocks expand (their literal steps are known); a
+ * `run:` composition stays one line, matching how post-hard-stop skips report
+ * a fragment that was never loaded. `scope` is the scope the steps would have
+ * executed in — already the block's child scope, not the marker's.
  */
 function reportBlockSkipped(
   state: ExecState,
   steps: FlowStep[],
-  sourceFlow: string,
+  scope: StepScope,
   reason?: string
 ): void {
   for (const step of steps) {
@@ -828,11 +873,12 @@ function reportBlockSkipped(
       // A `run:` line is attributed to the fragment it names, matching the
       // executed marker in execRunStep; everything else belongs to the
       // enclosing flow.
-      flow: step.kind === "run" ? step.flow : sourceFlow,
+      flow: step.kind === "run" ? step.flow : scope.flow,
       target: stepTarget(step),
+      ...depthOf(scope),
       ...(step.kind === "echo" ? { message: step.message } : {}),
     });
-    if (step.kind === "when") reportBlockSkipped(state, step.steps, sourceFlow, reason);
+    if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope), reason);
   }
 }
 
@@ -848,12 +894,15 @@ function reportBlockSkipped(
 async function execWhenStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "when" }>,
-  sourceFlow: string,
-  runStack: string[]
+  scope: StepScope
 ): Promise<void> {
   const index = state.reports.length;
   const label = describeWhenCondition(step.condition);
   const target = stepTarget(step);
+  // The marker sits at the enclosing depth; the guarded steps one deeper —
+  // whether they execute or report as skipped.
+  const marker = { index, kind: "when", flow: scope.flow, target, ...depthOf(scope) } as const;
+  const inner = childScope(scope);
 
   let met: boolean;
   if (step.condition.kind === "platform") {
@@ -866,28 +915,18 @@ async function execWhenStep(
   } else {
     const probe = await probeWhenCondition(state, step.condition);
     if (probe.aborted) {
-      pushReport(state, {
-        index,
-        kind: "when",
-        status: "skip",
-        reason: "run aborted",
-        flow: sourceFlow,
-        target,
-      });
-      reportBlockSkipped(state, step.steps, sourceFlow, "run aborted");
+      pushReport(state, { ...marker, status: "skip", reason: "run aborted" });
+      reportBlockSkipped(state, step.steps, inner, "run aborted");
       return;
     }
     if (!probe.ok && probe.indeterminate) {
       pushReport(state, {
-        index,
-        kind: "when",
+        ...marker,
         status: "error",
         reason: `could not evaluate when guard (${label}): ${probe.reason}`,
-        flow: sourceFlow,
-        target,
       });
       state.stopped = true;
-      reportBlockSkipped(state, step.steps, sourceFlow, "when guard errored");
+      reportBlockSkipped(state, step.steps, inner, "when guard errored");
       return;
     }
     met = probe.ok;
@@ -896,47 +935,44 @@ async function execWhenStep(
   if (!met) {
     const n = step.steps.length;
     pushReport(state, {
-      index,
-      kind: "when",
+      ...marker,
       status: "skip",
       reason: `condition not met (${label}) — block skipped (${n} step${n === 1 ? "" : "s"})`,
-      flow: sourceFlow,
-      target,
     });
-    reportBlockSkipped(state, step.steps, sourceFlow, "when block skipped");
+    reportBlockSkipped(state, step.steps, inner, "when block skipped");
     return;
   }
 
-  // Marker for the block, then the guarded steps inline — same scope, same
-  // fragment attribution, failures hard-stop as anywhere else.
-  pushReport(state, {
-    index,
-    kind: "when",
-    status: "pass",
-    reason: `condition met (${label})`,
-    flow: sourceFlow,
-    target,
-  });
-  await execSteps(state, step.steps, sourceFlow, runStack);
+  // Marker for the block, then the guarded steps inline — same fragment
+  // attribution, one level deeper, failures hard-stop as anywhere else.
+  pushReport(state, { ...marker, status: "pass", reason: `condition met (${label})` });
+  await execSteps(state, step.steps, inner);
 }
 
 async function execRunStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "run" }>,
-  runStack: string[]
+  scope: StepScope
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
 
   const fail = (reason: string): void => {
-    pushReport(state, { index, kind: "run", status: "error", flow: target, reason });
+    pushReport(state, {
+      index,
+      kind: "run",
+      status: "error",
+      flow: target,
+      reason,
+      ...depthOf(scope),
+    });
     state.stopped = true;
   };
 
-  if (runStack.includes(target)) {
-    return fail(`cyclic flow reference: ${[...runStack, target].join(" → ")}`);
+  if (scope.runStack.includes(target)) {
+    return fail(`cyclic flow reference: ${[...scope.runStack, target].join(" → ")}`);
   }
-  if (runStack.length >= MAX_RUN_DEPTH) {
+  if (scope.runStack.length >= MAX_RUN_DEPTH) {
     return fail("max run depth exceeded");
   }
 
@@ -949,18 +985,29 @@ async function execRunStep(
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
-  // Marker for the composition point, then expand the fragment's steps inline.
-  pushReport(state, { index, kind: "run", status: "pass", flow: target });
-  await execSteps(state, fragment.steps, target, [...runStack, target]);
+  // Marker for the composition point, then expand the fragment's steps inline,
+  // one level deeper, attributed to the fragment.
+  pushReport(state, { index, kind: "run", status: "pass", flow: target, ...depthOf(scope) });
+  await execSteps(
+    state,
+    fragment.steps,
+    childScope(scope, { flow: target, runStack: [...scope.runStack, target] })
+  );
 }
 
 async function execLeafStep(
   state: ExecState,
   step: FlowStep,
   index: number,
-  sourceFlow: string
+  scope: StepScope
 ): Promise<StepReport> {
-  const base = { index, kind: step.kind, flow: sourceFlow, target: stepTarget(step) } as const;
+  const base = {
+    index,
+    kind: step.kind,
+    flow: scope.flow,
+    target: stepTarget(step),
+    ...depthOf(scope),
+  } as const;
   const { registry, ctx, device, signal } = state;
 
   switch (step.kind) {
@@ -980,7 +1027,8 @@ async function execLeafStep(
     case "type":
     case "await":
     case "assert":
-    case "scroll-to": {
+    case "scroll-to":
+    case "pinch": {
       // A directive that *throws* (vs. reporting a failed outcome) — e.g. a
       // touch gesture on a focus-driven TV target — must still land in the
       // structured report rather than abort the whole run unreported.

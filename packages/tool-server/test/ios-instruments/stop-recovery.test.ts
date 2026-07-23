@@ -192,6 +192,10 @@ describe("native-profiler-stop recovery branch", () => {
     expect(api.recordingTimedOut).toBe(false);
   });
 
+  it("is declared longRunning so the MCP fetch timeout can't abort a slow stop", () => {
+    expect(nativeProfilerStopTool.longRunning).toBe(true);
+  });
+
   it("falls through to the unrecoverable error when no recovery flag is set", async () => {
     const api = await buildSession();
     api.traceFile = FAKE_TRACE; // a stale traceFile alone must not trigger recovery

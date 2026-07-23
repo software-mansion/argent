@@ -31,6 +31,21 @@ const zodSchema = z.object({
         "E.g. 0.6 = fingers 60% of screen apart. " +
         "Use a larger endDistance than startDistance to pinch out (zoom in)."
     ),
+  endCenterX: z
+    .number()
+    .optional()
+    .describe(
+      "Final horizontal center of the pinch: normalized 0.0–1.0. When set, the centroid drifts " +
+        "linearly from centerX to endCenterX over the gesture (e.g. to keep expanding fingers " +
+        "on-screen near an edge). Omit for a fixed center."
+    ),
+  endCenterY: z
+    .number()
+    .optional()
+    .describe(
+      "Final vertical center of the pinch: normalized 0.0–1.0. When set, the centroid drifts " +
+        "linearly from centerY to endCenterY over the gesture. Omit for a fixed center."
+    ),
   angle: z
     .number()
     .optional()
@@ -59,7 +74,7 @@ export const gesturePinchTool: ToolDefinition<Params, Result> = {
   description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
 startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
 Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
-Auto-generates interpolated frames at ~60fps. The angle parameter controls the axis (0 = horizontal, 90 = vertical).
+Auto-generates interpolated frames at ~60fps. The angle parameter controls the axis (0 = horizontal, 90 = vertical). Optional endCenterX/endCenterY drift the centroid linearly over the gesture (omitted = fixed center).
 Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,
@@ -74,6 +89,8 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
     const angleRad = (angleDeg * Math.PI) / 180;
     const cosA = Math.cos(angleRad);
     const sinA = Math.sin(angleRad);
+    const endCenterX = params.endCenterX ?? params.centerX;
+    const endCenterY = params.endCenterY ?? params.centerY;
 
     let timestampMs = 0;
 
@@ -81,11 +98,13 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       const t = i / steps;
       const dist = params.startDistance + (params.endDistance - params.startDistance) * t;
       const halfDist = dist / 2;
+      const cx = params.centerX + (endCenterX - params.centerX) * t;
+      const cy = params.centerY + (endCenterY - params.centerY) * t;
 
-      const x1 = params.centerX - halfDist * cosA;
-      const y1 = params.centerY - halfDist * sinA;
-      const x2 = params.centerX + halfDist * cosA;
-      const y2 = params.centerY + halfDist * sinA;
+      const x1 = cx - halfDist * cosA;
+      const y1 = cy - halfDist * sinA;
+      const x2 = cx + halfDist * cosA;
+      const y2 = cy + halfDist * sinA;
 
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();

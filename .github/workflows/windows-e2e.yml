@@ -1,0 +1,190 @@
+name: Windows E2E
+
+# Proves Argent runs on Windows. iOS Simulator is macOS-only (Apple), so
+# "Argent on Windows" means the Android + Chromium host control plane.
+#
+# This job, windows-chromium, has the tool-server drive a real headless Chrome
+# over CDP (discover → screenshot → describe → tap → observe the DOM change).
+# Chromium control is pure host-side TypeScript, so a hosted Windows runner (no
+# virtualization) verifies it fully. It also runs the cross-platform resolver
+# unit tests natively on Windows and confirms adb.exe resolution.
+#
+# The simulator-server.exe itself (the binary the Android path spawns) lives in
+# the private radon repo, so it can't be built here without a cross-repo token.
+# Its Windows build + smoke-run is verified in radon CI instead — see the
+# build_argent_windows job in radon's simulator-server-ci workflow (companion
+# PR). WHPX is available on windows-latest (Server 2025), so an Android emulator
+# does boot on a hosted runner — that is where the boot-device stdio fix was
+# verified. The full Android emulator E2E still lives in radon CI alongside that
+# binary rather than here, because this repo can't build simulator-server.exe
+# without a cross-repo token; that path is therefore out of scope for this job.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/tool-server/src/utils/command-on-path.ts"
+      - "packages/tool-server/src/utils/android-binary.ts"
+      - "packages/tool-server/src/utils/adb.ts"
+      - "packages/tool-server/src/utils/check-deps.ts"
+      - "packages/tool-server/src/utils/vega-cli.ts"
+      - "packages/tool-server/src/utils/chromium-discovery.ts"
+      - "packages/tool-server/src/tools/simulator/stop-metro.ts"
+      - "packages/tool-server/src/tools/devices/boot-device.ts"
+      - "packages/tool-server/src/utils/device-shutdown.ts"
+      # The unit tests this job runs — editing one must re-run it here.
+      - "packages/tool-server/test/command-on-path.test.ts"
+      - "packages/tool-server/test/android-binary-windows.test.ts"
+      - "packages/tool-server/test/adb-resolve-avd-path.test.ts"
+      - "packages/tool-server/test/check-deps.test.ts"
+      - "packages/tool-server/test/http-dep-gate.test.ts"
+      - "packages/tool-server/test/stop-metro-netstat.test.ts"
+      - "packages/tool-server/test/device-shutdown.test.ts"
+      - "packages/native-devtools-ios/src/index.ts"
+      - "packages/native-devtools-ios/test/index.test.ts"
+      - "packages/argent/scripts/bundle-tools.cjs"
+      - "packages/argent/scripts/argent-simulator-server.cjs"
+      - "scripts/dev.cjs"
+      - "scripts/download-simulator-server.sh"
+      - "scripts/ci/windows-chromium-e2e.mjs"
+      - "scripts/ci/e2e-chromium-page.html"
+      - ".github/workflows/windows-e2e.yml"
+
+jobs:
+  windows-chromium:
+    name: Chromium control plane + resolver unit tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fix rollup native bindings (win32)
+        # vitest 4 transforms via rollup, whose platform binary is an optional
+        # dep npm ci sometimes skips; install the win32 one explicitly.
+        run: npm install @rollup/rollup-win32-x64-msvc --no-save
+
+      - name: Build workspace
+        run: npx tsc --build
+
+      - name: Resolver unit tests on Windows (tool-server)
+        # The win32 branches added for Windows support, exercised on a real
+        # Windows host (real `where.exe`, real `.exe` access semantics) rather
+        # than a mocked platform. The broader suite has POSIX-only fixtures, so
+        # this is the curated cross-platform subset.
+        working-directory: packages/tool-server
+        run: >
+          npx vitest run
+          test/command-on-path.test.ts
+          test/android-binary-windows.test.ts
+          test/adb-resolve-avd-path.test.ts
+          test/check-deps.test.ts
+          test/http-dep-gate.test.ts
+          test/stop-metro-netstat.test.ts
+          test/device-shutdown.test.ts
+
+      - name: Resolver unit tests on Windows (native-devtools-ios)
+        working-directory: packages/native-devtools-ios
+        run: npx vitest run
+
+      - name: adb.exe resolves on Windows
+        # windows-latest ships the Android SDK with ANDROID_HOME/ANDROID_SDK_ROOT
+        # set but does NOT put platform-tools on PATH — exactly the gap the
+        # Windows resolver closes (`.exe` suffix + SDK-root fallback). Resolve
+        # adb the way the tool-server does, then run the *resolved* path (a bare
+        # `adb` wouldn't be found, which is the whole point).
+        shell: pwsh
+        run: |
+          $adb = node -e "require('./packages/tool-server/dist/utils/android-binary.js').resolveAndroidBinary('adb').then(p => process.stdout.write(p || ''))"
+          Write-Host "resolved adb -> $adb"
+          if ([string]::IsNullOrWhiteSpace($adb) -or -not $adb.ToLower().EndsWith('adb.exe')) {
+            Write-Error "expected resolveAndroidBinary('adb') to return an adb.exe path"
+            exit 1
+          }
+          if (-not (Test-Path $adb)) { Write-Error "resolved adb path does not exist: $adb"; exit 1 }
+          & $adb version
+
+      - name: Locate Chrome
+        id: chrome
+        run: |
+          $candidates = @(
+            "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+            "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+            "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+          )
+          $chrome = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $chrome) { Write-Error "Google Chrome not found on this runner"; exit 1 }
+          Write-Host "Chrome: $chrome"
+          "path=$chrome" >> $env:GITHUB_OUTPUT
+
+      # Launch Chrome + the tool-server AND run the E2E in one step. On Windows
+      # runners, `Start-Process` background processes don't reliably survive into
+      # a later step (unlike `nohup` on Linux), so both must stay in scope for
+      # the duration of the E2E — hence a single step rather than three.
+      - name: Launch Chrome + tool-server and run Chromium E2E
+        env:
+          ARGENT_E2E_URL: http://127.0.0.1:3033
+        run: |
+          $page = "file:///" + ((Resolve-Path scripts/ci/e2e-chromium-page.html).Path -replace '\\','/')
+          $udd  = Join-Path $env:RUNNER_TEMP "chrome-e2e-profile"
+          $chromeLog = Join-Path $env:RUNNER_TEMP "chrome.log"
+          Start-Process -FilePath "${{ steps.chrome.outputs.path }}" -ArgumentList @(
+            "--headless=new","--remote-debugging-port=9222","--user-data-dir=$udd",
+            "--no-first-run","--no-default-browser-check","--disable-gpu",$page
+          ) -RedirectStandardOutput $chromeLog -RedirectStandardError "$chromeLog.err" | Out-Null
+          $cdpUp = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:9222/json/version" -TimeoutSec 2
+              if ($r.StatusCode -eq 200) { Write-Host "CDP up at t+${i}s"; $cdpUp = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 1
+          }
+          if (-not $cdpUp) { Get-Content "$chromeLog.err" -ErrorAction SilentlyContinue; Write-Error "Chrome CDP never came up on :9222"; exit 1 }
+
+          $env:ARGENT_PORT = "3033"
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.argent" | Out-Null
+          $tsLog = Join-Path $env:RUNNER_TEMP "tool-server.log"
+          Start-Process -FilePath "node" -ArgumentList @("packages/tool-server/dist/index.js","start") `
+            -RedirectStandardOutput $tsLog -RedirectStandardError "$tsLog.err" | Out-Null
+          $tsUp = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:3033/tools" -TimeoutSec 2
+              if ($r.StatusCode -eq 200) { Write-Host "tool-server up at t+${i}s"; $tsUp = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 1
+          }
+          if (-not $tsUp) {
+            Write-Host "--- tool-server.log ---"; Get-Content $tsLog -ErrorAction SilentlyContinue
+            Write-Host "--- tool-server.err ---"; Get-Content "$tsLog.err" -ErrorAction SilentlyContinue
+            Write-Error "tool-server never came up on :3033"; exit 1
+          }
+
+          $env:ARGENT_E2E_OUT = Join-Path $env:RUNNER_TEMP "e2e"
+          node scripts/ci/windows-chromium-e2e.mjs
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-chromium-e2e
+          path: |
+            ${{ runner.temp }}/e2e/*.png
+            ${{ runner.temp }}/tool-server.log
+            ${{ runner.temp }}/tool-server.log.err
+            ${{ runner.temp }}/chrome.log
+            ${{ runner.temp }}/chrome.log.err
+          if-no-files-found: warn
+          retention-days: 7

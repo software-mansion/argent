@@ -24,6 +24,10 @@ import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
+import {
+  buildScreenRecordingNote,
+  getActiveScreenRecordings,
+} from "./utils/screen-recording-reminder";
 import { createPreviewRouter } from "./preview";
 import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
@@ -869,9 +873,18 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             // ignore
           }
         }
-        const notePayload = shouldNotify
-          ? { note: buildUpdateNote(currentVersion, installableVersion ?? "unknown") }
-          : {};
+        const notes: string[] = shouldNotify
+          ? [buildUpdateNote(currentVersion, installableVersion ?? "unknown")]
+          : [];
+        // Unlike the update note this is per-call and never suppressed: an
+        // in-flight (or ended-but-unretrieved) screen recording needs a
+        // `screen-recording-stop`, and the reminder is what keeps the agent
+        // from forgetting the capture it started.
+        const activeRecordings = getActiveScreenRecordings();
+        if (activeRecordings.length > 0) {
+          notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
+        }
+        const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
         if (wantsStream) {
           writeLine({ event: "result", data, ...notePayload });
           res.end();

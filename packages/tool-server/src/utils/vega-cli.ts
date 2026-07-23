@@ -12,7 +12,8 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { formatSubprocessFailure } from "./subprocess-error";
-import { listRunningVvdConsolePorts } from "./vega-process";
+import { listRunningVvdConsolePorts, PS_BIN } from "./vega-process";
+import { commandOnPath } from "./command-on-path";
 
 const execFileAsync = promisify(execFile);
 
@@ -43,18 +44,6 @@ async function isExecutable(p: string): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function commandOnPath(name: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], {
-      timeout: 2_000,
-    });
-    const path = stdout.trim();
-    return path || null;
-  } catch {
-    return null;
   }
 }
 
@@ -184,10 +173,17 @@ async function reapVegaGroup(child: ChildProcess): Promise<void> {
  * group kill is the primary mechanism; this is insurance).
  */
 async function collectDescendantPids(rootPid: number): Promise<number[]> {
-  const { stdout } = await execFileAsync("ps", ["-A", "-o", "pid=,ppid="], {
-    timeout: 1_500,
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(PS_BIN, ["-A", "-o", "pid=,ppid="], {
+      timeout: 1_500,
+      maxBuffer: 16 * 1024 * 1024,
+    }));
+  } catch {
+    // `ps` unavailable / timed out — honor the documented [] contract (the group
+    // kill is the primary mechanism; this walk is only insurance).
+    return [];
+  }
   const childrenByParent = new Map<number, number[]>();
   for (const line of stdout.split("\n")) {
     const m = line.trim().match(/^(\d+)\s+(\d+)$/);
@@ -218,10 +214,15 @@ async function collectDescendantPids(rootPid: number): Promise<number[]> {
  * itself). Used by reapLingeringGroupMembers; returns [] if `ps` is unavailable.
  */
 async function pgidMembers(pgid: number): Promise<number[]> {
-  const { stdout } = await execFileAsync("ps", ["-A", "-o", "pid=,pgid="], {
-    timeout: 1_500,
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(PS_BIN, ["-A", "-o", "pid=,pgid="], {
+      timeout: 1_500,
+      maxBuffer: 16 * 1024 * 1024,
+    }));
+  } catch {
+    return []; // `ps` unavailable / timed out — honor the documented [] contract.
+  }
   const members: number[] = [];
   for (const line of stdout.split("\n")) {
     const m = line.trim().match(/^(\d+)\s+(\d+)$/);

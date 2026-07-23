@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import * as crypto from "node:crypto";
 import type { ToolDefinition } from "@argent/registry";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
@@ -489,7 +490,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
     ),
   onScreenOnly: z
     .boolean()
@@ -544,7 +545,7 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
   // for DOM-tree discovery on Chromium.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
@@ -576,7 +577,7 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
     const deviceLine = [
       `device: ${api.deviceName}`,
       `app: ${api.appName}`,
-      ...(api.logicalDeviceId ? [`udid: ${api.logicalDeviceId}`] : []),
+      ...(api.logicalDeviceId ? [`logicalDeviceId: ${api.logicalDeviceId}`] : []),
     ].join(" | ");
 
     return `[${deviceLine}]\n${tree}`;

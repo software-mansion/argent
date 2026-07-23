@@ -39,6 +39,12 @@ interface FlagsFile {
 export interface FlagDefinition {
   readonly name: string;
   readonly description: string;
+  // Opt-OUT flag: the feature is ON when the flag has never been set. `argent
+  // disable <name>` then persists an explicit `false` (rather than unsetting,
+  // which would revert to this ON default), and `argent enable <name>` / no
+  // entry both read as on. Omit (falsey) for the usual opt-IN flags, which are
+  // off until enabled. Runtime callers get the default via `isFeatureEnabled`.
+  readonly defaultEnabled?: boolean;
 }
 
 // The flags argent recognizes. Adding one entry here is the only change needed
@@ -66,6 +72,12 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "tool-server-event-log",
     description: "Write structured tool-server lifecycle events to a JSONL file.",
   },
+  {
+    name: "video-watermark",
+    description:
+      "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",
+    defaultEnabled: true,
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the
@@ -87,17 +99,27 @@ export interface FlagsPathOptions {
   homeDir?: string;
 }
 
-export function resolveProjectRoot(startDir: string): string {
-  const initial = path.resolve(startDir);
-  let current = initial;
+/**
+ * Walk up from `startDir` looking for a project marker. Returns the marker
+ * directory, or `null` when no marker exists anywhere up to the fs root —
+ * callers that need to distinguish "found a project" from the cwd fallback
+ * (e.g. to warn before materializing `.argent` in an arbitrary directory)
+ * use this; everything else goes through `resolveProjectRoot`.
+ */
+export function findProjectRoot(startDir: string): string | null {
+  let current = path.resolve(startDir);
   while (true) {
     for (const marker of PROJECT_MARKERS) {
       if (fs.existsSync(path.join(current, marker))) return current;
     }
     const parent = path.dirname(current);
-    if (parent === current) return initial;
+    if (parent === current) return null;
     current = parent;
   }
+}
+
+export function resolveProjectRoot(startDir: string): string {
+  return findProjectRoot(startDir) ?? path.resolve(startDir);
 }
 
 export function getFlagsPath(scope: FlagScope, options: FlagsPathOptions = {}): string {
@@ -190,14 +212,33 @@ export function unsetFlag(name: string, scope: FlagScope, options: FlagsPathOpti
   return true;
 }
 
-// Effective value: project overrides global. Returns false when the flag is
-// not set in either scope — flags are opt-in.
-export function isFlagEnabled(name: string, options: FlagsPathOptions = {}): boolean {
+// Effective value: project overrides global. Returns the caller-supplied
+// `default` (false when omitted) if the flag is not set in either scope. Stays
+// storage-only and registry-decoupled — for a flag's *declared* default use
+// `isFeatureEnabled`.
+export function isFlagEnabled(
+  name: string,
+  options: FlagsPathOptions & { default?: boolean } = {}
+): boolean {
   // hasOwn, not `in`: otherwise prototype keys ("toString", "constructor", …)
   // resolve to a truthy Object.prototype member for a flag that was never set.
   const projectFlags = readFlags("project", options);
   if (Object.hasOwn(projectFlags, name)) return projectFlags[name]!;
   const globalFlags = readFlags("global", options);
   if (Object.hasOwn(globalFlags, name)) return globalFlags[name]!;
-  return false;
+  return options.default ?? false;
+}
+
+// Registry-aware read: resolves an unset flag to its declared `defaultEnabled`
+// (so an opt-out feature reads as on until disabled). This is the check runtime
+// features should use; `isFlagEnabled` stays the low-level storage primitive.
+export function isFeatureEnabled(
+  name: string,
+  options: FlagsPathOptions = {},
+  registry: readonly FlagDefinition[] = FLAG_REGISTRY
+): boolean {
+  return isFlagEnabled(name, {
+    ...options,
+    default: getFlagDefinition(name, registry)?.defaultEnabled ?? false,
+  });
 }
