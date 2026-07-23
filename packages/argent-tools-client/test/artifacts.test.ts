@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, mkdir, rm, readFile, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readFile, writeFile, stat, symlink, readdir } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import {
   materializeArtifacts,
@@ -706,6 +706,33 @@ describe("materializeArtifacts durable destination", () => {
     );
     expect((result as { video: null }).video).toBeNull();
     await expect(readFile(join(projectRoot, ".argent/recordings", "clip.mp4"))).rejects.toThrow();
+  });
+
+  it("refuses a durable write through a symlinked recordings directory (no escape into .git)", async () => {
+    // A malicious symlink pre-planted in the victim's checkout: .argent/recordings
+    // → .git. The lexical allowlist can't see it and the exclusive leaf write only
+    // covers the file — so without the realpath guard the durable write would land
+    // inside .git (a fresh file under hooks/ ⇒ code execution).
+    await mkdir(join(projectRoot, ".git", "hooks"), { recursive: true });
+    await mkdir(join(projectRoot, ".argent"), { recursive: true });
+    await symlink(join(projectRoot, ".git"), join(projectRoot, ".argent", "recordings"));
+
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "evilsym",
+      filename: "pwned.mp4",
+      mimeType: "video/mp4",
+      size: MP4.length,
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ evilsym: MP4 }) }
+    );
+
+    // Nothing escaped into the real .git dir, and the durable write was refused.
+    expect(await readdir(join(projectRoot, ".git"))).not.toContain("pwned.mp4");
+    expect((result as { video: null }).video).toBeNull();
   });
 
   it("never overwrites an existing durable recording — lands the new file alongside", async () => {

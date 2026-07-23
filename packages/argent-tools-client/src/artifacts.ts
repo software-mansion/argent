@@ -27,7 +27,7 @@
  *              otherwise.
  */
 
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, normalize, sep } from "node:path";
@@ -246,7 +246,9 @@ async function writeDurableUnique(
  * falls back to `null`, so an untrusted `saveDir` degrades to scratch rather than
  * writing somewhere dangerous.
  */
-export function durableSaveTarget(handle: ArtifactHandle): { dir: string; path: string } | null {
+export function durableSaveTarget(
+  handle: ArtifactHandle
+): { dir: string; path: string; base: string; rel: string } | null {
   if (!handle.saveDir || handle.archive) return null;
   const rel = normalize(handle.saveDir);
   if (
@@ -261,8 +263,36 @@ export function durableSaveTarget(handle: ArtifactHandle): { dir: string; path: 
   // non-escaping relative path, which still resolves *inside* the project root
   // (where `.git`, sources, and argent's own config live).
   if (!ALLOWED_SAVE_DIRS.has(rel)) return null;
-  const dir = join(durableBaseDir(), rel);
-  return { dir, path: join(dir, sanitizeSegment(handle.filename)) };
+  const base = durableBaseDir();
+  const dir = join(base, rel);
+  // `base` and `rel` are returned so the caller can re-check, after `mkdir`,
+  // that the *resolved* directory still lands at `<base>/<rel>` — the allowlist
+  // is a lexical check and can't see a symlink standing in for `dir` (or one of
+  // its segments) that redirects the write elsewhere. See {@link
+  // confineToRealBase}.
+  return { dir, path: join(dir, sanitizeSegment(handle.filename)), base, rel };
+}
+
+/**
+ * Guard against a symlinked durable directory. The allowlist and `..` checks in
+ * {@link durableSaveTarget} are purely lexical, and the exclusive leaf write
+ * only protects the final file — so if `.argent/recordings` (or an ancestor
+ * segment) is a **symlink** pre-planted in the victim's checkout, a durable
+ * write would follow it out of the intended directory (e.g. into `.git`, where
+ * a fresh file under `hooks/` is code execution). After the directory exists,
+ * verify its real path is exactly `<realpath(base)>/<rel>`: the base itself may
+ * legitimately be reached through a symlink (e.g. macOS `/var`→`/private/var`),
+ * but the `rel` portion must not traverse one. Returns false ⇒ the durable
+ * write is refused and the artifact degrades to the disposable cache.
+ */
+async function confineToRealBase(dir: string, base: string, rel: string): Promise<boolean> {
+  try {
+    const realDir = await realpath(dir);
+    const realBase = await realpath(base);
+    return realDir === join(realBase, rel);
+  } catch {
+    return false;
+  }
 }
 
 export interface MaterializedImage {
@@ -392,6 +422,13 @@ export async function materializeArtifacts(
         const filename = basename(saveTarget.path);
         try {
           await mkdir(saveTarget.dir, { recursive: true });
+          // Refuse to write through a symlinked durable directory — the lexical
+          // allowlist and the exclusive leaf write don't cover a symlink at
+          // `.argent/recordings` (or an ancestor) that redirects the whole write
+          // out of the intended tree (e.g. into `.git`).
+          if (!(await confineToRealBase(saveTarget.dir, saveTarget.base, saveTarget.rel))) {
+            return null;
+          }
           if (localPath) {
             // Already on this host — copy without buffering the whole file
             // (recordings can be large); only re-read if it's an inline image.
