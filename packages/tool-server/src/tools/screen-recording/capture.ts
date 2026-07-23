@@ -143,6 +143,7 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
   const child = api.captureProcess;
   const trim = api.trimStatic;
   api.framesWritten = 0;
+  api.trimmedAnyFrames = false;
 
   // Pacing baseline. `framesDue(paceBaseMs, now) + paceBaseFrames` is the frame
   // count the wall clock calls for. In trim mode the baseline is re-anchored
@@ -174,6 +175,7 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
         // Beyond the grace with no change: stop emitting. Nothing is written
         // until the screen moves again, collapsing the dead stretch.
         dead = true;
+        api.trimmedAnyFrames = true;
         return;
       }
       if (dead) {
@@ -519,8 +521,15 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     const durationMs = trimStatic
       ? Math.round((api.framesWritten / OUTPUT_FPS) * 1_000)
       : wallClockMs;
+    // Only surface the trim-only fields when trimming actually collapsed a
+    // static stretch. Without this guard a continuously-animating recording
+    // still reports a phantom trimmedMs of a frame or two purely from the
+    // framesWritten-vs-wall-clock rounding gap, contradicting the "present only
+    // when trimming applied" contract.
     const trimmedMs =
-      trimStatic && wallClockMs !== null ? Math.max(0, wallClockMs - durationMs!) : undefined;
+      trimStatic && wallClockMs !== null && api.trimmedAnyFrames
+        ? Math.max(0, wallClockMs - durationMs!)
+        : undefined;
     return {
       outputFile,
       sizeBytes: size,
