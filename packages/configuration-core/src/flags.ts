@@ -95,11 +95,12 @@ export interface FlagsPathOptions {
 }
 
 /**
- * Walk up from `startDir` looking for a project marker. Returns the marker
- * directory, or `null` when no marker exists anywhere up to the fs root —
- * callers that need to distinguish "found a project" from the cwd fallback
- * (e.g. to warn before materializing `.argent` in an arbitrary directory)
- * use this; everything else goes through `resolveProjectRoot`.
+ * Nearest ancestor of `startDir` (inclusive) that carries a {@link PROJECT_MARKERS}
+ * marker, or `null` when the walk reaches the filesystem root without finding one
+ * (i.e. `startDir` is not inside a project). Unlike {@link resolveProjectRoot},
+ * this reports the "no project" case distinctly, so callers that must not silently
+ * anchor at `startDir` can react — e.g. warn before materializing `.argent` in an
+ * arbitrary directory, or fall back to a global location.
  */
 export function findProjectRoot(startDir: string): string | null {
   let current = path.resolve(startDir);

@@ -27,12 +27,14 @@
  *              otherwise.
  */
 
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, normalize, sep } from "node:path";
 import { createHash } from "node:crypto";
 
 import { safeExtractTarGz } from "@argent/archive";
+import { argentHomeDir, findProjectRoot } from "@argent/configuration-core";
 
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
 export const ARTIFACT_MARKER = "__argentArtifact" as const;
@@ -60,6 +62,16 @@ export interface ArtifactHandle {
    * the download is a gzipped tar that the client unpacks back into a directory.
    */
   archive?: "tar.gz";
+  /**
+   * A relative directory the tool asked the artifact to be durably persisted
+   * into — e.g. `.argent/recordings` for a screen recording — instead of the
+   * ephemeral temp cache. The client resolves it against its own project root
+   * (the nearest ancestor with `.git`/`package.json`/`.argent`), falling back to
+   * its home when not in a project, and hardens it (relative, no `..`) before
+   * use — so for a remote `argent link` server the file lands *here*, on the
+   * client, in the project it belongs to. Absent ⇒ disposable temp-cache scratch.
+   */
+  saveDir?: string;
 }
 
 export function isArtifactHandle(value: unknown): value is ArtifactHandle {
@@ -103,6 +115,190 @@ export function artifactDir(deviceId?: string): string {
   const parts = [artifactsRoot(), projectSlug(), sessionId()];
   if (deviceId) parts.push(sanitizeSegment(deviceId));
   return join(...parts);
+}
+
+/**
+ * Base directory the `saveDir` hint is resolved against: the client's project
+ * root when it is inside one, else the user's home. This is what makes a
+ * recording land in the *project's* `.argent/recordings/` (shared with the rest
+ * of argent's per-project config) while still working — under the global
+ * `~/.argent/recordings/` — when the client is run from somewhere that isn't a
+ * project (no `.git`/`package.json`/`.argent` in any ancestor). Anchored at the
+ * project root rather than raw cwd so a recording taken from a subdirectory
+ * still lands in the one project-level `.argent`.
+ */
+function durableBaseDir(): string {
+  const projectRoot = findProjectRoot(process.cwd());
+  // argentHomeDir() is `<home>/.argent`; its parent is the home dir, and the
+  // `saveDir` hint (`.argent/recordings`) re-adds the `.argent` segment — so the
+  // global fallback resolves to `~/.argent/recordings`, matching the project
+  // case's `<root>/.argent/recordings`.
+  return projectRoot ?? dirname(argentHomeDir());
+}
+
+/**
+ * The durable save destinations the client will honor — a client-side allowlist.
+ * `saveDir` arrives on the wire from a possibly-remote or compromised `argent
+ * link` tool-server, so the set of directories an artifact may be persisted into
+ * is decided *here*, on the client, not by whatever value the server sends. Every
+ * entry is a project-relative directory under argent's own `.argent/` tree; the
+ * `filename` (sanitized to a single segment) then lands inside it. Add an entry
+ * when a new tool needs a durable home. Stored normalized so the wire value is
+ * compared in the same form regardless of separator style.
+ */
+const ALLOWED_SAVE_DIRS: ReadonlySet<string> = new Set([normalize(".argent/recordings")]);
+
+/**
+ * Hard ceiling on a single durable download, independent of the `size` the
+ * (possibly hostile) tool-server announces. A durable artifact is persisted
+ * where it survives temp-cache GC, so a remote/compromised `argent link` server
+ * must not be able to drive unbounded client memory use or a persistent disk
+ * fill under `.argent/recordings/` by streaming a body larger than it claimed.
+ * Well above any real recording (600 s cap at device-native h264), so it only
+ * ever trips a pathological stream. 2 GiB also stays within Node's `Buffer`
+ * limit, since the download is buffered before it is written.
+ */
+const MAX_DURABLE_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * Read a fetch response body into a Buffer, refusing to buffer more than `cap`
+ * bytes. Rejects early when the declared `Content-Length` already exceeds the
+ * cap, and otherwise aborts the stream the moment the accumulated bytes pass it
+ * — so a server that under-declares its `size` then streams an unbounded body
+ * can't exhaust memory. Falls back to a still-capped `arrayBuffer()` read when
+ * the response exposes no readable stream (e.g. an injected test fetch). Returns
+ * null when the cap is exceeded.
+ */
+async function readCapped(res: Response, cap: number): Promise<Buffer | null> {
+  const headers = (res as { headers?: { get?: (k: string) => string | null } }).headers;
+  const declared = Number(headers?.get?.("content-length"));
+  if (Number.isFinite(declared) && declared > cap) return null;
+
+  const body = (res as { body?: ReadableStream<Uint8Array> | null }).body;
+  if (!body?.getReader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > cap ? null : buf;
+  }
+
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > cap) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Persist a durable artifact without ever overwriting an existing file. The
+ * artifact's own filename is tried first; if it is already taken, it lands
+ * alongside as `name (2).ext`, `name (3).ext`, … The write is *exclusive*
+ * (`wx` / `COPYFILE_EXCL`), so a collision is detected atomically — two
+ * concurrent materializations can't clobber each other, and a tool-server can't
+ * silently replace a recording already in `.argent/recordings/` by reusing its
+ * name. Returns the final path, or null if no free name is found within the
+ * bound (a pathological directory, not a real collision).
+ */
+async function writeDurableUnique(
+  dir: string,
+  filename: string,
+  write: (path: string) => Promise<void>
+): Promise<string | null> {
+  const ext = extname(filename);
+  const stem = filename.slice(0, filename.length - ext.length);
+  for (let i = 1; i <= 1000; i++) {
+    const candidate = i === 1 ? filename : `${stem} (${i})${ext}`;
+    const path = join(dir, candidate);
+    try {
+      await write(path);
+      return path;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === "EEXIST") continue;
+      throw err;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve an artifact's durable save destination from its `saveDir` hint, or
+ * `null` when it has none (⇒ the disposable temp cache is used instead). The
+ * hint (e.g. `.argent/recordings`) is resolved against {@link durableBaseDir} —
+ * the client's project root, or its home when not in a project — so a file
+ * produced by a remote (`argent link`) tool-server is persisted on the *client*
+ * host, in the project it belongs to.
+ *
+ * The hint is hardened before use: a directory bundle (`archive`) is excluded
+ * (durable persistence is for single files only), and — crucially — the value
+ * must be on {@link ALLOWED_SAVE_DIRS}, the client's own allowlist. A relative,
+ * non-`..` path is *not* enough: the base is the project root, so an unlisted
+ * destination like `.git` (⇒ overwriting `.git/config` for code execution), `.`
+ * (a source file or `package.json`), or `.argent` (argent's own config) all sit
+ * *inside* the base and would otherwise be writable by a hostile tool-server.
+ * The absolute/`..` structural checks stay as defense in depth. A rejected hint
+ * falls back to `null`, so an untrusted `saveDir` degrades to scratch rather than
+ * writing somewhere dangerous.
+ */
+export function durableSaveTarget(
+  handle: ArtifactHandle
+): { dir: string; path: string; base: string; rel: string } | null {
+  // `saveDir` is unvalidated wire JSON (isArtifactHandle only checks id/filename),
+  // so reject anything that isn't a non-empty string here — a truthy non-string
+  // (number, object, array) would otherwise make `normalize()` below throw
+  // `ERR_INVALID_ARG_TYPE`, and since this runs *outside* the caller's try/catch
+  // that would reject the whole `materializeArtifacts` and lose every sibling
+  // artifact, instead of this one handle degrading to the temp cache.
+  if (typeof handle.saveDir !== "string" || !handle.saveDir || handle.archive) return null;
+  const rel = normalize(handle.saveDir);
+  if (
+    isAbsolute(rel) ||
+    rel === ".." ||
+    rel.startsWith(`..${sep}`) ||
+    rel.split(sep).includes("..")
+  ) {
+    return null;
+  }
+  // The destination must be one the client sanctions — not merely a
+  // non-escaping relative path, which still resolves *inside* the project root
+  // (where `.git`, sources, and argent's own config live).
+  if (!ALLOWED_SAVE_DIRS.has(rel)) return null;
+  const base = durableBaseDir();
+  const dir = join(base, rel);
+  // `base` and `rel` are returned so the caller can re-check, after `mkdir`,
+  // that the *resolved* directory still lands at `<base>/<rel>` — the allowlist
+  // is a lexical check and can't see a symlink standing in for `dir` (or one of
+  // its segments) that redirects the write elsewhere. See {@link
+  // confineToRealBase}.
+  return { dir, path: join(dir, sanitizeSegment(handle.filename)), base, rel };
+}
+
+/**
+ * Guard against a symlinked durable directory. The allowlist and `..` checks in
+ * {@link durableSaveTarget} are purely lexical, and the exclusive leaf write
+ * only protects the final file — so if `.argent/recordings` (or an ancestor
+ * segment) is a **symlink** pre-planted in the victim's checkout, a durable
+ * write would follow it out of the intended directory (e.g. into `.git`, where
+ * a fresh file under `hooks/` is code execution). After the directory exists,
+ * verify its real path is exactly `<realpath(base)>/<rel>`: the base itself may
+ * legitimately be reached through a symlink (e.g. macOS `/var`→`/private/var`),
+ * but the `rel` portion must not traverse one. Returns false ⇒ the durable
+ * write is refused and the artifact degrades to the disposable cache.
+ */
+async function confineToRealBase(dir: string, base: string, rel: string): Promise<boolean> {
+  try {
+    const realDir = await realpath(dir);
+    const realBase = await realpath(base);
+    return realDir === join(realBase, rel);
+  } catch {
+    return false;
+  }
 }
 
 export interface MaterializedImage {
@@ -222,6 +418,71 @@ export async function materializeArtifacts(
     if (isArtifactHandle(value)) {
       // Gate: prefer the file already on this host; only download on a miss.
       const localPath = await resolveLocalFile(value);
+
+      // Durable destination (e.g. `.argent/recordings`): persist under the
+      // client's own cwd instead of the disposable temp cache. Copy when the
+      // file is already local (co-located server), download otherwise — so an
+      // `argent link` recording ends up on the *client* host, not the server.
+      const saveTarget = durableSaveTarget(value);
+      if (saveTarget) {
+        const filename = basename(saveTarget.path);
+        try {
+          await mkdir(saveTarget.dir, { recursive: true });
+          // Refuse to write through a symlinked durable directory — the lexical
+          // allowlist and the exclusive leaf write don't cover a symlink at
+          // `.argent/recordings` (or an ancestor) that redirects the whole write
+          // out of the intended tree (e.g. into `.git`).
+          if (!(await confineToRealBase(saveTarget.dir, saveTarget.base, saveTarget.rel))) {
+            return null;
+          }
+          if (localPath) {
+            // Already on this host — copy without buffering the whole file
+            // (recordings can be large); only re-read if it's an inline image.
+            // Exclusive copy so a colliding name never clobbers an existing
+            // durable recording — it lands alongside as `name (2).ext`.
+            const finalPath = await writeDurableUnique(saveTarget.dir, filename, (p) =>
+              copyFile(localPath, p, fsConstants.COPYFILE_EXCL)
+            );
+            if (!finalPath) return null;
+            if (value.mimeType.startsWith("image/")) {
+              images.push({
+                localPath: finalPath,
+                data: await readFile(finalPath),
+                mimeType: value.mimeType,
+              });
+            }
+            return finalPath;
+          }
+          // Remote download. A durable file survives cache GC, so it must have a
+          // known, verified size: refuse anything but a positive integer within
+          // the cap — a `size:0`, absent, NaN, or over-cap value can't bound the
+          // download. (`size` arrives as unvalidated JSON from a possibly hostile
+          // server and `isArtifactHandle` doesn't check it, so a non-numeric size
+          // would make the `readCapped` cap `NaN` and never trip, letting an
+          // unbounded body buffer into client memory — the exact DoS the cap
+          // exists to prevent.) The cap can then be `value.size` directly.
+          if (!Number.isInteger(value.size) || value.size <= 0 || value.size > MAX_DURABLE_BYTES) {
+            return null;
+          }
+          const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
+            headers: authHeaders,
+          });
+          if (!res.ok) return null;
+          const data = await readCapped(res, value.size);
+          if (!data || data.length !== value.size) return null;
+          const finalPath = await writeDurableUnique(saveTarget.dir, filename, (p) =>
+            writeFile(p, data, { flag: "wx" })
+          );
+          if (!finalPath) return null;
+          if (value.mimeType.startsWith("image/")) {
+            images.push({ localPath: finalPath, data, mimeType: value.mimeType });
+          }
+          return finalPath;
+        } catch {
+          return null;
+        }
+      }
+
       if (localPath) {
         if (value.mimeType.startsWith("image/")) {
           images.push({ localPath, data: await readFile(localPath), mimeType: value.mimeType });
