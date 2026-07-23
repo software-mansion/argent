@@ -71,6 +71,13 @@ export interface ScreenRecordingSessionApi {
   watermarkSkipped: string | null;
   /** Live subscription to simulator-server's frame stream. */
   frameStream: { readonly error: Error | null; close(): void } | null;
+  /**
+   * The frame stream's drop error, captured when the pump is torn down (cap,
+   * crash, stop) before `frameStream` is nulled — so a stop arriving after a
+   * cap/crash can still surface the "video may freeze" hint, which it could not
+   * once `frameStream` (and its `error`) was gone.
+   */
+  lastFrameStreamError: Error | null;
   /** Interval pacing frames onto the fixed output frame rate. */
   pumpTimer: NodeJS.Timeout | null;
   wallClockStartMs: number | null;
@@ -100,6 +107,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.captureProcess = null;
   state.pendingChild = null;
   state.frameStream = null;
+  state.lastFrameStreamError = null;
   state.recordingTimedOut = false;
   state.recordingExitedUnexpectedly = false;
   state.lastExitInfo = null;
@@ -155,6 +163,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       logoFile: null,
       watermarkSkipped: null,
       frameStream: null,
+      lastFrameStreamError: null,
       pumpTimer: null,
       wallClockStartMs: null,
       wallClockEndMs: null,

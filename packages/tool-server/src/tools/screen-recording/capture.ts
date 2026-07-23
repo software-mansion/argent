@@ -156,6 +156,11 @@ function stopPump(api: ScreenRecordingSessionApi): void {
     api.pumpTimer = null;
   }
   if (api.frameStream) {
+    // Preserve a real drop before dropping the reference: a stop that arrives
+    // after the cap/crash already ran this teardown reads the error from here,
+    // since `frameStream` (and its `error`) is gone by then. Our own clean
+    // close reports no error, so this never manufactures a phantom drop.
+    api.lastFrameStreamError = api.frameStream.error ?? api.lastFrameStreamError;
     api.frameStream.close();
     api.frameStream = null;
   }
@@ -279,6 +284,7 @@ async function startCaptureLocked(
   api.recordingExitedUnexpectedly = false;
   api.pendingRetrieval = false;
   api.lastExitInfo = null;
+  api.lastFrameStreamError = null;
   api.outputFile = outputFile;
   api.logoFile = logoFile;
   api.watermarkSkipped = watermarkSkipped;
@@ -406,7 +412,9 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const startedAtMs = api.wallClockStartMs;
   const endedEarly = api.recordingTimedOut || api.recordingExitedUnexpectedly;
   // Read before finalizing: closing the stream ourselves would look like a drop.
-  const streamError = api.frameStream?.error ?? null;
+  // Fall back to the error stopPump stashed if the cap/crash already tore the
+  // stream down, so a drop that coincided with the cap is not silently lost.
+  const streamError = api.frameStream?.error ?? api.lastFrameStreamError ?? null;
   const watermarkSkipped = api.watermarkSkipped;
   let warning: string | undefined;
 
@@ -447,10 +455,18 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         : `ffmpeg exited before stop was called (code=${api.lastExitInfo?.code ?? "?"}, ` +
           `signal=${api.lastExitInfo?.signal ?? "?"}); returning whatever was captured.`;
     }
-    if (streamError && !warning) {
-      warning =
+    if (streamError) {
+      // Append rather than gate on `!warning`: a stream drop that coincided
+      // with the cap/crash carries its own "may freeze" caveat on top of the
+      // more specific cap/exit notice — both are useful, neither should mask
+      // the other.
+      warning = [
+        warning,
         `The frame stream from simulator-server dropped during the recording (${streamError.message}); ` +
-        `the video may freeze on its last received frame.`;
+          `the video may freeze on its last received frame.`,
+      ]
+        .filter(Boolean)
+        .join(" ");
     }
 
     if (watermarkSkipped) {
@@ -498,6 +514,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.recordingTimedOut = false;
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
+    api.lastFrameStreamError = null;
     clearActiveScreenRecording(api.deviceId);
     if (logoFile) await fs.rm(logoFile, { force: true }).catch(() => {});
   }

@@ -745,6 +745,28 @@ describe("screen recording stop", () => {
     await fs.rm(outputFile, { force: true });
   });
 
+  it("still reports a frame-stream drop when the cap fired after the drop", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { timeLimitSeconds: 5 });
+    // Stream drops mid-recording, THEN the cap fires. The cap's finalize nulls
+    // api.frameStream, so a stop that reads api.frameStream.error afterwards
+    // would lose the drop entirely and never emit the freeze hint.
+    stream.error = new Error("frame stream aborted");
+    await vi.advanceTimersByTimeAsync(5_000); // cap fires, nulls frameStream
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+
+    const result = await stopCapture(api);
+
+    // Both the cap notice and the freeze hint must survive.
+    expect(result.warning).toContain("time limit");
+    expect(result.warning).toContain("frame stream");
+    await fs.rm(outputFile, { force: true });
+  });
+
   it("stop fails loudly when the recording left no file behind", async () => {
     const api = await makeSession(iosDevice);
     fakeStream();
