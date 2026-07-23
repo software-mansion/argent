@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Argent Chromium E2E</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      #target {
+        width: 100vw;
+        height: 100vh;
+        border: none;
+        font:
+          700 56px/1.2 system-ui,
+          sans-serif;
+        color: #fff;
+        background: #2e7d32;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- A full-viewport button so a normalized tap at (0.5, 0.5) always lands on
+         it. The click handler rewrites the accessible name to TAPPED-OK, giving
+         the E2E an observable DOM effect to assert (proving the tap really
+         dispatched, not just that the tool returned 200). -->
+    <button
+      id="target"
+      onclick="
+        this.textContent = 'TAPPED-OK';
+        document.title = 'TAPPED-OK';
+      ">
+      ArgentTapTarget
+    </button>
+  </body>
+</html>

@@ -36,6 +36,25 @@ describe("computeWatermarkBox", () => {
     expect(box.w).toBeGreaterThanOrEqual(2);
     expect(box.h).toBeGreaterThanOrEqual(2);
   });
+
+  it("never lets the crop box exceed the frame, even for pathological aspect ratios", () => {
+    // A frame far wider than tall keeps the logo's 900:277 aspect, which would
+    // otherwise make the box taller than the frame. ffmpeg's crop aborts (-22)
+    // on a rectangle larger than the input and kills the whole recording, so
+    // the box must stay inside the frame on every axis regardless of shape.
+    for (const dims of [
+      { width: 1000, height: 50 }, // 20:1, h would overflow the height
+      { width: 2000, height: 30 }, // extreme wide-short
+      { width: 40, height: 41 }, // sub-55px width, odd height rounding edge
+    ]) {
+      const box = computeWatermarkBox(dims);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.w).toBeLessThanOrEqual(dims.width);
+      expect(box.y + box.h).toBeLessThanOrEqual(dims.height);
+      for (const v of [box.w, box.h, box.x, box.y]) expect(v % 2).toBe(0);
+    }
+  });
 });
 
 describe("buildWatermarkGraph", () => {
@@ -70,5 +89,26 @@ describe("buildWatermarkGraph", () => {
     expect(crop?.[4]).toBe(String(box.y));
     expect(overlay?.[1]).toBe(String(box.x));
     expect(overlay?.[2]).toBe(String(box.y));
+  });
+
+  it("evens an odd-resolution base before splitting so yuv420p can encode it", () => {
+    // iPhone 16 / 15 Pro / 15 / 14 Pro stream at 1179x2556 (odd width). Without
+    // an even base the overlayed output stays 1179 wide and libx264 rejects it
+    // ("width not divisible by 2"), killing the whole recording. Crop the base
+    // to 1178 up front, and derive the box from that so the mask stays inside.
+    const odd = buildWatermarkGraph({ width: 1179, height: 2556 });
+    expect(odd.startsWith("[0:v]fps=30,crop=1178:2556:0:0,split=2[base][under]")).toBe(true);
+    const box = computeWatermarkBox({ width: 1178, height: 2556 });
+    expect(box.x + box.w).toBeLessThanOrEqual(1178);
+    // the mask crop reads from within the evened base
+    const maskCrop = odd.match(/\[under\]crop=(\d+):(\d+):(\d+):(\d+)/);
+    expect(Number(maskCrop?.[3]) + Number(maskCrop?.[1])).toBeLessThanOrEqual(1178);
+  });
+
+  it("leaves an already-even frame's graph unchanged (no redundant base crop)", () => {
+    const even = buildWatermarkGraph({ width: 1320, height: 2868 });
+    expect(even.startsWith("[0:v]fps=30,split=2[base][under]")).toBe(true);
+    // the only crop is the mask crop; there is no base even-crop of the frame
+    expect(even).not.toMatch(/crop=1320:2868/);
   });
 });

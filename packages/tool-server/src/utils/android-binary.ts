@@ -1,11 +1,8 @@
-import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { commandOnPath } from "./command-on-path";
 
 export type AndroidBinaryName = "adb" | "emulator";
 
@@ -18,6 +15,16 @@ const SUBDIR: Record<AndroidBinaryName, string> = {
   adb: "platform-tools",
   emulator: "emulator",
 };
+
+// On Windows the SDK ships `adb.exe` / `emulator.exe`. PATH lookups via `where`
+// already resolve the extension, but the $ANDROID_HOME fallbacks below build a
+// literal path and `access()` it, so they must include `.exe` there. Empty on
+// POSIX hosts where the binaries are extensionless.
+const BIN_EXT = process.platform === "win32" ? ".exe" : "";
+
+function binFileName(name: AndroidBinaryName): string {
+  return `${name}${BIN_EXT}`;
+}
 
 interface CacheEntry {
   path: string | null;
@@ -67,22 +74,14 @@ export async function resolveAndroidBinary(name: AndroidBinaryName): Promise<str
 
 async function probe(name: AndroidBinaryName): Promise<string | null> {
   // PATH first — preserves prior behavior for users who already have the
-  // binary on PATH (e.g. Homebrew adb at /opt/homebrew/bin/adb), and means
-  // a sysadmin override on PATH still wins over $ANDROID_HOME.
-  try {
-    const { stdout } = await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], {
-      timeout: 2_000,
-    });
-    const trimmed = stdout.trim();
-    // `command -v` prints nothing on miss but returns non-zero, so we only
-    // get here on success — but defend against an empty stdout anyway in
-    // case a future shell quirk decouples the two.
-    if (trimmed) return trimmed;
-  } catch {
-    // fall through to SDK-root fallbacks
-  }
+  // binary on PATH (e.g. Homebrew adb at /opt/homebrew/bin/adb, or an
+  // `adb.exe` on a Windows user's PATH), and means a sysadmin override on PATH
+  // still wins over $ANDROID_HOME. `commandOnPath` uses `where` on Windows so
+  // the `.exe` extension is resolved automatically.
+  const onPath = await commandOnPath(name);
+  if (onPath) return onPath;
   for (const root of androidRoots()) {
-    const candidate = join(root, SUBDIR[name], name);
+    const candidate = join(root, SUBDIR[name], binFileName(name));
     try {
       // X_OK rather than F_OK: a non-executable file at the canonical path
       // means a corrupted/partial install, and falling back to the next root
@@ -126,8 +125,8 @@ function androidRoots(): string[] {
 function defaultAndroidRoots(): string[] {
   const home = homedir();
   const roots = [
-    // Android Studio defaults (the two big ones — covers the majority of
-    // user installs that arrive without any env-var setup).
+    // Android Studio defaults (the big ones — cover the majority of user
+    // installs that arrive without any env-var setup).
     join(home, "Library", "Android", "sdk"), // macOS Android Studio default
     join(home, "Android", "Sdk"), // Linux Android Studio default
     // Common manual install convention. Not picked by any installer but used
@@ -138,6 +137,15 @@ function defaultAndroidRoots(): string[] {
     "/usr/lib/android-sdk", // Debian/Ubuntu `android-sdk` apt package
     "/usr/local/share/android-sdk", // Homebrew cask
   ];
+  // Windows Android Studio default: %LOCALAPPDATA%\Android\Sdk. LOCALAPPDATA
+  // is set on every interactive Windows session, but fall back to the
+  // canonical AppData\Local layout under the home dir so a GUI-spawned MCP
+  // server that didn't inherit it still resolves the SDK.
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA?.trim();
+    if (localAppData) roots.push(join(localAppData, "Android", "Sdk"));
+    roots.push(join(home, "AppData", "Local", "Android", "Sdk"));
+  }
   return roots;
 }
 

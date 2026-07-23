@@ -30,8 +30,10 @@ export interface ScreenRecordingStopResult {
   /** The finalized video as a downloadable artifact (mp4). */
   video: ArtifactHandle;
   /**
-   * Length of the returned video; null when the session lost its start stamp.
-   * Shorter than the real recording when static-frame trimming removed dead air.
+   * Length of the returned video. With static-frame trimming on (the default)
+   * this is the frame-derived trimmed length and is always present — shorter than
+   * the real recording when dead air was removed. Null only when trimming is off
+   * (`trimStatic: false`) and the session lost its start stamp.
    */
   durationMs: number | null;
   /** Real elapsed recording time. Present only when trimming actually removed frames. */
