@@ -409,7 +409,6 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const streamError = api.frameStream?.error ?? null;
   const watermarkSkipped = api.watermarkSkipped;
   let warning: string | undefined;
-  let succeeded = false;
 
   try {
     const child = api.captureProcess;
@@ -465,9 +464,21 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     // encoder dies) the recording is over even if stop arrives much later.
     const durationMs =
       startedAtMs === null ? null : (api.wallClockEndMs ?? Date.now()) - startedAtMs;
-    const result = { outputFile, sizeBytes: size, durationMs, ...(warning ? { warning } : {}) };
-    succeeded = true;
-    return result;
+    return { outputFile, sizeBytes: size, durationMs, ...(warning ? { warning } : {}) };
+  } catch (err) {
+    // A stop only throws when the container is missing or empty
+    // (statNonEmptyOutput). Drop that dead-weight 0-byte temp so a retry doesn't
+    // orphan it — but ONLY when the file is genuinely empty/absent, so no
+    // unexpected error can ever delete a real recording. Fail SAFE: cleanup is
+    // gated on a thrown failure AND an empty file, never on "delete unless a
+    // success flag was set" — a delete-by-default a later refactor (e.g. the
+    // stacked trim work) could trip into wiping every finalized video.
+    const empty = await fs
+      .stat(outputFile)
+      .then((s) => s.size === 0)
+      .catch(() => false);
+    if (empty) await fs.rm(outputFile, { force: true }).catch(() => {});
+    throw err;
   } finally {
     // Always return the session to a startable state — a failed stat must not
     // wedge the next start behind "already active". The video is host-side, so
@@ -489,10 +500,5 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.lastExitInfo = null;
     clearActiveScreenRecording(api.deviceId);
     if (logoFile) await fs.rm(logoFile, { force: true }).catch(() => {});
-    // A failed stop (missing/empty container) hands the caller no outputFile to
-    // register, so the temp mp4 is dead weight — remove it rather than orphan a
-    // 0-byte file in os.tmpdir on every retry. On success the file MUST survive:
-    // screen-recording-stop registers it as an artifact after this returns.
-    if (!succeeded) await fs.rm(outputFile, { force: true }).catch(() => {});
   }
 }

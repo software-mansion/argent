@@ -606,6 +606,30 @@ describe("screen recording stop", () => {
     await fs.rm(outputFile, { force: true });
   });
 
+  it("leaves the finalized video ON DISK after a successful stop", async () => {
+    // Invariant: screen-recording-stop registers the artifact AFTER stopCapture
+    // returns, so a successful stop must never delete its own output. Guards
+    // against any fail-open cleanup (a "delete unless a success flag is set"
+    // finally) that a later refactor could trip into wiping every recording.
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api);
+    const outputFile = api.outputFile!;
+    await fs.writeFile(outputFile, Buffer.alloc(4096, 1)); // a real, non-empty video
+
+    const result = await stopCapture(api);
+    expect(result.outputFile).toBe(outputFile);
+
+    const sizeOnDisk = await fs
+      .stat(outputFile)
+      .then((s) => s.size)
+      .catch(() => -1);
+    await fs.rm(outputFile, { force: true }).catch(() => {});
+    expect(sizeOnDisk).toBe(4096);
+  });
+
   it("stop with no session fails with SCREEN_RECORDING_NO_ACTIVE_SESSION", async () => {
     const api = await makeSession(iosDevice);
     try {
