@@ -86,6 +86,29 @@ export const NON_INJECTABLE_RECOVERY =
 // Max consecutive init failures per service instance before it stops retrying.
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
 
+/**
+ * What an agent is told when the running app has no devtools connection.
+ *
+ * `restart-app` is the right first move and usually the only one needed: the app
+ * was simply launched before the env carried `DYLD_INSERT_LIBRARIES`.
+ *
+ * The second sentence exists because `requiresAppRestart` returns true for EVERY
+ * unconnected app, with no notion of how many times we have already said this.
+ * When the connection never registers — the dylib dials the socket and logs
+ * `devtools connection established`, but this service never records it — the
+ * advice above stays literally true forever, so an agent obeying it restarts the
+ * app indefinitely and every native-* tool (and any flow whose `launch` step
+ * needs the connection) stays dead with no way out in the message. Restarting
+ * the tool-server rebuilds the service and clears that state, so name it here
+ * rather than leaving the loop unbounded. `flow-run` already tells agents this
+ * on its own connect failure; the shared precheck now matches it.
+ */
+export const RESTART_REQUIRED_MESSAGE =
+  "Native devtools are not injected into the running app. Call restart-app then retry. " +
+  "If it is still not connected after that restart, the native-devtools service for this " +
+  "simulator is stale rather than the app being uninjected — do not keep restarting the app; " +
+  "restart the tool-server (`argent server stop && argent server start`) and retry.";
+
 export interface NativeDevtoolsInitFailure {
   attempts: number;
   lastError: string;
@@ -174,8 +197,7 @@ export async function precheckNativeDevtools(
   if (bundleId !== undefined && (await api.requiresAppRestart(bundleId))) {
     return {
       status: "restart_required",
-      message:
-        "Native devtools are not injected into the running app. " + "Call restart-app then retry.",
+      message: RESTART_REQUIRED_MESSAGE,
     };
   }
 
