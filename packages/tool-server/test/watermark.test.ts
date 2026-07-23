@@ -90,4 +90,25 @@ describe("buildWatermarkGraph", () => {
     expect(overlay?.[1]).toBe(String(box.x));
     expect(overlay?.[2]).toBe(String(box.y));
   });
+
+  it("evens an odd-resolution base before splitting so yuv420p can encode it", () => {
+    // iPhone 16 / 15 Pro / 15 / 14 Pro stream at 1179x2556 (odd width). Without
+    // an even base the overlayed output stays 1179 wide and libx264 rejects it
+    // ("width not divisible by 2"), killing the whole recording. Crop the base
+    // to 1178 up front, and derive the box from that so the mask stays inside.
+    const odd = buildWatermarkGraph({ width: 1179, height: 2556 });
+    expect(odd.startsWith("[0:v]fps=30,crop=1178:2556:0:0,split=2[base][under]")).toBe(true);
+    const box = computeWatermarkBox({ width: 1178, height: 2556 });
+    expect(box.x + box.w).toBeLessThanOrEqual(1178);
+    // the mask crop reads from within the evened base
+    const maskCrop = odd.match(/\[under\]crop=(\d+):(\d+):(\d+):(\d+)/);
+    expect(Number(maskCrop?.[3]) + Number(maskCrop?.[1])).toBeLessThanOrEqual(1178);
+  });
+
+  it("leaves an already-even frame's graph unchanged (no redundant base crop)", () => {
+    const even = buildWatermarkGraph({ width: 1320, height: 2868 });
+    expect(even.startsWith("[0:v]fps=30,split=2[base][under]")).toBe(true);
+    // the only crop is the mask crop; there is no base even-crop of the frame
+    expect(even).not.toMatch(/crop=1320:2868/);
+  });
 });

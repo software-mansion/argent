@@ -114,12 +114,22 @@ export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox
  * input runs at OUTPUT_FPS so maskedmerge's per-frame streams stay in lockstep.
  */
 export function buildWatermarkGraph(dims: Dimensions): string {
-  const { w, h, x, y } = computeWatermarkBox(dims);
+  // yuv420p (the encoder's pixel format) needs even output dimensions, and a
+  // device whose native frame is odd on either axis (iPhone 16 / 15 Pro / 15 /
+  // 14 Pro stream at 1179x2556) would otherwise reach libx264 with an odd size
+  // and fail the whole encode. Even the base up front when needed, and derive
+  // the box from the same evened size so the mask crop stays inside it. An
+  // already-even frame keeps the graph unchanged.
+  const evenW = evenFloor(dims.width);
+  const evenH = evenFloor(dims.height);
+  const { w, h, x, y } = computeWatermarkBox({ width: evenW, height: evenH });
+  const evenCrop =
+    evenW !== dims.width || evenH !== dims.height ? `,crop=${evenW}:${evenH}:0:0` : "";
   const span = MASK_LIGHT_MIN_LUMA - MASK_DARK_MAX_LUMA;
   // High where the background is dark (-> keep the white logo), low where light.
   const maskRamp = `lut=y='clip((${MASK_LIGHT_MIN_LUMA}-val)/${span}*255,0,255)'`;
   return [
-    `[0:v]fps=${OUTPUT_FPS},split=2[base][under]`,
+    `[0:v]fps=${OUTPUT_FPS}${evenCrop},split=2[base][under]`,
     `[under]crop=${w}:${h}:${x}:${y},format=gray,${maskRamp},format=gbrap[mask]`,
     `[1:v]fps=${OUTPUT_FPS},format=rgba,scale=${w}:${h},split=2[white][darksrc]`,
     `[darksrc]colorchannelmixer=rr=${DARK_LOGO_LEVEL}:gg=${DARK_LOGO_LEVEL}:bb=${DARK_LOGO_LEVEL}[dark]`,

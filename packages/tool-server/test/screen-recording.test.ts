@@ -30,7 +30,12 @@ import {
   screenRecordingSessionBlueprint,
   type ScreenRecordingSessionApi,
 } from "../src/blueprints/screen-recording-session";
-import { startCapture, stopCapture, framesDue } from "../src/tools/screen-recording/capture";
+import {
+  startCapture,
+  stopCapture,
+  framesDue,
+  ffmpegArgs,
+} from "../src/tools/screen-recording/capture";
 import { openMjpegStream, readJpegDimensions } from "../src/tools/screen-recording/mjpeg-stream";
 import { resolveFfmpeg, writeLogoTemp } from "../src/tools/screen-recording/watermark";
 import {
@@ -319,6 +324,32 @@ describe("screen recording capture", () => {
 
     const args = mockSpawn.mock.calls[0]![1] as string[];
     expect(args).not.toContain("-filter_complex");
+  });
+
+  it("evens the raw base so an odd device resolution still encodes (no watermark)", () => {
+    // The watermark-off path has no filter graph to normalize the base, so the
+    // frame reaches libx264 directly. yuv420p rejects an odd width/height and
+    // leaves a 0-byte file (iPhone 16 / 15 Pro / 15 / 14 Pro stream at
+    // 1179x2556); the crop drops the odd edge pixel so any resolution records.
+    const args = ffmpegArgs({ outputFile: "/tmp/out.mp4", logoFile: null, graph: null });
+    const vf = args.indexOf("-vf");
+    expect(vf).toBeGreaterThan(-1);
+    expect(args[vf + 1]).toBe("crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
+    expect(args).not.toContain("-filter_complex");
+    // the crop must precede the output file, not trail it
+    expect(vf).toBeLessThan(args.length - 1);
+  });
+
+  it("does not add a second base filter when a watermark graph already evens it", () => {
+    // buildWatermarkGraph handles the even-base crop itself, so the args must not
+    // also carry a -vf (ffmpeg rejects -vf alongside -filter_complex on one map).
+    const args = ffmpegArgs({
+      outputFile: "/tmp/out.mp4",
+      logoFile: "/tmp/logo.png",
+      graph: "[0:v]fps=30,split=2[base][under];[base][x]overlay[out]",
+    });
+    expect(args).not.toContain("-vf");
+    expect(args).toContain("-filter_complex");
   });
 
   it("fails the start when ffmpeg is not installed", async () => {
@@ -704,6 +735,29 @@ describe("screen recording stop", () => {
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING);
     }
     // The session must still be startable after a failed stop.
+    expect(api.recordingActive).toBe(false);
+    expect(api.stopPending).toBe(false);
+  });
+
+  it("removes the empty container rather than orphaning it when a stop fails", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api);
+    // ffmpeg opened its output with `-y` but wrote nothing (odd-resolution
+    // encode abort, disk full mid-header, ...): a real 0-byte file is on disk.
+    const outputFile = api.outputFile!;
+    await fs.writeFile(outputFile, Buffer.alloc(0));
+
+    try {
+      await stopCapture(api);
+      expect.unreachable();
+    } catch (err) {
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING);
+    }
+    // The dead 0-byte temp must not be left behind in os.tmpdir.
+    await expect(fs.access(outputFile)).rejects.toThrow();
     expect(api.recordingActive).toBe(false);
     expect(api.stopPending).toBe(false);
   });

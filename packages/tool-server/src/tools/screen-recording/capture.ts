@@ -52,7 +52,7 @@ const START_FAILFAST_GRACE_MS = 800;
 const FINALIZE_WAIT_MS = 20_000;
 const SIGINT_WAIT_MS = 5_000;
 
-function ffmpegArgs(opts: {
+export function ffmpegArgs(opts: {
   outputFile: string;
   logoFile: string | null;
   graph: string | null;
@@ -74,7 +74,8 @@ function ffmpegArgs(opts: {
   if (opts.logoFile && opts.graph) {
     // The still logo is looped into an endless input so the graph has a logo
     // frame for every video frame; `shortest=1` in the graph ends the output
-    // with the capture.
+    // with the capture. `buildWatermarkGraph` already crops the base to even
+    // dimensions, so the yuv420p encoder below always gets a valid size.
     args.push(
       "-framerate",
       String(OUTPUT_FPS),
@@ -87,6 +88,15 @@ function ffmpegArgs(opts: {
       "-map",
       "[out]"
     );
+  } else {
+    // No watermark graph to normalize the base, so the raw frame reaches
+    // libx264 directly. yuv420p (4:2:0) subsamples chroma 2x and rejects an odd
+    // width or height — a device whose native resolution is odd on either axis
+    // (iPhone 16 / 15 Pro / 15 / 14 Pro stream at 1179x2556) would otherwise
+    // fail the encode after the readiness grace and leave a 0-byte file that
+    // stop reports as "the video file is empty". Drop the odd edge pixel so any
+    // resolution encodes; even frames are unchanged.
+    args.push("-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
   }
   args.push(
     "-c:v",
@@ -399,6 +409,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const streamError = api.frameStream?.error ?? null;
   const watermarkSkipped = api.watermarkSkipped;
   let warning: string | undefined;
+  let succeeded = false;
 
   try {
     const child = api.captureProcess;
@@ -454,7 +465,9 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     // encoder dies) the recording is over even if stop arrives much later.
     const durationMs =
       startedAtMs === null ? null : (api.wallClockEndMs ?? Date.now()) - startedAtMs;
-    return { outputFile, sizeBytes: size, durationMs, ...(warning ? { warning } : {}) };
+    const result = { outputFile, sizeBytes: size, durationMs, ...(warning ? { warning } : {}) };
+    succeeded = true;
+    return result;
   } finally {
     // Always return the session to a startable state — a failed stat must not
     // wedge the next start behind "already active". The video is host-side, so
@@ -476,5 +489,10 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.lastExitInfo = null;
     clearActiveScreenRecording(api.deviceId);
     if (logoFile) await fs.rm(logoFile, { force: true }).catch(() => {});
+    // A failed stop (missing/empty container) hands the caller no outputFile to
+    // register, so the temp mp4 is dead weight — remove it rather than orphan a
+    // 0-byte file in os.tmpdir on every retry. On success the file MUST survive:
+    // screen-recording-stop registers it as an artifact after this returns.
+    if (!succeeded) await fs.rm(outputFile, { force: true }).catch(() => {});
   }
 }
