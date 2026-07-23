@@ -412,9 +412,10 @@ test("single-quoted id and description are captured (with escapes)", () => {
 
 test("standard escapes render as their actual characters, not literal backslash sequences", () => {
   // A template-literal description with a literal "\n" must become a real
-  // newline in the extracted text — not survive as a stray backslash-n. Real,
-  // currently-shipping example: flow-add-step.ts's description uses \n between
-  // sentences.
+  // newline in the extracted text — not survive as a stray backslash-n.
+  // (Descriptions in the real tree come and go from this shape — flow-add-step
+  // shipped a \n between sentences for a while — so the fixture, not any live
+  // tool, pins it.)
   const src = `
     export const withEscapes = defineTool({
       id: "with-escapes",
