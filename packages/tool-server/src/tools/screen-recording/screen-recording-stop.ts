@@ -45,6 +45,8 @@ export interface ScreenRecordingStopResult {
 
 const capability = {
   apple: { simulator: true },
+  // Remote (`sim-remote`) recordings finalize host-side exactly like local ones.
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
