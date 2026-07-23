@@ -72,7 +72,7 @@ const START_FAILFAST_GRACE_MS = 800;
 const FINALIZE_WAIT_MS = 20_000;
 const SIGINT_WAIT_MS = 5_000;
 
-function ffmpegArgs(opts: {
+export function ffmpegArgs(opts: {
   outputFile: string;
   logoFile: string | null;
   graph: string | null;
@@ -94,7 +94,8 @@ function ffmpegArgs(opts: {
   if (opts.logoFile && opts.graph) {
     // The still logo is looped into an endless input so the graph has a logo
     // frame for every video frame; `shortest=1` in the graph ends the output
-    // with the capture.
+    // with the capture. `buildWatermarkGraph` already crops the base to even
+    // dimensions, so the yuv420p encoder below always gets a valid size.
     args.push(
       "-framerate",
       String(OUTPUT_FPS),
@@ -107,6 +108,15 @@ function ffmpegArgs(opts: {
       "-map",
       "[out]"
     );
+  } else {
+    // No watermark graph to normalize the base, so the raw frame reaches
+    // libx264 directly. yuv420p (4:2:0) subsamples chroma 2x and rejects an odd
+    // width or height — a device whose native resolution is odd on either axis
+    // (iPhone 16 / 15 Pro / 15 / 14 Pro stream at 1179x2556) would otherwise
+    // fail the encode after the readiness grace and leave a 0-byte file that
+    // stop reports as "the video file is empty". Drop the odd edge pixel so any
+    // resolution encodes; even frames are unchanged.
+    args.push("-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
   }
   args.push(
     "-c:v",
@@ -224,6 +234,11 @@ function stopPump(api: ScreenRecordingSessionApi): void {
     api.pumpTimer = null;
   }
   if (api.frameStream) {
+    // Preserve a real drop before dropping the reference: a stop that arrives
+    // after the cap/crash already ran this teardown reads the error from here,
+    // since `frameStream` (and its `error`) is gone by then. Our own clean
+    // close reports no error, so this never manufactures a phantom drop.
+    api.lastFrameStreamError = api.frameStream.error ?? api.lastFrameStreamError;
     api.frameStream.close();
     api.frameStream = null;
   }
@@ -364,6 +379,7 @@ async function startCaptureLocked(
   // at stop about an overlay it never requested.
   api.pointerFailed = false;
   api.lastExitInfo = null;
+  api.lastFrameStreamError = null;
   api.outputFile = outputFile;
   api.logoFile = logoFile;
   api.watermarkSkipped = watermarkSkipped;
@@ -510,7 +526,9 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const trimStatic = api.trimStatic;
   const endedEarly = api.recordingTimedOut || api.recordingExitedUnexpectedly;
   // Read before finalizing: closing the stream ourselves would look like a drop.
-  const streamError = api.frameStream?.error ?? null;
+  // Fall back to the error stopPump stashed if the cap/crash already tore the
+  // stream down, so a drop that coincided with the cap is not silently lost.
+  const streamError = api.frameStream?.error ?? api.lastFrameStreamError ?? null;
   const watermarkSkipped = api.watermarkSkipped;
   const pointerFailed = api.pointerFailed;
   let warning: string | undefined;
@@ -552,10 +570,18 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         : `ffmpeg exited before stop was called (code=${api.lastExitInfo?.code ?? "?"}, ` +
           `signal=${api.lastExitInfo?.signal ?? "?"}); returning whatever was captured.`;
     }
-    if (streamError && !warning) {
-      warning =
+    if (streamError) {
+      // Append rather than gate on `!warning`: a stream drop that coincided
+      // with the cap/crash carries its own "may freeze" caveat on top of the
+      // more specific cap/exit notice — both are useful, neither should mask
+      // the other.
+      warning = [
+        warning,
         `The frame stream from simulator-server dropped during the recording (${streamError.message}); ` +
-        `the video may freeze on its last received frame.`;
+          `the video may freeze on its last received frame.`,
+      ]
+        .filter(Boolean)
+        .join(" ");
     }
 
     if (watermarkSkipped) {
@@ -599,6 +625,20 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
       ...(trimmedMs !== undefined ? { wallClockMs: wallClockMs!, trimmedMs } : {}),
       ...(warning ? { warning } : {}),
     };
+  } catch (err) {
+    // A stop only throws when the container is missing or empty
+    // (statNonEmptyOutput). Drop that dead-weight 0-byte temp so a retry doesn't
+    // orphan it — but ONLY when the file is genuinely empty/absent, so no
+    // unexpected error can ever delete a real recording. Fail SAFE: cleanup is
+    // gated on a thrown failure AND an empty file, never on "delete unless a
+    // success flag was set" — a delete-by-default a later refactor (e.g. the
+    // stacked trim work) could trip into wiping every finalized video.
+    const empty = await fs
+      .stat(outputFile)
+      .then((s) => s.size === 0)
+      .catch(() => false);
+    if (empty) await fs.rm(outputFile, { force: true }).catch(() => {});
+    throw err;
   } finally {
     // Always return the session to a startable state — a failed stat must not
     // wedge the next start behind "already active". The video is host-side, so
@@ -615,12 +655,14 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.watermarkSkipped = null;
     api.pointerFailed = false;
     api.framesWritten = 0;
+    api.trimmedAnyFrames = false;
     api.wallClockStartMs = null;
     api.wallClockEndMs = null;
     api.timeLimitSeconds = null;
     api.recordingTimedOut = false;
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
+    api.lastFrameStreamError = null;
     clearActiveScreenRecording(api.deviceId);
     if (logoFile) await fs.rm(logoFile, { force: true }).catch(() => {});
   }

@@ -54,7 +54,10 @@ SRC_DIR="${SUBMODULE_DIR}/Sources/NativeDevtoolsIos"
 
 if [[ "$TRANSPORT" == "tcp" ]]; then
   DEST_DIR="${ROOT_DIR}/dylibs/tcp"
-  BIN_DIR="${ROOT_DIR}/bin/darwin/tcp"
+  # Platform-neutral: the tcp ax-service is an iOS-sim binary uploaded to the
+  # remote macOS orchestrator, so it must be resolvable from any host platform
+  # (not nested under bin/darwin/). Matches tcpBinDir() in src/index.ts.
+  BIN_DIR="${ROOT_DIR}/bin/tcp"
 else
   DEST_DIR="${ROOT_DIR}/dylibs"
   BIN_DIR="${ROOT_DIR}/bin/darwin"

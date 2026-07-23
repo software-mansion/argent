@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import {
   FLAG_REGISTRY,
+  findProjectRoot,
   getFlagDefinition,
   getFlagsPath,
   isFlagEnabled,
@@ -126,6 +127,24 @@ describe("resolveProjectRoot", () => {
     const nested = path.join(tmpProject, "sub");
     fs.mkdirSync(nested);
     expect(resolveProjectRoot(nested)).toBe(tmpProject);
+  });
+});
+
+describe("findProjectRoot", () => {
+  it("returns the marker directory when one exists", () => {
+    const nested = path.join(tmpProject, "a", "b");
+    fs.mkdirSync(nested, { recursive: true });
+    expect(findProjectRoot(nested)).toBe(tmpProject);
+  });
+
+  it("returns null when no marker exists in ancestry (unlike resolveProjectRoot)", () => {
+    const bare = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-flags-noroot-")));
+    try {
+      expect(findProjectRoot(bare)).toBeNull();
+      expect(resolveProjectRoot(bare)).toBe(bare);
+    } finally {
+      fs.rmSync(bare, { recursive: true, force: true });
+    }
   });
 });
 

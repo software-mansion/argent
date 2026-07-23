@@ -34,6 +34,7 @@ import {
   startCapture,
   stopCapture,
   framesDue,
+  ffmpegArgs,
   type PointerControl,
 } from "../src/tools/screen-recording/capture";
 import { setPointerTrail, setPointerVisible } from "../src/utils/simulator-client";
@@ -343,6 +344,32 @@ describe("screen recording capture", () => {
 
     const args = mockSpawn.mock.calls[0]![1] as string[];
     expect(args).not.toContain("-filter_complex");
+  });
+
+  it("evens the raw base so an odd device resolution still encodes (no watermark)", () => {
+    // The watermark-off path has no filter graph to normalize the base, so the
+    // frame reaches libx264 directly. yuv420p rejects an odd width/height and
+    // leaves a 0-byte file (iPhone 16 / 15 Pro / 15 / 14 Pro stream at
+    // 1179x2556); the crop drops the odd edge pixel so any resolution records.
+    const args = ffmpegArgs({ outputFile: "/tmp/out.mp4", logoFile: null, graph: null });
+    const vf = args.indexOf("-vf");
+    expect(vf).toBeGreaterThan(-1);
+    expect(args[vf + 1]).toBe("crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
+    expect(args).not.toContain("-filter_complex");
+    // the crop must precede the output file, not trail it
+    expect(vf).toBeLessThan(args.length - 1);
+  });
+
+  it("does not add a second base filter when a watermark graph already evens it", () => {
+    // buildWatermarkGraph handles the even-base crop itself, so the args must not
+    // also carry a -vf (ffmpeg rejects -vf alongside -filter_complex on one map).
+    const args = ffmpegArgs({
+      outputFile: "/tmp/out.mp4",
+      logoFile: "/tmp/logo.png",
+      graph: "[0:v]fps=30,split=2[base][under];[base][x]overlay[out]",
+    });
+    expect(args).not.toContain("-vf");
+    expect(args).toContain("-filter_complex");
   });
 
   it("fails the start when ffmpeg is not installed", async () => {
@@ -1037,6 +1064,30 @@ describe("screen recording stop", () => {
     await fs.rm(outputFile, { force: true });
   });
 
+  it("leaves the finalized video ON DISK after a successful stop", async () => {
+    // Invariant: screen-recording-stop registers the artifact AFTER stopCapture
+    // returns, so a successful stop must never delete its own output. Guards
+    // against any fail-open cleanup (a "delete unless a success flag is set"
+    // finally) that a later refactor could trip into wiping every recording.
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api);
+    const outputFile = api.outputFile!;
+    await fs.writeFile(outputFile, Buffer.alloc(4096, 1)); // a real, non-empty video
+
+    const result = await stopCapture(api);
+    expect(result.outputFile).toBe(outputFile);
+
+    const sizeOnDisk = await fs
+      .stat(outputFile)
+      .then((s) => s.size)
+      .catch(() => -1);
+    await fs.rm(outputFile, { force: true }).catch(() => {});
+    expect(sizeOnDisk).toBe(4096);
+  });
+
   it("stop with no session fails with SCREEN_RECORDING_NO_ACTIVE_SESSION", async () => {
     const api = await makeSession(iosDevice);
     try {
@@ -1065,6 +1116,35 @@ describe("screen recording stop", () => {
     expect(api.pendingRetrieval).toBe(true);
     const [reminder] = getActiveScreenRecordings();
     expect(reminder?.finalizedReason).toContain("5s time limit");
+  });
+
+  it("rejects a start while a capped recording still awaits retrieval, keeping the first video reachable", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { timeLimitSeconds: 5 });
+
+    await vi.advanceTimersByTimeAsync(5_000); // cap fires -> pendingRetrieval
+    expect(api.pendingRetrieval).toBe(true);
+    const firstOutput = api.outputFile!;
+    const firstLogo = api.logoFile;
+
+    // Admitting a start here would overwrite outputFile/logoFile and orphan the
+    // finalized-but-unretrieved video (the state stop still recovers from), so
+    // the guard must reject it and point the agent at stop instead.
+    fakeStream();
+    fakeChild();
+    try {
+      await startAndSettle(api);
+      expect.unreachable();
+    } catch (err) {
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_ALREADY_ACTIVE);
+    }
+    // The first recording's session pointers are untouched -> still retrievable.
+    expect(api.outputFile).toBe(firstOutput);
+    expect(api.logoFile).toBe(firstLogo);
+    expect(api.pendingRetrieval).toBe(true);
   });
 
   it("durationMs reflects the capture length, not the idle time after the cap", async () => {
@@ -1123,6 +1203,28 @@ describe("screen recording stop", () => {
     await fs.rm(outputFile, { force: true });
   });
 
+  it("still reports a frame-stream drop when the cap fired after the drop", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { timeLimitSeconds: 5 });
+    // Stream drops mid-recording, THEN the cap fires. The cap's finalize nulls
+    // api.frameStream, so a stop that reads api.frameStream.error afterwards
+    // would lose the drop entirely and never emit the freeze hint.
+    stream.error = new Error("frame stream aborted");
+    await vi.advanceTimersByTimeAsync(5_000); // cap fires, nulls frameStream
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+
+    const result = await stopCapture(api);
+
+    // Both the cap notice and the freeze hint must survive.
+    expect(result.warning).toContain("time limit");
+    expect(result.warning).toContain("frame stream");
+    await fs.rm(outputFile, { force: true });
+  });
+
   it("stop fails loudly when the recording left no file behind", async () => {
     const api = await makeSession(iosDevice);
     fakeStream();
@@ -1137,6 +1239,29 @@ describe("screen recording stop", () => {
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING);
     }
     // The session must still be startable after a failed stop.
+    expect(api.recordingActive).toBe(false);
+    expect(api.stopPending).toBe(false);
+  });
+
+  it("removes the empty container rather than orphaning it when a stop fails", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api);
+    // ffmpeg opened its output with `-y` but wrote nothing (odd-resolution
+    // encode abort, disk full mid-header, ...): a real 0-byte file is on disk.
+    const outputFile = api.outputFile!;
+    await fs.writeFile(outputFile, Buffer.alloc(0));
+
+    try {
+      await stopCapture(api);
+      expect.unreachable();
+    } catch (err) {
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING);
+    }
+    // The dead 0-byte temp must not be left behind in os.tmpdir.
+    await expect(fs.access(outputFile)).rejects.toThrow();
     expect(api.recordingActive).toBe(false);
     expect(api.stopPending).toBe(false);
   });
@@ -1159,5 +1284,19 @@ describe("readJpegDimensions", () => {
 
   it("returns null when there is no frame header", () => {
     expect(readJpegDimensions(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).toBeNull();
+  });
+
+  it("skips 0xFF fill bytes before a marker (T.81 B.1.1.2)", () => {
+    // A decoder-valid JPEG may pad any number of 0xFF fill bytes before a
+    // marker. Splice extras in ahead of the SOF: ffprobe/libjpeg read this
+    // fine, so the dimension reader must too rather than bailing to null and
+    // silently dropping the watermark.
+    const base = fakeJpeg(640, 480);
+    const withFill = Buffer.concat([
+      base.subarray(0, 2), // SOI
+      Buffer.from([0xff, 0xff, 0xff]), // fill bytes before the SOF marker
+      base.subarray(2), // SOF0 + payload + EOI
+    ]);
+    expect(readJpegDimensions(withFill)).toEqual({ width: 640, height: 480 });
   });
 });

@@ -78,15 +78,23 @@ export function resolveFfmpeg(): Promise<string | null> {
 // down to even while the rgba logo scales to the odd value, and maskedmerge
 // aborts on the size mismatch. Snap everything to even.
 const even = (n: number) => 2 * Math.round(n / 2);
+// Rounds DOWN to even: used for the frame-fitting clamps, where rounding up
+// could push the box one pixel past the frame edge.
+const evenFloor = (n: number) => 2 * Math.floor(n / 2);
 
 /** The bottom-left watermark rectangle in pixels (all even) for a frame size. */
 export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox {
-  const w = Math.max(2, even(width * WATERMARK_WIDTH_FRACTION));
-  const h = Math.max(2, even(w / LOGO_ASPECT));
+  // Cap the box to the frame so a pathological aspect ratio (a frame far wider
+  // than tall keeps the logo aspect and would otherwise make the box taller
+  // than the frame) can't yield a crop rectangle larger than the input —
+  // ffmpeg's crop aborts (-22) on that and kills the whole recording. Real
+  // device resolutions never hit the cap; the box sits well inside the frame.
+  const w = Math.max(2, Math.min(even(width * WATERMARK_WIDTH_FRACTION), evenFloor(width)));
+  const h = Math.max(2, Math.min(even(w / LOGO_ASPECT), evenFloor(height)));
   const margin = even(width * WATERMARK_MARGIN_FRACTION);
   const bottomMargin = even(width * WATERMARK_BOTTOM_MARGIN_FRACTION);
-  const x = Math.max(0, Math.min(even(margin), even(width - w)));
-  const y = Math.max(0, Math.min(even(height - h - bottomMargin), even(height - h)));
+  const x = Math.max(0, Math.min(even(margin), evenFloor(width - w)));
+  const y = Math.max(0, Math.min(even(height - h - bottomMargin), evenFloor(height - h)));
   return { w, h, x, y };
 }
 
@@ -106,12 +114,22 @@ export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox
  * input runs at OUTPUT_FPS so maskedmerge's per-frame streams stay in lockstep.
  */
 export function buildWatermarkGraph(dims: Dimensions): string {
-  const { w, h, x, y } = computeWatermarkBox(dims);
+  // yuv420p (the encoder's pixel format) needs even output dimensions, and a
+  // device whose native frame is odd on either axis (iPhone 16 / 15 Pro / 15 /
+  // 14 Pro stream at 1179x2556) would otherwise reach libx264 with an odd size
+  // and fail the whole encode. Even the base up front when needed, and derive
+  // the box from the same evened size so the mask crop stays inside it. An
+  // already-even frame keeps the graph unchanged.
+  const evenW = evenFloor(dims.width);
+  const evenH = evenFloor(dims.height);
+  const { w, h, x, y } = computeWatermarkBox({ width: evenW, height: evenH });
+  const evenCrop =
+    evenW !== dims.width || evenH !== dims.height ? `,crop=${evenW}:${evenH}:0:0` : "";
   const span = MASK_LIGHT_MIN_LUMA - MASK_DARK_MAX_LUMA;
   // High where the background is dark (-> keep the white logo), low where light.
   const maskRamp = `lut=y='clip((${MASK_LIGHT_MIN_LUMA}-val)/${span}*255,0,255)'`;
   return [
-    `[0:v]fps=${OUTPUT_FPS},split=2[base][under]`,
+    `[0:v]fps=${OUTPUT_FPS}${evenCrop},split=2[base][under]`,
     `[under]crop=${w}:${h}:${x}:${y},format=gray,${maskRamp},format=gbrap[mask]`,
     `[1:v]fps=${OUTPUT_FPS},format=rgba,scale=${w}:${h},split=2[white][darksrc]`,
     `[darksrc]colorchannelmixer=rr=${DARK_LOGO_LEVEL}:gg=${DARK_LOGO_LEVEL}:bb=${DARK_LOGO_LEVEL}[dark]`,

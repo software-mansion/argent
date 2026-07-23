@@ -71,18 +71,25 @@ export interface ScreenRecordingSessionApi {
   watermarkSkipped: string | null;
   /** Live subscription to simulator-server's frame stream. */
   frameStream: { readonly error: Error | null; close(): void } | null;
+  /**
+   * The frame stream's drop error, captured when the pump is torn down (cap,
+   * crash, stop) before `frameStream` is nulled — so a stop arriving after a
+   * cap/crash can still surface the "video may freeze" hint, which it could not
+   * once `frameStream` (and its `error`) was gone.
+   */
+  lastFrameStreamError: Error | null;
   /** Interval pacing frames onto the fixed output frame rate. */
   pumpTimer: NodeJS.Timeout | null;
   /** Drop unchanged frames past a short grace so dead stretches don't pad the video. */
   trimStatic: boolean;
   /** Frames the pump has fed the encoder; the output video's length in frames. */
   framesWritten: number;
+  /** Whether trimming ever collapsed a static stretch (crossed the grace and dropped frames). */
+  trimmedAnyFrames: boolean;
   /** Restore the touch visualizer to off; set while it is on for this recording. */
   pointerDisable: (() => Promise<void>) | null;
   /** The touch visualizer was requested but simulator-server would not enable it. */
   pointerFailed: boolean;
-  /** Whether trimming ever collapsed a static stretch (crossed the grace and dropped frames). */
-  trimmedAnyFrames: boolean;
   wallClockStartMs: number | null;
   /** When the capture stopped producing frames (cap fired, process exited, stop signaled). */
   wallClockEndMs: number | null;
@@ -110,6 +117,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.captureProcess = null;
   state.pendingChild = null;
   state.frameStream = null;
+  state.lastFrameStreamError = null;
   state.pointerDisable = null;
   state.pointerFailed = false;
   state.recordingTimedOut = false;
@@ -167,12 +175,13 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       logoFile: null,
       watermarkSkipped: null,
       frameStream: null,
+      lastFrameStreamError: null,
       pumpTimer: null,
       trimStatic: true,
       framesWritten: 0,
+      trimmedAnyFrames: false,
       pointerDisable: null,
       pointerFailed: false,
-      trimmedAnyFrames: false,
       wallClockStartMs: null,
       wallClockEndMs: null,
       timeLimitSeconds: null,
