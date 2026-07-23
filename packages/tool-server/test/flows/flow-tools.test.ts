@@ -578,6 +578,51 @@ describe("flow-finish-recording", () => {
     expect(result.summary).toEqual(["1. echo: Before tap", '2. tool: tap {"x":0.5}']);
   });
 
+  it("uses file-facing target labels in gesture summaries", async () => {
+    const name = "gesture-target-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [
+          {
+            kind: "tap",
+            selector: { text: "Tap me" },
+          },
+          {
+            kind: "long-press",
+            x: 0.25,
+            y: 0.75,
+          },
+          {
+            kind: "swipe",
+            from: { selector: { text: "Card", loose: true } },
+            direction: "left",
+          },
+          {
+            kind: "swipe",
+            from: { x: 0.1, y: 0.2 },
+            to: { selector: { identifier: "destination" } },
+          },
+        ],
+      })
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, {});
+
+    expect(result.summary).toEqual([
+      '1. tap: {"text":"Tap me"}',
+      "2. long-press: (0.25, 0.75)",
+      '3. swipe: left from "Card"',
+      '4. swipe: to {"id":"destination"} from (0.1, 0.2)',
+    ]);
+  });
+
   it("distinguishes contains, equals, and regex text comparisons in the summary", async () => {
     const name = "text-comparison-summary";
     await flowStartRecordingTool.execute(

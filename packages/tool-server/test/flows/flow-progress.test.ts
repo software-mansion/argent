@@ -196,6 +196,48 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
     ]);
   });
 
+  it("labels swipe reports with their travel and optional starting target", async () => {
+    // Stop before executing gestures: skipped directives still need complete
+    // labels so the CLI can identify every swipe in a failed flow.
+    await writeFlow("swipe-labels", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "boom", args: {} },
+        { kind: "swipe", direction: "left" },
+        {
+          kind: "swipe",
+          from: { selector: { text: "Card", loose: true } },
+          direction: "right",
+        },
+        { kind: "swipe", by: { x: 0.25, y: -0.4 } },
+        {
+          kind: "swipe",
+          from: { x: 0.5, y: 0.8 },
+          to: { selector: { identifier: "archive" } },
+        },
+        {
+          kind: "swipe",
+          from: { selector: { textMatches: "^Card \\d+$" } },
+          to: { x: 0.1, y: 0.5 },
+        },
+      ],
+    });
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    const result = asRun(
+      await runFlow.execute({}, { name: "swipe-labels", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.steps.map((s) => s.target)).toEqual([
+      undefined,
+      "left",
+      'right from "Card"',
+      "by x=0.25, y=-0.4",
+      "to id=archive from (0.5, 0.8)",
+      "to (0.1, 0.5) from /^Card \\d+$/",
+    ]);
+  });
+
   it("runs identically when no progress consumer is attached", async () => {
     await writeFlow("main", {
       executionPrerequisite: "",
