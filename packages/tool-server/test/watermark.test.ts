@@ -36,6 +36,25 @@ describe("computeWatermarkBox", () => {
     expect(box.w).toBeGreaterThanOrEqual(2);
     expect(box.h).toBeGreaterThanOrEqual(2);
   });
+
+  it("never lets the crop box exceed the frame, even for pathological aspect ratios", () => {
+    // A frame far wider than tall keeps the logo's 900:277 aspect, which would
+    // otherwise make the box taller than the frame. ffmpeg's crop aborts (-22)
+    // on a rectangle larger than the input and kills the whole recording, so
+    // the box must stay inside the frame on every axis regardless of shape.
+    for (const dims of [
+      { width: 1000, height: 50 }, // 20:1, h would overflow the height
+      { width: 2000, height: 30 }, // extreme wide-short
+      { width: 40, height: 41 }, // sub-55px width, odd height rounding edge
+    ]) {
+      const box = computeWatermarkBox(dims);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.w).toBeLessThanOrEqual(dims.width);
+      expect(box.y + box.h).toBeLessThanOrEqual(dims.height);
+      for (const v of [box.w, box.h, box.x, box.y]) expect(v % 2).toBe(0);
+    }
+  });
 });
 
 describe("buildWatermarkGraph", () => {

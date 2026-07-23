@@ -78,15 +78,23 @@ export function resolveFfmpeg(): Promise<string | null> {
 // down to even while the rgba logo scales to the odd value, and maskedmerge
 // aborts on the size mismatch. Snap everything to even.
 const even = (n: number) => 2 * Math.round(n / 2);
+// Rounds DOWN to even: used for the frame-fitting clamps, where rounding up
+// could push the box one pixel past the frame edge.
+const evenFloor = (n: number) => 2 * Math.floor(n / 2);
 
 /** The bottom-left watermark rectangle in pixels (all even) for a frame size. */
 export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox {
-  const w = Math.max(2, even(width * WATERMARK_WIDTH_FRACTION));
-  const h = Math.max(2, even(w / LOGO_ASPECT));
+  // Cap the box to the frame so a pathological aspect ratio (a frame far wider
+  // than tall keeps the logo aspect and would otherwise make the box taller
+  // than the frame) can't yield a crop rectangle larger than the input —
+  // ffmpeg's crop aborts (-22) on that and kills the whole recording. Real
+  // device resolutions never hit the cap; the box sits well inside the frame.
+  const w = Math.max(2, Math.min(even(width * WATERMARK_WIDTH_FRACTION), evenFloor(width)));
+  const h = Math.max(2, Math.min(even(w / LOGO_ASPECT), evenFloor(height)));
   const margin = even(width * WATERMARK_MARGIN_FRACTION);
   const bottomMargin = even(width * WATERMARK_BOTTOM_MARGIN_FRACTION);
-  const x = Math.max(0, Math.min(even(margin), even(width - w)));
-  const y = Math.max(0, Math.min(even(height - h - bottomMargin), even(height - h)));
+  const x = Math.max(0, Math.min(even(margin), evenFloor(width - w)));
+  const y = Math.max(0, Math.min(even(height - h - bottomMargin), evenFloor(height - h)));
   return { w, h, x, y };
 }
 
