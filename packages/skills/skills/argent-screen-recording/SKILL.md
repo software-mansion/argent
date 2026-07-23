@@ -14,7 +14,7 @@ One recording per device at a time; different devices can record concurrently. R
 
 ## 2. Critical: never leave a recording running
 
-A recording does not stop itself before its `timeLimitSeconds` cap, and a forgotten one wastes disk and returns a video full of dead air. Two safety nets exist — use both:
+A recording does not stop itself before its `timeLimitSeconds` cap, so a forgotten one keeps capturing until the cap fires — holding the recording session, wasting disk, and delaying the video you are waiting on (and with `trimStatic: false` it comes back padded with dead air). Two safety nets exist — use both:
 
 1. **Set yourself a reminder the moment the recording starts.** You know the expected capture length (the interaction you are about to drive). Immediately after `screen-recording-start` returns, schedule a wake-up for that expected end time using whatever your harness provides — a built-in reminder/wakeup or scheduled-task tool if you have one, otherwise a background shell running `sleep <expected-seconds>` whose completion notification pulls you back. When it fires, call `screen-recording-stop`. Do not rely on remembering.
 2. **Read the tool-result notes.** While a recording is running, every argent tool result carries a `NOTE:` reminding you it is still going and how to stop it. If the note says the recording already ended (time limit hit), still call `screen-recording-stop` — that is what hands you the file.
