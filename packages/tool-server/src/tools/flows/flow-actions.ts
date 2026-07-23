@@ -24,6 +24,14 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
 import {
+  buildAxisCandidate,
+  decomposePinch,
+  selectPinchCandidate,
+  systemEdgeGuards,
+  PINCH_SETTLE_MS,
+  type PinchCandidate,
+} from "./flow-pinch-geometry";
+import {
   describeSelector,
   describeTextExpectation,
   type FlowSelector,
@@ -72,7 +80,7 @@ export const ABORTED_OUTCOME: DirectiveOutcome = {
 /** The selector-acting steps {@link runDirective} handles. */
 export type DirectiveStep = Extract<
   FlowStep,
-  { kind: "tap" | "long-press" | "type" | "await" | "assert" | "scroll-to" }
+  { kind: "tap" | "long-press" | "type" | "await" | "assert" | "scroll-to" | "pinch" }
 >;
 
 /** Dispatch a tool with the run's resolved device id bound into its args. */
@@ -578,7 +586,7 @@ function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
 }
 
-/** Execute one selector-acting directive (`tap` / `long-press` / `type` / `await` / `assert` / `scroll-to`). */
+/** Execute one selector-acting directive (`tap` / `long-press` / `type` / `await` / `assert` / `scroll-to` / `pinch`). */
 export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
   // Vega is remote-driven — there is no touch input, so the touch directives
   // can never act on it. Fail upfront with authoring guidance instead of a
@@ -588,11 +596,21 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     (step.kind === "tap" ||
       step.kind === "long-press" ||
       step.kind === "type" ||
-      step.kind === "scroll-to")
+      step.kind === "scroll-to" ||
+      step.kind === "pinch")
   ) {
     return {
       ok: false,
       reason: `${step.kind} is a touch directive and Vega is remote-driven — move focus with \`tool: tv-remote\` steps (and type via \`tool: keyboard\`) instead`,
+    };
+  }
+  // Chromium: not "no backend" — CDP can dispatch two-finger touch, but a
+  // mouse-driven desktop app has no uniform pinch-zoom mapping for it to hit.
+  if (step.kind === "pinch" && env.device.platform === "chromium") {
+    return {
+      ok: false,
+      reason:
+        "pinch is unsupported on chromium — desktop apps have no uniform pinch-zoom mapping (they zoom via ctrl+wheel or their own controls); drive the app's zoom UI with tap/keyboard instead",
     };
   }
   switch (step.kind) {
@@ -611,6 +629,8 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
       if (r.aborted) return ABORTED_OUTCOME;
       return { ok: Boolean(r.frame), reason: r.reason };
     }
+    case "pinch":
+      return runPinch(env, step);
   }
 }
 
@@ -696,6 +716,69 @@ async function runLongPress(
         { type: "Up", x: point.x, y: point.y, delayMs: duration },
       ],
     });
+  }
+  return { ok: true };
+}
+
+/**
+ * Pinch-zoom by `scale` centered on a selector's frame (settled tree +
+ * auto-wait, like tap) or on the screen center when no selector is given. The
+ * scale decomposes into equal-ratio sub-gestures chained with a recognizer
+ * reset delay; per sub-gesture, a horizontal and a vertical candidate are
+ * built from the axis-matching frame dimension and the better one dispatched
+ * (see flow-pinch-geometry). Open-loop by design: there is no "current zoom"
+ * to read back, so flows assert on the result, not the multiplier.
+ */
+async function runPinch(
+  env: ActionEnv,
+  step: { selector?: FlowSelector; scale: number }
+): Promise<DirectiveOutcome> {
+  let center = { x: 0.5, y: 0.5 };
+  let frame: DescribeFrame | undefined;
+  if (step.selector) {
+    const resolved = await waitForFrame(env, step.selector);
+    if (resolved === "aborted") return ABORTED_OUTCOME;
+    if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
+    frame = resolved;
+    center = getDescribeTapPoint(resolved);
+  }
+
+  const { n, per } = decomposePinch(step.scale);
+  // Guards are resolved exactly once per directive; geometry only ever
+  // receives them as data (the seam for a future per-device query).
+  const guards = systemEdgeGuards(env.device);
+  const candidates = [
+    buildAxisCandidate({ angle: 0, center, targetSpan: frame?.width, per, guards }),
+    buildAxisCandidate({ angle: 90, center, targetSpan: frame?.height, per, guards }),
+  ].filter((c): c is PinchCandidate => c !== undefined);
+  const selected = selectPinchCandidate(candidates);
+  if (!selected) {
+    // The only geometry failure: literally no room to move the fingers —
+    // never "target too small" (a tiny target is still attempted).
+    return {
+      ok: false,
+      reason: `pinch found no on-screen finger travel around (${center.x}, ${center.y})`,
+    };
+  }
+
+  const args: Record<string, unknown> = {
+    centerX: center.x,
+    centerY: center.y,
+    startDistance: selected.start,
+    endDistance: selected.end,
+    angle: selected.angle,
+  };
+  // Centroid drift rides the gesture only on the moving axis, and only when
+  // the clamp actually moved it.
+  const startCenter = selected.angle === 0 ? center.x : center.y;
+  if (selected.endCenter !== startCenter) {
+    args[selected.angle === 0 ? "endCenterX" : "endCenterY"] = selected.endCenter;
+  }
+
+  for (let i = 0; i < n; i++) {
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
+    await invokeOnDevice(env, "gesture-pinch", args);
+    if (i < n - 1 && !(await sleepOrAbort(PINCH_SETTLE_MS, env.signal))) return ABORTED_OUTCOME;
   }
   return { ok: true };
 }
