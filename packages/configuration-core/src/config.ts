@@ -1,25 +1,103 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { argentHomeDir, configFilePath } from "./paths.js";
+import { configDir, configFilePath, type ConfigPathOptions } from "./paths.js";
+import type { FlagScope } from "./flags.js";
 
-// Shared read/write for ~/.argent/config.json. The config holds several
-// independent keys (telemetry consent, first-run notices, Lens preferences,
-// ...), so every writer must merge rather than overwrite, and publish
-// atomically so an interrupted write can never truncate keys it does not own.
+// Shared read/write for the `.argent/config.json` documents. The config holds
+// several independent keys (telemetry consent, first-run notices, Lens
+// preferences, ...) at two scopes — `global` (`~/.argent`) and `project`
+// (`<project-root>/.argent`) — so every writer must merge rather than
+// overwrite, and publish atomically so an interrupted write can never truncate
+// keys it does not own.
 
-/** Parse the config document, returning an empty object when missing/malformed. */
-export function readConfigObject(): Record<string, unknown> {
+/**
+ * Parse a scope's config document, returning an empty object when
+ * missing/malformed. Defaults to the global scope for backward compatibility.
+ */
+export function readConfigObject(
+  scope: FlagScope = "global",
+  options: ConfigPathOptions = {}
+): Record<string, unknown> {
   try {
-    const raw = fs.readFileSync(configFilePath(), "utf8");
+    const raw = fs.readFileSync(configFilePath(scope, options), "utf8");
     const json = JSON.parse(raw) as unknown;
-    if (json && typeof json === "object") {
+    if (json && typeof json === "object" && !Array.isArray(json)) {
       return json as Record<string, unknown>;
     }
   } catch {
     /* missing or malformed — treat as a fresh document */
   }
   return {};
+}
+
+// ── dotted-path access ────────────────────────────────────────────────────
+// Config keys are dotted paths (`ios.deviceSet`) into the nested document.
+// These helpers read/write/remove a leaf while refusing prototype-polluting
+// segments so a crafted key can never reach `Object.prototype`.
+
+const FORBIDDEN_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+
+function splitKey(dottedKey: string): string[] {
+  const parts = dottedKey.split(".");
+  if (parts.length === 0 || parts.some((p) => p === "")) {
+    throw new Error(`Invalid config key "${dottedKey}": empty path segment`);
+  }
+  for (const p of parts) {
+    if (FORBIDDEN_SEGMENTS.has(p)) {
+      throw new Error(`Invalid config key "${dottedKey}": forbidden segment "${p}"`);
+    }
+  }
+  return parts;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Read the value at a dotted key, or `undefined` when any segment is missing. */
+export function getAtPath(obj: Record<string, unknown>, dottedKey: string): unknown {
+  const parts = splitKey(dottedKey);
+  let cur: unknown = obj;
+  for (const part of parts) {
+    if (!isPlainObject(cur)) return undefined;
+    cur = cur[part];
+  }
+  return cur;
+}
+
+/** Set the value at a dotted key, creating intermediate objects as needed. */
+export function setAtPath(obj: Record<string, unknown>, dottedKey: string, value: unknown): void {
+  const parts = splitKey(dottedKey);
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i]!;
+    const next = cur[part];
+    if (!isPlainObject(next)) {
+      cur[part] = {};
+    }
+    cur = cur[part] as Record<string, unknown>;
+  }
+  cur[parts[parts.length - 1]!] = value;
+}
+
+/**
+ * Delete the leaf at a dotted key. Returns true when something was removed.
+ * Intermediate objects are left in place (an emptied parent stays as `{}`),
+ * matching how the previous per-key clearers behaved.
+ */
+export function deleteAtPath(obj: Record<string, unknown>, dottedKey: string): boolean {
+  const parts = splitKey(dottedKey);
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const next = cur[parts[i]!];
+    if (!isPlainObject(next)) return false;
+    cur = next;
+  }
+  const leaf = parts[parts.length - 1]!;
+  if (!Object.hasOwn(cur, leaf)) return false;
+  delete cur[leaf];
+  return true;
 }
 
 // A read → mutate → publish cycle completes in well under a second; a lock held
@@ -48,8 +126,8 @@ interface ConfigLock {
 // non-null result must be released. Stale-lock recovery is best-effort: in the
 // pathological case of two writers observing the same orphaned lock at once the
 // steal can race, but that is vastly rarer than the lost-update it replaces.
-function acquireConfigLock(): ConfigLock | null {
-  const lockPath = configFilePath() + ".lock";
+function acquireConfigLock(finalPath: string): ConfigLock | null {
+  const lockPath = finalPath + ".lock";
   const deadline = Date.now() + LOCK_MAX_WAIT_MS;
   for (;;) {
     try {
@@ -107,16 +185,21 @@ function releaseConfigLock(lock: ConfigLock): void {
  * the last `rename` wins — silently dropping the other's change (e.g. a
  * telemetry opt-out lost behind a first-run-notice write).
  */
-export function updateConfig(mutate: (config: Record<string, unknown>) => void): void {
-  fs.mkdirSync(argentHomeDir(), { recursive: true });
+export function updateConfig(
+  mutate: (config: Record<string, unknown>) => void,
+  scope: FlagScope = "global",
+  options: ConfigPathOptions = {}
+): void {
+  const dir = configDir(scope, options);
+  fs.mkdirSync(dir, { recursive: true });
 
-  const lock = acquireConfigLock();
+  const finalPath = configFilePath(scope, options);
+  const lock = acquireConfigLock(finalPath);
   try {
-    const next = readConfigObject();
+    const next = readConfigObject(scope, options);
     mutate(next);
 
-    const finalPath = configFilePath();
-    const tmpPath = path.join(argentHomeDir(), `.config.tmp.${process.pid}.${crypto.randomUUID()}`);
+    const tmpPath = path.join(dir, `.config.tmp.${process.pid}.${crypto.randomUUID()}`);
     const fd = fs.openSync(tmpPath, "wx", 0o600);
     try {
       fs.writeSync(fd, JSON.stringify(next, null, 2) + "\n");
@@ -137,48 +220,4 @@ export function updateConfig(mutate: (config: Record<string, unknown>) => void):
   } finally {
     if (lock) releaseConfigLock(lock);
   }
-}
-
-// ── Argent Lens preferences ──────────────────────────────────────────────
-// Stored under the `lens` key of the shared config document, e.g.
-// `{ "lens": { "agent": "claude" } }`. `argent lens` reads `agent` to skip the
-// window's agent picker on subsequent runs, and writes it when the human ticks
-// "Remember this choice".
-
-/** Shape of the `lens` config section. Only the keys we read are typed. */
-interface LensConfig {
-  /** The coding-agent id last remembered for `argent lens` (e.g. "claude"). */
-  agent?: string;
-}
-
-function readLensConfig(): LensConfig {
-  const lens = readConfigObject().lens;
-  return lens && typeof lens === "object" ? (lens as LensConfig) : {};
-}
-
-/** The remembered `argent lens` agent id, or null when none is stored. */
-export function getRememberedAgent(): string | null {
-  const agent = readLensConfig().agent;
-  return typeof agent === "string" && agent.trim() ? agent : null;
-}
-
-/** Persist the chosen `argent lens` agent id so later runs skip the picker. */
-export function setRememberedAgent(agentId: string): void {
-  updateConfig((config) => {
-    const lens =
-      config.lens && typeof config.lens === "object"
-        ? (config.lens as Record<string, unknown>)
-        : {};
-    lens.agent = agentId;
-    config.lens = lens;
-  });
-}
-
-/** Forget the remembered `argent lens` agent (so the picker shows again). */
-export function clearRememberedAgent(): void {
-  updateConfig((config) => {
-    if (config.lens && typeof config.lens === "object") {
-      delete (config.lens as Record<string, unknown>).agent;
-    }
-  });
 }

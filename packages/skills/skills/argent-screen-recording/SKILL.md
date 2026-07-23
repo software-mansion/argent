@@ -14,7 +14,7 @@ One recording per device at a time; different devices can record concurrently. R
 
 ## 2. Critical: never leave a recording running
 
-A recording does not stop itself before its `timeLimitSeconds` cap, and a forgotten one wastes disk and returns a video full of dead air. Two safety nets exist — use both:
+A recording does not stop itself before its `timeLimitSeconds` cap, so a forgotten one keeps capturing until the cap fires — holding the recording session, wasting disk, and delaying the video you are waiting on (and with `trimStatic: false` it comes back padded with dead air). Two safety nets exist — use both:
 
 1. **Set yourself a reminder the moment the recording starts.** You know the expected capture length (the interaction you are about to drive). Immediately after `screen-recording-start` returns, schedule a wake-up for that expected end time using whatever your harness provides — a built-in reminder/wakeup or scheduled-task tool if you have one, otherwise a background shell running `sleep <expected-seconds>` whose completion notification pulls you back. When it fires, call `screen-recording-stop`. Do not rely on remembering.
 2. **Read the tool-result notes.** While a recording is running, every argent tool result carries a `NOTE:` reminding you it is still going and how to stop it. If the note says the recording already ended (time limit hit), still call `screen-recording-stop` — that is what hands you the file.
@@ -41,7 +41,7 @@ A recording does not stop itself before its `timeLimitSeconds` cap, and a forgot
 ## 4. Platform notes and limits
 
 - **What can be recorded**: anything simulator-server drives — iOS simulators, Android emulators, and physical Android devices. The only length limit is `timeLimitSeconds` (max 600).
-- **The timeline is wall-clock accurate**: a device only emits a frame when its screen changes, so captured frames are re-paced onto a steady 30 fps timeline. A recording of a completely still screen is still a full-length video (and compresses to almost nothing), and `durationMs` matches the time you actually recorded.
+- **The timeline is paced to a steady 30 fps**: a device only emits a frame when its screen changes, so captured frames are re-paced onto a fixed timeline rather than bunching up. With static-frame trimming off (`trimStatic: false`) that timeline is wall-clock accurate — a completely still screen still comes back as a full-length video (compressing to almost nothing) and `durationMs` matches the time you actually recorded. With trimming on (the default, see §3) still stretches past the grace window are collapsed, so `durationMs` is the trimmed video length and `wallClockMs` carries the real elapsed time.
 - **Android**: records at the device's native resolution; secure screens (DRM, some password fields) come out black.
 - **Unsupported**: tvOS simulators, physical iPhones, Chromium apps, Vega/Fire TV, and remote (`remote:`-prefixed) simulators — none of them expose a readable frame stream. For a single still frame use `screenshot`; for a replayable interaction script use `argent-create-flow` instead of a video.
 - **ffmpeg is required**: it is the encoder, so `screen-recording-start` fails up front with an install hint if it is missing (`brew install ffmpeg`). It is resolved from `PATH` plus the usual Homebrew prefixes.

@@ -79,6 +79,8 @@ function registerTrace(store: ArtifactStore, traceFile: string): Promise<Artifac
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
   capability,
+  // Packaging plus the export passes routinely exceed the 30s fetch timeout.
+  longRunning: true,
   description: `Stop native profiling and export trace data.
 iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks XML.
 Android: sends SIGTERM to the perfetto daemon, polls /proc/<pid>, then \`adb pull\`s the .pftrace.

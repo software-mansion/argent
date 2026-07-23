@@ -31,6 +31,14 @@ function setArch(value: NodeJS.Architecture) {
   Object.defineProperty(process, "arch", { value, configurable: true });
 }
 
+// The on-disk binary name is `.exe` on Windows, extensionless elsewhere — must
+// match simulatorServerBinaryName(). Tests that don't override the platform run
+// against the host's real one, so their fixtures have to use the host-correct
+// name to pass on a Windows runner as well as on macOS/Linux.
+function ssBinName(): string {
+  return process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
+}
+
 beforeAll(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-resolver-"));
 });
@@ -97,6 +105,32 @@ describe("requireDarwin gating", () => {
     expect(r.keyboardPatchDylibPathTcp()).toBe(path.join(dir, "libKeyboardPatch.dylib"));
   });
 
+  it("resolves TCP dylibs from the default dylibs/tcp on linux (neutral, no override)", async () => {
+    // Without the tcp override env, the tcp dylib dir defaults to DYLIB_DIR/tcp —
+    // platform-NEUTRAL, exactly like the tcp ax-service's bin/tcp. Resolving from
+    // the base dir on a Linux host must land under tcp/, never a host-platform
+    // subdir, since these are darwin artifacts uploaded to the remote orchestrator.
+    setPlatform("linux");
+    const base = fs.mkdtempSync(path.join(tmpRoot, "dylibs-base-"));
+    const tcpDir = path.join(base, "tcp");
+    fs.mkdirSync(tcpDir, { recursive: true });
+    fs.writeFileSync(path.join(tcpDir, "libArgentInjectionBootstrap.dylib"), "");
+    fs.writeFileSync(path.join(tcpDir, "libNativeDevtoolsIos.dylib"), "");
+    fs.writeFileSync(path.join(tcpDir, "libKeyboardPatch.dylib"), "");
+    process.env.ARGENT_NATIVE_DEVTOOLS_DIR = base;
+    try {
+      const r = await loadResolver();
+      expect(r.bootstrapDylibPathTcp()).toBe(
+        path.join(tcpDir, "libArgentInjectionBootstrap.dylib")
+      );
+      expect(r.nativeDevtoolsDylibPathTcp()).toBe(path.join(tcpDir, "libNativeDevtoolsIos.dylib"));
+      expect(r.keyboardPatchDylibPathTcp()).toBe(path.join(tcpDir, "libKeyboardPatch.dylib"));
+    } finally {
+      if (originalDevtoolsDir === undefined) delete process.env.ARGENT_NATIVE_DEVTOOLS_DIR;
+      else process.env.ARGENT_NATIVE_DEVTOOLS_DIR = originalDevtoolsDir;
+    }
+  });
+
   it("throws a plain not-found (not a macOS-host error) for missing TCP dylibs on linux", async () => {
     // When the TCP artifacts haven't been downloaded, the file-existence check
     // gives a "not found" error — never the "requires a macOS host" gate.
@@ -106,6 +140,22 @@ describe("requireDarwin gating", () => {
     const r = await loadResolver();
     expect(() => r.bootstrapDylibPathTcp()).toThrow(/dylib not found/);
     expect(() => r.bootstrapDylibPathTcp()).not.toThrow(/requires a macOS host/);
+    // The error must be self-servicing: name the override env var so a user
+    // hitting a stale/dev build learns how to relocate the lookup.
+    expect(() => r.bootstrapDylibPathTcp()).toThrow(/ARGENT_NATIVE_DEVTOOLS_TCP_DIR/);
+  });
+
+  it("throws an actionable not-found (naming the override env) for a missing TCP ax-service", async () => {
+    // A missing TCP ax-service otherwise surfaces deep in describe as a
+    // misleading "reboot the simulator" hint; the resolver error must instead
+    // point at the override env so the real cause is diagnosable.
+    setPlatform("darwin");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-tcp-missing-"));
+    fs.mkdirSync(path.join(dir, "tcp"), { recursive: true });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(() => r.axServiceBinaryPathTcp()).toThrow(/TCP-transport binary not found/);
+    expect(() => r.axServiceBinaryPathTcp()).toThrow(/ARGENT_SIMULATOR_SERVER_TCP_DIR/);
   });
 
   it("throws with a root-cause message on linux for ax-service", async () => {
@@ -117,13 +167,14 @@ describe("requireDarwin gating", () => {
     expect(() => r.axServiceBinaryPath()).toThrow(/requires a macOS host/);
   });
 
-  it("resolves the ax-service TCP binary on linux (remote upload artifact)", async () => {
+  it("resolves the ax-service TCP binary from the platform-neutral bin/tcp on linux", async () => {
     // The TCP ax-service is uploaded to and `simctl spawn`d on the remote Mac
-    // orchestrator, so a Linux host must be able to resolve it — no darwin gate.
+    // orchestrator, so a Linux host must resolve it from the neutral bin/tcp —
+    // NOT bin/linux/tcp, which would never hold the darwin-built binary.
     setPlatform("linux");
     setArch("x64");
     const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-tcp-linux-"));
-    const tcpDir = path.join(dir, "linux", "tcp");
+    const tcpDir = path.join(dir, "tcp");
     fs.mkdirSync(tcpDir, { recursive: true });
     const binPath = path.join(tcpDir, "ax-service");
     fs.writeFileSync(binPath, "", { mode: 0o755 });
@@ -141,7 +192,7 @@ describe("simulator-server path resolution", () => {
     const dir = fs.mkdtempSync(path.join(tmpRoot, "platform-join-"));
     const platDir = path.join(dir, process.platform);
     fs.mkdirSync(platDir, { recursive: true });
-    const binPath = path.join(platDir, "simulator-server");
+    const binPath = path.join(platDir, ssBinName());
     fs.writeFileSync(binPath, "", { mode: 0o755 });
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
@@ -168,8 +219,8 @@ describe("simulator-server path resolution", () => {
     // the message tells them exactly what changed and how to fix it.
     const dir = fs.mkdtempSync(path.join(tmpRoot, "flat-layout-"));
     fs.mkdirSync(path.join(dir, process.platform), { recursive: true });
-    // Place the binary at the flat (old) path.
-    const flatBin = path.join(dir, "simulator-server");
+    // Place the binary at the flat (old) path, host-correct name.
+    const flatBin = path.join(dir, ssBinName());
     fs.writeFileSync(flatBin, "", { mode: 0o755 });
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
@@ -240,6 +291,45 @@ describe("host platform key (arch-aware Linux bin dirs)", () => {
   });
 });
 
+describe("Windows (win32) binary resolution", () => {
+  // The Windows release ships a PE `.exe` (simulator-server.exe), not the
+  // extensionless binary other hosts use. The resolver must pick the `.exe`
+  // name AND key the directory by "win32" (process.platform), so a Windows
+  // host finds bin/win32/simulator-server.exe. iOS is macOS-only, so this
+  // binary serves Android + Chromium hosts.
+  it("resolves bin/win32/simulator-server.exe on Windows", async () => {
+    setPlatform("win32");
+    setArch("x64");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "win32-"));
+    const platDir = path.join(dir, "win32");
+    fs.mkdirSync(platDir, { recursive: true });
+    const binPath = path.join(platDir, "simulator-server.exe");
+    fs.writeFileSync(binPath, "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(r.hostPlatformKey()).toBe("win32");
+    expect(r.simulatorServerBinaryName()).toBe("simulator-server.exe");
+    expect(r.simulatorServerBinaryPath()).toBe(binPath);
+    expect(r.simulatorServerBinaryDir()).toBe(platDir);
+  });
+
+  it("does not resolve an extensionless binary on Windows", async () => {
+    // Guards against a half-migrated layout: an extensionless
+    // bin/win32/simulator-server must NOT satisfy the resolver, since Windows
+    // can't exec it — the error should point at the `.exe` it actually needs.
+    setPlatform("win32");
+    setArch("x64");
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "win32-noext-"));
+    const platDir = path.join(dir, "win32");
+    fs.mkdirSync(platDir, { recursive: true });
+    fs.writeFileSync(path.join(platDir, "simulator-server"), "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(() => r.simulatorServerBinaryPath()).toThrow(/simulator-server\.exe/);
+    expect(() => r.simulatorServerBinaryPath()).toThrow(/win32/);
+  });
+});
+
 describe("ax-service path resolution", () => {
   it("joins process.platform into the ax-service bin path", async () => {
     if (originalPlatform !== "darwin") return;
@@ -253,10 +343,11 @@ describe("ax-service path resolution", () => {
     expect(r.axServiceBinaryPath()).toBe(binPath);
   });
 
-  it("joins process.platform/tcp into the ax-service TCP bin path", async () => {
-    if (originalPlatform !== "darwin") return;
+  it("resolves the ax-service TCP binary from the platform-neutral bin/tcp", async () => {
+    // The tcp ax-service is host-platform-independent (uploaded to the remote
+    // orchestrator), so it resolves at bin/tcp — not bin/<hostPlatform>/tcp.
     const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-tcp-"));
-    const tcpDir = path.join(dir, "darwin", "tcp");
+    const tcpDir = path.join(dir, "tcp");
     fs.mkdirSync(tcpDir, { recursive: true });
     const binPath = path.join(tcpDir, "ax-service");
     fs.writeFileSync(binPath, "", { mode: 0o755 });

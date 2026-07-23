@@ -98,8 +98,9 @@ export interface FlagsPathOptions {
  * Nearest ancestor of `startDir` (inclusive) that carries a {@link PROJECT_MARKERS}
  * marker, or `null` when the walk reaches the filesystem root without finding one
  * (i.e. `startDir` is not inside a project). Unlike {@link resolveProjectRoot},
- * this reports the "no project" case distinctly so callers can fall back to a
- * global location instead of silently anchoring at `startDir`.
+ * this reports the "no project" case distinctly, so callers that must not silently
+ * anchor at `startDir` can react — e.g. warn before materializing `.argent` in an
+ * arbitrary directory, or fall back to a global location.
  */
 export function findProjectRoot(startDir: string): string | null {
   let current = path.resolve(startDir);
