@@ -249,7 +249,13 @@ async function writeDurableUnique(
 export function durableSaveTarget(
   handle: ArtifactHandle
 ): { dir: string; path: string; base: string; rel: string } | null {
-  if (!handle.saveDir || handle.archive) return null;
+  // `saveDir` is unvalidated wire JSON (isArtifactHandle only checks id/filename),
+  // so reject anything that isn't a non-empty string here — a truthy non-string
+  // (number, object, array) would otherwise make `normalize()` below throw
+  // `ERR_INVALID_ARG_TYPE`, and since this runs *outside* the caller's try/catch
+  // that would reject the whole `materializeArtifacts` and lose every sibling
+  // artifact, instead of this one handle degrading to the temp cache.
+  if (typeof handle.saveDir !== "string" || !handle.saveDir || handle.archive) return null;
   const rel = normalize(handle.saveDir);
   if (
     isAbsolute(rel) ||

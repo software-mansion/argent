@@ -403,6 +403,16 @@ describe("durableSaveTarget", () => {
     expect(durableSaveTarget(handle("a", "x.mp4", "video/mp4"))).toBeNull();
   });
 
+  it("returns null (never throws) for a non-string saveDir from the wire", () => {
+    // `saveDir` is unvalidated JSON; a truthy non-string must not reach
+    // `normalize()` (which throws ERR_INVALID_ARG_TYPE on a non-string).
+    for (const bad of [1, 0, true, false, {}, [], null, undefined]) {
+      const h = { ...handle("a", "x.mp4", "video/mp4"), saveDir: bad } as unknown as ArtifactHandle;
+      expect(() => durableSaveTarget(h), JSON.stringify(bad)).not.toThrow();
+      expect(durableSaveTarget(h), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
   it("resolves saveDir under the project root with the sanitized filename", () => {
     const h: ArtifactHandle = {
       ...handle("a", "clip name.mp4", "video/mp4"),
@@ -892,6 +902,36 @@ describe("materializeArtifacts durable destination", () => {
       expect(await readFile(join(dir, "clip.mp4"), "utf8")).toBe("EXISTING"); // original intact
     } finally {
       await rm(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  it("a non-string saveDir degrades that handle without crashing the whole result", async () => {
+    // A hostile server tags one handle with a non-string saveDir; materialize
+    // must NOT reject (which would lose every sibling artifact) — the bad handle
+    // degrades to the temp cache and the good one still materializes.
+    for (const bad of [1, {}, [], true]) {
+      const evil = {
+        [ARTIFACT_MARKER]: true,
+        id: "e",
+        filename: "clip.mp4",
+        mimeType: "video/mp4",
+        size: MP4.length,
+        saveDir: bad,
+      } as unknown as ArtifactHandle;
+      const good: ArtifactHandle = {
+        [ARTIFACT_MARKER]: true,
+        id: "g",
+        filename: "ok.png",
+        mimeType: "image/png",
+        size: MP4.length,
+      };
+      const { result } = await materializeArtifacts(
+        { evil, good },
+        { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ e: MP4, g: MP4 }) }
+      );
+      const r = result as { evil: string | null; good: string | null };
+      expect(typeof r.good, JSON.stringify(bad)).toBe("string"); // sibling survived
+      expect(r.evil, JSON.stringify(bad)).not.toBeUndefined(); // handled, not thrown
     }
   });
 });
