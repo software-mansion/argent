@@ -15,7 +15,7 @@ description: Optimizes a React Native app by profiling first to find real bottle
 - **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
 - **One fix per cycle for architectural changes.** Mechanical batch fixes (inline styles, index keys) can be grouped — re-profile once after the batch. When the measurement involves device interaction, record it as a flow (`argent-create-flow` skill) before the first run so all subsequent cycles replay identical steps.
 - **React Compiler**: if `react-profiler-analyze` reports `reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out via `react-profiler-fiber-tree` (absent `useMemoCache`).
-- **Sub-agents**: Phases 1–2 dispatch sub-agents — one per file for lint results, one per checklist item for semantic. Sub-agents CANNOT touch the device - all profiling and E2E verification must happen in the main agent.
+- **Sub-agents**: Phases 1–2 may dispatch sub-agents, but the fan-out MUST be bounded — **never one per file, one per finding, or one per lint result**. Batch the work and run **at most 4 sub-agents per phase**. An unbounded sweep spawns one agent per source file, which costs far more than the fixes are worth. Sub-agents CANNOT touch the device - all profiling and E2E verification must happen in the main agent.
 
 ## Pipeline
 
@@ -33,12 +33,12 @@ Optimization Progress:
 
 ### Phase 1: Lint sweep
 
-Run ESLint once at the project root with a comprehensive RN performance ruleset. Dispatch sub-agents to fix results — one per file.
+Run ESLint once at the project root with a comprehensive RN performance ruleset, then apply `eslint --fix` — most of these rules autofix, which usually leaves only a handful of findings needing judgment. Group whatever remains by directory into **at most 4 batches** and dispatch **one sub-agent per batch** — never one per file.
 See [references/lint-rules.md](references/lint-rules.md) for ruleset and procedure.
 
 ### Phase 2: Semantic sweep
 
-Review each area requiring judgment — memoization, list rendering, animations, async patterns, effect cleanup, state hygiene, context architecture. Dispatch one sub-agent per checklist item.
+Review each area requiring judgment — memoization, list rendering, animations, async patterns, effect cleanup, state hygiene, context architecture. Split those seven areas across **at most 4 sub-agents**, grouping related areas together — never one sub-agent per finding.
 See [references/semantic-checklist.md](references/semantic-checklist.md) for full checklist.
 
 ### Phase 3: Visual profiling
@@ -55,8 +55,8 @@ Navigate every screen and UI flow within scope, confirm each renders without err
 
 ## App-wide optimization
 
-1. **Phase 1**: run lint centrally (one command), dispatch sub-agents to fix per-file in parallel
-2. **Phase 2**: one sub-agent per checklist item for semantic sweep
+1. **Phase 1**: run lint centrally (one command), autofix, then dispatch at most 4 batched sub-agents for what remains
+2. **Phase 2**: split the checklist areas across at most 4 sub-agents for the semantic sweep
 3. **Phase 3**: main agent profiles top offending screens; fixes architectural issues top-down
 4. **Phase 4**: main agent navigates all screens to verify nothing crashes
 
