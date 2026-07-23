@@ -111,6 +111,7 @@
   --border-hairline: 1px;
   --border-strong: 2px; /* spotlight ring, touch dot */
   --connector-width: 1.5; /* SVG stroke-width (unitless) */
+  --map-edge-hit-width: 14; /* invisible hover-target stroke around a map edge (unitless, SVG) */
 
   /* ── Spacing — gaps (recurring roles) ────────────────────────────────── */
   --gap-tight: 5px;
@@ -140,6 +141,7 @@
   --pad-footbar: 8px 10px;
   --pad-footbar-input: 6px 9px;
   --pad-complete: 8px 14px;
+  --pad-tab-strip: 3px; /* gutter inside the Lens/Map segmented control */
 
   /* one-off margins / nudges (kept named by what they position) */
   --sub-margin: -4px 0 6px; /* device-picker caption */
@@ -181,6 +183,20 @@
   --pad-modal: 18px;
   --stream-max-h: 80dvh; /* dvh, not vh: in a browser tab `vh` is the toolbar-retracted (large) viewport, so the centered stream overflowed the %-height container and got clipped at the bottom. `dvh` tracks the visible viewport. In the frameless Electron window (no toolbar) dvh == vh, so production is unchanged. */
   --backdrop-blur: 1.67px; /* light haze over the dimmed stream (3× softer than the former 5px) */
+
+  /* Map tab (screen-graph crawler view) */
+  --map-node-w: 148px; /* screen card */
+  --map-node-h: 184px;
+  --map-world-pad: 56px; /* graph inset from the world's outer edge */
+  --map-entry-ring-w: 2.5px; /* accent ring drawn around an entry-point card */
+  --map-entry-marker: 14px; /* corner start-pin badge on an entry-point card */
+  --map-drag-band-h: 52px; /* top window-drag band; the pannable canvas starts below it */
+  --map-outside-glyph: 26px; /* placeholder glyph on the synthetic "left the app" card */
+  --map-spinner-size: 12px;
+  --map-state-max-width: 280px; /* status-strip verdict (may carry a failure message) */
+  --map-detail-shot-w: 220px; /* node-detail overlay screenshot column */
+  --map-detail-max-w: 640px;
+  --map-detail-max-h: 80dvh;
 
   /* ── Cursors ─────────────────────────────────────────────────────────── */
   /* Comment-mode cursor — a Figma-style speech bubble that makes "you are
@@ -242,4 +258,31 @@
   --spot-max-frame-area: 0.85; /* nodes whose frame covers more than this fraction of the screen are not treated as highlightables (catches Android full-screen container roots that lack iOS's explicit root flag) */
   --annpop-hover-grace-ms: 280; /* hover-card grace: pin ↔ popover travel */
   --success-toast-show-ms: 1200; /* how long the post-submit confirmation card lingers (browser mode; in Electron the window closes around it sooner) */
+  --dur-spin: 0.9s; /* map status spinner rotation */
+  --map-zoom-min: 0.25; /* map canvas zoom clamp */
+  --map-zoom-max: 2.5;
+  --map-zoom-intensity: 0.0015; /* wheel-px → zoom-factor exponent (cursor-anchored) */
+  --map-elapsed-tick-ms: 1000; /* elapsed-clock refresh while a crawl runs */
+
+  /* Force-directed graph layout (a one-shot synchronous settle, read by JS at
+     boot; see mapLayout). NOT a live simulation — these tune the single relax
+     that runs only when the graph gains nodes; between polls nothing moves. */
+  --map-spring-len: 208px; /* target centre-to-centre length of an edge */
+  --map-spring-k: 0.09; /* edge-spring stiffness (fraction of length error per iter) */
+  --map-repulsion: 46000; /* node-node inverse-square repulsion strength (px³/iter) */
+  --map-repulsion-cap: 540px; /* beyond this separation repulsion is ignored (keeps it O(N²)-cheap) */
+  --map-center-pull: 0.013; /* mild pull of movable nodes toward the graph centroid per iter */
+  --map-node-gap: 16px; /* minimum clear space between two screen-card edges (anti-occlusion) */
+  --map-collide-k: 0.5; /* how hard overlapping cards push apart (fraction of penetration per iter) */
+  --map-separate-passes: 24; /* floor of post-relax de-overlap passes (small graphs need only a few) */
+  --map-separate-passes-per-node: 6; /* de-overlap budget scales with node count so a single-shot cold-load of a large completed graph still fully un-stacks */
+  --map-max-step: 62px; /* per-iteration displacement clamp at the start of the cool */
+  --map-min-step: 0.5px; /* displacement clamp at the end of the cool (exponential schedule) */
+  --map-iters: 170; /* relaxation iterations run when new nodes were seeded */
+  --map-freeze-polls: 1; /* structural revisions a node stays movable before it freezes for good */
+  --map-grow-margin: 620px; /* world base offset — headroom so growth stays in positive space */
+  --map-edge-bow: 30px; /* perpendicular bow of an edge curve (separates A→B from B→A) */
+  --map-edge-clip: 5px; /* gap between an arrowhead and the target card's edge */
+  --map-activity-dot-size: 6px; /* Map-tab dot marking an unseen running crawl */
+  --map-activity-pulse-dur: 1.6s; /* that dot's pulse cadence */
 }

@@ -1,0 +1,218 @@
+import { describe, it, expect } from "vitest";
+import type { DescribeNode } from "../src/tools/describe/contract";
+import { fetchStableTree } from "../src/tools/map/stable-tree";
+import { screenKey, screenNodeCount } from "../src/tools/map/fingerprint";
+
+// A flat tree with `count` uniform buttons — enough to give each state a
+// distinct fingerprint and node count.
+function treeWithButtons(count: number): DescribeNode {
+  const children: DescribeNode[] = [];
+  for (let i = 0; i < count; i++) {
+    children.push({
+      role: "AXButton",
+      frame: { x: 0.1, y: 0.1 + i * 0.05, width: 0.8, height: 0.04 },
+      children: [],
+      label: `Row ${i}`,
+    });
+  }
+  return { role: "AXGroup", frame: { x: 0, y: 0, width: 1, height: 1 }, children };
+}
+
+// Drives fetchStableTree with a scripted sequence of trees; the last entry
+// repeats if the sampler asks for more. Records sleeps instead of waiting.
+function scripted(states: DescribeNode[]) {
+  let i = 0;
+  const sleeps: number[] = [];
+  return {
+    fetches: () => i,
+    sleeps,
+    options: {
+      fetch: () => Promise.resolve(states[Math.min(i++, states.length - 1)]!),
+      keyOf: screenKey,
+      // Match the driver: measure fullness over the fingerprint's node set.
+      sizeOf: screenNodeCount,
+      sleep: (ms: number) => {
+        sleeps.push(ms);
+        return Promise.resolve();
+      },
+    },
+  };
+}
+
+describe("fetchStableTree — sampled tree capture", () => {
+  it("a uniformly stable screen samples the full budget and returns it", async () => {
+    const stable = treeWithButtons(10);
+    const s = scripted([stable, stable]);
+    const result = await fetchStableTree(s.options);
+    expect(result).toBe(stable);
+    // A screen that reads identical every time is INDISTINGUISHABLE from an
+    // oscillation caught in its sparse phase (both just agree at one count), so
+    // the early exit must not fire — it never observed the tree grow to a peak
+    // (minCount === maxCount). It samples the whole budget and returns the tree.
+    expect(s.fetches()).toBe(5);
+    expect(s.sleeps).toHaveLength(4);
+  });
+
+  it("a sparse phase sampled first does not lock in before the fuller phase appears", async () => {
+    const full = treeWithButtons(41);
+    const sparse = treeWithButtons(30);
+    // Capture begins in the sparse phase (two sparse reads) before the screen
+    // swings to its fuller phase. A naive exit on the first agreeing pair would
+    // commit to the sparse look and never see `full`, keying the screen
+    // differently than a visit that began in the full phase.
+    const sparseFirst = screenKey(
+      await fetchStableTree(scripted([sparse, sparse, full, full, full]).options)
+    );
+    const fullFirst = screenKey(
+      await fetchStableTree(scripted([full, full, sparse, sparse, sparse]).options)
+    );
+    expect(sparseFirst).toBe(fullFirst);
+    expect(sparseFirst).toBe(screenKey(full));
+  });
+
+  it("a sparse phase leading for the whole settle floor still does not lock in before the fuller phase", async () => {
+    // The bite the plain floor missed: the sparse phase leads for the FIRST THREE
+    // reads (the settle floor), so the early-exit's `count === maxCount` guard is
+    // vacuously true — maxCount is only the fullest seen SO FAR, and nothing
+    // fuller has been sampled yet — and a naive floor commits to sparse at read 3,
+    // never sampling the fuller phase that arrives at read 4 (within the 5-sample
+    // budget). The capture must still hand back the fuller key.
+    const full = treeWithButtons(41);
+    const sparse = treeWithButtons(30);
+    const sparseFirst = screenKey(
+      await fetchStableTree(scripted([sparse, sparse, sparse, full, full]).options)
+    );
+    const fullFirst = screenKey(
+      await fetchStableTree(scripted([full, full, full, sparse, sparse]).options)
+    );
+    expect(sparseFirst).toBe(fullFirst);
+    expect(sparseFirst).toBe(screenKey(full));
+  });
+
+  it("measures fullness over the fingerprint's node set, so a fading scroll bar can't flip the key", async () => {
+    // screenKey excludes scroll-decoration overlays, but a RAW node count includes
+    // them. A scrollable screen flashes its scroll bar on appear then it fades, so
+    // one visit samples 30 content rows WITH the bar, another samples 31 rows with
+    // the bar already gone — the same raw total (31 == 30 + bar), so "fullest wins"
+    // by raw count is order-dependent and picks the sparser CONTENT half the time,
+    // keying the screen two different ways across visits. Measuring fullness with
+    // screenNodeCount (scroll decorations excluded, like the key) makes the fuller-
+    // content sample win regardless of which phase the visit sampled first.
+    const scrollBar: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0.95, y: 0.1, width: 0.02, height: 0.8 },
+      children: [],
+      label: "Vertical scroll bar, 3 pages",
+    };
+    const withScroll = treeWithButtons(30);
+    withScroll.children.push(scrollBar);
+    const noScroll = treeWithButtons(31);
+    // Sanity: the two raw-count the same (so a raw metric ties/flips), but differ
+    // by the fingerprint's node set (so the aligned metric ranks them correctly).
+    const scrollFirst = screenKey(
+      await fetchStableTree(scripted([withScroll, noScroll, noScroll]).options)
+    );
+    const contentFirst = screenKey(
+      await fetchStableTree(scripted([noScroll, withScroll, withScroll]).options)
+    );
+    expect(scrollFirst).toBe(contentFirst);
+    expect(scrollFirst).toBe(screenKey(noScroll));
+  });
+
+  it("rides out a transient describe failure, keeping the good sample already captured", async () => {
+    const full = treeWithButtons(12);
+    let calls = 0;
+    const result = await fetchStableTree({
+      fetch: () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.resolve(full)
+          : Promise.reject(new Error("transient AX glitch"));
+      },
+      keyOf: screenKey,
+      sleep: () => Promise.resolve(),
+    });
+    expect(result).toBe(full);
+  });
+
+  it("throws the underlying device error when every sample fails", async () => {
+    await expect(
+      fetchStableTree({
+        fetch: () => Promise.reject(new Error("device offline")),
+        keyOf: screenKey,
+        sleep: () => Promise.resolve(),
+      })
+    ).rejects.toThrow("device offline");
+  });
+
+  it("returns the fullest snapshot when the tree decays mid-capture", async () => {
+    // The live failure mode this exists for: an idle iOS screen whose AX tree
+    // drops content nodes seconds after settling (observed 41 ⇒ 30 on the
+    // Settings root). The sparse repeats must not win over the full look.
+    const full = treeWithButtons(12);
+    const sparse = treeWithButtons(4);
+    const s = scripted([full, sparse, sparse, sparse, sparse]);
+    const result = await fetchStableTree(s.options);
+    expect(result).toBe(full);
+    expect(s.fetches()).toBe(5);
+  });
+
+  it("converges on the full tree while the AX tree is still filling", async () => {
+    const chrome = treeWithButtons(2);
+    const full = treeWithButtons(12);
+    const s = scripted([chrome, full, full]);
+    const result = await fetchStableTree(s.options);
+    expect(result).toBe(full);
+    expect(s.fetches()).toBe(3);
+  });
+
+  it("never exceeds maxSamples and returns the fullest sample seen", async () => {
+    const a = treeWithButtons(3);
+    const b = treeWithButtons(9);
+    const c = treeWithButtons(6);
+    const s = scripted([a, b, c, a, b, c, a]);
+    const result = await fetchStableTree({ ...s.options, maxSamples: 3 });
+    expect(s.fetches()).toBe(3);
+    expect(result).toBe(b);
+  });
+
+  it("a late equally-full sample wins over an earlier one (freshest full look)", async () => {
+    const early = treeWithButtons(8);
+    const late = treeWithButtons(8);
+    // Distinct keys (different frames) so no early agreement fires.
+    late.children[0]!.frame.y = 0.9;
+    const mid = treeWithButtons(2);
+    const s = scripted([early, mid, late, mid, mid]);
+    const result = await fetchStableTree(s.options);
+    expect(result).toBe(late);
+  });
+});
+
+describe("fetchStableTree — order-independent capture of an oscillating screen", () => {
+  // The same screen flickering between a full and a sparse phase must produce
+  // ONE screenKey however the sampler phased into it — else back-navigation
+  // verification and revisit dedup fail. Oscillate once then settle: (A,B,B,…).
+  async function keyFromOrder(phaseA: DescribeNode, phaseB: DescribeNode): Promise<string> {
+    const s = scripted([phaseA, phaseB, phaseB]);
+    return screenKey(await fetchStableTree(s.options));
+  }
+
+  it("small sub-10% oscillation (40 ⇄ 38) keys the same from either phase first", async () => {
+    const full = treeWithButtons(40);
+    const sparse = treeWithButtons(38);
+    const fullFirst = await keyFromOrder(full, sparse); // (40, 38, 38)
+    const sparseFirst = await keyFromOrder(sparse, full); // (38, 40, 40)
+    expect(fullFirst).toBe(sparseFirst);
+    // ...and it is the fuller phase's key both times.
+    expect(fullFirst).toBe(screenKey(full));
+  });
+
+  it("large 27% oscillation (41 ⇄ 30) keys the same from either phase first", async () => {
+    const full = treeWithButtons(41);
+    const sparse = treeWithButtons(30);
+    const fullFirst = await keyFromOrder(full, sparse); // (41, 30, 30)
+    const sparseFirst = await keyFromOrder(sparse, full); // (30, 41, 41)
+    expect(fullFirst).toBe(sparseFirst);
+    expect(fullFirst).toBe(screenKey(full));
+  });
+});

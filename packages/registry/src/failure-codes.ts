@@ -201,6 +201,9 @@ export const FAILURE_CODES = {
   NATIVE_PROFILER_PERFETTO_READY_TIMEOUT: "NATIVE_PROFILER_PERFETTO_READY_TIMEOUT",
   NATIVE_PROFILER_PERFETTO_READY_EXITED: "NATIVE_PROFILER_PERFETTO_READY_EXITED",
 
+  MAP_CRAWL_ALREADY_RUNNING: "MAP_CRAWL_ALREADY_RUNNING",
+  MAP_APP_NOT_VISIBLE: "MAP_APP_NOT_VISIBLE",
+
   // screen-recording-start / screen-recording-stop. One capture path for every
   // platform (simulator-server's frame stream into ffmpeg), so the stages name
   // the step that failed rather than the device family.

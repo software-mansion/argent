@@ -27,6 +27,13 @@ export interface CallToolOptions {
    * in which case no events fire and the call behaves exactly as before.
    */
   onProgress?: (event: unknown) => void;
+  /**
+   * Abort the in-flight invocation. Tearing down the HTTP request is the
+   * cancellation channel: the server observes the client abort and cancels
+   * the running tool. The call rejects with the abort error, whether the
+   * signal fires before the response or mid-stream.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -174,6 +181,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         ...authHeaders(token),
       },
       body: JSON.stringify(finalArgs ?? {}),
+      signal: opts?.signal,
     });
     // The server only streams when the request asked for it AND every
     // pre-invoke gate passed (validation errors stay plain JSON with their

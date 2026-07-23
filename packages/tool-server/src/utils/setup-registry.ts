@@ -73,6 +73,7 @@ import { profilerLoadTool } from "../tools/profiler/query/profiler-load";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
+import { createMapAppTool } from "../tools/map";
 import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
 import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
@@ -177,6 +178,11 @@ export function createRegistry(): Registry {
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   registry.registerTool(stopMetroTool);
+
+  // App crawler (`argent map`). Cross-platform (iOS sim / Android), so it is
+  // registered everywhere; exposure is gated by `featureFlag: "argent-map"`,
+  // re-checked per request like every flag-gated tool.
+  registry.registerTool(createMapAppTool(registry));
 
   // Flow tools
   registry.registerTool(flowStartRecordingTool);

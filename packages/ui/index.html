@@ -1464,6 +1464,422 @@
         font-size: var(--fs-title);
         font-weight: var(--fw-bold);
       }
+
+      /* ── Lens / Map tab strip ────────────────────────────────────────── */
+      /* Floating segmented control, top-centre — clear of the macOS traffic
+         lights (top-left) by construction, so unlike .float-status it needs
+         no .native-frame gutter. Lives beside #main rather than inside it, so
+         it stays put while the tabs swap the content underneath. */
+      .tab-strip {
+        position: fixed;
+        top: var(--footbar-bottom);
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        padding: var(--pad-tab-strip);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-pill);
+        box-shadow: var(--shadow-pill);
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+      }
+      .tab-btn {
+        border: 0;
+        background: transparent;
+        color: var(--color-muted);
+        font: inherit;
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+        padding: var(--pad-toggle);
+        border-radius: var(--radius-pill);
+        cursor: pointer;
+        transition:
+          background var(--dur-hover) var(--ease-out),
+          color var(--dur-hover) var(--ease-out);
+      }
+      .tab-btn:hover {
+        color: var(--color-fg);
+      }
+      .tab-btn.active,
+      .tab-btn.active:hover {
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+      }
+      .tab-btn:focus-visible {
+        outline: var(--border-strong) solid var(--color-accent);
+        outline-offset: var(--border-strong);
+      }
+      /* Unseen-crawl indicator: a small accent dot on the Map tab when a crawl
+         is running and the user is on another tab. `position: relative` on the
+         button anchors it; the dot never affects layout. Suppressed on the
+         active tab (you're already looking at it) and honours reduced-motion. */
+      .tab-btn {
+        position: relative;
+      }
+      .tab-btn.has-activity:not(.active)::after {
+        content: "";
+        position: absolute;
+        top: calc(var(--map-activity-dot-size) * -0.25);
+        right: calc(var(--map-activity-dot-size) * -0.15);
+        width: var(--map-activity-dot-size);
+        height: var(--map-activity-dot-size);
+        border-radius: var(--radius-pill);
+        background: var(--color-accent);
+        animation: tab-activity-pulse var(--map-activity-pulse-dur) var(--ease-out) infinite;
+      }
+      @keyframes tab-activity-pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.45;
+          transform: scale(0.7);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .tab-btn.has-activity:not(.active)::after {
+          animation: none;
+        }
+      }
+
+      /* ── Map tab (screen-graph crawler view) ─────────────────────────── */
+      /* The Map tab hides #main with `visibility` (NOT display): Lens keeps
+         real layout geometry, so its background polling and springs stay valid
+         and switching back never re-flows from zero-sized rects. The theme
+         toggle is the one piece of Lens chrome resurfaced over the map (its
+         z-index outranks the z-auto .map-view in the root stacking context). */
+      .tab-map .main {
+        visibility: hidden;
+      }
+      .tab-map .float-controls {
+        visibility: visible;
+      }
+      .map-view {
+        position: fixed;
+        inset: 0;
+        background: var(--color-bg);
+      }
+      /* While the node-detail modal is open, raise the whole map view above the
+         fixed tab strip and theme toggle (both z-overlay in the root context)
+         so the modal scrim covers them. The map view's own children already
+         layer the scrim/detail above the canvas via --z-modal. Scoped to the
+         open state so the tab strip stays clickable the rest of the time. */
+      body.map-detail-open .map-view {
+        z-index: var(--z-modal);
+      }
+      /* Window-drag band along the top — the canvas below is no-drag because
+         dragging it PANS the graph. Same inset trick as .drag-region so the
+         window's top resize edge keeps working. */
+      .map-drag {
+        position: absolute;
+        top: var(--resize-edge);
+        left: var(--resize-edge);
+        right: var(--resize-edge);
+        height: var(--map-drag-band-h);
+        pointer-events: none;
+        -webkit-app-region: drag;
+      }
+      .map-canvas {
+        position: absolute;
+        inset: var(--map-drag-band-h) 0 0 0;
+        overflow: hidden;
+        cursor: grab;
+        -webkit-app-region: no-drag;
+      }
+      .map-canvas.panning {
+        cursor: grabbing;
+      }
+      /* Pan/zoom is one translate+scale on this inner container, so nodes and
+         edges never move relative to each other. Its size tracks the graph
+         extents (the SVG needs real bounds to not clip the beziers). */
+      .map-world {
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform-origin: 0 0;
+      }
+      .map-edges {
+        position: absolute;
+        left: 0;
+        top: 0;
+      }
+      .map-edge .line {
+        fill: none;
+        stroke: var(--color-muted);
+        stroke-width: var(--connector-width);
+        opacity: var(--opacity-connector);
+        marker-end: url(#map-arrow);
+      }
+      /* Invisible fat twin of the line so the hover target isn't a hairline —
+         a transparent stroke still hit-tests. Hover surfaces the action label
+         via the group's SVG <title> tooltip. */
+      .map-edge .hit {
+        fill: none;
+        stroke: transparent;
+        stroke-width: var(--map-edge-hit-width);
+      }
+      .map-edge:hover .line {
+        stroke: var(--color-accent);
+        opacity: 1;
+        marker-end: url(#map-arrow-hover);
+      }
+      .map-edges marker path {
+        fill: var(--color-muted);
+      }
+      .map-edges #map-arrow-hover path {
+        fill: var(--color-accent);
+      }
+      /* Positioning layer only — clicks belong to the cards and, between them,
+         to the edge strokes underneath (mirrors .cards). */
+      .map-nodes {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .map-node {
+        position: absolute;
+        width: var(--map-node-w);
+        height: var(--map-node-h);
+        display: flex;
+        flex-direction: column;
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
+        overflow: hidden;
+        cursor: pointer;
+        pointer-events: auto;
+        animation: map-node-in var(--dur-card-in) var(--ease-out);
+        transition: border-color var(--dur-hover) ease;
+      }
+      .map-node:hover {
+        border-color: var(--color-accent);
+      }
+      @keyframes map-node-in {
+        from {
+          opacity: 0;
+          transform: scale(var(--card-gone-scale));
+        }
+      }
+      /* Entry-point cards — the launch screen or a deep-link seed. An app graph
+         has a SET of ways in, not one root, so entries are flagged in place with
+         an accent ring plus a small corner start-pin (no column/hierarchy is
+         used to imply "the top"). The ring is a box-shadow, so overflow:hidden
+         does not clip it; the pin sits just inside the clipped corner. */
+      .map-node.entry {
+        border-color: var(--color-accent);
+        box-shadow:
+          var(--shadow-card),
+          0 0 0 var(--map-entry-ring-w) var(--color-accent);
+      }
+      .map-node.entry::after {
+        content: "";
+        position: absolute;
+        top: calc(var(--map-entry-marker) * 0.4);
+        left: calc(var(--map-entry-marker) * 0.4);
+        width: var(--map-entry-marker);
+        height: var(--map-entry-marker);
+        border-radius: var(--radius-round);
+        background: var(--color-accent);
+        border: var(--border-strong) solid var(--color-surface);
+        z-index: 1;
+      }
+      /* The synthetic "left the app" node: same shape, deliberately unlike the
+         real screens — dashed, flat, muted. */
+      .map-node.outside {
+        border-style: dashed;
+        background: var(--color-bg);
+        box-shadow: none;
+      }
+      .map-thumb {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--color-thumb-bg);
+      }
+      .map-node.outside .map-thumb {
+        background: transparent;
+      }
+      .map-node.outside .map-thumb::before {
+        content: "⌂";
+        font-size: var(--map-outside-glyph);
+        color: var(--color-muted);
+      }
+      .map-thumb img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: top;
+      }
+      .map-node-foot {
+        display: flex;
+        align-items: center;
+        gap: var(--gap-inline);
+        padding: var(--pad-card-head);
+        border-top: var(--border-hairline) solid var(--color-border);
+      }
+      .map-node.outside .map-node-foot {
+        border-top-style: dashed;
+      }
+      .map-node-title {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+      }
+      .map-node.outside .map-node-title {
+        color: var(--color-muted);
+      }
+      .map-node-badge {
+        flex: none;
+        font-family: var(--font-mono);
+        font-size: var(--fs-tag);
+        color: var(--color-muted);
+        background: var(--color-bg);
+        border-radius: var(--radius-chip);
+        padding: var(--pad-code);
+      }
+      /* Status strip — bottom-centre pill: bundle id, verdict, counts, clock. */
+      .map-status {
+        position: absolute;
+        bottom: var(--footbar-bottom);
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: var(--gap-bar);
+        max-width: calc(100% - 2 * var(--footbar-right));
+        padding: var(--pad-pill);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-pill);
+        box-shadow: var(--shadow-pill);
+        font-size: var(--fs-note);
+        color: var(--color-muted);
+        white-space: nowrap;
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+      }
+      .map-bundle {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--color-fg);
+        font-weight: var(--fw-semibold);
+      }
+      .map-state {
+        max-width: var(--map-state-max-width);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .map-state.ok {
+        color: var(--color-ok);
+      }
+      .map-state.error {
+        color: var(--color-error);
+      }
+      .map-spinner {
+        flex: none;
+        width: var(--map-spinner-size);
+        height: var(--map-spinner-size);
+        border: var(--border-strong) solid var(--color-border);
+        border-top-color: var(--color-accent);
+        border-radius: var(--radius-round);
+        animation: map-spin var(--dur-spin) linear infinite;
+      }
+      @keyframes map-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .map-empty {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      /* Node detail — same scrim-and-card pattern as the confirm modal:
+         bigger screenshot on the left, outgoing edges on the right. */
+      .map-detail {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--spotlight-scrim);
+        z-index: var(--z-modal);
+        -webkit-app-region: no-drag;
+      }
+      .map-detail-card {
+        display: flex;
+        max-width: var(--map-detail-max-w);
+        max-height: var(--map-detail-max-h);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-pop);
+        overflow: hidden;
+      }
+      .map-detail-shot {
+        flex: none;
+        width: var(--map-detail-shot-w);
+        object-fit: contain;
+        background: var(--color-thumb-bg);
+      }
+      .map-detail-body {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        min-width: 0;
+        padding: var(--pad-modal);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+      .map-detail-title {
+        margin: 0;
+        font-size: var(--fs-title);
+        font-weight: var(--fw-bold);
+      }
+      .map-detail-sub {
+        margin: 0;
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+      }
+      .map-detail-edges {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-tight);
+      }
+      .map-detail-edge {
+        display: flex;
+        align-items: baseline;
+        gap: var(--gap-inline);
+        font-size: var(--fs-note);
+      }
+      .map-detail-edge .lbl {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .map-detail-edge .arr,
+      .map-detail-edge .dst {
+        color: var(--color-muted);
+      }
+      .map-detail-none {
+        margin: 0;
+        color: var(--color-muted);
+        font-size: var(--fs-note);
+      }
     </style>
   </head>
   <body>
@@ -1617,6 +2033,75 @@
           </div>
         </div>
       </div>
+      <!-- Map tab: live screen-graph of an `argent map` crawl. Hidden until
+           the Map tab is active; #main stays in the DOM (visibility-hidden)
+           so Lens keeps polling untouched underneath. -->
+      <div class="map-view" id="map-view" hidden>
+        <div class="map-drag"></div>
+        <div class="map-canvas" id="map-canvas">
+          <div class="map-world" id="map-world">
+            <svg class="map-edges" id="map-edges" aria-hidden="true">
+              <defs>
+                <marker
+                  id="map-arrow"
+                  viewBox="0 0 8 8"
+                  refX="7"
+                  refY="4"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto">
+                  <path d="M0 0 L8 4 L0 8 Z" />
+                </marker>
+                <marker
+                  id="map-arrow-hover"
+                  viewBox="0 0 8 8"
+                  refX="7"
+                  refY="4"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto">
+                  <path d="M0 0 L8 4 L0 8 Z" />
+                </marker>
+              </defs>
+              <g id="map-edge-layer"></g>
+            </svg>
+            <div class="map-nodes" id="map-nodes"></div>
+          </div>
+        </div>
+        <div class="map-empty" id="map-empty" hidden>
+          <div class="empty">
+            No app map yet — run <code>argent map &lt;bundleId&gt;</code> to crawl an app and watch
+            its screen graph grow here.
+          </div>
+        </div>
+        <div class="map-status" id="map-status" hidden>
+          <span class="map-spinner" id="map-spinner" hidden></span>
+          <span class="map-bundle" id="map-bundle"></span>
+          <span class="map-state" id="map-state"></span>
+          <span class="map-counts" id="map-counts"></span>
+          <span class="map-elapsed" id="map-elapsed"></span>
+        </div>
+        <div class="map-detail" id="map-detail" hidden>
+          <div class="map-detail-card">
+            <img class="map-detail-shot" id="map-detail-shot" alt="" hidden />
+            <div class="map-detail-body">
+              <p class="map-detail-title" id="map-detail-title"></p>
+              <p class="map-detail-sub" id="map-detail-sub"></p>
+              <div class="map-detail-edges" id="map-detail-edges"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Lens / Map tab strip — floating chrome shared by both tabs, so it
+           lives beside #main rather than inside it. -->
+      <div class="tab-strip" id="tab-strip" role="tablist" aria-label="View">
+        <button class="tab-btn" id="tab-lens" type="button" role="tab" aria-selected="true">
+          Lens
+        </button>
+        <button class="tab-btn" id="tab-map" type="button" role="tab" aria-selected="false">
+          Map
+        </button>
+      </div>
     </div>
 
     <script>
@@ -1664,6 +2149,29 @@
         collapsedThumbH: cssNum("--collapsed-thumb-h", 58),
         annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
         successToastShowMs: cssNum("--success-toast-show-ms", 1200),
+        mapNodeW: cssNum("--map-node-w", 148),
+        mapNodeH: cssNum("--map-node-h", 184),
+        mapWorldPad: cssNum("--map-world-pad", 56),
+        mapSpringLen: cssNum("--map-spring-len", 208),
+        mapSpringK: cssNum("--map-spring-k", 0.09),
+        mapRepulsion: cssNum("--map-repulsion", 46000),
+        mapRepulsionCap: cssNum("--map-repulsion-cap", 540),
+        mapCenterPull: cssNum("--map-center-pull", 0.013),
+        mapNodeGap: cssNum("--map-node-gap", 16),
+        mapCollideK: cssNum("--map-collide-k", 0.5),
+        mapSeparatePasses: cssNum("--map-separate-passes", 24),
+        mapSeparatePassesPerNode: cssNum("--map-separate-passes-per-node", 6),
+        mapMaxStep: cssNum("--map-max-step", 62),
+        mapMinStep: cssNum("--map-min-step", 0.5),
+        mapIters: cssNum("--map-iters", 170),
+        mapFreezePolls: cssNum("--map-freeze-polls", 1),
+        mapGrowMargin: cssNum("--map-grow-margin", 620),
+        mapEdgeBow: cssNum("--map-edge-bow", 30),
+        mapEdgeClip: cssNum("--map-edge-clip", 5),
+        mapZoomMin: cssNum("--map-zoom-min", 0.25),
+        mapZoomMax: cssNum("--map-zoom-max", 2.5),
+        mapZoomIntensity: cssNum("--map-zoom-intensity", 0.0015),
+        mapElapsedTickMs: cssNum("--map-elapsed-tick-ms", 1000),
       };
 
       // Browser KeyboardEvent.code → USB HID Keyboard Usage Page (0x07) keycode.
@@ -2764,6 +3272,14 @@
       // and focus is not on a toolbar control. We forward raw keydown/keyup so
       // the simulator sees modifier keys (Shift, Ctrl, etc.) as real key events.
       function shouldForwardKey(ev) {
+        // Key forwarding is a Lens-tab concern only. The Map tab deliberately
+        // keeps the stream alive underneath (`.tab-map .main { visibility:
+        // hidden }`), so `wsOpen` stays true while a crawl is on screen — but a
+        // keystroke typed there (or Escape closing the map overlay) must NEVER
+        // reach the crawled device. Gate here, in the single forwarding
+        // decision both key listeners funnel through, so a future tab can't
+        // reintroduce the leak by forgetting a per-call-site guard.
+        if (activeTab !== "lens") return false;
         if (!wsOpen) return false;
         const ae = document.activeElement;
         if (
@@ -5464,9 +5980,956 @@
         lastMainSize = { w: mr.width, h: mr.height };
         vpRender();
       });
+
+      // ── Map tab (screen-graph crawler view) ─────────────────────────────
+      // Renders the live `argent map` crawl from GET /preview/map: a real
+      // directed GRAPH (cross-edges, back-edges, cycles — an app is not a
+      // tree), laid out by a DETERMINISTIC, STABLE, INCREMENTAL force settle
+      // (see mapLayout). Nodes are keyed by id and updated INCREMENTALLY each
+      // poll (the crawl mutates the graph under us; rebuilding the DOM every
+      // tick would drop in-flight hovers and thumbnail loads). Layout is a
+      // one-shot synchronous settle computed ONLY when the graph gains
+      // nodes/edges; a string-hash PRNG of the node id seeds new nodes so the
+      // same graph → identical coords, and nodes present through one structural
+      // revision FREEZE — the skeleton never drifts, so nothing ever jitters.
+      const mapViewEl = document.getElementById("map-view");
+      const mapCanvasEl = document.getElementById("map-canvas");
+      const mapWorldEl = document.getElementById("map-world");
+      const mapEdgesSvg = document.getElementById("map-edges");
+      const mapEdgeLayer = document.getElementById("map-edge-layer");
+      const mapNodesEl = document.getElementById("map-nodes");
+      const mapEmptyEl = document.getElementById("map-empty");
+      const mapStatusEl = document.getElementById("map-status");
+      const mapSpinnerEl = document.getElementById("map-spinner");
+      const mapBundleEl = document.getElementById("map-bundle");
+      const mapStateEl = document.getElementById("map-state");
+      const mapCountsEl = document.getElementById("map-counts");
+      const mapElapsedEl = document.getElementById("map-elapsed");
+      const mapDetailEl = document.getElementById("map-detail");
+      const mapDetailShotEl = document.getElementById("map-detail-shot");
+      const mapDetailTitleEl = document.getElementById("map-detail-title");
+      const mapDetailSubEl = document.getElementById("map-detail-sub");
+      const mapDetailEdgesEl = document.getElementById("map-detail-edges");
+
+      const mv = {
+        state: null, // last GET /preview/map snapshot (MapCrawlState JSON)
+        crawlStartedAt: undefined, // startedAt of the graph currently in the DOM
+        nodes: new Map(), // node id -> { el, img, titleEl, badgeEl, x, y, title, badge, shot, entry }
+        edges: new Map(), // edge id -> { el, hit, line, d } reused SVG nodes
+        // Persistent force-layout state (survives polls, wiped per crawl). `pos`
+        // holds each node's settled world-space CENTRE + the structural revision
+        // it was first placed in; `layoutSig` is the last graph structure we laid
+        // out and `layoutPoll` counts structural revisions (NOT poll ticks) so a
+        // node freezes after the revision it appears in. See mapLayout.
+        pos: new Map(), // node id -> { cx, cy, placedAt }
+        layoutSig: null, // signature of the last laid-out node/edge structure
+        layoutPoll: 0, // structural-revision counter (increments only on change)
+        pan: { x: 0, y: 0 },
+        zoom: 1,
+        worldW: 0,
+        worldH: 0,
+        worldMinX: 0, // left/top extent of the graph (≤0); the edge SVG covers
+        worldMinY: 0, // the negative region so arcs into it are not clipped
+        unanchoredSeeded: 0, // running count of neighbourless-seeded nodes; PERSISTS
+        // across layout revisions so each disconnected entry (deep links land one
+        // per revision) takes the next golden-angle slot instead of all seeding at 0
+        detailId: null, // node id the detail overlay is open for
+        detailShotFor: null, // node id the big screenshot was last loaded for
+        activitySeen: null, // startedAt of the last crawl the user viewed on Map
+        activityPending: false, // an unseen crawl is running → dot the Map tab
+      };
+
+      function mapShotUrl(id) {
+        // A per-crawl cache-bust token: node ids restart at s0 every crawl, so
+        // the same URL would otherwise map to a stale, byte-identical request
+        // the browser never refetches — the detail overlay would show the
+        // previous crawl's screenshot for the reused id. Tagging the URL with
+        // the current crawl's start time makes each crawl's URLs distinct; the
+        // route resolves by the path segment and ignores the query.
+        const token = mv.crawlStartedAt ?? 0;
+        return `${TOOL_SERVER}/preview/map/screenshot/${encodeURIComponent(id)}?c=${token}`;
+      }
+
+      async function pollMap() {
+        // Poll regardless of the active tab: a crawl no longer yanks an in-use
+        // Lens window over to Map (see index.ts), so the page must notice a
+        // crawl STARTING on its own to raise the Map-tab activity dot — and
+        // keep the graph warm so switching over lands on a current map. `GET
+        // /preview/map` is a cheap in-memory snapshot, so the steady poll is
+        // negligible.
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/map`, { cache: "no-store" });
+          if (!res.ok) return;
+          mv.state = await res.json();
+        } catch {
+          return; /* keep last state */
+        }
+        mapRender();
+      }
+
+      function mapClearGraph() {
+        mv.nodes.clear();
+        mv.edges.clear();
+        mv.pos.clear();
+        mv.layoutSig = null;
+        mv.layoutPoll = 0;
+        // Reset the layout accumulators too: without this a second crawl in the
+        // same window inherits the prior graph's seed counter (so its root no
+        // longer lands at world centre) and stale world extents.
+        mv.unanchoredSeeded = 0;
+        mv.worldW = 0;
+        mv.worldH = 0;
+        mv.worldMinX = 0;
+        mv.worldMinY = 0;
+        mapNodesEl.textContent = "";
+        mapEdgeLayer.textContent = "";
+        closeMapDetail();
+      }
+
+      function mapRender() {
+        const s = mv.state;
+        if (!s) return;
+        if (s.startedAt !== mv.crawlStartedAt) {
+          // A fresh crawl reuses node ids from "s0" — wipe the old graph and
+          // re-home the viewport rather than morphing between unrelated maps.
+          mv.crawlStartedAt = s.startedAt;
+          mapClearGraph();
+          mv.pan = { x: 0, y: 0 };
+          mv.zoom = 1;
+          mapApplyTransform();
+        }
+        const idle = s.status === "idle";
+        mapEmptyEl.hidden = !idle;
+        mapStatusEl.hidden = idle;
+        if (!idle) mapRenderStatus(s);
+        // Settle the force layout — a no-op unless the graph structure changed
+        // (see mapLayout) — then read each node's persisted world-space CENTRE.
+        mapLayout(s);
+        const halfW = THEME.mapNodeW / 2;
+        const halfH = THEME.mapNodeH / 2;
+        const pos = new Map(); // id -> world-space centre, consumed by the edge curves
+        // Track the FULL extent, including negatives: the force layout grows
+        // radially from a fixed anchor and is not origin-normalized, so a node
+        // (and the edges reaching it) can sit left of / above x=0/y=0. The edge
+        // SVG clips anything outside its viewBox, so a "0 0 w h" box would sever
+        // every arc into a negative node at the world origin while the cards —
+        // which overflow visibly — still drew. Span [minX..maxX] × [minY..maxY].
+        // minX/minY are clamped to ≤0 so an all-positive graph is unchanged.
+        let minX = 0;
+        let minY = 0;
+        let maxX = 0;
+        let maxY = 0;
+        for (const n of s.nodes) {
+          const p = mv.pos.get(n.id);
+          if (!p) continue; // seeded on the next poll if somehow absent
+          pos.set(n.id, { x: p.cx, y: p.cy });
+          minX = Math.min(minX, p.cx - halfW - THEME.mapWorldPad);
+          minY = Math.min(minY, p.cy - halfH - THEME.mapWorldPad);
+          maxX = Math.max(maxX, p.cx + halfW + THEME.mapWorldPad);
+          maxY = Math.max(maxY, p.cy + halfH + THEME.mapWorldPad);
+        }
+        const svgW = maxX - minX;
+        const svgH = maxY - minY;
+        if (
+          maxX !== mv.worldW ||
+          maxY !== mv.worldH ||
+          minX !== mv.worldMinX ||
+          minY !== mv.worldMinY
+        ) {
+          mv.worldW = maxX;
+          mv.worldH = maxY;
+          mv.worldMinX = minX;
+          mv.worldMinY = minY;
+          // The world box stays anchored at (0,0) so node cards keep their exact
+          // left/top (cx-halfW, cy-halfH) and never shift as the graph grows;
+          // negative cards overflow it visibly. Only the edge SVG is offset to
+          // cover the negative region, its viewBox mapping world→CSS 1:1.
+          mapWorldEl.style.width = maxX + "px";
+          mapWorldEl.style.height = maxY + "px";
+          mapEdgesSvg.style.left = minX + "px";
+          mapEdgesSvg.style.top = minY + "px";
+          mapEdgesSvg.setAttribute("width", svgW);
+          mapEdgesSvg.setAttribute("height", svgH);
+          mapEdgesSvg.setAttribute("viewBox", `${minX} ${minY} ${svgW} ${svgH}`);
+        }
+        // Entry points (accent ring/pin). The per-node `entry` flag and the
+        // `entryPoints` list agree by contract; union them defensively.
+        const entryIds = new Set(s.entryPoints || []);
+        // Upsert by id; prune whatever the snapshot no longer carries.
+        const nodeIds = new Set();
+        for (const n of s.nodes) {
+          nodeIds.add(n.id);
+          const p = mv.pos.get(n.id);
+          if (!p) continue;
+          mapUpsertNode(n, p.cx - halfW, p.cy - halfH, n.entry || entryIds.has(n.id));
+        }
+        for (const [id, rec] of mv.nodes) {
+          if (!nodeIds.has(id)) {
+            rec.el.remove();
+            mv.nodes.delete(id);
+          }
+        }
+        const edgeIds = new Set();
+        for (const e of s.edges) {
+          edgeIds.add(e.id);
+          mapUpsertEdge(e, pos);
+        }
+        for (const [id, rec] of mv.edges) {
+          if (!edgeIds.has(id)) {
+            rec.el.remove();
+            mv.edges.delete(id);
+          }
+        }
+        if (mv.detailId) renderMapDetail(); // keep the open overlay's counts live
+        mapUpdateTabActivity();
+      }
+
+      // ── Force-directed graph layout ─────────────────────────────────────
+      // Deterministic, stable, incremental. A bounded synchronous relaxation
+      // runs ONLY when the node/edge structure changes; otherwise mapLayout
+      // early-outs and every node keeps its stored centre — no drift, no
+      // per-frame physics, no jitter. New nodes are seeded from a string-hash
+      // PRNG of their id (never Math.random), so an identical graph settles to
+      // identical coordinates regardless of poll timing; a node that has lived
+      // through its freeze window FREEZES, so the existing skeleton is pinned
+      // as the graph grows and only freshly-seeded nodes move, relaxing around
+      // the frozen set. O(N²) repulsion is fine for the crawler's screen budget
+      // (≤~200 nodes) and the distance cap keeps each pass cheap.
+      const MAP_TAU = Math.PI * 2;
+      const MAP_GOLDEN_ANGLE = 2.399963229728653; // radians — spreads spiral seeds evenly
+
+      // Mulberry32 seeded by an FNV-1a hash of the string: a pure function of
+      // the node id, so seeding is reproducible across pages, polls and reloads.
+      function mapHashRng(str) {
+        let h = 2166136261 >>> 0;
+        for (let i = 0; i < str.length; i++) {
+          h ^= str.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+        }
+        let a = h >>> 0;
+        return function () {
+          a = (a + 0x6d2b79f5) | 0;
+          let t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      // Only node ids + edge endpoints define the LAYOUT; volatile fields
+      // (title, action counts, screenshotPath, status) must not re-settle it.
+      function mapStructureSig(s) {
+        const nodes = s.nodes.map((n) => n.id).sort();
+        const edges = s.edges.map((e) => `${e.from}>${e.to}`).sort();
+        return nodes.join(",") + "|" + edges.join(",");
+      }
+
+      // Undirected neighbour sets — seeding and springs pull regardless of edge
+      // direction (direction is a render concern, not a layout one).
+      function mapAdjacency(s) {
+        const adj = new Map();
+        for (const n of s.nodes) adj.set(n.id, new Set());
+        for (const e of s.edges) {
+          adj.get(e.from)?.add(e.to);
+          adj.get(e.to)?.add(e.from);
+        }
+        return adj;
+      }
+
+      function mapLayout(s) {
+        if (!s.nodes.length) return;
+        const sig = mapStructureSig(s);
+        if (sig === mv.layoutSig) return; // structure unchanged — reuse positions
+        mv.layoutSig = sig;
+        const poll = mv.layoutPoll++; // this structural revision's index
+        const adj = mapAdjacency(s);
+        const base = THEME.mapGrowMargin;
+        const springLen = THEME.mapSpringLen;
+
+        // Centroid of nodes placed BEFORE this revision — the anchor a new,
+        // neighbourless node (e.g. a fresh deep-link entry) spirals around.
+        let priorN = 0;
+        let priorCx = 0;
+        let priorCy = 0;
+        for (const p of mv.pos.values()) {
+          priorN++;
+          priorCx += p.cx;
+          priorCy += p.cy;
+        }
+        const anchorCx = priorN ? priorCx / priorN : base;
+        const anchorCy = priorN ? priorCy / priorN : base;
+
+        // Seed each new node deterministically, in discovery order so an earlier
+        // new node is already placed when a later one anchors to it. `unanchored`
+        // PERSISTS across revisions (mv.unanchoredSeeded): deep-link entries arrive
+        // one per structural revision, each with no placed neighbour, so a
+        // per-call counter would seed every one at slot 0 — the same wedge — and,
+        // since nodes freeze after one revision, they'd overlap forever. Carrying
+        // the count forward hands each disconnected seed the next golden-angle slot.
+        let unanchored = mv.unanchoredSeeded || 0;
+        for (const n of s.nodes) {
+          if (mv.pos.has(n.id)) continue;
+          const rng = mapHashRng(n.id);
+          const placed = [];
+          for (const m of adj.get(n.id) || []) {
+            const p = mv.pos.get(m);
+            if (p) placed.push(p);
+          }
+          let cx;
+          let cy;
+          if (placed.length) {
+            let sx = 0;
+            let sy = 0;
+            for (const p of placed) {
+              sx += p.cx;
+              sy += p.cy;
+            }
+            const ang = rng() * MAP_TAU;
+            const r = springLen * (0.45 + rng() * 0.5);
+            cx = sx / placed.length + Math.cos(ang) * r;
+            cy = sy / placed.length + Math.sin(ang) * r;
+          } else {
+            // No placed neighbour: a deterministic golden-angle spiral around
+            // the existing centroid (the very first node → radius 0 at `base`).
+            const ang = unanchored * MAP_GOLDEN_ANGLE + rng() * 0.5;
+            const r = priorN ? springLen * (1.3 + unanchored * 0.7) : springLen * unanchored * 0.9;
+            cx = anchorCx + Math.cos(ang) * r;
+            cy = anchorCy + Math.sin(ang) * r;
+            unanchored++;
+          }
+          mv.pos.set(n.id, { cx, cy, placedAt: poll });
+        }
+        mv.unanchoredSeeded = unanchored; // carry the slot count into the next revision
+
+        // Movable = nodes still inside their freeze window. Frozen nodes exert
+        // forces but never move, so the skeleton is pinned as the graph grows.
+        const movable = [];
+        for (const n of s.nodes) {
+          if (poll - mv.pos.get(n.id).placedAt < THEME.mapFreezePolls) movable.push(n.id);
+        }
+        if (movable.length) mapRelax(s, movable);
+      }
+
+      // One bounded relaxation pass. Only `movableIds` are integrated; every
+      // other node is a fixed obstacle. Iteration order is fixed (discovery
+      // order + the snapshot's edge order) so the float sums are bit-stable and
+      // the settle is reproducible.
+      function mapRelax(s, movableIds) {
+        const movable = new Set(movableIds);
+        const ids = s.nodes.map((n) => n.id);
+        const springLen = THEME.mapSpringLen;
+        const springK = THEME.mapSpringK;
+        const rep = THEME.mapRepulsion;
+        const repCap2 = THEME.mapRepulsionCap * THEME.mapRepulsionCap;
+        const centerPull = THEME.mapCenterPull;
+        // Minimum centre-to-centre offsets that clear the opaque cards, plus a gap.
+        const sepW = THEME.mapNodeW + THEME.mapNodeGap;
+        const sepH = THEME.mapNodeH + THEME.mapNodeGap;
+        const collideK = THEME.mapCollideK;
+        // De-overlap needs enough passes for separation to PROPAGATE across the
+        // pile: incrementally (one new node per revision) a handful clears the
+        // local overlap, but a single-shot cold-load — a fresh page render of an
+        // already-completed graph, where every node is movable at once — piles N
+        // opaque cards and needs ~O(N) Gauss-Seidel sweeps to fully un-stack. So
+        // scale the budget with node count (floored at the token). The loop below
+        // early-breaks the instant nothing moves, so the high ceiling is free for
+        // the common already-separated case and only spent on the cold pile.
+        const separatePasses = Math.max(
+          Math.max(0, Math.round(THEME.mapSeparatePasses)),
+          Math.ceil(ids.length * THEME.mapSeparatePassesPerNode)
+        );
+        const iters = Math.max(1, Math.round(THEME.mapIters));
+        let temp = THEME.mapMaxStep;
+        const cool = Math.pow(
+          Math.max(THEME.mapMinStep, 0.01) / Math.max(THEME.mapMaxStep, 0.02),
+          1 / iters
+        );
+        // Nodes with at least one edge. A disconnected node (a deep-link entry —
+        // "a jump, not a tap", so no incoming edge) is exempt from the centering
+        // pull below: it has no spring to hold the spread the golden-angle seeding
+        // gave it, so a center-pull would just collapse every entry onto the
+        // centroid and overlap them — exactly what the spiral seeding placed them
+        // apart to avoid. Repulsion (which separates, and is range-capped so it
+        // cannot fling them away) is the only force left acting on them.
+        const connected = new Set();
+        for (const e of s.edges) {
+          if (e.from !== e.to) {
+            connected.add(e.from);
+            connected.add(e.to);
+          }
+        }
+        const disp = new Map();
+        for (const id of movableIds) disp.set(id, { x: 0, y: 0 });
+        for (let it = 0; it < iters; it++) {
+          for (const d of disp.values()) {
+            d.x = 0;
+            d.y = 0;
+          }
+          // Pairwise inverse-square repulsion (accumulated onto movable nodes
+          // only; a frozen node still pushes, it just does not receive).
+          for (let i = 0; i < ids.length; i++) {
+            const ai = movable.has(ids[i]);
+            const a = mv.pos.get(ids[i]);
+            for (let j = i + 1; j < ids.length; j++) {
+              const bj = movable.has(ids[j]);
+              if (!ai && !bj) continue;
+              const b = mv.pos.get(ids[j]);
+              let dx = a.cx - b.cx;
+              let dy = a.cy - b.cy;
+              let d2 = dx * dx + dy * dy;
+              if (d2 > repCap2) continue;
+              if (d2 < 1e-3) {
+                // Coincident — deterministic hair of separation from id order.
+                dx = i < j ? 0.13 : -0.13;
+                dy = 0.017;
+                d2 = dx * dx + dy * dy;
+              }
+              const d = Math.sqrt(d2);
+              const f = rep / d2;
+              const fx = (dx / d) * f;
+              const fy = (dy / d) * f;
+              if (ai) {
+                const p = disp.get(ids[i]);
+                p.x += fx;
+                p.y += fy;
+              }
+              if (bj) {
+                const p = disp.get(ids[j]);
+                p.x -= fx;
+                p.y -= fy;
+              }
+              // Minimum-separation (anti-occlusion): the cards are opaque boxes,
+              // so any centre offset inside the WxH footprint paints one card on
+              // top of another. Soft inverse-square repulsion alone (weak and
+              // range-capped) can't guarantee clearance on dense graphs, so push
+              // any overlapping pair apart along the axis of LEAST penetration —
+              // the short way out — hard enough to beat the springs/centre-pull
+              // that drew them together.
+              const penX = sepW - Math.abs(dx);
+              const penY = sepH - Math.abs(dy);
+              if (penX > 0 && penY > 0) {
+                let cfx = 0;
+                let cfy = 0;
+                if (penX < penY) cfx = (dx >= 0 ? penX : -penX) * collideK;
+                else cfy = (dy >= 0 ? penY : -penY) * collideK;
+                if (ai) {
+                  const p = disp.get(ids[i]);
+                  p.x += cfx;
+                  p.y += cfy;
+                }
+                if (bj) {
+                  const p = disp.get(ids[j]);
+                  p.x -= cfx;
+                  p.y -= cfy;
+                }
+              }
+            }
+          }
+          // Edge springs toward the target length.
+          for (const e of s.edges) {
+            if (e.from === e.to) continue;
+            const a = mv.pos.get(e.from);
+            const b = mv.pos.get(e.to);
+            if (!a || !b) continue;
+            const dx = b.cx - a.cx;
+            const dy = b.cy - a.cy;
+            const d = Math.hypot(dx, dy) || 0.01;
+            const f = (d - springLen) * springK;
+            const fx = (dx / d) * f;
+            const fy = (dy / d) * f;
+            if (movable.has(e.from)) {
+              const p = disp.get(e.from);
+              p.x += fx;
+              p.y += fy;
+            }
+            if (movable.has(e.to)) {
+              const p = disp.get(e.to);
+              p.x -= fx;
+              p.y -= fy;
+            }
+          }
+          // Mild centering toward the centroid of ALL nodes so chains and
+          // disconnected components do not drift away forever.
+          let cx = 0;
+          let cy = 0;
+          for (const id of ids) {
+            const p = mv.pos.get(id);
+            cx += p.cx;
+            cy += p.cy;
+          }
+          cx /= ids.length;
+          cy /= ids.length;
+          for (const id of movableIds) {
+            if (!connected.has(id)) continue; // disconnected entries keep their spread
+            const p = mv.pos.get(id);
+            const d = disp.get(id);
+            d.x += (cx - p.cx) * centerPull;
+            d.y += (cy - p.cy) * centerPull;
+          }
+          // Integrate with a cooling per-node step clamp.
+          for (const id of movableIds) {
+            const d = disp.get(id);
+            const len = Math.hypot(d.x, d.y);
+            const scale = len > temp ? temp / len : 1;
+            const p = mv.pos.get(id);
+            p.cx += d.x * scale;
+            p.cy += d.y * scale;
+          }
+          temp *= cool;
+        }
+
+        // The force settle above still leaves cards overlapping on dense graphs —
+        // its cooling clamp gets too small in late iterations to push them fully
+        // apart. The cards are opaque, so finish with dedicated de-overlap passes:
+        // a direct positional constraint (Gauss-Seidel) that slides each still-
+        // overlapping pair apart along the axis of least penetration.
+        //
+        // This resolves EVERY overlapping pair, frozen ones included — not just
+        // the movable set the force loop integrates. A node freezes after one
+        // revision to pin the skeleton, but when the graph streams in one node at
+        // a time two edge-connected cards can freeze while still stacked (the
+        // spring pulled them together in the same revision they both froze), and
+        // then neither is movable so a movable-only pass could never part them.
+        // Running de-overlap over all nodes fixes that. It stays a DETERMINISTIC
+        // per-structural-revision solve — bounded, fixed iteration order, and it
+        // only moves cards that actually penetrate — so it converges to a stable
+        // zero-overlap arrangement and an unchanged structure re-solves to the
+        // same positions (no live per-frame jitter).
+        for (let pass = 0; pass < separatePasses; pass++) {
+          let moved = false;
+          for (let i = 0; i < ids.length; i++) {
+            const a = mv.pos.get(ids[i]);
+            for (let j = i + 1; j < ids.length; j++) {
+              const b = mv.pos.get(ids[j]);
+              let dx = a.cx - b.cx;
+              let dy = a.cy - b.cy;
+              if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) {
+                dx = i < j ? 0.13 : -0.13;
+                dy = 0.017;
+              }
+              const penX = sepW - Math.abs(dx);
+              const penY = sepH - Math.abs(dy);
+              if (penX <= 0 || penY <= 0) continue;
+              moved = true;
+              let mx = 0;
+              let my = 0;
+              if (penX < penY) mx = dx >= 0 ? penX : -penX;
+              else my = dy >= 0 ? penY : -penY;
+              // Split the correction evenly; every card can yield now.
+              a.cx += mx * 0.5;
+              a.cy += my * 0.5;
+              b.cx -= mx * 0.5;
+              b.cy -= my * 0.5;
+            }
+          }
+          if (!moved) break;
+        }
+      }
+
+      // Directed BFS hop-distance from the nearest entry point (honest
+      // shortest-path over the current graph, not a tree level). Feeds the
+      // detail overlay; ids with no forward path from any entry are absent.
+      function mapEntryDistances(s) {
+        const out = new Map();
+        for (const n of s.nodes) out.set(n.id, []);
+        for (const e of s.edges) out.get(e.from)?.push(e.to);
+        const dist = new Map();
+        const q = [];
+        for (const id of s.entryPoints || []) {
+          if (out.has(id) && !dist.has(id)) {
+            dist.set(id, 0);
+            q.push(id);
+          }
+        }
+        for (let i = 0; i < q.length; i++) {
+          const cur = q[i];
+          const d = dist.get(cur);
+          for (const nx of out.get(cur) || []) {
+            if (!dist.has(nx)) {
+              dist.set(nx, d + 1);
+              q.push(nx);
+            }
+          }
+        }
+        return dist;
+      }
+
+      // Reflect unseen crawl activity on the Map tab. The tool-server no longer
+      // pulls an in-use Lens window over to the Map tab when a crawl begins (it
+      // would discard staged picks / typed comments — see index.ts); instead a
+      // small dot on the Map tab tells the user a crawl is running so they can
+      // switch on their own terms. Cleared the instant they land on Map — that
+      // crawl is now "seen" and never re-dots (a genuinely new crawl, with a
+      // fresh startedAt, dots again).
+      function mapUpdateTabActivity() {
+        const s = mv.state;
+        if (activeTab === "map") {
+          if (s) mv.activitySeen = s.startedAt;
+          mv.activityPending = false;
+        } else if (s && s.status === "running" && s.startedAt !== mv.activitySeen) {
+          mv.activityPending = true;
+        }
+        tabButtons.map.classList.toggle("has-activity", mv.activityPending);
+      }
+
+      const MAP_STATE_LABEL = {
+        running: "mapping",
+        completed: "completed",
+        failed: "failed",
+        cancelled: "cancelled",
+      };
+      function mapRenderStatus(s) {
+        mapSpinnerEl.hidden = s.status !== "running";
+        mapBundleEl.textContent = s.bundleId || "";
+        const verdict =
+          s.status === "failed" && s.error
+            ? `failed — ${s.error}`
+            : MAP_STATE_LABEL[s.status] || s.status;
+        mapStateEl.textContent = verdict;
+        mapStateEl.title = s.status === "failed" ? s.error || "" : "";
+        mapStateEl.classList.toggle("ok", s.status === "completed");
+        mapStateEl.classList.toggle("error", s.status === "failed");
+        mapCountsEl.textContent = `${s.stats.screens} screens · ${s.stats.edges} edges`;
+        mapRenderElapsed();
+      }
+
+      function mapRenderElapsed() {
+        const s = mv.state;
+        if (!s || s.status === "idle") {
+          mapElapsedEl.textContent = "";
+          return;
+        }
+        // While running, tick off the wall clock (same host as the server, so
+        // startedAt is directly comparable); afterwards show the final figure.
+        const ms =
+          s.status === "running" && s.startedAt ? Date.now() - s.startedAt : s.stats.elapsedMs;
+        const t = Math.max(0, Math.floor(ms / 1000));
+        mapElapsedEl.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+      }
+      function mapElapsedTick() {
+        if (activeTab === "map" && mv.state && mv.state.status === "running") mapRenderElapsed();
+      }
+
+      function mapUpsertNode(n, x, y, isEntry) {
+        let rec = mv.nodes.get(n.id);
+        if (!rec) {
+          const el = document.createElement("div");
+          el.className = "map-node" + (n.outside ? " outside" : "");
+          el.dataset.id = n.id;
+          const thumb = document.createElement("div");
+          thumb.className = "map-thumb";
+          const img = document.createElement("img");
+          img.alt = "";
+          img.hidden = true; // shown on load; a 404 keeps the letterbox/glyph
+          img.addEventListener("load", () => {
+            img.hidden = false;
+          });
+          img.addEventListener("error", () => {
+            img.hidden = true;
+          });
+          thumb.appendChild(img);
+          const foot = document.createElement("div");
+          foot.className = "map-node-foot";
+          const titleEl = document.createElement("span");
+          titleEl.className = "map-node-title";
+          const badgeEl = document.createElement("span");
+          badgeEl.className = "map-node-badge";
+          foot.append(titleEl, badgeEl);
+          el.append(thumb, foot);
+          el.addEventListener("click", () => openMapDetail(n.id));
+          mapNodesEl.appendChild(el);
+          rec = {
+            el,
+            img,
+            titleEl,
+            badgeEl,
+            x: null,
+            y: null,
+            title: null,
+            badge: null,
+            shot: false,
+            entry: null,
+          };
+          mv.nodes.set(n.id, rec);
+        }
+        // Entry status can flip mid-crawl (a deep link seeds an existing screen
+        // as an entry), so toggle it every upsert, not just on create.
+        if (rec.entry !== isEntry) {
+          rec.entry = isEntry;
+          rec.el.classList.toggle("entry", !!isEntry);
+        }
+        if (rec.x !== x || rec.y !== y) {
+          rec.x = x;
+          rec.y = y;
+          rec.el.style.left = x + "px";
+          rec.el.style.top = y + "px";
+        }
+        if (rec.title !== n.title) {
+          rec.title = n.title;
+          rec.titleEl.textContent = n.title;
+          rec.el.title = n.title;
+        }
+        const badge = `${n.actionsExplored}/${n.actionsTotal}`;
+        if (rec.badge !== badge) {
+          rec.badge = badge;
+          rec.badgeEl.textContent = badge;
+          rec.badgeEl.title = `${n.actionsExplored} of ${n.actionsTotal} actions explored`;
+        }
+        if (!rec.shot && n.screenshotPath) {
+          rec.shot = true; // src set once; on error the img simply stays hidden
+          rec.img.src = mapShotUrl(n.id);
+        }
+      }
+
+      function mapUpsertEdge(e, pos) {
+        const a = pos.get(e.from);
+        const b = pos.get(e.to);
+        if (!a || !b) return; // endpoint not in this snapshot — pick it up next poll
+        let rec = mv.edges.get(e.id);
+        if (!rec) {
+          const g = document.createElementNS(SVGNS, "g");
+          g.setAttribute("class", "map-edge");
+          const hit = document.createElementNS(SVGNS, "path");
+          hit.setAttribute("class", "hit");
+          const line = document.createElementNS(SVGNS, "path");
+          line.setAttribute("class", "line");
+          const tip = document.createElementNS(SVGNS, "title");
+          tip.textContent = e.action.label || e.action.role;
+          g.append(hit, line, tip);
+          mapEdgeLayer.appendChild(g);
+          rec = { el: g, hit, line, d: null };
+          mv.edges.set(e.id, rec);
+        }
+        const d = mapEdgePathD(a, b, e.from === e.to);
+        if (rec.d !== d) {
+          rec.d = d;
+          rec.hit.setAttribute("d", d);
+          rec.line.setAttribute("d", d);
+        }
+      }
+
+      // Cubic bezier between two node CENTRES, clipped to each card's rectangle
+      // and bowed to one side so a back-edge (B→A) separates cleanly from its
+      // forward twin (A→B) — a 2-cycle draws as two visible arcs. The arrowhead
+      // (marker-end) lands just off the target's edge, preserving direction;
+      // cross-edges, back-edges and cycles are all just curves, no hierarchy.
+      function mapEdgePathD(a, b, selfLoop) {
+        const halfW = THEME.mapNodeW / 2;
+        const halfH = THEME.mapNodeH / 2;
+        if (selfLoop) {
+          // A small loop off the top edge back down into the card.
+          const r = THEME.mapSpringLen * 0.34;
+          const sx = a.x + halfW * 0.4;
+          const ex = a.x - halfW * 0.4;
+          const ty = a.y - halfH;
+          return `M ${sx} ${ty} C ${sx + r} ${ty - r}, ${ex - r} ${ty - r}, ${ex} ${ty}`;
+        }
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const ux = dx / dist;
+        const uy = dy / dist;
+        // Ray→rectangle exit distance from a centre along the a→b direction.
+        const exit = () => {
+          const tx = Math.abs(ux) > 1e-4 ? halfW / Math.abs(ux) : Infinity;
+          const ty = Math.abs(uy) > 1e-4 ? halfH / Math.abs(uy) : Infinity;
+          return Math.min(tx, ty);
+        };
+        const t = exit();
+        const sx = a.x + ux * t;
+        const sy = a.y + uy * t;
+        const ex = b.x - ux * (t + THEME.mapEdgeClip);
+        const ey = b.y - uy * (t + THEME.mapEdgeClip);
+        // Control point bowed perpendicular to the a→b line; the reverse edge
+        // has an opposite (ux,uy), so it bows the other way and never overlaps.
+        const bow = THEME.mapEdgeBow;
+        const mx = (sx + ex) / 2 - uy * bow;
+        const my = (sy + ey) / 2 + ux * bow;
+        return `M ${sx} ${sy} C ${mx} ${my}, ${mx} ${my}, ${ex} ${ey}`;
+      }
+
+      // ── Map pan & zoom ──────────────────────────────────────────────────
+      // One translate+scale on .map-world. Drag the empty background to pan;
+      // wheel / trackpad-pinch zooms about the cursor. Deliberately dumb and
+      // deterministic — no inertia, no springs, no re-layout on the way.
+      function mapApplyTransform() {
+        mapWorldEl.style.transform = `translate(${mv.pan.x}px, ${mv.pan.y}px) scale(${mv.zoom})`;
+      }
+      mapCanvasEl.addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+          const rect = mapCanvasEl.getBoundingClientRect();
+          const cx = e.clientX - rect.left;
+          const cy = e.clientY - rect.top;
+          const next = Math.min(
+            THEME.mapZoomMax,
+            Math.max(THEME.mapZoomMin, mv.zoom * Math.exp(-e.deltaY * THEME.mapZoomIntensity))
+          );
+          if (next === mv.zoom) return;
+          // Keep the world point under the cursor fixed while the scale moves.
+          mv.pan.x = cx - ((cx - mv.pan.x) * next) / mv.zoom;
+          mv.pan.y = cy - ((cy - mv.pan.y) * next) / mv.zoom;
+          mv.zoom = next;
+          mapApplyTransform();
+        },
+        { passive: false }
+      );
+      let mapDrag = null; // { id, x, y } active background-pan pointer
+      mapCanvasEl.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0 || e.target.closest(".map-node")) return;
+        mapDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+        mapCanvasEl.setPointerCapture(e.pointerId);
+        mapCanvasEl.classList.add("panning");
+      });
+      mapCanvasEl.addEventListener("pointermove", (e) => {
+        if (!mapDrag || e.pointerId !== mapDrag.id) return;
+        mv.pan.x += e.clientX - mapDrag.x;
+        mv.pan.y += e.clientY - mapDrag.y;
+        mapDrag.x = e.clientX;
+        mapDrag.y = e.clientY;
+        mapApplyTransform();
+      });
+      function mapEndDrag(e) {
+        if (!mapDrag || e.pointerId !== mapDrag.id) return;
+        mapDrag = null;
+        mapCanvasEl.classList.remove("panning");
+      }
+      mapCanvasEl.addEventListener("pointerup", mapEndDrag);
+      mapCanvasEl.addEventListener("pointercancel", mapEndDrag);
+
+      // ── Map node detail overlay ─────────────────────────────────────────
+      function openMapDetail(id) {
+        mv.detailId = id;
+        // Lift the map view above the tab strip / theme toggle so the modal
+        // scrim covers them (see the `.map-detail-open` rule) — otherwise those
+        // fixed, root-context chrome elements paint over the scrim.
+        document.body.classList.add("map-detail-open");
+        renderMapDetail();
+      }
+      function closeMapDetail() {
+        mv.detailId = null;
+        mv.detailShotFor = null;
+        mapDetailEl.hidden = true;
+        document.body.classList.remove("map-detail-open");
+      }
+      function renderMapDetail() {
+        const s = mv.state;
+        let node = null;
+        if (s) {
+          for (const n of s.nodes) {
+            if (n.id === mv.detailId) {
+              node = n;
+              break;
+            }
+          }
+        }
+        if (!node) {
+          closeMapDetail(); // node vanished (new crawl) — nothing to show
+          return;
+        }
+        // (Re)load the big screenshot once per node, not on every poll tick.
+        if (
+          mv.detailShotFor !== node.id ||
+          (node.screenshotPath && !mapDetailShotEl.getAttribute("src"))
+        ) {
+          mv.detailShotFor = node.id;
+          if (node.screenshotPath) {
+            mapDetailShotEl.hidden = false;
+            mapDetailShotEl.src = mapShotUrl(node.id);
+          } else {
+            mapDetailShotEl.hidden = true;
+            mapDetailShotEl.removeAttribute("src");
+          }
+        }
+        mapDetailTitleEl.textContent = node.title;
+        // A screen has no intrinsic "depth" (it is reachable by many paths); show
+        // its honest shortest-path distance from the nearest entry instead.
+        const isEntry = node.entry || (s.entryPoints || []).includes(node.id);
+        const dist = mapEntryDistances(s).get(node.id);
+        const reach = isEntry
+          ? "entry point"
+          : dist === undefined
+            ? "not yet reached from an entry"
+            : `${dist} ${dist === 1 ? "step" : "steps"} from nearest entry`;
+        mapDetailSubEl.textContent =
+          `${reach} · ${node.actionsExplored}/${node.actionsTotal} actions explored` +
+          (node.outside ? " · outside the app" : "");
+        const titles = new Map();
+        for (const n of s.nodes) titles.set(n.id, n.title);
+        mapDetailEdgesEl.textContent = "";
+        let outgoing = 0;
+        for (const e of s.edges) {
+          if (e.from !== node.id) continue;
+          outgoing++;
+          const row = document.createElement("div");
+          row.className = "map-detail-edge";
+          const lbl = document.createElement("span");
+          lbl.className = "lbl";
+          lbl.textContent = e.action.label || e.action.role;
+          const arr = document.createElement("span");
+          arr.className = "arr";
+          arr.textContent = "→";
+          const dst = document.createElement("span");
+          dst.className = "dst";
+          dst.textContent = titles.get(e.to) || e.to;
+          row.append(lbl, arr, dst);
+          mapDetailEdgesEl.appendChild(row);
+        }
+        if (!outgoing) {
+          const p = document.createElement("p");
+          p.className = "map-detail-none";
+          p.textContent = "No outgoing edges yet.";
+          mapDetailEdgesEl.appendChild(p);
+        }
+        mapDetailEl.hidden = false;
+      }
+      mapDetailShotEl.addEventListener("error", () => {
+        mapDetailShotEl.hidden = true;
+      });
+      mapDetailEl.addEventListener("click", (e) => {
+        if (e.target === mapDetailEl) closeMapDetail();
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !mapDetailEl.hidden) closeMapDetail();
+      });
+
+      // ── Lens / Map tabs ─────────────────────────────────────────────────
+      // Client-side only: the strip swaps which root is visible; nothing is
+      // persisted. Lens's loops keep running untouched in the background (see
+      // the .tab-map notes in the stylesheet for why visibility, not display).
+      const tabButtons = {
+        lens: document.getElementById("tab-lens"),
+        map: document.getElementById("tab-map"),
+      };
+      let activeTab = null;
+      function setTab(tab) {
+        if (tab === activeTab) return;
+        activeTab = tab;
+        const isMap = tab === "map";
+        document.body.classList.toggle("tab-map", isMap);
+        mapViewEl.hidden = !isMap;
+        for (const [name, btn] of Object.entries(tabButtons)) {
+          btn.classList.toggle("active", name === tab);
+          btn.setAttribute("aria-selected", String(name === tab));
+        }
+        if (isMap) {
+          mapUpdateTabActivity(); // clear the activity dot now — this crawl is seen
+          pollMap(); // land on a current graph now, not a poll-tick later
+        } else {
+          closeMapDetail();
+        }
+      }
+      tabButtons.lens.addEventListener("click", () => setTab("lens"));
+      tabButtons.map.addEventListener("click", () => setTab("map"));
+
       setInterval(pollVariants, THEME.pollMs);
       pollVariants();
       pollDescribe(); // arms the single fast describe loop
+      setInterval(pollMap, THEME.pollMs);
+      setInterval(mapElapsedTick, THEME.mapElapsedTickMs);
+      // `?tab=map` (the URL the tool-server opens for a crawl) lands on Map;
+      // everything else starts on Lens.
+      setTab(urlParams.get("tab") === "map" ? "map" : "lens");
 
       // Opened for a specific device → stream it straight away. Otherwise fall
       // back to discovering booted simulators (single → auto-connect, multiple →
