@@ -864,27 +864,24 @@ describe("touch visualizer", () => {
     await fs.rm(outputFile, { force: true });
   });
 
-  it("does not carry a failed enable into a later showTouches:false recording", async () => {
+  it("clears a stale failed-enable flag at start so a later showTouches:false recording is clean", async () => {
     const api = await makeSession(iosDevice);
 
-    // First recording: the overlay refuses to enable AND the capture ends via
-    // the time-limit cap, which — unlike stop — never runs the reset that clears
-    // `pointerFailed`.
-    fakeStream();
-    const first = fakeChild();
-    first.exitOnStdinEnd();
-    await startAndSettle(api, { timeLimitSeconds: 5, pointer: fakePointer(false) });
-    expect(api.pointerFailed).toBe(true);
-    await vi.advanceTimersByTimeAsync(5_000); // cap fires; no stop
-    expect(api.recordingTimedOut).toBe(true);
+    // A cap- or crash-ended recording leaves `pointerFailed` set: only stop and a
+    // fresh start clear it, and neither the cap nor the crash path runs stop's
+    // reset. Simulate that residue directly rather than via a real cap-then-start
+    // — reaching it that way would depend on the session admitting a new start
+    // while a finalized recording still awaits retrieval, which is exactly the
+    // path the `pendingRetrieval` admission guard forbids. What this asserts is
+    // only that a fresh start scrubs the flag, however it got set, so an
+    // overlay-free recording never inherits a spurious touch-visualizer warning.
+    api.pointerFailed = true;
 
-    // A fresh recording that never asked for the overlay must start clean, so its
-    // stop carries no spurious touch-visualizer warning.
     fakeStream();
-    const second = fakeChild();
-    second.exitOnStdinEnd();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
     await startAndSettle(api); // showTouches off → no PointerControl
-    expect(api.pointerFailed).toBe(false);
+    expect(api.pointerFailed).toBe(false); // start's reset scrubbed the stale flag
 
     await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
     const outputFile = api.outputFile!;
