@@ -136,6 +136,18 @@ function durableBaseDir(): string {
 }
 
 /**
+ * The durable save destinations the client will honor — a client-side allowlist.
+ * `saveDir` arrives on the wire from a possibly-remote or compromised `argent
+ * link` tool-server, so the set of directories an artifact may be persisted into
+ * is decided *here*, on the client, not by whatever value the server sends. Every
+ * entry is a project-relative directory under argent's own `.argent/` tree; the
+ * `filename` (sanitized to a single segment) then lands inside it. Add an entry
+ * when a new tool needs a durable home. Stored normalized so the wire value is
+ * compared in the same form regardless of separator style.
+ */
+const ALLOWED_SAVE_DIRS: ReadonlySet<string> = new Set([normalize(".argent/recordings")]);
+
+/**
  * Resolve an artifact's durable save destination from its `saveDir` hint, or
  * `null` when it has none (⇒ the disposable temp cache is used instead). The
  * hint (e.g. `.argent/recordings`) is resolved against {@link durableBaseDir} —
@@ -144,10 +156,14 @@ function durableBaseDir(): string {
  * host, in the project it belongs to.
  *
  * The hint is hardened before use: a directory bundle (`archive`) is excluded
- * (durable persistence is for single files only), and the path is rejected if it
- * is absolute or escapes the base via a `..` segment — a compromised tool-server
- * must not be able to steer a write outside the base directory. A rejected hint
- * falls back to `null`, so an unsafe `saveDir` degrades to scratch rather than
+ * (durable persistence is for single files only), and — crucially — the value
+ * must be on {@link ALLOWED_SAVE_DIRS}, the client's own allowlist. A relative,
+ * non-`..` path is *not* enough: the base is the project root, so an unlisted
+ * destination like `.git` (⇒ overwriting `.git/config` for code execution), `.`
+ * (a source file or `package.json`), or `.argent` (argent's own config) all sit
+ * *inside* the base and would otherwise be writable by a hostile tool-server.
+ * The absolute/`..` structural checks stay as defense in depth. A rejected hint
+ * falls back to `null`, so an untrusted `saveDir` degrades to scratch rather than
  * writing somewhere dangerous.
  */
 export function durableSaveTarget(handle: ArtifactHandle): { dir: string; path: string } | null {
@@ -161,6 +177,10 @@ export function durableSaveTarget(handle: ArtifactHandle): { dir: string; path: 
   ) {
     return null;
   }
+  // The destination must be one the client sanctions — not merely a
+  // non-escaping relative path, which still resolves *inside* the project root
+  // (where `.git`, sources, and argent's own config live).
+  if (!ALLOWED_SAVE_DIRS.has(rel)) return null;
   const dir = join(durableBaseDir(), rel);
   return { dir, path: join(dir, sanitizeSegment(handle.filename)) };
 }
