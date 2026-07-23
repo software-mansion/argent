@@ -72,7 +72,8 @@ const MAX_START_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 1_200;
 const COLD_START_SIGNATURE = "Cannot find process matching name:";
 
-const STOP_GRACE_MS = 30_000;
+// Ceiling, not a fixed wait — 30s SIGTERM'd xctrace mid-package.
+const STOP_GRACE_MS = 300_000;
 const STOP_TERM_MS = 5_000;
 const STOP_KILL_MS = 5_000;
 
