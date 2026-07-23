@@ -83,8 +83,9 @@ const capability: ToolCapability = {
  * The saved PNGs live on the AGENT's machine (typically materialized there by
  * an earlier full-res `screenshot` call), so both path params cross the file
  * boundary as `file` inputs. `outputDir` is only probed: when the agent-chosen
- * directory doesn't exist on this host (remote mode), the tool quietly falls
- * back to its temp default rather than recreating an agent-side path here.
+ * directory doesn't exist on this host, the tool creates it if its parent is
+ * already here (a local agent naming a fresh folder) and otherwise falls back to
+ * its temp default rather than recreating an agent-side path tree here.
  */
 const fileInputs: FileInputSpec[] = [
   { target: "baselinePath", path: "${baselinePath}", kind: "file", optional: true },
@@ -165,11 +166,31 @@ export async function executeScreenshotDiffTool(
  * not flagged absent by the boundary probe (a remote client's local directory).
  * Everything else gets a per-call temp dir; the diff images travel back as
  * artifacts, so the directory's location no longer matters to the agent.
+ *
+ * The probe only answers "does this path already exist on this host", so a local
+ * agent naming a fresh output directory is indistinguishable from a remote
+ * client's own path — both come back `presentOnHost: false`. Creating the
+ * directory non-recursively separates them: it succeeds only when the parent
+ * already exists here, which is true for a local agent picking a new subfolder
+ * and false for a remote client's unrelated directory tree. Without this, a
+ * perfectly good local `outputDir` was silently swapped for a temp dir and the
+ * caller was never told, so the diffs never appeared where they asked.
  */
 async function resolveOutputDir(params: Params, options?: Partial<ToolContext>): Promise<string> {
   const probe = options?.fileInputs?.outputDir;
   if (params.outputDir && (probe === undefined || probe.presentOnHost)) {
     return params.outputDir;
+  }
+  if (params.outputDir) {
+    try {
+      await fs.mkdir(params.outputDir);
+      return params.outputDir;
+    } catch (err) {
+      // EEXIST means it raced into existence between probe and now — still ours.
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") return params.outputDir;
+      // Anything else (missing parent, not writable) means this path is not
+      // meaningful on this host; fall back to the temp dir below.
+    }
   }
   const dir = path.join(
     os.tmpdir(),
