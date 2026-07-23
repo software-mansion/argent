@@ -19,6 +19,7 @@ const execFileMock = vi.fn();
 const spawnMock = vi.fn();
 const hasSnapshotMock = vi.fn();
 const probeMock = vi.fn();
+const supportsFlagMock = vi.fn();
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -40,14 +41,18 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-// Stub the two filesystem/probe helpers so tests don't depend on a real AVD or
-// a real `emulator -check-snapshot-loadable` spawn.
+// Stub the filesystem/probe helpers so tests don't depend on a real AVD or a
+// real `emulator -check-snapshot-loadable` spawn. `emulatorSupportsFlag` is
+// stubbed too: the real one memoizes its `emulator -help` result per binary
+// for the lifetime of the process, so tests could not otherwise exercise both
+// the supported and unsupported branch in one file.
 vi.mock("../src/utils/adb", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/adb")>("../src/utils/adb");
   return {
     ...actual,
     hasDefaultBootSnapshot: (...a: unknown[]) => hasSnapshotMock(...a),
     checkSnapshotLoadable: (...a: unknown[]) => probeMock(...a),
+    emulatorSupportsFlag: (...a: unknown[]) => supportsFlagMock(...a),
   };
 });
 
@@ -88,6 +93,10 @@ beforeEach(() => {
   spawnMock.mockReset();
   hasSnapshotMock.mockReset();
   probeMock.mockReset();
+  supportsFlagMock.mockReset();
+  // Default to the conservative branch: an emulator build that does not list
+  // the flag in `-help`. Tests that need the supported branch opt in.
+  supportsFlagMock.mockResolvedValue(false);
   spawnMock.mockImplementation(() => fakeChild());
   // Per-AVD in-flight coalescing carries leaked promises across tests; reset
   // so each test starts with an empty boot map. (See note in adjacent
@@ -217,12 +226,13 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   );
 
   it("passes launch-hardening flags on the hot-boot spawn", async () => {
-    // `-noaudio`, `-no-boot-anim`, `-netfast` are the perf cuts; the consent
-    // dialogs that `-crash-report-mode never` and `-no-metrics` suppress are
-    // what block MCP-driven boots on emulator crash or first run. All five
-    // must reach the spawn or argent loses the qemu device parity the probe
-    // relies on (and the dialog protection). See LAUNCH_HARDENING_ARGS in
-    // boot-device.ts for the per-flag rationale.
+    // `-noaudio`, `-no-boot-anim`, `-netfast` are the perf cuts; `-no-metrics`
+    // suppresses the metrics consent dialog that blocks MCP-driven boots on
+    // first run. All four must reach the spawn or argent loses the qemu device
+    // parity the probe relies on (and the dialog protection). See
+    // LAUNCH_HARDENING_ARGS in boot-device.ts for the per-flag rationale.
+    // (`-crash-report-mode never` is feature-detected, not unconditional —
+    // covered by the dedicated describe block below.)
     hasSnapshotMock.mockResolvedValue(true);
     probeMock.mockResolvedValue({ loadable: true, reason: null });
     mockHappyBootChain();
@@ -233,14 +243,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const hotArgs = spawnMock.mock.calls[0]![1] as string[];
     expect(hotArgs).toEqual(
-      expect.arrayContaining([
-        "-noaudio",
-        "-no-boot-anim",
-        "-netfast",
-        "-crash-report-mode",
-        "never",
-        "-no-metrics",
-      ])
+      expect.arrayContaining(["-noaudio", "-no-boot-anim", "-netfast", "-no-metrics"])
     );
   });
 
@@ -257,14 +260,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const coldArgs = spawnMock.mock.calls[0]![1] as string[];
     expect(coldArgs).toEqual(
-      expect.arrayContaining([
-        "-noaudio",
-        "-no-boot-anim",
-        "-netfast",
-        "-crash-report-mode",
-        "never",
-        "-no-metrics",
-      ])
+      expect.arrayContaining(["-noaudio", "-no-boot-anim", "-netfast", "-no-metrics"])
     );
   });
 
@@ -776,5 +772,120 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("boot-device Android — `-crash-report-mode` feature gate", () => {
+  // Regression: `-crash-report-mode` was added to LAUNCH_HARDENING_ARGS (so it
+  // shipped on every launch) AND, later, behind an `emulatorSupportsFlag`
+  // gate — the gate never took effect. On emulator builds whose `-help` does
+  // not list the flag (verified on 36.1.9.0) the launch aborts with
+  // "unknown option: -crash-report-mode" and boot-device fails outright; on
+  // builds that do accept it the flag was passed twice. Assert the exact
+  // occurrence COUNT, not mere presence: presence alone passes on the
+  // double-pass code and would guard nothing.
+  const FLAG = "-crash-report-mode";
+  const countFlag = (argv: readonly string[]) => argv.filter((a) => a === FLAG).length;
+
+  /** Assert the flag appears exactly `times` times and always as `<flag> never`. */
+  function expectFlagOccurrences(argv: readonly string[], times: number) {
+    expect(countFlag(argv)).toBe(times);
+    argv.forEach((arg, i) => {
+      if (arg === FLAG) expect(argv[i + 1]).toBe("never");
+    });
+  }
+
+  it("omits the flag from the snapshot probe and the hot-boot spawn when the emulator rejects it", async () => {
+    supportsFlagMock.mockResolvedValue(false);
+    hasSnapshotMock.mockResolvedValue(true);
+    probeMock.mockResolvedValue({ loadable: true, reason: null });
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(probeMock).toHaveBeenCalledTimes(1);
+    const probeArgs = (probeMock.mock.calls[0]![2] as { extraArgs: string[] }).extraArgs;
+    expectFlagOccurrences(probeArgs, 0);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expectFlagOccurrences(spawnMock.mock.calls[0]![1] as string[], 0);
+  });
+
+  it("omits the flag from the cold-boot spawn when the emulator rejects it", async () => {
+    supportsFlagMock.mockResolvedValue(false);
+    hasSnapshotMock.mockResolvedValue(false);
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const coldArgs = spawnMock.mock.calls[0]![1] as string[];
+    expect(coldArgs).toContain("-no-snapshot-load");
+    expectFlagOccurrences(coldArgs, 0);
+  });
+
+  it("passes the flag exactly once to the snapshot probe and the hot-boot spawn when supported", async () => {
+    supportsFlagMock.mockResolvedValue(true);
+    hasSnapshotMock.mockResolvedValue(true);
+    probeMock.mockResolvedValue({ loadable: true, reason: null });
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(supportsFlagMock).toHaveBeenCalledWith(FLAG);
+
+    // The probe must carry it too: it changes emulator startup config, and the
+    // probe/boot argv have to agree or a loadable snapshot gets rejected.
+    expect(probeMock).toHaveBeenCalledTimes(1);
+    const probeArgs = (probeMock.mock.calls[0]![2] as { extraArgs: string[] }).extraArgs;
+    expectFlagOccurrences(probeArgs, 1);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expectFlagOccurrences(spawnMock.mock.calls[0]![1] as string[], 1);
+  });
+
+  it("passes the flag exactly once to the cold-boot spawn when supported", async () => {
+    supportsFlagMock.mockResolvedValue(true);
+    hasSnapshotMock.mockResolvedValue(false);
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const coldArgs = spawnMock.mock.calls[0]![1] as string[];
+    expect(coldArgs).toContain("-no-snapshot-load");
+    expectFlagOccurrences(coldArgs, 1);
+  });
+
+  it("skips the `-help` feature probe entirely when an already-running AVD is reused", async () => {
+    // The detection costs an `emulator -help` spawn; the reuse fast-path never
+    // launches an emulator, so it must return before the probe runs.
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "version")
+        return { stdout: "Android Debug Bridge\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+      if (cmd === "emulator" && args[0] === "-list-avds")
+        return { stdout: "Pixel_7_API_34\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "devices")
+        return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        const shellCmd = args[3] ?? "";
+        if (shellCmd === "getprop ro.boot.qemu.avd_name")
+          return { stdout: "Pixel_7_API_34\n", stderr: "" };
+        if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+        if (shellCmd.startsWith("screencap")) return { stdout: "1\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(supportsFlagMock).not.toHaveBeenCalled();
   });
 });
