@@ -591,6 +591,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.logoFile = null;
     api.watermarkSkipped = null;
     api.framesWritten = 0;
+    api.trimmedAnyFrames = false;
     api.wallClockStartMs = null;
     api.wallClockEndMs = null;
     api.timeLimitSeconds = null;

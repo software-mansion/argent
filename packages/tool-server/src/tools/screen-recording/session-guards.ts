@@ -15,9 +15,10 @@ export interface StopRecordingFile {
   outputFile: string;
   sizeBytes: number;
   /**
-   * Length of the returned video; null when the session lost its start stamp.
-   * With static-frame trimming this is shorter than the wall clock — it counts
-   * only the frames that survived.
+   * Length of the returned video. With static-frame trimming on this is the
+   * frame-derived length (always present) and shorter than the wall clock — it
+   * counts only the frames that survived. Null only when trimming is off and the
+   * session lost its start stamp.
    */
   durationMs: number | null;
   /** Real elapsed recording time. Present only when trimming actually applied. */
