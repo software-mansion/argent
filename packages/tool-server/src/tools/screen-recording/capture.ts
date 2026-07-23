@@ -380,6 +380,27 @@ async function startCaptureLocked(
     api.pointerFailed = !(await params.pointer.enable());
   }
 
+  superviseCapture(api, child, params.timeLimitSeconds);
+
+  return {
+    status: "recording",
+    timeLimitSeconds: params.timeLimitSeconds,
+    outputFile,
+  };
+}
+
+/**
+ * Arm the auto-stop cap and the unexpected-exit handler for a live capture.
+ * Shared by the MJPEG pump path and the MoQ push path — the cap and exit
+ * handling are source-agnostic (they finalize ffmpeg and update session state,
+ * never touch the frame source directly beyond `finalizeCapture`). Both handlers
+ * carry an ownership guard so a superseded capture can't clobber a newer one.
+ */
+export function superviseCapture(
+  api: ScreenRecordingSessionApi,
+  child: ReturnType<typeof spawn>,
+  timeLimitSeconds: number
+): void {
   api.recordingTimeout = setTimeout(() => {
     api.recordingTimeout = null;
     // Ownership guard: if a newer capture stamped the session, this timer is
@@ -391,10 +412,10 @@ async function startCaptureLocked(
     api.recordingActive = false;
     api.wallClockEndMs = Date.now();
     api.pendingRetrieval = true;
-    markScreenRecordingFinalized(api.deviceId, `it hit its ${params.timeLimitSeconds}s time limit`);
+    markScreenRecordingFinalized(api.deviceId, `it hit its ${timeLimitSeconds}s time limit`);
     finalizeCapture(api);
     void disablePointer(api);
-  }, params.timeLimitSeconds * 1_000);
+  }, timeLimitSeconds * 1_000);
 
   child.on("exit", (code, signal) => {
     // Ownership guard: after this capture is superseded, its exit must not
@@ -417,12 +438,6 @@ async function startCaptureLocked(
       markScreenRecordingFinalized(api.deviceId, "the recording process exited unexpectedly");
     }
   });
-
-  return {
-    status: "recording",
-    timeLimitSeconds: params.timeLimitSeconds,
-    outputFile,
-  };
 }
 
 /**
@@ -430,7 +445,7 @@ async function startCaptureLocked(
  * silent on a good start, so "did not die within the grace" is the signal;
  * a bad filter graph or unwritable output dies immediately and fails the start.
  */
-function waitForEncoderReady(
+export function waitForEncoderReady(
   child: ReturnType<typeof spawn>,
   stderrRef: { text: string }
 ): Promise<void> {
@@ -501,6 +516,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const streamError = api.frameStream?.error ?? null;
   const watermarkSkipped = api.watermarkSkipped;
   const pointerFailed = api.pointerFailed;
+  const remoteTouchesUnsupported = api.remoteTouchesUnsupported;
   let warning: string | undefined;
 
   try {
@@ -559,6 +575,14 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         .filter(Boolean)
         .join(" ");
     }
+    if (remoteTouchesUnsupported) {
+      warning = [
+        warning,
+        "The touch visualizer is not available over the remote (MoQ) transport, so touches are not shown in this video.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
 
     const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
     // Wall-clock capture length: after the cap fires (or the encoder dies) the
@@ -595,6 +619,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.logoFile = null;
     api.watermarkSkipped = null;
     api.pointerFailed = false;
+    api.remoteTouchesUnsupported = false;
     api.framesWritten = 0;
     api.wallClockStartMs = null;
     api.wallClockEndMs = null;

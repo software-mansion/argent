@@ -29,7 +29,7 @@ export function screenRecordingSessionRef(device: DeviceInfo): ServiceRef {
 
 export interface ScreenRecordingSessionApi {
   deviceId: string;
-  platform: "ios" | "android";
+  platform: "ios" | "android" | "ios-remote";
   /** True from a successful start until stop / cap / unexpected exit. */
   recordingActive: boolean;
   /**
@@ -81,6 +81,12 @@ export interface ScreenRecordingSessionApi {
   pointerDisable: (() => Promise<void>) | null;
   /** The touch visualizer was requested but simulator-server would not enable it. */
   pointerFailed: boolean;
+  /**
+   * The touch visualizer was requested on a `sim-remote` recording, where it is
+   * not available (the MoQ control channel carries no pointer command). Distinct
+   * from `pointerFailed` so `stop` can explain the remote limitation accurately.
+   */
+  remoteTouchesUnsupported: boolean;
   wallClockStartMs: number | null;
   /** When the capture stopped producing frames (cap fired, process exited, stop signaled). */
   wallClockEndMs: number | null;
@@ -110,6 +116,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.frameStream = null;
   state.pointerDisable = null;
   state.pointerFailed = false;
+  state.remoteTouchesUnsupported = false;
   state.recordingTimedOut = false;
   state.recordingExitedUnexpectedly = false;
   state.lastExitInfo = null;
@@ -140,7 +147,11 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       );
     }
     const { device } = opts;
-    if (device.platform !== "ios" && device.platform !== "android") {
+    if (
+      device.platform !== "ios" &&
+      device.platform !== "android" &&
+      device.platform !== "ios-remote"
+    ) {
       throw new FailureError(
         `${SCREEN_RECORDING_SESSION_NAMESPACE}: unsupported platform "${device.platform}" for device '${device.id}'.`,
         {
@@ -170,6 +181,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       framesWritten: 0,
       pointerDisable: null,
       pointerFailed: false,
+      remoteTouchesUnsupported: false,
       wallClockStartMs: null,
       wallClockEndMs: null,
       timeLimitSeconds: null,
