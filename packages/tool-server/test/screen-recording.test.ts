@@ -727,4 +727,18 @@ describe("readJpegDimensions", () => {
   it("returns null when there is no frame header", () => {
     expect(readJpegDimensions(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).toBeNull();
   });
+
+  it("skips 0xFF fill bytes before a marker (T.81 B.1.1.2)", () => {
+    // A decoder-valid JPEG may pad any number of 0xFF fill bytes before a
+    // marker. Splice extras in ahead of the SOF: ffprobe/libjpeg read this
+    // fine, so the dimension reader must too rather than bailing to null and
+    // silently dropping the watermark.
+    const base = fakeJpeg(640, 480);
+    const withFill = Buffer.concat([
+      base.subarray(0, 2), // SOI
+      Buffer.from([0xff, 0xff, 0xff]), // fill bytes before the SOF marker
+      base.subarray(2), // SOF0 + payload + EOI
+    ]);
+    expect(readJpegDimensions(withFill)).toEqual({ width: 640, height: 480 });
+  });
 });

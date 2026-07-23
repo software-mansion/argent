@@ -251,6 +251,13 @@ export function readJpegDimensions(jpeg: Buffer): { width: number; height: numbe
       continue;
     }
     const marker = jpeg[offset + 1]!;
+    // 0xFF may repeat as fill bytes before the actual marker (T.81 B.1.1.2):
+    // advance one byte so the next iteration reads the real marker instead of
+    // treating the fill pair as a segment length and jumping into garbage.
+    if (marker === 0xff) {
+      offset++;
+      continue;
+    }
     // Standalone markers carry no length payload.
     if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
       offset += 2;
