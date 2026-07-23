@@ -92,6 +92,7 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
         error: null as Error | null,
       };
       let firstFrameResolve: ((frame: Buffer) => void) | null = null;
+      let firstFrameReject: ((err: Error) => void) | null = null;
 
       res.on("data", (chunk: Buffer) => {
         buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
@@ -116,6 +117,7 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
             if (firstFrameResolve) {
               firstFrameResolve(frame);
               firstFrameResolve = null;
+              firstFrameReject = null;
             }
           }
           buffer = buffer.subarray(frameEnd);
@@ -127,6 +129,22 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
 
       const fail = (err: Error) => {
         state.error = err;
+        // A drop while the first frame is still pending must reject that waiter
+        // now — otherwise it blocks the full first-frame timeout and then throws
+        // a misleading "no frame arrived" message that masks the real cause.
+        if (firstFrameReject) {
+          const reject = firstFrameReject;
+          firstFrameResolve = null;
+          firstFrameReject = null;
+          reject(
+            streamFailure(
+              `simulator-server's frame stream dropped before the first frame arrived: ${err.message}`,
+              "screen_recording_stream_first_frame",
+              "network",
+              err
+            )
+          );
+        }
       };
       res.on("error", fail);
       res.on("aborted", () => fail(new Error("frame stream aborted")));
@@ -144,9 +162,22 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
         },
         waitForFirstFrame(timeoutMs: number) {
           if (state.latest) return Promise.resolve(state.latest);
+          // The stream already dropped before any frame — fail now rather than
+          // wait out the whole timeout for a frame that can never arrive.
+          if (state.error) {
+            return Promise.reject(
+              streamFailure(
+                `simulator-server's frame stream dropped before any frame arrived: ${state.error.message}`,
+                "screen_recording_stream_first_frame",
+                "network",
+                state.error
+              )
+            );
+          }
           return new Promise<Buffer>((resolveFrame, rejectFrame) => {
             const timer = setTimeout(() => {
               firstFrameResolve = null;
+              firstFrameReject = null;
               rejectFrame(
                 streamFailure(
                   `No frame arrived from simulator-server within ${timeoutMs} ms. ` +
@@ -158,12 +189,22 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
             }, timeoutMs);
             firstFrameResolve = (frame) => {
               clearTimeout(timer);
+              firstFrameReject = null;
               resolveFrame(frame);
+            };
+            firstFrameReject = (err) => {
+              clearTimeout(timer);
+              firstFrameResolve = null;
+              rejectFrame(err);
             };
           });
         },
         close() {
+          // Drop the waiter hooks before destroying the socket so the resulting
+          // 'aborted'/'error' from our own teardown does not reject a caller
+          // that has already moved on.
           firstFrameResolve = null;
+          firstFrameReject = null;
           res.destroy();
           request.destroy();
         },

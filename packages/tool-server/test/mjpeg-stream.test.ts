@@ -156,6 +156,33 @@ describe("openMjpegStream", () => {
     expect(stream.latest!.equals(late)).toBe(true);
   });
 
+  it("rejects a pending waitForFirstFrame the moment the stream drops, not after the timeout", async () => {
+    // Headers land (stream resolves) but the socket dies before any complete
+    // frame. The pending first-frame waiter must reject on that drop, not block
+    // the full first-frame timeout and then report a misleading "no frame" one.
+    const url = await serveChunks((res) => {
+      res.write(Buffer.from(BOUNDARY)); // part header only, no complete frame
+      setTimeout(() => res.destroy(), 30);
+    });
+
+    stream = await openMjpegStream(url);
+    const started = Date.now();
+    let caught: unknown;
+    try {
+      await stream.waitForFirstFrame(5_000);
+    } catch (err) {
+      caught = err;
+    }
+    const elapsed = Date.now() - started;
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(getFailureSignal(caught)?.error_code).toBe(
+      FAILURE_CODES.SCREEN_RECORDING_STREAM_UNAVAILABLE
+    );
+    // Surfaced promptly on the drop rather than blocking the 5s first-frame wait.
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
   it("records a mid-stream disconnect so stop can warn about it", async () => {
     const url = await serveChunks((res) => {
       res.write(Buffer.concat([Buffer.from(BOUNDARY), jpeg(0xf6), Buffer.from(BOUNDARY)]));
