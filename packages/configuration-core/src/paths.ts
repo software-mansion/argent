@@ -23,13 +23,20 @@ function nonEmpty(value: string | undefined): string | null {
   return trimmed === "" ? null : value;
 }
 
+/**
+ * The user's home directory, honoring HOME (POSIX) / USERPROFILE (Windows) and
+ * the test-sandbox `homeDir` override — the base the global scope hangs off.
+ */
+export function resolveHomeDir(options: ConfigPathOptions = {}): string {
+  if (options.homeDir) return options.homeDir;
+  return process.platform === "win32"
+    ? (nonEmpty(process.env.USERPROFILE) ?? os.homedir())
+    : (nonEmpty(process.env.HOME) ?? os.homedir());
+}
+
 /** The `~/.argent` directory, honoring HOME (POSIX) / USERPROFILE (Windows). */
 export function argentHomeDir(): string {
-  const home =
-    process.platform === "win32"
-      ? (nonEmpty(process.env.USERPROFILE) ?? os.homedir())
-      : (nonEmpty(process.env.HOME) ?? os.homedir());
-  return path.join(home, ".argent");
+  return path.join(resolveHomeDir(), ".argent");
 }
 
 /**
@@ -39,7 +46,7 @@ export function argentHomeDir(): string {
  */
 export function configDir(scope: FlagScope = "global", options: ConfigPathOptions = {}): string {
   if (scope === "global") {
-    return options.homeDir ? path.join(options.homeDir, ".argent") : argentHomeDir();
+    return path.join(resolveHomeDir(options), ".argent");
   }
   const cwd = options.cwd ?? process.cwd();
   return path.join(resolveProjectRoot(cwd), ".argent");

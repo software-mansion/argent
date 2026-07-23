@@ -14,7 +14,13 @@ export {
   type FlagsPathOptions,
 } from "./flags.js";
 
-export { argentHomeDir, configDir, configFilePath, type ConfigPathOptions } from "./paths.js";
+export {
+  argentHomeDir,
+  resolveHomeDir,
+  configDir,
+  configFilePath,
+  type ConfigPathOptions,
+} from "./paths.js";
 
 export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
 
@@ -51,6 +57,7 @@ export {
   getRememberedAgent,
   setRememberedAgent,
   clearRememberedAgent,
+  getAdditionalIosDeviceSets,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,
