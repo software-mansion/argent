@@ -549,3 +549,30 @@ describe("native-devtools tools — init_failed precheck", () => {
     }
   });
 });
+
+// `requiresAppRestart` reports true for every unconnected app and keeps no count
+// of how often it has already said so. When a connection never registers, the
+// "call restart-app" advice stays true forever and an agent obeying it restarts
+// the app indefinitely, so the message has to name the way out of that loop.
+describe("precheckNativeDevtools restart guidance", () => {
+  function apiRequiringRestart(): NativeDevtoolsApi {
+    const { api } = makeNativeApi({ envSetup: true, appRunning: true });
+    api.requiresAppRestart = async () => true;
+    return api;
+  }
+
+  it("still leads with restart-app, which is the usual and sufficient fix", async () => {
+    const result = await precheckNativeDevtools(apiRequiringRestart(), "UDID", "com.example.app");
+
+    expect(result).toMatchObject({ status: "restart_required" });
+    expect((result as { message: string }).message).toContain("Call restart-app then retry.");
+  });
+
+  it("names the tool-server restart so a stale service is not an unbounded app-restart loop", async () => {
+    const result = await precheckNativeDevtools(apiRequiringRestart(), "UDID", "com.example.app");
+
+    const message = (result as { message: string }).message;
+    expect(message).toContain("argent server stop && argent server start");
+    expect(message).toContain("do not keep restarting the app");
+  });
+});
