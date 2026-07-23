@@ -27,14 +27,19 @@ export function clip(s: string, max = 300): string {
 }
 
 /**
- * Reject a start while a capture is live OR while another start/stop is
- * mid-flight on the same session. The pending flags are set synchronously
- * before the first await of start/stop, closing the check-then-stamp gap that
- * would otherwise let two overlapping calls both pass this guard and
- * cross-corrupt the shared session state.
+ * Reject a start while a capture is live, while another start/stop is mid-flight
+ * on the same session, OR while a finalized-but-unretrieved capture is still
+ * waiting to be handed over (the `pendingRetrieval` state a cap or crash leaves
+ * behind). The pending flags are set synchronously before the first await of
+ * start/stop, closing the check-then-stamp gap that would otherwise let two
+ * overlapping calls both pass this guard and cross-corrupt the shared session
+ * state. Guarding `pendingRetrieval` too stops a start-after-cap from
+ * overwriting the earlier recording's `outputFile`/`logoFile` and orphaning its
+ * video on disk (stop still recovers it — the guard points the caller there).
  */
 export function assertNoActiveRecording(api: ScreenRecordingSessionApi, stage: string): void {
-  if (api.recordingActive || api.startPending || api.stopPending) {
+  const awaitingRetrieval = api.pendingRetrieval && api.outputFile !== null;
+  if (api.recordingActive || api.startPending || api.stopPending || awaitingRetrieval) {
     const detail = api.recordingActive
       ? `A screen recording is already running on device ${api.deviceId} ` +
         `(started ${api.wallClockStartMs ? Math.round((Date.now() - api.wallClockStartMs) / 1000) : "?"}s ago). ` +
@@ -42,7 +47,11 @@ export function assertNoActiveRecording(api: ScreenRecordingSessionApi, stage: s
       : api.stopPending
         ? `A screen-recording-stop is still finalizing on device ${api.deviceId}. ` +
           `Wait for it to return before starting a new recording.`
-        : `Another screen-recording-start is already in flight on device ${api.deviceId}.`;
+        : api.startPending
+          ? `Another screen-recording-start is already in flight on device ${api.deviceId}.`
+          : `A previous screen recording on device ${api.deviceId} already ended (time limit or ` +
+            `unexpected exit) and its video has not been retrieved yet. Call ` +
+            `\`screen-recording-stop\` to hand it over before starting a new recording.`;
     throw new FailureError(detail, {
       error_code: FAILURE_CODES.SCREEN_RECORDING_ALREADY_ACTIVE,
       failure_stage: stage,

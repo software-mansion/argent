@@ -605,6 +605,35 @@ describe("screen recording stop", () => {
     expect(reminder?.finalizedReason).toContain("5s time limit");
   });
 
+  it("rejects a start while a capped recording still awaits retrieval, keeping the first video reachable", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { timeLimitSeconds: 5 });
+
+    await vi.advanceTimersByTimeAsync(5_000); // cap fires -> pendingRetrieval
+    expect(api.pendingRetrieval).toBe(true);
+    const firstOutput = api.outputFile!;
+    const firstLogo = api.logoFile;
+
+    // Admitting a start here would overwrite outputFile/logoFile and orphan the
+    // finalized-but-unretrieved video (the state stop still recovers from), so
+    // the guard must reject it and point the agent at stop instead.
+    fakeStream();
+    fakeChild();
+    try {
+      await startAndSettle(api);
+      expect.unreachable();
+    } catch (err) {
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_ALREADY_ACTIVE);
+    }
+    // The first recording's session pointers are untouched -> still retrievable.
+    expect(api.outputFile).toBe(firstOutput);
+    expect(api.logoFile).toBe(firstLogo);
+    expect(api.pendingRetrieval).toBe(true);
+  });
+
   it("durationMs reflects the capture length, not the idle time after the cap", async () => {
     const api = await makeSession(iosDevice);
     fakeStream();
