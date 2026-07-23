@@ -37,6 +37,7 @@ import {
   type PointerControl,
 } from "../src/tools/screen-recording/capture";
 import { setPointerTrail, setPointerVisible } from "../src/utils/simulator-client";
+import { makePointerControl } from "../src/tools/screen-recording/screen-recording-start";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { openMjpegStream, readJpegDimensions } from "../src/tools/screen-recording/mjpeg-stream";
 import { resolveFfmpeg, writeLogoTemp } from "../src/tools/screen-recording/watermark";
@@ -794,6 +795,35 @@ describe("touch visualizer", () => {
     expect(result.warning).toBeUndefined();
     await fs.rm(outputFile, { force: true });
   });
+
+  it("does not carry a failed enable into a later showTouches:false recording", async () => {
+    const api = await makeSession(iosDevice);
+
+    // First recording: the overlay refuses to enable AND the capture ends via
+    // the time-limit cap, which — unlike stop — never runs the reset that clears
+    // `pointerFailed`.
+    fakeStream();
+    const first = fakeChild();
+    first.exitOnStdinEnd();
+    await startAndSettle(api, { timeLimitSeconds: 5, pointer: fakePointer(false) });
+    expect(api.pointerFailed).toBe(true);
+    await vi.advanceTimersByTimeAsync(5_000); // cap fires; no stop
+    expect(api.recordingTimedOut).toBe(true);
+
+    // A fresh recording that never asked for the overlay must start clean, so its
+    // stop carries no spurious touch-visualizer warning.
+    fakeStream();
+    const second = fakeChild();
+    second.exitOnStdinEnd();
+    await startAndSettle(api); // showTouches off → no PointerControl
+    expect(api.pointerFailed).toBe(false);
+
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+    const result = await stopCapture(api);
+    expect(result.warning).toBeUndefined();
+    await fs.rm(outputFile, { force: true });
+  });
 });
 
 describe("touch visualizer wire protocol", () => {
@@ -843,6 +873,37 @@ describe("touch visualizer wire protocol", () => {
       })
     );
     await expect(setPointerVisible(fakeApi, false)).resolves.toBe(false);
+  });
+
+  it("issues disable's show:false only after an in-flight enable's show:true", async () => {
+    // Model a dispose racing the enable await: enable's `show:true` is parked
+    // in flight when disable is called. The control must serialize them so the
+    // overlay ends OFF — otherwise disable's `show:false` is issued first and is
+    // overtaken by the later `show:true`, leaving the overlay stuck on.
+    const ops: Array<Record<string, unknown>> = [];
+    let releaseShowTrue!: () => void;
+    const showTrueParked = new Promise<void>((resolve) => (releaseShowTrue = resolve));
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string) as Record<string, unknown>;
+      if (body.show === true) await showTrueParked; // hold enable's overlay toggle
+      ops.push(body);
+      return new Response(JSON.stringify({ status: "ok" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const control = makePointerControl(fakeApi);
+    const enablePromise = control.enable();
+    // enable's trail POST resolves; its show:true is now parked. Race disable in.
+    const disablePromise = control.disable();
+    // Flush microtasks: an unserialized disable would fire show:false here.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(ops).toEqual([{ trail: 8 }]); // no show yet
+
+    releaseShowTrue();
+    await Promise.all([enablePromise, disablePromise]);
+
+    // Serialized: trail, then show:true, then show:false last → overlay ends off.
+    expect(ops).toEqual([{ trail: 8 }, { show: true }, { show: false }]);
   });
 });
 

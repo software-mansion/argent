@@ -130,30 +130,7 @@ Fails if a recording is already running on the device, the device is not booted,
       // remote sims never reach here — they are gated out by the stream check.
       const showTouches = params.showTouches ?? true;
       const pointer: PointerControl | undefined = showTouches
-        ? {
-            async enable() {
-              // Set the comet trail first so the very first swipe already leaves
-              // one; the returned success reflects the show toggle (the overlay
-              // itself), since the trail is only a cosmetic enhancement.
-              await setPointerTrail(
-                simulator,
-                POINTER_TRAIL_LENGTH,
-                AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS)
-              );
-              return setPointerVisible(
-                simulator,
-                true,
-                AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS)
-              );
-            },
-            async disable() {
-              await setPointerVisible(
-                simulator,
-                false,
-                AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS)
-              );
-            },
-          }
+        ? makePointerControl(simulator)
         : undefined;
 
       // Read the flag live per call so `argent enable/disable video-watermark`
@@ -165,6 +142,49 @@ Fails if a recording is already running on the device, the device is not booted,
         trimStatic: params.trimStatic ?? true,
         pointer,
       });
+    },
+  };
+}
+
+/**
+ * Build the touch-visualizer control capture.ts arms for the life of a
+ * recording. `enable` sets the comet trail, then flips the overlay on; the
+ * returned success reflects the show toggle (the overlay itself), since the
+ * trail is only a cosmetic enhancement.
+ *
+ * `disable` waits for any in-flight `enable` to settle before sending its own
+ * `show:false`. Enabling is the one suspension point after a recording is
+ * stamped, so a dispose (shutdown) can call `disable` while `enable`'s
+ * `show:true` request is still outstanding. Without this barrier the two
+ * requests race and the earlier-issued `show:false` can be overtaken by the
+ * later `show:true`, leaving simulator-server's overlay stuck on after the
+ * recording is gone — where it then draws touch markers into subsequent
+ * non-recording screenshots. Serializing the two guarantees `show:false` is
+ * both issued and applied last, so the overlay always ends off.
+ */
+export function makePointerControl(simulator: SimulatorServerApi): PointerControl {
+  let enabling: Promise<unknown> | null = null;
+  return {
+    async enable() {
+      const run = (async () => {
+        await setPointerTrail(
+          simulator,
+          POINTER_TRAIL_LENGTH,
+          AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS)
+        );
+        return setPointerVisible(simulator, true, AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS));
+      })();
+      enabling = run;
+      try {
+        return await run;
+      } finally {
+        if (enabling === run) enabling = null;
+      }
+    },
+    async disable() {
+      const pending = enabling;
+      if (pending) await pending.catch(() => {});
+      await setPointerVisible(simulator, false, AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS));
     },
   };
 }

@@ -356,6 +356,11 @@ async function startCaptureLocked(
   api.recordingTimedOut = false;
   api.recordingExitedUnexpectedly = false;
   api.pendingRetrieval = false;
+  // Clear the previous capture's pointer-enable result: an end via the cap or an
+  // encoder crash never runs stop's reset, so without this a `showTouches: false`
+  // recording started afterwards would inherit a stale `pointerFailed` and warn
+  // at stop about an overlay it never requested.
+  api.pointerFailed = false;
   api.lastExitInfo = null;
   api.outputFile = outputFile;
   api.logoFile = logoFile;
