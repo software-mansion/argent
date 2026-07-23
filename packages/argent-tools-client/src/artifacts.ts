@@ -28,8 +28,9 @@
  */
 
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, normalize, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, normalize, sep } from "node:path";
 import { createHash } from "node:crypto";
 
 import { safeExtractTarGz } from "@argent/archive";
@@ -146,6 +147,85 @@ function durableBaseDir(): string {
  * compared in the same form regardless of separator style.
  */
 const ALLOWED_SAVE_DIRS: ReadonlySet<string> = new Set([normalize(".argent/recordings")]);
+
+/**
+ * Hard ceiling on a single durable download, independent of the `size` the
+ * (possibly hostile) tool-server announces. A durable artifact is persisted
+ * where it survives temp-cache GC, so a remote/compromised `argent link` server
+ * must not be able to drive unbounded client memory use or a persistent disk
+ * fill under `.argent/recordings/` by streaming a body larger than it claimed.
+ * Well above any real recording (600 s cap at device-native h264), so it only
+ * ever trips a pathological stream. 2 GiB also stays within Node's `Buffer`
+ * limit, since the download is buffered before it is written.
+ */
+const MAX_DURABLE_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * Read a fetch response body into a Buffer, refusing to buffer more than `cap`
+ * bytes. Rejects early when the declared `Content-Length` already exceeds the
+ * cap, and otherwise aborts the stream the moment the accumulated bytes pass it
+ * — so a server that under-declares its `size` then streams an unbounded body
+ * can't exhaust memory. Falls back to a still-capped `arrayBuffer()` read when
+ * the response exposes no readable stream (e.g. an injected test fetch). Returns
+ * null when the cap is exceeded.
+ */
+async function readCapped(res: Response, cap: number): Promise<Buffer | null> {
+  const headers = (res as { headers?: { get?: (k: string) => string | null } }).headers;
+  const declared = Number(headers?.get?.("content-length"));
+  if (Number.isFinite(declared) && declared > cap) return null;
+
+  const body = (res as { body?: ReadableStream<Uint8Array> | null }).body;
+  if (!body?.getReader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > cap ? null : buf;
+  }
+
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > cap) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Persist a durable artifact without ever overwriting an existing file. The
+ * artifact's own filename is tried first; if it is already taken, it lands
+ * alongside as `name (2).ext`, `name (3).ext`, … The write is *exclusive*
+ * (`wx` / `COPYFILE_EXCL`), so a collision is detected atomically — two
+ * concurrent materializations can't clobber each other, and a tool-server can't
+ * silently replace a recording already in `.argent/recordings/` by reusing its
+ * name. Returns the final path, or null if no free name is found within the
+ * bound (a pathological directory, not a real collision).
+ */
+async function writeDurableUnique(
+  dir: string,
+  filename: string,
+  write: (path: string) => Promise<void>
+): Promise<string | null> {
+  const ext = extname(filename);
+  const stem = filename.slice(0, filename.length - ext.length);
+  for (let i = 1; i <= 1000; i++) {
+    const candidate = i === 1 ? filename : `${stem} (${i})${ext}`;
+    const path = join(dir, candidate);
+    try {
+      await write(path);
+      return path;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === "EEXIST") continue;
+      throw err;
+    }
+  }
+  return null;
+}
 
 /**
  * Resolve an artifact's durable save destination from its `saveDir` hint, or
@@ -309,32 +389,46 @@ export async function materializeArtifacts(
       // `argent link` recording ends up on the *client* host, not the server.
       const saveTarget = durableSaveTarget(value);
       if (saveTarget) {
+        const filename = basename(saveTarget.path);
         try {
           await mkdir(saveTarget.dir, { recursive: true });
           if (localPath) {
             // Already on this host — copy without buffering the whole file
             // (recordings can be large); only re-read if it's an inline image.
-            await copyFile(localPath, saveTarget.path);
+            // Exclusive copy so a colliding name never clobbers an existing
+            // durable recording — it lands alongside as `name (2).ext`.
+            const finalPath = await writeDurableUnique(saveTarget.dir, filename, (p) =>
+              copyFile(localPath, p, fsConstants.COPYFILE_EXCL)
+            );
+            if (!finalPath) return null;
             if (value.mimeType.startsWith("image/")) {
               images.push({
-                localPath: saveTarget.path,
-                data: await readFile(saveTarget.path),
+                localPath: finalPath,
+                data: await readFile(finalPath),
                 mimeType: value.mimeType,
               });
             }
-          } else {
-            const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
-              headers: authHeaders,
-            });
-            if (!res.ok) return null;
-            const data = Buffer.from(await res.arrayBuffer());
-            if (value.size > 0 && data.length !== value.size) return null;
-            await writeFile(saveTarget.path, data);
-            if (value.mimeType.startsWith("image/")) {
-              images.push({ localPath: saveTarget.path, data, mimeType: value.mimeType });
-            }
+            return finalPath;
           }
-          return saveTarget.path;
+          // Remote download. A durable file survives cache GC, so it must have a
+          // known, verified size: refuse a `size:0` handle (its length can't be
+          // checked) and cap the streamed bytes, so a linked tool-server can't
+          // persist an unbounded or under-declared body under `.argent/`.
+          if (value.size <= 0) return null;
+          const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
+            headers: authHeaders,
+          });
+          if (!res.ok) return null;
+          const data = await readCapped(res, Math.min(value.size, MAX_DURABLE_BYTES));
+          if (!data || data.length !== value.size) return null;
+          const finalPath = await writeDurableUnique(saveTarget.dir, filename, (p) =>
+            writeFile(p, data, { flag: "wx" })
+          );
+          if (!finalPath) return null;
+          if (value.mimeType.startsWith("image/")) {
+            images.push({ localPath: finalPath, data, mimeType: value.mimeType });
+          }
+          return finalPath;
         } catch {
           return null;
         }

@@ -654,4 +654,85 @@ describe("materializeArtifacts durable destination", () => {
     );
     expect((result as { video: null }).video).toBeNull();
   });
+
+  it("refuses a size:0 durable download — an unverifiable body is never persisted", async () => {
+    // A durable file survives temp-cache GC, so a length that can't be checked
+    // (size 0) must not be persisted. A remote server that announces size:0 and
+    // streams an arbitrary-length body is dropped, not written under `.argent/`.
+    const big = Array.from({ length: 40000 }, (_, i) => i % 256);
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vid0",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: 0,
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ vid0: big }) }
+    );
+    expect((result as { video: null }).video).toBeNull();
+    await expect(readFile(join(projectRoot, ".argent/recordings", "clip.mp4"))).rejects.toThrow();
+  });
+
+  it("caps a durable download that over-streams past its declared size", async () => {
+    // The handle declares 8 bytes but the server streams 200_000. The bounded
+    // reader aborts the stream once it passes the declared size (the cap), so an
+    // under-declared body can't drive unbounded memory use / disk fill; the
+    // artifact resolves to null and nothing is left under `.argent/recordings/`.
+    const overStreamingFetch = (async () => ({
+      ok: true,
+      headers: { get: () => null }, // no Content-Length announced
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (let i = 0; i < 100; i++) controller.enqueue(new Uint8Array(2000));
+          controller.close();
+        },
+      }),
+    })) as unknown as typeof fetch;
+
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vidflood",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: MP4.length, // declares 8, delivers 200_000
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: overStreamingFetch }
+    );
+    expect((result as { video: null }).video).toBeNull();
+    await expect(readFile(join(projectRoot, ".argent/recordings", "clip.mp4"))).rejects.toThrow();
+  });
+
+  it("never overwrites an existing durable recording — lands the new file alongside", async () => {
+    // A colliding filename must not clobber a recording already on disk. Both
+    // the co-located copy and the remote download create exclusively, so the new
+    // file lands as `clip (2).mp4` and the original is preserved intact.
+    const dir = join(projectRoot, ".argent/recordings");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "clip.mp4"), Buffer.from("EXISTING"));
+
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "viddup",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: MP4.length,
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ viddup: MP4 }) }
+    );
+
+    const out = (result as { video: string }).video;
+    expect(out).toBe(join(dir, "clip (2).mp4"));
+    expect(Buffer.from(await readFile(out))).toEqual(Buffer.from(MP4));
+    // The original is untouched.
+    expect(await readFile(join(dir, "clip.mp4"), "utf8")).toBe("EXISTING");
+  });
 });
