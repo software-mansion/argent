@@ -8,6 +8,7 @@ import {
   isArtifactHandle,
   getDeviceIdFromArgs,
   artifactDir,
+  durableSaveTarget,
   ARTIFACT_MARKER,
   type ArtifactHandle,
 } from "../src/artifacts.js";
@@ -363,5 +364,255 @@ describe("materializeArtifacts directory bundles", () => {
       { toolsUrl: "http://remote:3001", fetchImpl: fakeFetchBuffer({}) }
     );
     expect((result as { traceFile: null }).traceFile).toBeNull();
+  });
+});
+
+// ── durable destination (saveDir, e.g. `.argent/recordings`) ─────────
+//
+// The base a `saveDir` resolves against is the client's project root (nearest
+// ancestor with `.git`/`package.json`/`.argent`), or its home dir when not in a
+// project. These suites drive cwd into a marker-bearing temp dir and redirect
+// HOME so the global-fallback branch never touches the real `~/.argent`.
+
+describe("durableSaveTarget", () => {
+  let projectRoot: string;
+  let home: string;
+  let originalCwd: string;
+  let originalHome: string | undefined;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), "argent-proj-"));
+    await writeFile(join(projectRoot, "package.json"), "{}"); // the project marker
+    home = await mkdtemp(join(tmpdir(), "argent-home-"));
+    originalCwd = process.cwd();
+    originalHome = process.env.HOME;
+    process.chdir(projectRoot);
+    process.env.HOME = home;
+    projectRoot = process.cwd(); // resolve /var → /private/var for assertions
+  });
+
+  afterEach(async () => {
+    process.chdir(originalCwd);
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    await rm(projectRoot, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("returns null when no saveDir is set (⇒ disposable temp cache)", () => {
+    expect(durableSaveTarget(handle("a", "x.mp4", "video/mp4"))).toBeNull();
+  });
+
+  it("resolves saveDir under the project root with the sanitized filename", () => {
+    const h: ArtifactHandle = {
+      ...handle("a", "clip name.mp4", "video/mp4"),
+      saveDir: ".argent/recordings",
+    };
+    const target = durableSaveTarget(h)!;
+    expect(target).not.toBeNull();
+    expect(target.dir).toBe(join(projectRoot, ".argent/recordings"));
+    // Space in the filename is sanitized to an underscore.
+    expect(target.path).toBe(join(projectRoot, ".argent/recordings", "clip_name.mp4"));
+  });
+
+  it("anchors at the project root even from a subdirectory", async () => {
+    const sub = join(projectRoot, "packages", "app");
+    await mkdir(sub, { recursive: true });
+    process.chdir(sub);
+    const h: ArtifactHandle = {
+      ...handle("a", "clip.mp4", "video/mp4"),
+      saveDir: ".argent/recordings",
+    };
+    // Not join(sub, …) — the one project-level `.argent`, walked up to.
+    expect(durableSaveTarget(h)!.dir).toBe(join(projectRoot, ".argent/recordings"));
+  });
+
+  it("falls back to the global ~/.argent when not inside a project", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "argent-noproj-"));
+    process.chdir(outside);
+    try {
+      const h: ArtifactHandle = {
+        ...handle("a", "clip.mp4", "video/mp4"),
+        saveDir: ".argent/recordings",
+      };
+      const target = durableSaveTarget(h)!;
+      expect(target.dir).toBe(join(home, ".argent/recordings"));
+      expect(target.path).toBe(join(home, ".argent/recordings", "clip.mp4"));
+    } finally {
+      process.chdir(projectRoot);
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an absolute saveDir (falls back to null → temp cache)", () => {
+    const h: ArtifactHandle = { ...handle("a", "x.mp4", "video/mp4"), saveDir: "/etc" };
+    expect(durableSaveTarget(h)).toBeNull();
+  });
+
+  it("rejects a `..`-escaping saveDir", () => {
+    for (const evil of ["..", "../outside", "a/../../b", "./../x"]) {
+      const h: ArtifactHandle = { ...handle("a", "x.mp4", "video/mp4"), saveDir: evil };
+      expect(durableSaveTarget(h), evil).toBeNull();
+    }
+  });
+
+  it("excludes directory bundles (archive) — durable persistence is for single files", () => {
+    const h: ArtifactHandle = {
+      ...handle("a", "session.trace", "application/octet-stream"),
+      saveDir: ".argent/recordings",
+      archive: "tar.gz",
+    };
+    expect(durableSaveTarget(h)).toBeNull();
+  });
+});
+
+describe("materializeArtifacts durable destination", () => {
+  let root: string; // ARGENT_ARTIFACTS_DIR (temp cache)
+  let hostDir: string; // stands in for the tool-server host
+  let projectRoot: string; // the client's project (marker-bearing) working dir
+  let home: string; // redirected HOME for the global-fallback branch
+  let originalCwd: string;
+  let originalHome: string | undefined;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "argent-artifacts-"));
+    hostDir = await mkdtemp(join(tmpdir(), "argent-host-"));
+    projectRoot = await mkdtemp(join(tmpdir(), "argent-proj-"));
+    await writeFile(join(projectRoot, "package.json"), "{}"); // the project marker
+    home = await mkdtemp(join(tmpdir(), "argent-home-"));
+    process.env.ARGENT_ARTIFACTS_DIR = root;
+    originalCwd = process.cwd();
+    originalHome = process.env.HOME;
+    process.chdir(projectRoot);
+    process.env.HOME = home;
+    // On macOS the temp dir is under a /var → /private/var symlink; the
+    // materializer resolves cwd to the real path, so mirror that for assertions.
+    projectRoot = process.cwd();
+  });
+
+  afterEach(async () => {
+    process.chdir(originalCwd);
+    delete process.env.ARGENT_ARTIFACTS_DIR;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    await rm(root, { recursive: true, force: true });
+    await rm(hostDir, { recursive: true, force: true });
+    await rm(projectRoot, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const MP4 = [0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]; // ftyp box header-ish
+
+  it("remote: downloads the video into <project>/.argent/recordings/, not the temp cache", async () => {
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vid1",
+      filename: "screen-recording-DEV-1-42.mp4",
+      mimeType: "video/mp4",
+      size: MP4.length,
+      saveDir: ".argent/recordings",
+    };
+    const { result, images } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", authToken: "tok", fetchImpl: fakeFetch({ vid1: MP4 }) }
+    );
+
+    const out = (result as { video: string }).video;
+    const expected = join(projectRoot, ".argent/recordings", "screen-recording-DEV-1-42.mp4");
+    expect(out).toBe(expected);
+    expect(out.startsWith(artifactDir())).toBe(false); // NOT in the temp cache
+    expect(Buffer.from(await readFile(out))).toEqual(Buffer.from(MP4));
+    // A video is not an image — no inline render.
+    expect(images).toHaveLength(0);
+  });
+
+  it("co-located: copies the host video into <project>/.argent/recordings/ and leaves the original", async () => {
+    const hostPath = join(hostDir, "argent-screen-recording-DEV-1-42.mp4");
+    await writeFile(hostPath, Buffer.from(MP4));
+    const st = await stat(hostPath);
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vid2",
+      filename: "screen-recording-DEV-1-42.mp4", // server strips the `argent-` prefix
+      mimeType: "video/mp4",
+      size: st.size,
+      hostPath,
+      mtimeMs: st.mtimeMs,
+      saveDir: ".argent/recordings",
+    };
+    const throwingFetch: typeof fetch = (async () => {
+      throw new Error("fetch must not be called when the file is already local");
+    }) as unknown as typeof fetch;
+
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://localhost:3001", fetchImpl: throwingFetch }
+    );
+
+    const out = (result as { video: string }).video;
+    expect(out).toBe(join(projectRoot, ".argent/recordings", "screen-recording-DEV-1-42.mp4"));
+    expect(out).not.toBe(hostPath); // durable copy, not the temp original
+    expect(Buffer.from(await readFile(out))).toEqual(Buffer.from(MP4));
+    // Original host file is untouched.
+    expect(Buffer.from(await readFile(hostPath))).toEqual(Buffer.from(MP4));
+  });
+
+  it("not in a project: downloads into the global ~/.argent/recordings/", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "argent-noproj-"));
+    process.chdir(outside);
+    try {
+      const h: ArtifactHandle = {
+        [ARTIFACT_MARKER]: true,
+        id: "vid5",
+        filename: "clip.mp4",
+        mimeType: "video/mp4",
+        size: MP4.length,
+        saveDir: ".argent/recordings",
+      };
+      const { result } = await materializeArtifacts(
+        { video: h },
+        { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ vid5: MP4 }) }
+      );
+      const out = (result as { video: string }).video;
+      expect(out).toBe(join(home, ".argent/recordings", "clip.mp4"));
+      expect(Buffer.from(await readFile(out))).toEqual(Buffer.from(MP4));
+    } finally {
+      process.chdir(projectRoot);
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("unsafe saveDir falls back to the temp cache instead of writing outside the base", async () => {
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vid3",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: MP4.length,
+      saveDir: "../escape",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ vid3: MP4 }) }
+    );
+    const out = (result as { video: string }).video;
+    expect(out.startsWith(artifactDir())).toBe(true); // fell back to temp cache
+    expect(out).not.toContain("escape");
+  });
+
+  it("a truncated durable download rewrites to null (integrity holds)", async () => {
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vid4",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: 99, // announced 99…
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ vid4: MP4 }) } // …delivered 8
+    );
+    expect((result as { video: null }).video).toBeNull();
   });
 });

@@ -94,17 +94,27 @@ export interface FlagsPathOptions {
   homeDir?: string;
 }
 
-export function resolveProjectRoot(startDir: string): string {
-  const initial = path.resolve(startDir);
-  let current = initial;
+/**
+ * Nearest ancestor of `startDir` (inclusive) that carries a {@link PROJECT_MARKERS}
+ * marker, or `null` when the walk reaches the filesystem root without finding one
+ * (i.e. `startDir` is not inside a project). Unlike {@link resolveProjectRoot},
+ * this reports the "no project" case distinctly so callers can fall back to a
+ * global location instead of silently anchoring at `startDir`.
+ */
+export function findProjectRoot(startDir: string): string | null {
+  let current = path.resolve(startDir);
   while (true) {
     for (const marker of PROJECT_MARKERS) {
       if (fs.existsSync(path.join(current, marker))) return current;
     }
     const parent = path.dirname(current);
-    if (parent === current) return initial;
+    if (parent === current) return null;
     current = parent;
   }
+}
+
+export function resolveProjectRoot(startDir: string): string {
+  return findProjectRoot(startDir) ?? path.resolve(startDir);
 }
 
 export function getFlagsPath(scope: FlagScope, options: FlagsPathOptions = {}): string {

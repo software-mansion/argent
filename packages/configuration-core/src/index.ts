@@ -1,6 +1,7 @@
 export {
   FLAG_REGISTRY,
   getFlagDefinition,
+  findProjectRoot,
   resolveProjectRoot,
   getFlagsPath,
   readFlags,

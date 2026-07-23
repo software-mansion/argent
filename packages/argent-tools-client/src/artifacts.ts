@@ -27,12 +27,13 @@
  *              otherwise.
  */
 
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, sep } from "node:path";
 import { createHash } from "node:crypto";
 
 import { safeExtractTarGz } from "@argent/archive";
+import { argentHomeDir, findProjectRoot } from "@argent/configuration-core";
 
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
 export const ARTIFACT_MARKER = "__argentArtifact" as const;
@@ -60,6 +61,16 @@ export interface ArtifactHandle {
    * the download is a gzipped tar that the client unpacks back into a directory.
    */
   archive?: "tar.gz";
+  /**
+   * A relative directory the tool asked the artifact to be durably persisted
+   * into — e.g. `.argent/recordings` for a screen recording — instead of the
+   * ephemeral temp cache. The client resolves it against its own project root
+   * (the nearest ancestor with `.git`/`package.json`/`.argent`), falling back to
+   * its home when not in a project, and hardens it (relative, no `..`) before
+   * use — so for a remote `argent link` server the file lands *here*, on the
+   * client, in the project it belongs to. Absent ⇒ disposable temp-cache scratch.
+   */
+  saveDir?: string;
 }
 
 export function isArtifactHandle(value: unknown): value is ArtifactHandle {
@@ -103,6 +114,55 @@ export function artifactDir(deviceId?: string): string {
   const parts = [artifactsRoot(), projectSlug(), sessionId()];
   if (deviceId) parts.push(sanitizeSegment(deviceId));
   return join(...parts);
+}
+
+/**
+ * Base directory the `saveDir` hint is resolved against: the client's project
+ * root when it is inside one, else the user's home. This is what makes a
+ * recording land in the *project's* `.argent/recordings/` (shared with the rest
+ * of argent's per-project config) while still working — under the global
+ * `~/.argent/recordings/` — when the client is run from somewhere that isn't a
+ * project (no `.git`/`package.json`/`.argent` in any ancestor). Anchored at the
+ * project root rather than raw cwd so a recording taken from a subdirectory
+ * still lands in the one project-level `.argent`.
+ */
+function durableBaseDir(): string {
+  const projectRoot = findProjectRoot(process.cwd());
+  // argentHomeDir() is `<home>/.argent`; its parent is the home dir, and the
+  // `saveDir` hint (`.argent/recordings`) re-adds the `.argent` segment — so the
+  // global fallback resolves to `~/.argent/recordings`, matching the project
+  // case's `<root>/.argent/recordings`.
+  return projectRoot ?? dirname(argentHomeDir());
+}
+
+/**
+ * Resolve an artifact's durable save destination from its `saveDir` hint, or
+ * `null` when it has none (⇒ the disposable temp cache is used instead). The
+ * hint (e.g. `.argent/recordings`) is resolved against {@link durableBaseDir} —
+ * the client's project root, or its home when not in a project — so a file
+ * produced by a remote (`argent link`) tool-server is persisted on the *client*
+ * host, in the project it belongs to.
+ *
+ * The hint is hardened before use: a directory bundle (`archive`) is excluded
+ * (durable persistence is for single files only), and the path is rejected if it
+ * is absolute or escapes the base via a `..` segment — a compromised tool-server
+ * must not be able to steer a write outside the base directory. A rejected hint
+ * falls back to `null`, so an unsafe `saveDir` degrades to scratch rather than
+ * writing somewhere dangerous.
+ */
+export function durableSaveTarget(handle: ArtifactHandle): { dir: string; path: string } | null {
+  if (!handle.saveDir || handle.archive) return null;
+  const rel = normalize(handle.saveDir);
+  if (
+    isAbsolute(rel) ||
+    rel === ".." ||
+    rel.startsWith(`..${sep}`) ||
+    rel.split(sep).includes("..")
+  ) {
+    return null;
+  }
+  const dir = join(durableBaseDir(), rel);
+  return { dir, path: join(dir, sanitizeSegment(handle.filename)) };
 }
 
 export interface MaterializedImage {
@@ -222,6 +282,44 @@ export async function materializeArtifacts(
     if (isArtifactHandle(value)) {
       // Gate: prefer the file already on this host; only download on a miss.
       const localPath = await resolveLocalFile(value);
+
+      // Durable destination (e.g. `.argent/recordings`): persist under the
+      // client's own cwd instead of the disposable temp cache. Copy when the
+      // file is already local (co-located server), download otherwise — so an
+      // `argent link` recording ends up on the *client* host, not the server.
+      const saveTarget = durableSaveTarget(value);
+      if (saveTarget) {
+        try {
+          await mkdir(saveTarget.dir, { recursive: true });
+          if (localPath) {
+            // Already on this host — copy without buffering the whole file
+            // (recordings can be large); only re-read if it's an inline image.
+            await copyFile(localPath, saveTarget.path);
+            if (value.mimeType.startsWith("image/")) {
+              images.push({
+                localPath: saveTarget.path,
+                data: await readFile(saveTarget.path),
+                mimeType: value.mimeType,
+              });
+            }
+          } else {
+            const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
+              headers: authHeaders,
+            });
+            if (!res.ok) return null;
+            const data = Buffer.from(await res.arrayBuffer());
+            if (value.size > 0 && data.length !== value.size) return null;
+            await writeFile(saveTarget.path, data);
+            if (value.mimeType.startsWith("image/")) {
+              images.push({ localPath: saveTarget.path, data, mimeType: value.mimeType });
+            }
+          }
+          return saveTarget.path;
+        } catch {
+          return null;
+        }
+      }
+
       if (localPath) {
         if (value.mimeType.startsWith("image/")) {
           images.push({ localPath, data: await readFile(localPath), mimeType: value.mimeType });

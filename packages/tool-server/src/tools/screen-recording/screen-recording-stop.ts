@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
@@ -14,6 +15,16 @@ const zodSchema = z.object({
     .string()
     .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
 });
+
+/**
+ * Where the finished video is durably saved, relative to the client's project
+ * root (or its home dir when not in a project — the client decides). The client
+ * materializer copies (co-located) or downloads (remote `argent link`) the mp4
+ * here, so a recording always lands under `<project>/.argent/recordings/` on the
+ * client host rather than in disposable temp — even when the tool-server that
+ * produced it is remote.
+ */
+const RECORDINGS_DIR = ".argent/recordings";
 
 export interface ScreenRecordingStopResult {
   /** The finalized video as a downloadable artifact (mp4). */
@@ -64,7 +75,13 @@ Fails if no recording (running or finished-but-unretrieved) exists for the given
     // Resolve the store only after a successful stop — the "no active
     // recording" error path never needs it.
     const artifacts = requireArtifacts(ctx);
-    const video = await artifacts.register(stopped.outputFile, { mimeType: "video/mp4" });
+    const video = await artifacts.register(stopped.outputFile, {
+      mimeType: "video/mp4",
+      // Drop the internal `argent-` temp prefix so the saved file reads cleanly
+      // as `.argent/recordings/screen-recording-<device>-<ts>.mp4`.
+      filename: basename(stopped.outputFile).replace(/^argent-/, ""),
+      saveDir: RECORDINGS_DIR,
+    });
     const result: ScreenRecordingStopResult = { video, durationMs: stopped.durationMs };
     if (stopped.wallClockMs !== undefined) result.wallClockMs = stopped.wallClockMs;
     if (stopped.trimmedMs !== undefined) result.trimmedMs = stopped.trimmedMs;

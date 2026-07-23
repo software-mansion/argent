@@ -54,6 +54,16 @@ export interface ArtifactHandle {
    * gate. The client unpacks the tar back into a directory after download.
    */
   archive?: "tar.gz";
+  /**
+   * A relative directory where the client should durably persist this artifact
+   * instead of the ephemeral temp cache — e.g. `.argent/recordings` for a screen
+   * recording. The client resolves it against its own project root (nearest
+   * ancestor with `.git`/`package.json`/`.argent`, else its home dir) and
+   * sanitizes it (relative, no `..`), so for a remote (`argent link`) tool-server
+   * the file lands on the *client* host, not the server. Absent ⇒ the artifact
+   * is disposable scratch.
+   */
+  saveDir?: string;
 }
 
 /** Internal entry the HTTP route reads to stream a registered artifact. */
@@ -85,6 +95,8 @@ const MIME_BY_EXT: Record<string, string> = {
   ".txt": "text/plain",
   ".md": "text/markdown",
   ".html": "text/html",
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
 };
 
 function inferMimeType(filePath: string): string {
@@ -102,6 +114,12 @@ export interface RegisterArtifactOptions {
    * session). When omitted, directories are auto-detected via stat.
    */
   archive?: "tar.gz";
+  /**
+   * Relative directory to durably persist the artifact into (resolved on the
+   * client against its project root, else home) instead of the temp cache —
+   * surfaced to the client on the handle. See {@link ArtifactHandle.saveDir}.
+   */
+  saveDir?: string;
 }
 
 /**
@@ -140,6 +158,7 @@ export class ArtifactStore {
     };
     if (mtimeMs != null) handle.mtimeMs = mtimeMs;
     if (isDirectory) handle.archive = "tar.gz";
+    if (opts?.saveDir) handle.saveDir = opts.saveDir;
     return handle;
   }
 
