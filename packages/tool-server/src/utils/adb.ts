@@ -66,11 +66,11 @@ const emulatorFlagSupportCache = new Map<string, boolean>();
  * Feature-detect whether the resolved `emulator` binary accepts a given
  * command-line flag, by checking whether it appears in `emulator -help`.
  *
- * Some launch flags exist only in newer emulator builds and are undocumented
- * in the release notes (e.g. `-crash-report-mode`, added in ~36.x and late
- * 35.x), so the binary's own `-help` listing is the only reliable signal.
- * Passing an unrecognized flag makes the emulator abort before boot, so callers
- * must gate on this before adding such a flag to the launch args.
+ * Some launch flags are undocumented in the release notes and present on only
+ * a subset of builds (e.g. `-crash-report-mode`, which 36.1.9.0 does not list),
+ * so the binary's own `-help` listing is the only reliable signal. Passing an
+ * unrecognized flag makes the emulator abort before boot, so callers must gate
+ * on this before adding such a flag to the launch args.
  *
  * Best-effort: returns false if the binary cannot be resolved or `-help` cannot
  * be run, and never throws.
