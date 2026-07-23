@@ -134,9 +134,10 @@ export interface InvokeToolOptions {
  * this for every invocation: it carries the caller's {@link InvokeToolOptions}
  * (e.g. `signal`) plus cross-cutting context the registry owns — currently the
  * {@link ArtifactStore}, so any tool that produces a host file can register it
- * (`ctx.artifacts.register(path)`) without declaring a per-tool service. The
- * registry always populates `artifacts`; it is only ever absent when `execute`
- * is called directly (bypassing `invokeTool`), e.g. in a unit test.
+ * (`ctx.artifacts.register({ hostPath, kind })`) without declaring a per-tool
+ * service. The registry always populates `artifacts`; it is only ever absent
+ * when `execute` is called directly (bypassing `invokeTool`), e.g. in a unit
+ * test.
  */
 export interface ToolContext extends InvokeToolOptions {
   artifacts: ArtifactStore;

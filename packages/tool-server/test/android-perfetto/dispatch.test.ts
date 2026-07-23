@@ -102,6 +102,7 @@ describe("native-profiler-* dispatch by session platform", () => {
     // the filename still proves it routed through the Android (.pftrace) path.
     expect(stop.traceFile).toMatchObject({
       __argentArtifact: true,
+      kind: "native-profile-trace",
       archive: "tar.gz",
       filename: "android.pftrace",
     });

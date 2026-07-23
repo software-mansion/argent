@@ -147,11 +147,19 @@ export async function executeScreenshotDiffTool(
   return {
     summary: result.summary,
     ...(result.diffPath
-      ? { diffPath: await artifacts.register(result.diffPath, { mimeType: "image/png" }) }
+      ? {
+          diffPath: await artifacts.register({
+            hostPath: result.diffPath,
+            kind: "screenshot-diff",
+            mimeType: "image/png",
+          }),
+        }
       : {}),
     ...(result.contextDiffPath
       ? {
-          contextDiffPath: await artifacts.register(result.contextDiffPath, {
+          contextDiffPath: await artifacts.register({
+            hostPath: result.contextDiffPath,
+            kind: "screenshot-diff-context",
             mimeType: "image/png",
           }),
         }

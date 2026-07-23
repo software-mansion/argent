@@ -88,11 +88,13 @@ describe("screenshotDiffTool", () => {
     expect(result.summary).toContain("Screenshot diff summary");
     expect(result.diffPath).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot-diff",
       hostPath: path.join(dir, "current-diff.png"),
       mimeType: "image/png",
     });
     expect(result.contextDiffPath).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot-diff-context",
       hostPath: path.join(dir, "current-context-diff.png"),
       mimeType: "image/png",
     });
