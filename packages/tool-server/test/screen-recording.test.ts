@@ -767,6 +767,47 @@ describe("touch visualizer", () => {
     expect(api.recordingExitedUnexpectedly).toBe(true);
   });
 
+  it("observes an encoder crash that lands during the pointer-enable await", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+
+    // Park enable() in flight so the start suspends exactly in the window
+    // between ffmpeg readiness and the exit-handler registration — the gap where
+    // a crash would go unobserved unless the `exit` listener is armed first.
+    let releaseEnable!: () => void;
+    const enableParked = new Promise<void>((resolve) => (releaseEnable = resolve));
+    const enable = vi.fn(async () => {
+      await enableParked;
+      return true;
+    });
+    const pointer = { enable, disable: vi.fn(async () => {}) } satisfies PointerControl;
+
+    const promise = startCapture(api, {
+      streamUrl: STREAM_URL,
+      timeLimitSeconds: 180,
+      watermark: false,
+      trimStatic: false,
+      pointer,
+    });
+    promise.catch(() => {});
+    // Clear the fail-fast grace so readiness resolves and the start parks at
+    // `await enable()`.
+    await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+    expect(enable).toHaveBeenCalledTimes(1); // enable is now parked in flight
+
+    child.exit(1); // ffmpeg dies WHILE the enable await is still suspended
+
+    // The death must be seen: with the exit listener armed before the await, the
+    // crash flips the recording into its unexpected-exit recovery state so a
+    // later stop warns and returns the (truncated) file instead of a silent one.
+    expect(api.recordingExitedUnexpectedly).toBe(true);
+    expect(api.pendingRetrieval).toBe(true);
+
+    releaseEnable();
+    await promise;
+  });
+
   it("restores the overlay on session dispose", async () => {
     const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
       device: iosDevice,

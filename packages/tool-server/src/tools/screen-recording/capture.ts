@@ -378,6 +378,33 @@ async function startCaptureLocked(
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
   startPump(api, stream);
 
+  // Arm the exit handler BEFORE the pointer-enable await below. readiness
+  // already removed its own 'exit' listener, so if the encoder dies during that
+  // await the death would go unobserved (Node never replays an 'exit' fired with
+  // no listener) — a later stop would then hand back a truncated file with no
+  // warning and the cap would misread the crash as a clean time-limit finish.
+  child.on("exit", (code, signal) => {
+    // Ownership guard: after this capture is superseded, its exit must not
+    // clobber the newer capture's session state.
+    if (api.captureProcess !== child) return;
+    api.lastExitInfo = { code, signal };
+    api.captureProcess = null;
+    if (api.recordingTimeout) {
+      clearTimeout(api.recordingTimeout);
+      api.recordingTimeout = null;
+    }
+    if (api.recordingActive) {
+      // Died without stop or the cap: disk full, encoder crash, …
+      api.recordingActive = false;
+      api.recordingExitedUnexpectedly = true;
+      api.wallClockEndMs = Date.now();
+      api.pendingRetrieval = true;
+      stopPump(api);
+      void disablePointer(api);
+      markScreenRecordingFinalized(api.deviceId, "the recording process exited unexpectedly");
+    }
+  });
+
   if (params.pointer) {
     // Arm the touch visualizer before returning, so the very first interaction
     // is already drawn into the recording. Store the teardown first so a
@@ -402,28 +429,6 @@ async function startCaptureLocked(
     finalizeCapture(api);
     void disablePointer(api);
   }, params.timeLimitSeconds * 1_000);
-
-  child.on("exit", (code, signal) => {
-    // Ownership guard: after this capture is superseded, its exit must not
-    // clobber the newer capture's session state.
-    if (api.captureProcess !== child) return;
-    api.lastExitInfo = { code, signal };
-    api.captureProcess = null;
-    if (api.recordingTimeout) {
-      clearTimeout(api.recordingTimeout);
-      api.recordingTimeout = null;
-    }
-    if (api.recordingActive) {
-      // Died without stop or the cap: disk full, encoder crash, …
-      api.recordingActive = false;
-      api.recordingExitedUnexpectedly = true;
-      api.wallClockEndMs = Date.now();
-      api.pendingRetrieval = true;
-      stopPump(api);
-      void disablePointer(api);
-      markScreenRecordingFinalized(api.deviceId, "the recording process exited unexpectedly");
-    }
-  });
 
   return {
     status: "recording",
