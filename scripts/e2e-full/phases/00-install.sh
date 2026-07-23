@@ -73,12 +73,16 @@ run_phase() {
     skip "$P" bundle dylibs "macOS-only"
   fi
 
-  # --- postinstall prints the init hint ------------------------------------
-  if [ -f "$pkg/scripts/postinstall.cjs" ]; then
-    local pout; pout="$(cd "$pkg" && ARGENT_SKIP_POSTINSTALL= node scripts/postinstall.cjs 2>&1)"
-    case "$pout" in *"argent init"*) pass "$P" postinstall init-hint;; *) fail "$P" postinstall init-hint "banner missing: $(printf '%s' "$pout" | head -1)";; esac
+  # --- no npm postinstall hook ---------------------------------------------
+  # The postinstall was deliberately dropped (#510) and its jobs moved to
+  # runtime, because installs that pass --ignore-scripts (pnpm, hardened CI)
+  # skip it silently — anything it did was unreliable by construction. Pin the
+  # absence so the hook cannot creep back in: assert neither the script file
+  # nor a `postinstall` entry in the shipped package.json.
+  if [ -f "$pkg/scripts/postinstall.cjs" ] || jq -e '.scripts.postinstall' "$pkg/package.json" >/dev/null 2>&1; then
+    fail "$P" postinstall no-hook "package ships a postinstall hook again (dropped in #510)"
   else
-    fail "$P" postinstall init-hint "postinstall.cjs not shipped"
+    pass "$P" postinstall no-hook
   fi
 
   # --- global init in a throwaway workspace --------------------------------
