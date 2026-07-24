@@ -62,6 +62,18 @@ export interface SimulatorServerTransport {
 const connections = new Map<string, WebSocket>();
 let cmdId = 0;
 
+const attachCloseListeners = new Set<(apiUrl: string) => void>();
+
+/** Register a callback fired when an attach's WebSocket closes. */
+export function onAttachClose(listener: (apiUrl: string) => void): void {
+  attachCloseListeners.add(listener);
+}
+
+function notifyAttachClosed(apiUrl: string): void {
+  pointerVisibleApis.delete(apiUrl);
+  for (const listener of attachCloseListeners) listener(apiUrl);
+}
+
 function getOrCreateWs(api: SimulatorServerApi): WebSocket {
   const key = api.apiUrl;
   const existing = connections.get(key);
@@ -73,8 +85,14 @@ function getOrCreateWs(api: SimulatorServerApi): WebSocket {
   }
   const { host } = new URL(api.apiUrl);
   const ws = new WebSocket(`ws://${host}/ws`);
-  ws.on("error", () => connections.delete(key));
-  ws.on("close", () => connections.delete(key));
+  ws.on("error", () => {
+    connections.delete(key);
+    notifyAttachClosed(key);
+  });
+  ws.on("close", () => {
+    connections.delete(key);
+    notifyAttachClosed(key);
+  });
   connections.set(key, ws);
   return ws;
 }
@@ -101,6 +119,16 @@ export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown
   }
 }
 
+// Which simulator-servers currently have the pointer overlay on, keyed by
+// apiUrl. The overlay draws every sent touch into the frame stream whether or
+// not it landed, so frame-diff touch verification must stand down while it is on.
+const pointerVisibleApis = new Set<string>();
+
+/** Whether the touch-pointer overlay is currently on for this simulator-server. */
+export function isPointerVisible(api: SimulatorServerApi): boolean {
+  return pointerVisibleApis.has(api.apiUrl);
+}
+
 /**
  * Toggle simulator-server's on-screen touch visualizer (its "pointer" overlay).
  * When on, every touch argent sends is drawn into the frame stream server-side —
@@ -110,12 +138,17 @@ export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown
  * argent one has it). Best-effort: returns false instead of throwing, so a
  * recording is never lost to a pointer toggle.
  */
-export function setPointerVisible(
+export async function setPointerVisible(
   api: SimulatorServerApi,
   show: boolean,
   signal?: AbortSignal
 ): Promise<boolean> {
-  return pointerPost(api, { show }, signal);
+  const ok = await pointerPost(api, { show }, signal);
+  if (ok) {
+    if (show) pointerVisibleApis.add(api.apiUrl);
+    else pointerVisibleApis.delete(api.apiUrl);
+  }
+  return ok;
 }
 
 /** Length of the fading comet trail behind a moving touch (0 disables it). */

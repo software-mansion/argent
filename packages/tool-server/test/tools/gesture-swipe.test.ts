@@ -16,6 +16,27 @@ vi.mock("../../src/utils/simulator-client", () => ({
   },
 }));
 
+// Stub the delivery-verification entry point: the tool passes the caller's
+// `verify` through, runs the injection via the action, and spreads the returned
+// check into its result. The policy itself is unit-tested in
+// touch-verification.test.ts.
+type Check = { verified?: boolean; warning?: string };
+let mockCheck: Check = {};
+const runWithDeliveryVerificationMock = vi.fn(
+  async (_api: unknown, _verify: boolean | undefined, action: () => Promise<void>) => {
+    await action();
+    return mockCheck;
+  }
+);
+vi.mock("../../src/utils/touch-verification", () => ({
+  runWithDeliveryVerification: (
+    api: unknown,
+    verify: boolean | undefined,
+    action: () => Promise<void>
+  ) => runWithDeliveryVerificationMock(api, verify, action),
+  describeVerify: (noun: string) => `verify ${noun}`,
+}));
+
 import { gestureSwipeTool } from "../../src/tools/gesture-swipe";
 
 const services = { simulatorServer: {} } as never;
@@ -34,6 +55,8 @@ function trailingStationaryMoves(events: TouchCmd[], x: number, y: number): numb
 
 beforeEach(() => {
   sent.length = 0;
+  mockCheck = {};
+  runWithDeliveryVerificationMock.mockClear();
 });
 
 describe("gesture-swipe", () => {
@@ -64,5 +87,46 @@ describe("gesture-swipe", () => {
     expect(gaps.at(-1)!).toBeLessThan(gaps[0]);
     // Monotonic and in-bounds: every sample sits between the start and end point.
     expect(ys.every((y) => y >= 0.2 - 1e-9 && y <= 0.7 + 1e-9)).toBe(true);
+  });
+});
+
+describe("gesture-swipe delivery verification", () => {
+  it("routes every swipe through the verification wrapper with the caller's verify flag", async () => {
+    await gestureSwipeTool.execute(services, { ...base, durationMs: 64 });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined, // automatic first-touch policy
+      expect.any(Function)
+    );
+
+    await gestureSwipeTool.execute(services, { ...base, durationMs: 64, verify: true });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      true,
+      expect.any(Function)
+    );
+  });
+
+  it("spreads the delivery check into the result while still injecting the swipe", async () => {
+    mockCheck = { verified: false, warning: "warn:no-change" };
+    const result = await gestureSwipeTool.execute(services, {
+      ...base,
+      durationMs: 64,
+      verify: true,
+    });
+    // The swipe was still sent; the result reports the failed delivery.
+    expect(sent[0]?.type).toBe("Down");
+    expect(sent.at(-1)?.type).toBe("Up");
+    expect(result.swiped).toBe(true);
+    expect(result.verified).toBe(false);
+    expect(result.warning).toBe("warn:no-change");
+  });
+
+  it("returns a bare result when no check ran", async () => {
+    mockCheck = {};
+    const result = await gestureSwipeTool.execute(services, { ...base, durationMs: 64 });
+    expect(result.swiped).toBe(true);
+    expect(result.verified).toBeUndefined();
+    expect(result.warning).toBeUndefined();
   });
 });

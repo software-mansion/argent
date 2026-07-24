@@ -3,8 +3,12 @@ import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import {
+  describeVerify,
+  runWithDeliveryVerification,
+  type DeliveryCheck,
+} from "../../utils/touch-verification";
+import { sleep } from "../../utils/timing";
 
 // Ease-out exponent for a `settle` swipe. The finger follows 1-(1-t)^n rather
 // than a straight line, so it decelerates into the end point and lifts at ~0
@@ -28,11 +32,21 @@ const zodSchema = z.object({
     .describe(
       "Momentum-free swipe: decelerate into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use for scroll-to-element loops; default false (a natural flinging swipe)."
     ),
+  verify: z
+    .boolean()
+    .optional()
+    .describe(
+      describeVerify("swipe", {
+        tail:
+          "Frame-diff heuristic: a swipe on content already scrolled to its end can legitimately " +
+          "change nothing.",
+      })
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
+interface Result extends DeliveryCheck {
   swiped: boolean;
   timestampMs: number;
 }
@@ -53,7 +67,7 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
-Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (no fling), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (no fling), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. The first touch per device session is automatically delivery-verified (a wedged iOS simulator can accept touches but silently drop them): when a check runs the result also carries 'verified' and, if the screen never changed, a 'warning' pointing at recover-touch-injection; verify:true forces the check, verify:false skips it. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
@@ -68,31 +82,30 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
     const api = services.simulatorServer as SimulatorServerApi;
     const steps = Math.max(1, Math.round(duration / 16));
 
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      // A plain swipe advances linearly; a `settle` swipe eases-out so the finger
-      // decelerates into the end point and lifts at ~0 velocity (no fling). The
-      // shrinking end-of-curve steps stay distinct, non-coalescible moves whose
-      // dx/dt genuinely decays — unlike a train of identical "hold" samples,
-      // which UIKit coalesces away, leaving the fast pre-hold velocity to fling.
-      // Ease-out also keeps every sample between the start and end point, so it
-      // never runs off-screen the way a beyond-the-end hold would for a swipe
-      // that already finishes at an edge.
-      const progress = settle ? 1 - Math.pow(1 - t, SETTLE_EASE_EXPONENT) : t;
-      const x = params.fromX + (params.toX - params.fromX) * progress;
-      const y = params.fromY + (params.toY - params.fromY) * progress;
-      const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
-      sendCommand(api, {
-        cmd: "touch",
-        type,
-        x,
-        y,
-        second_x: null,
-        second_y: null,
-      });
-      if (i < steps) await sleep(16);
-    }
+    const injectSwipe = async () => {
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        // A plain swipe advances linearly; `settle` eases-out so the finger lifts
+        // at ~0 velocity (no fling). Its decaying end-of-curve moves stay distinct
+        // (UIKit coalesces identical "hold" samples, which would leave the pre-hold
+        // velocity to fling) and every sample stays on-screen between the endpoints.
+        const progress = settle ? 1 - Math.pow(1 - t, SETTLE_EASE_EXPONENT) : t;
+        const x = params.fromX + (params.toX - params.fromX) * progress;
+        const y = params.fromY + (params.toY - params.fromY) * progress;
+        const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
+        sendCommand(api, {
+          cmd: "touch",
+          type,
+          x,
+          y,
+          second_x: null,
+          second_y: null,
+        });
+        if (i < steps) await sleep(16);
+      }
+    };
 
-    return { swiped: true, timestampMs };
+    const check = await runWithDeliveryVerification(api, params.verify, injectSwipe);
+    return { swiped: true, timestampMs, ...check };
   },
 };

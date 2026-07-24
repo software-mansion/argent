@@ -4,8 +4,12 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import {
+  describeVerify,
+  runWithDeliveryVerification,
+  type DeliveryCheck,
+} from "../../utils/touch-verification";
+import { sleep } from "../../utils/timing";
 
 const zodSchema = z.object({
   udid: z
@@ -24,11 +28,23 @@ const zodSchema = z.object({
         "The taps land inside the OS double-tap window; on Chromium each click carries an escalating " +
         "CDP clickCount so dblclick actually fires. Default 1."
     ),
+  verify: z
+    .boolean()
+    .optional()
+    .describe(
+      describeVerify("tap", {
+        prefix: "iOS/Android: ",
+        tail:
+          "It is a frame-diff heuristic: unrelated animation can mask a dropped touch, and a " +
+          "control with no visible effect can look dropped. Chromium taps are acked by CDP, so " +
+          "verify:true just returns verified:true there.",
+      })
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
+interface Result extends DeliveryCheck {
   tapped: boolean;
   timestampMs: number;
 }
@@ -72,7 +88,7 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
 Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
 Set clickCount: 2 for a double-tap / double-click — the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
 Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
+Returns { tapped: true, timestampMs }. On iOS/Android the first tap per device session is automatically delivery-verified (a wedged iOS simulator can accept touches but silently drop them): when a check runs the result also carries 'verified' and, if the screen never changed, a 'warning' pointing at recover-touch-injection. Pass verify:true to force the check on any tap, verify:false to skip it. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
 Before tapping, determine the correct coordinates by using discovery tools — pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker), since the native and RN-specific discovery tools don't apply. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",
@@ -92,29 +108,34 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
       await tapChromium(chromium, params.x, params.y, clickCount);
-      return { tapped: true, timestampMs };
+      // CDP awaits each mouse event, so a Chromium tap is delivery-confirmed by
+      // construction; there is no injection failure mode to check for.
+      return { tapped: true, timestampMs, ...(params.verify ? { verified: true } : {}) };
     }
     const api = services.simulatorServer as SimulatorServerApi;
-    for (let i = 1; i <= clickCount; i++) {
-      if (i > 1) await sleep(MULTI_TAP_GAP_MS);
-      sendCommand(api, {
-        cmd: "touch",
-        type: "Down",
-        x: params.x,
-        y: params.y,
-        second_x: null,
-        second_y: null,
-      });
-      await sleep(TAP_HOLD_MS);
-      sendCommand(api, {
-        cmd: "touch",
-        type: "Up",
-        x: params.x,
-        y: params.y,
-        second_x: null,
-        second_y: null,
-      });
-    }
-    return { tapped: true, timestampMs };
+    const injectTaps = async () => {
+      for (let i = 1; i <= clickCount; i++) {
+        if (i > 1) await sleep(MULTI_TAP_GAP_MS);
+        sendCommand(api, {
+          cmd: "touch",
+          type: "Down",
+          x: params.x,
+          y: params.y,
+          second_x: null,
+          second_y: null,
+        });
+        await sleep(TAP_HOLD_MS);
+        sendCommand(api, {
+          cmd: "touch",
+          type: "Up",
+          x: params.x,
+          y: params.y,
+          second_x: null,
+          second_y: null,
+        });
+      }
+    };
+    const check = await runWithDeliveryVerification(api, params.verify, injectTaps);
+    return { tapped: true, timestampMs, ...check };
   },
 };
