@@ -1,0 +1,81 @@
+{
+  // Anti-dead-code gate. Knip finds what ESLint's `no-unused-vars` can't:
+  // whole unused files, exports/types no other module imports, and
+  // dependencies declared in package.json but never used (plus the inverse —
+  // imports with no matching dependency). Run with `npm run knip`; enforced by
+  // .github/workflows/knip.yml.
+  //
+  // Not analyzed: build outputs and deps (git-ignored — knip skips them) and
+  // the argent-private submodule (own repo + CI), excluded below.
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+
+  // The submodule ships from its own repo and has no package.json checked out
+  // here; treat it like eslint/prettier do and skip it entirely.
+  "ignoreWorkspaces": ["packages/argent-private"],
+
+  "workspaces": {
+    // Root workspace: build/dev/release scripts. Scripts referenced from
+    // package.json (`scripts`, `node --test …`) are auto-detected as entries;
+    // these standalone dev/test helpers are invoked by hand, so name them.
+    ".": {
+      "entry": ["scripts/setup-in-workspace.cjs", "scripts/*.test.mjs"],
+    },
+
+    // @swmansion/argent is a thin dispatcher whose real payload is an esbuild
+    // bundle of the OTHER workspaces (see scripts/bundle-tools.cjs). Every
+    // runtime dep it lists is consumed by that bundled-in code, which knip
+    // can't follow across the esbuild boundary — so dependency checking here
+    // is all false positives. Correctness of those deps is already enforced in
+    // the source workspaces (tool-server, installer, mcp, …). The hand-written
+    // dispatcher copied into bin/ at build time is an entry, not dead.
+    "packages/argent": {
+      "entry": ["scripts/argent-simulator-server.cjs"],
+      "ignoreDependencies": [".*"],
+    },
+
+    // tool-server pulls a few deps in ways knip can't trace statically.
+    "packages/tool-server": {
+      "ignoreDependencies": [
+        // Dynamic `_require("tree-sitter")` / `_require("tree-sitter-typescript")`
+        // in react-profiler/pipeline/.../ast-index.ts (pinned + lazy-loaded).
+        "tree-sitter",
+        "tree-sitter-typescript",
+        // Runtime companion of the dynamically imported
+        // `@fails-components/webtransport`; loaded internally, never imported.
+        "@fails-components/webtransport-transport-http3-quiche",
+        // Lazy `require("sharp")` in chromium-server/screenshot.ts (optional —
+        // the caller degrades gracefully when it isn't installed).
+        "sharp",
+        // Provided by the Electron host at runtime; deliberately externalized
+        // from the tool-server bundle rather than declared as a dependency.
+        "electron",
+        // Type-only import in a test, pulled in transitively via supertest.
+        "superagent",
+      ],
+    },
+  },
+
+  // Severity per issue type. Mirrors the ESLint rollout in eslint.config.mjs:
+  // gate hard on the high-signal, low-noise classes now, and PARK the large
+  // pre-existing backlog of unused exports/types at "warn" (reported but
+  // non-failing) to ratchet to "error" in follow-up passes.
+  "rules": {
+    // --- Enforced (fail CI) ---
+    "files": "error",
+    "dependencies": "error",
+    "devDependencies": "error",
+    "optionalPeerDependencies": "error",
+    "unlisted": "error",
+    "unresolved": "error",
+    "binaries": "error",
+    "duplicates": "error",
+
+    // --- Parked: pre-existing debt, out of scope for the initial rollout ---
+    "exports": "warn",
+    "types": "warn",
+    "nsExports": "warn",
+    "nsTypes": "warn",
+    "enumMembers": "warn",
+    "classMembers": "warn",
+  },
+}
