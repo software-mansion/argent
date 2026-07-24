@@ -244,11 +244,12 @@ For visual regression checks, before/after screenshot comparisons, and detailed 
 
 ### Troubleshooting
 
-| Problem                 | Solution                                                      |
-| ----------------------- | ------------------------------------------------------------- |
-| Screenshot times out    | Restart the simulator-server via `stop-simulator-server` tool |
-| No booted iOS simulator | Call `boot-device` with the iOS `udid`                        |
-| No ready Android device | Call `boot-device` with `avdName`                             |
+| Problem                                            | Solution                                                                                                                                                      |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Screenshot times out                               | Restart the simulator-server via `stop-simulator-server` tool                                                                                                 |
+| No booted iOS simulator                            | Call `boot-device` with the iOS `udid`                                                                                                                        |
+| No ready Android device                            | Call `boot-device` with `avdName`                                                                                                                             |
+| iOS taps/swipes report success but nothing happens | Touch injection wedged in the CoreSimulator daemon — confirm with `gesture-tap { verify: true }`, then run `recover-touch-injection` (host-wide; see § 9 iOS) |
 
 ---
 
@@ -353,4 +354,7 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 
 ### iOS
 
-_(no iOS-only gotchas collected here yet — add them as they come up)_
+- **Taps/swipes silently stop landing (wedged touch injection)**: on a local iOS simulator, `gesture-tap` / `gesture-swipe` can report success (`tapped` / `swiped: true`) while the synthesized touches never reach the UI — `describe`, `screenshot`, and `launch-app` keep working, so the screen just looks unresponsive. It comes from stale HID state in the host **CoreSimulator** daemon (often after a prior Xcode debug session on that device), and neither `stop-simulator-server` nor a re-boot clears it.
+  - **Detect**: the first touch per device session is delivery-verified automatically — if the screen doesn't change, the result carries `verified: false` and a `warning`. A single automatic no-change stays a soft note (many controls have no visible effect); the warning only points at `recover-touch-injection` once no-change **repeats**, or when you force a check with `gesture-tap { verify: true }` (`verify: false` skips it). Confirm a suspected wedge with an explicit `verify: true` **before** recovering.
+  - **Recover**: call **`recover-touch-injection`** with the device `udid`. It restarts the CoreSimulator daemon (`simctl shutdown all` → `killall CoreSimulatorService` → re-boot). **This is host-wide** — every booted simulator is briefly shut down, but the daemon snapshots which were running and re-boots them all automatically: the target is waited on, any siblings finish booting in the background. Then relaunch your app with `launch-app` and continue.
+  - **Heuristic caveats**: the check is a frame diff, so a control with no visible effect can look like a drop (ignore the warning if the tap had no expected visual result), and unrelated on-screen animation can mask a real drop. While the screen-recording touch-pointer overlay is on it stands down (that overlay draws every sent touch into the frame regardless of delivery).
