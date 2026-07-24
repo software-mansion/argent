@@ -124,6 +124,8 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
           return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
         case "pinch":
           return `${n}. pinch: scale ${step.scale}${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
+        case "rotate":
+          return `${n}. rotate: by ${step.by}°${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
         case "snapshot":
           return `${n}. snapshot: ${step.name}`;
         case "tool":
