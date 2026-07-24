@@ -10,6 +10,9 @@ on:
     workflows:
       - "Publish to npm"
       - "Publish prerelease to npm (next)"
+      # Unified successor to the two workflows above; they coexist during the
+      # trusted-publishing cutover (see publish-npm.yml's header).
+      - "Publish npm package"
     types:
       - completed
   workflow_dispatch:
