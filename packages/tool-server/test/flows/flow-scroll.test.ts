@@ -804,6 +804,60 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
+  it("nudges within a pane whose entry edge is near — not on — the screen edge", async () => {
+    // The near-edge band only EDGE_AVOID_SCREEN_EPS covers: the pane's bottom
+    // sits at 0.96 — 0.04 shy of the screen edge (inside the 0.05 tolerance,
+    // so screen chrome can still overlap it) but not exactly on it, e.g. a
+    // scroller inset a few pixels under a tab bar. The row lands flush at
+    // 0.84..0.94 → clearance 0.02, deficit 0.08 → one nudge of 0.08 × 1.5 =
+    // 0.12 (headroom 0.64; the 0.32 half-cap doesn't bite), anchored at the
+    // pane centre (y 0.58). Zeroing the epsilon would read 0.96 as "not a
+    // screen edge" and silently skip the nudge — this geometry also pins
+    // EDGE_AVOID_SCREEN_EPS ≥ 0.04.
+    const pane = () => n({ identifier: "pane", frame: { x: 0, y: 0.2, width: 1, height: 0.76 } });
+    const flush = screen([
+      pane(),
+      n({ label: "Row 9", frame: { x: 0.1, y: 0.84, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      pane(),
+      n({ label: "Row 9", frame: { x: 0.1, y: 0.72, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("near-edge-pane", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 9" },
+          direction: "down",
+          within: { identifier: "pane" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "near-edge-pane", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    // Momentum-free, deficit-sized (0.08 × 1.5), anchored at the pane centre.
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromX).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY).toBeCloseTo(0.58, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.12, 5);
+  });
+
   it("caps the nudge at half the target's headroom, then stops when none is left", async () => {
     // A 0.85-tall card 0.03 off the screen bottom has only 0.12 of headroom
     // above it: the 1.5×-deficit ask (0.105) is capped at headroom/2 (0.06).
