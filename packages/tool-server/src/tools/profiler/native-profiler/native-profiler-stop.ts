@@ -8,10 +8,14 @@ import { resolveDevice } from "../../../utils/device-info";
 import { assertSupported } from "../../../utils/capability";
 import { ensureDeps } from "../../../utils/check-deps";
 import { stopNativeProfilerIos, type IosStopResult } from "./platforms/ios";
-import { stopNativeProfilerAndroid, type AndroidStopResult } from "./platforms/android";
-import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
+import {
+  stopNativeProfilerAndroid,
+  type AndroidExportKey,
+  type AndroidStopResult,
+} from "./platforms/android";
+import type { ExportDiagnostics, IosExportKey } from "../../../utils/ios-profiler/export";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
-import type { ArtifactStore } from "@argent/registry";
+import type { ArtifactKind, ArtifactStore } from "@argent/registry";
 
 const zodSchema = z.object({
   device_id: z
@@ -31,7 +35,7 @@ export interface IosStopArtifacts {
    * clients use the bundle in place.
    */
   traceFile: ArtifactHandle;
-  exportedFiles: Record<string, ArtifactHandle | null>;
+  exportedFiles: Record<IosExportKey, ArtifactHandle | null>;
   exportDiagnostics: ExportDiagnostics;
   warning?: string;
 }
@@ -44,7 +48,7 @@ export interface IosStopArtifacts {
 interface AndroidStopArtifacts {
   /** The pulled `.pftrace` file as a downloadable artifact handle. */
   traceFile: ArtifactHandle;
-  exportedFiles: Record<string, ArtifactHandle | null>;
+  exportedFiles: Record<AndroidExportKey, ArtifactHandle | null>;
   warning?: string;
 }
 
@@ -55,14 +59,30 @@ const capability = {
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
+/**
+ * Artifact kind for each exported file, total over every key both platforms
+ * can produce. A new export key added to {@link IosExportKey} or
+ * {@link AndroidExportKey} fails to compile here until it is classified —
+ * nothing is ever silently defaulted.
+ */
+const EXPORTED_FILE_KINDS: Record<IosExportKey | AndroidExportKey, ArtifactKind> = {
+  cpu: "native-profile-cpu",
+  hangs: "native-profile-hangs",
+  leaks: "native-profile-leaks",
+  pftrace: "native-profile-trace",
+};
+
 /** Register each non-null exported file path as a downloadable artifact. */
-async function exportedFilesToArtifacts(
+async function exportedFilesToArtifacts<K extends IosExportKey | AndroidExportKey>(
   store: ArtifactStore,
-  files: Record<string, string | null>
-): Promise<Record<string, ArtifactHandle | null>> {
-  const out: Record<string, ArtifactHandle | null> = {};
-  for (const [key, filePath] of Object.entries(files)) {
-    out[key] = filePath ? await store.register(filePath) : null;
+  files: Record<K, string | null>
+): Promise<Record<K, ArtifactHandle | null>> {
+  const out = {} as Record<K, ArtifactHandle | null>;
+  for (const key of Object.keys(files) as K[]) {
+    const filePath = files[key];
+    out[key] = filePath
+      ? await store.register({ hostPath: filePath, kind: EXPORTED_FILE_KINDS[key] })
+      : null;
   }
   return out;
 }
@@ -73,7 +93,7 @@ async function exportedFilesToArtifacts(
  * be stat'd at registration (e.g. a recovered session).
  */
 function registerTrace(store: ArtifactStore, traceFile: string): Promise<ArtifactHandle> {
-  return store.register(traceFile, { archive: "tar.gz" });
+  return store.register({ hostPath: traceFile, kind: "native-profile-trace", archive: "tar.gz" });
 }
 
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {

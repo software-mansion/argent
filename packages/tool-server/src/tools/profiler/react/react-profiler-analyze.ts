@@ -21,7 +21,7 @@ import {
 } from "../../../utils/react-profiler/debug/dump";
 import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
-import type { ArtifactStore } from "@argent/registry";
+import type { ArtifactKind, ArtifactStore } from "@argent/registry";
 
 /**
  * Register a server-side file path as a downloadable artifact (or pass through
@@ -32,9 +32,10 @@ import type { ArtifactStore } from "@argent/registry";
  */
 async function fileArtifact(
   store: ArtifactStore,
-  p: string | null | undefined
+  p: string | null | undefined,
+  kind: ArtifactKind
 ): Promise<ArtifactHandle | null> {
-  return p ? store.register(p) : null;
+  return p ? store.register({ hostPath: p, kind }) : null;
 }
 
 const annotationSchema = z.object({
@@ -227,13 +228,13 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
     const artifacts = requireArtifacts(ctx);
     const result: Record<string, unknown> = {
       report,
-      reportFile: await fileArtifact(artifacts, reportFile),
+      reportFile: await fileArtifact(artifacts, reportFile, "react-profile-report"),
       hotCommitsTotal,
       hotCommitsShown,
       sessionFiles: {
         sessionId: sessionPaths.sessionId,
-        cpuProfile: await fileArtifact(artifacts, sessionPaths.cpuProfilePath),
-        commits: await fileArtifact(artifacts, sessionPaths.commitsPath),
+        cpuProfile: await fileArtifact(artifacts, sessionPaths.cpuProfilePath, "react-profile-cpu"),
+        commits: await fileArtifact(artifacts, sessionPaths.commitsPath, "react-profile-commits"),
       },
     };
 

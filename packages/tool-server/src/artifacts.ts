@@ -30,6 +30,7 @@ export {
   ARTIFACT_MARKER,
   type ArtifactHandle,
   type ArtifactEntry,
+  type ArtifactKind,
   type ArtifactListItem,
   type RegisterArtifactOptions,
 } from "@argent/registry";

@@ -22,6 +22,7 @@ export { ArtifactStore, ARTIFACT_MARKER } from "./artifacts";
 export type {
   ArtifactHandle,
   ArtifactEntry,
+  ArtifactKind,
   ArtifactListItem,
   RegisterArtifactOptions,
 } from "./artifacts";

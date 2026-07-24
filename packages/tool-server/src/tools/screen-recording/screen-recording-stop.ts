@@ -77,7 +77,9 @@ Fails if no recording (running or finished-but-unretrieved) exists for the given
     // Resolve the store only after a successful stop — the "no active
     // recording" error path never needs it.
     const artifacts = requireArtifacts(ctx);
-    const video = await artifacts.register(stopped.outputFile, {
+    const video = await artifacts.register({
+      hostPath: stopped.outputFile,
+      kind: "screen-recording",
       mimeType: "video/mp4",
       // Drop the internal `argent-` temp prefix so the saved file reads cleanly
       // as `.argent/recordings/screen-recording-<device>-<ts>.mp4`.

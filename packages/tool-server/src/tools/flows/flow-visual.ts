@@ -132,7 +132,11 @@ export async function runSnapshot(
   if (opts.updateBaselines) {
     await fs.mkdir(dir, { recursive: true });
     await fs.copyFile(currentPath, baselinePath);
-    const baseline = await store.register(baselinePath, { mimeType: "image/png" });
+    const baseline = await store.register({
+      hostPath: baselinePath,
+      kind: "screenshot",
+      mimeType: "image/png",
+    });
     return {
       status: "pass",
       reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
@@ -179,7 +183,11 @@ export async function runSnapshot(
           `${actual.width}x${actual.height} (${key}) — nothing was compared`,
         snapshotKey,
         artifacts: {
-          baseline: await store.register(baselinePath, { mimeType: "image/png" }),
+          baseline: await store.register({
+            hostPath: baselinePath,
+            kind: "screenshot",
+            mimeType: "image/png",
+          }),
           current: shot.image,
         },
       };
@@ -192,14 +200,20 @@ export async function runSnapshot(
     }
 
     const artifacts: SnapshotArtifacts = {
-      baseline: await store.register(baselinePath, { mimeType: "image/png" }),
+      baseline: await store.register({
+        hostPath: baselinePath,
+        kind: "screenshot",
+        mimeType: "image/png",
+      }),
       current: shot.image,
     };
     // Also expose the annotated context diff — the image a client renders inline
     // so the agent can see WHAT differed. (Absent when the diff bailed early,
     // e.g. on a dimension mismatch.)
     if (result.contextDiffPath) {
-      artifacts.diff = await store.register(result.contextDiffPath, {
+      artifacts.diff = await store.register({
+        hostPath: result.contextDiffPath,
+        kind: "screenshot-diff-context",
         mimeType: "image/png",
         filename: `${snapshotKey}-diff.png`,
       });

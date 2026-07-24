@@ -8,7 +8,7 @@ import { execFileAsyncWithTimeout } from "./run-with-timeout";
  */
 const CPU_SCHEMA_CANDIDATES = ["time-profile", "cpu-profile", "time-sample"];
 
-export const EXPORTS: Record<string, { suffix: string; xpath: string }> = {
+export const EXPORTS = {
   cpu: {
     suffix: "_raw_cpu.xml",
     xpath: '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]',
@@ -21,7 +21,15 @@ export const EXPORTS: Record<string, { suffix: string; xpath: string }> = {
     suffix: "_raw_leaks.xml",
     xpath: '/trace-toc/run[@number="1"]/tracks/track[@name="Leaks"]/details/detail[@name="Leaks"]',
   },
-};
+} satisfies Record<string, { suffix: string; xpath: string }>;
+
+/**
+ * The fixed set of per-schema exports an iOS stop produces. Result types are
+ * keyed by this union (not `string`) so a consumer that must classify every
+ * export — e.g. artifact-kind tagging in native-profiler-stop — is forced by
+ * the compiler to handle a key added here.
+ */
+export type IosExportKey = keyof typeof EXPORTS;
 
 export interface ExportDiagnostics {
   tocSchemas: string[];
@@ -124,10 +132,14 @@ async function tryCpuExportFallback(
 }
 
 export async function exportIosTraceData(traceFile: string): Promise<{
-  files: Record<string, string | null>;
+  files: Record<IosExportKey, string | null>;
   diagnostics: ExportDiagnostics;
 }> {
-  const exportedFiles: Record<string, string | null> = {};
+  const exportedFiles: Record<IosExportKey, string | null> = {
+    cpu: null,
+    hangs: null,
+    leaks: null,
+  };
   const diagnostics: ExportDiagnostics = {
     tocSchemas: [],
     cpuSchemaUsed: null,
@@ -136,7 +148,8 @@ export async function exportIosTraceData(traceFile: string): Promise<{
   const dir = path.dirname(traceFile);
   const baseName = path.basename(traceFile, ".trace");
 
-  for (const [key, config] of Object.entries(EXPORTS)) {
+  for (const key of Object.keys(EXPORTS) as IosExportKey[]) {
+    const config = EXPORTS[key];
     const outPath = path.join(dir, `${baseName}${config.suffix}`);
 
     if (key === "cpu") {

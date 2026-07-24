@@ -29,10 +29,33 @@ import { basename, extname } from "node:path";
 /** Discriminant key identifying an artifact handle inside a tool result. */
 export const ARTIFACT_MARKER = "__argentArtifact" as const;
 
+/**
+ * Semantic artifact category, declared by the producing tool at registration.
+ * MIME type tells a consumer how to read the bytes; kind tells it what the
+ * artifact represents (a screenshot vs. the annotated diff of two screenshots,
+ * a raw trace bundle vs. the report derived from it). Extending this union is
+ * backward-compatible on the wire — clients treat unknown kinds as opaque.
+ */
+export type ArtifactKind =
+  | "screenshot"
+  | "screenshot-diff"
+  | "screenshot-diff-context"
+  | "screen-recording"
+  | "native-profile-trace"
+  | "native-profile-cpu"
+  | "native-profile-hangs"
+  | "native-profile-leaks"
+  | "native-profile-report"
+  | "react-profile-cpu"
+  | "react-profile-commits"
+  | "react-profile-report";
+
 /** Wire contract: what a tool returns in place of a host path. */
 export interface ArtifactHandle {
   [ARTIFACT_MARKER]: true;
   id: string;
+  /** Semantic category of the artifact — see {@link ArtifactKind}. */
+  kind: ArtifactKind;
   filename: string;
   mimeType: string;
   size: number;
@@ -69,6 +92,7 @@ export interface ArtifactHandle {
 /** Internal entry the HTTP route reads to stream a registered artifact. */
 export interface ArtifactEntry {
   path: string;
+  kind: ArtifactKind;
   filename: string;
   mimeType: string;
   size: number;
@@ -78,6 +102,7 @@ export interface ArtifactEntry {
 /** Public metadata returned by the artifact inventory endpoint. */
 export interface ArtifactListItem {
   id: string;
+  kind: ArtifactKind;
   filename: string;
   mimeType: string;
   size: number;
@@ -104,6 +129,10 @@ function inferMimeType(filePath: string): string {
 }
 
 export interface RegisterArtifactOptions {
+  /** Absolute path of the file or directory on the tool-server host. */
+  hostPath: string;
+  /** Semantic category of the artifact, distinct from its MIME type. */
+  kind: ArtifactKind;
   /** Override the basename presented to the client. Defaults to the host basename. */
   filename?: string;
   /** Override the inferred MIME type. */
@@ -130,12 +159,13 @@ export interface RegisterArtifactOptions {
 export class ArtifactStore {
   private readonly entries = new Map<string, ArtifactEntry>();
 
-  async register(hostPath: string, opts?: RegisterArtifactOptions): Promise<ArtifactHandle> {
-    const filename = opts?.filename ?? basename(hostPath);
-    const mimeType = opts?.mimeType ?? inferMimeType(hostPath);
+  async register(opts: RegisterArtifactOptions): Promise<ArtifactHandle> {
+    const { hostPath, kind } = opts;
+    const filename = opts.filename ?? basename(hostPath);
+    const mimeType = opts.mimeType ?? inferMimeType(hostPath);
     let size = 0;
     let mtimeMs: number | undefined;
-    let isDirectory = opts?.archive === "tar.gz";
+    let isDirectory = opts.archive === "tar.gz";
     try {
       const st = await stat(hostPath);
       size = st.size;
@@ -147,10 +177,11 @@ export class ArtifactStore {
       // they don't match what's on disk at read time.
     }
     const id = randomUUID();
-    this.entries.set(id, { path: hostPath, filename, mimeType, size, isDirectory });
+    this.entries.set(id, { path: hostPath, kind, filename, mimeType, size, isDirectory });
     const handle: ArtifactHandle = {
       [ARTIFACT_MARKER]: true,
       id,
+      kind,
       filename,
       mimeType,
       size,
@@ -158,7 +189,7 @@ export class ArtifactStore {
     };
     if (mtimeMs != null) handle.mtimeMs = mtimeMs;
     if (isDirectory) handle.archive = "tar.gz";
-    if (opts?.saveDir) handle.saveDir = opts.saveDir;
+    if (opts.saveDir) handle.saveDir = opts.saveDir;
     return handle;
   }
 
@@ -169,6 +200,7 @@ export class ArtifactStore {
   list(): ArtifactListItem[] {
     return [...this.entries.entries()].map(([id, entry]) => ({
       id,
+      kind: entry.kind,
       filename: entry.filename,
       mimeType: entry.mimeType,
       size: entry.size,
