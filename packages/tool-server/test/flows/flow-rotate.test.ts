@@ -178,8 +178,9 @@ describe("rotate: parse/serialize", () => {
 
 describe("rotate: execution", () => {
   it("dispatches one physically circular gesture at the element center with the derived duration", async () => {
+    // Center x ≠ y (0.4, 0.6) so a transposed centerX/centerY dispatch fails here.
     currentTree = () =>
-      screen([n({ label: "Map", frame: { x: 0.1, y: 0.3, width: 0.8, height: 0.4 } })]);
+      screen([n({ label: "Map", frame: { x: 0.1, y: 0.4, width: 0.6, height: 0.4 } })]);
     await writeFlow("rotate-map", {
       executionPrerequisite: "",
       steps: [{ kind: "rotate", selector: { text: "Map", loose: true }, by: 90 }],
@@ -192,8 +193,8 @@ describe("rotate: execution", () => {
     const { tool, args } = result.calls[0]!;
     expect(tool).toBe("gesture-rotate");
     expect(args.udid).toBe(DEVICE);
-    expect(args.centerX).toBeCloseTo(0.5, 9);
-    expect(args.centerY).toBeCloseTo(0.5, 9);
+    expect(args.centerX).toBeCloseTo(0.4, 9);
+    expect(args.centerY).toBeCloseTo(0.6, 9);
     // Physical circle: one radius spelled in both normalizations, no ellipse.
     expect((args.radiusX as number) * SCREEN_W).toBeCloseTo((args.radiusY as number) * SCREEN_H, 9);
     expect(args).not.toHaveProperty("radius");
