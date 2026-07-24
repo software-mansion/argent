@@ -419,7 +419,7 @@ describe("flow-add-step", () => {
     // Ran the fragment live to set up state…
     expect(result.toolResult).toEqual({ ok: true, steps: [] });
     // …but recorded the portable composition directive, not the raw tool call.
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login" }]);
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login.yaml" }]);
   });
 
   it("records a run: directive when the target is an e2e flow", async () => {
@@ -440,7 +440,7 @@ describe("flow-add-step", () => {
     );
 
     // e2e flows now compose via run: just like fragments — their launch runs inline.
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "other-e2e" }]);
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "other-e2e.yaml" }]);
   });
 
   it("keeps the raw flow-execute step when the target is not a sibling", async () => {
@@ -598,7 +598,7 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "MixedCase" }]);
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "MixedCase.yaml" }]);
   });
 
   // A root the recorder cannot anchor is not a root it can check the name
@@ -659,13 +659,17 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login" }]);
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login.yaml" }]);
     // The live sub-invoke gets no file-input boundary, so it must run the
     // sibling by name…
     const nested = (registry.invokeTool as any).mock.calls[0][1];
     expect(nested).toEqual({ name: "login", project_root: tmpDir });
     // …which a real tool-server resolves to that same file.
-    expect(await resolveFlowSource(nested)).toEqual({ filePath: sibling, flowName: "login" });
+    expect(await resolveFlowSource(nested)).toEqual({
+      filePath: sibling,
+      flowName: "login",
+      viaUpload: false,
+    });
   });
 
   it("rejects a mis-cased sibling flow_path, naming the on-disk spelling", async () => {
@@ -1763,6 +1767,7 @@ describe("saved-flow name spelling", () => {
     await expect(resolveFlowSource({ name: "MixedCase", project_root: tmpDir })).resolves.toEqual({
       filePath,
       flowName: "MixedCase",
+      viaUpload: false,
     });
   });
 
@@ -1777,6 +1782,7 @@ describe("saved-flow name spelling", () => {
       {
         filePath: path.join(tmpDir, ".argent", "flows", "nonexistent.yaml"),
         flowName: "nonexistent",
+        viaUpload: false,
       }
     );
 
@@ -1797,6 +1803,7 @@ describe("saved-flow name spelling", () => {
     await expect(resolveFlowSource({ name: "unlisted", project_root: tmpDir })).resolves.toEqual({
       filePath: path.join(tmpDir, ".argent", "flows", "unlisted.yaml"),
       flowName: "unlisted",
+      viaUpload: false,
     });
   });
 
@@ -1818,7 +1825,7 @@ describe("saved-flow name spelling", () => {
           viaUpload: true,
         }
       )
-    ).resolves.toEqual({ filePath: uploaded, flowName: "Snap" });
+    ).resolves.toEqual({ filePath: uploaded, flowName: "Snap", viaUpload: true });
   });
 
   it("flow-execute refuses the mis-cased name before running any step", async () => {

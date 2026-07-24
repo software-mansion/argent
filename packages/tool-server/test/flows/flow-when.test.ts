@@ -413,7 +413,7 @@ describe("when: execution", () => {
             condition: "visible",
             selector: { text: "What's new", loose: true },
           },
-          steps: [{ kind: "run", flow: "dismiss" }],
+          steps: [{ kind: "run", flow: "dismiss.yaml" }],
         },
         { kind: "echo", message: "after block" },
       ],

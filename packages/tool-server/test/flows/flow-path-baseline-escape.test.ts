@@ -188,12 +188,12 @@ describe("the stem a valid flow_path derives", () => {
     const flowPath = path.join(flowDir, "checkout.yaml");
     await fs.writeFile(
       flowPath,
-      ["executionPrerequisite: ''", "steps:", "  - run: helper", ""].join("\n"),
+      ["executionPrerequisite: ''", "steps:", "  - run: helper.yaml", ""].join("\n"),
       "utf8"
     );
     await fs.writeFile(
       path.join(flowDir, "helper.yaml"),
-      ["executionPrerequisite: ''", "steps:", "  - run: checkout", ""].join("\n"),
+      ["executionPrerequisite: ''", "steps:", "  - run: checkout.yaml", ""].join("\n"),
       "utf8"
     );
 

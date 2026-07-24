@@ -277,9 +277,12 @@ function stepIndent(depth: unknown): string {
 
 function stepLabel(step: FlowStepResult): string {
   if (step.kind === "echo") return step.message ?? "";
-  if (step.kind === "run") return `run ${step.flow ?? ""}`.trim();
   if (step.tool) return step.tool;
+  // A run step's target is the as-written path — `run ios/login.yaml` and
+  // `run android/login.yaml` must render distinctly, not as one stem.
   if (step.target) return `${step.kind} ${step.target}`;
+  // Legacy: a pre-target tool-server sends only the fragment stem in `flow`.
+  if (step.kind === "run") return `run ${step.flow ?? ""}`.trim();
   return step.kind;
 }
 

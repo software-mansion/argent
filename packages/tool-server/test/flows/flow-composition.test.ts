@@ -6,6 +6,14 @@ import { ArtifactStore, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
+import { runSnapshot } from "../../src/tools/flows/flow-visual";
+
+// Stub the snapshot differ: the baseline-anchoring test asserts only WHERE the
+// runner points it (root flowsDir + root flow name), not the diffing itself.
+vi.mock("../../src/tools/flows/flow-visual", () => ({
+  DEFAULT_MAX_MISMATCH: 0.5,
+  runSnapshot: vi.fn(async () => ({ status: "pass", reason: "snapshot stubbed" })),
+}));
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 let tmpDir: string;
@@ -62,7 +70,7 @@ describe("flow composition (run:)", () => {
     await writeFlow("main", {
       executionPrerequisite: "",
       steps: [
-        { kind: "run", flow: "login" },
+        { kind: "run", flow: "login.yaml" },
         { kind: "echo", message: "done" },
       ],
     });
@@ -101,7 +109,7 @@ describe("flow composition (run:)", () => {
       mainPath,
       serializeFlow({
         executionPrerequisite: "",
-        steps: [{ kind: "run", flow: "login" }],
+        steps: [{ kind: "run", flow: "login.yaml" }],
       }),
       "utf8"
     );
@@ -161,6 +169,311 @@ describe("flow composition (run:)", () => {
     ).rejects.toThrow('flow files must use the lowercase .yaml extension, not ".YAML"');
   });
 
+  it("resolves a run: path against the containing flow's own directory, not the root's", async () => {
+    // Root (in .argent/flows) → ../../shared/login.yaml → helper.yaml, where
+    // helper.yaml is login's OWN sibling in shared/ and absent from the root's
+    // directory — only per-file anchoring resolves it.
+    const sharedDir = path.join(tmpDir, "shared");
+    await fs.mkdir(sharedDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sharedDir, "helper.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "from helper" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(sharedDir, "login.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "helper.yaml" }],
+      }),
+      "utf8"
+    );
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "../../shared/login.yaml" }],
+    });
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    const result = asRun(
+      await runFlow.execute({}, { name: "main", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "run:pass",
+      "echo:pass",
+    ]);
+    // Attribution is the basename stem; the report target keeps the as-written path.
+    expect(result.steps[0]).toMatchObject({ flow: "login", target: "../../shared/login.yaml" });
+    expect(result.steps[1]).toMatchObject({ flow: "helper", target: "helper.yaml" });
+    expect(result.steps[2]).toMatchObject({ flow: "helper", message: "from helper" });
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not flag two different files sharing a basename as a cycle", async () => {
+    const subDir = path.join(tmpDir, ".argent", "flows", "sub");
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(
+      path.join(subDir, "login.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "inner login" }],
+      }),
+      "utf8"
+    );
+    // Root flow "login" runs sub/login.yaml: same stem, different file.
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub/login.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("detects a cycle reached through a different relative spelling", async () => {
+    const subDir = path.join(tmpDir, ".argent", "flows", "sub");
+    await fs.mkdir(subDir, { recursive: true });
+    await writeFlow("a", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub/b.yaml" }],
+    });
+    await fs.writeFile(
+      path.join(subDir, "b.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "../a.yaml" }],
+      }),
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "a", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    const errored = result.steps.find((s) => s.status === "error");
+    expect(errored?.reason).toMatch(/cyclic flow reference: a → b → a/);
+  });
+
+  it("anchors a symlinked root flow's run: at the real file's directory", async () => {
+    // .argent/flows/main.yaml is a symlink to shared/flows/main.yaml, which
+    // references ../helpers/x.yaml. Only the canonical anchor resolves the
+    // shared helper; the un-canonicalized one would hit the project decoy.
+    const sharedFlows = path.join(tmpDir, "shared", "flows");
+    const sharedHelpers = path.join(tmpDir, "shared", "helpers");
+    const decoyHelpers = path.join(tmpDir, ".argent", "helpers");
+    await fs.mkdir(sharedFlows, { recursive: true });
+    await fs.mkdir(sharedHelpers, { recursive: true });
+    await fs.mkdir(decoyHelpers, { recursive: true });
+    await fs.writeFile(
+      path.join(sharedFlows, "main.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "../helpers/x.yaml" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(sharedHelpers, "x.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "shared helper" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(decoyHelpers, "x.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "project decoy" }],
+      }),
+      "utf8"
+    );
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.symlink(path.join(sharedFlows, "main.yaml"), path.join(flowsDir, "main.yaml"));
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[1]).toMatchObject({ kind: "echo", message: "shared helper" });
+  });
+
+  it("detects a cycle through a symlinked spelling", async () => {
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await writeFlow("a", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "alias.yaml" }],
+    });
+    await fs.symlink(path.join(flowsDir, "a.yaml"), path.join(flowsDir, "alias.yaml"));
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "a", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    const errored = result.steps.find((s) => s.status === "error");
+    expect(errored?.reason).toMatch(/cyclic flow reference: a → alias/);
+  });
+
+  it("rejects run: composition when the root flow was uploaded (no shared filesystem)", async () => {
+    // A remote client's flow arrives as content and is materialized to a temp
+    // file — the files its run: paths reference stayed on the client, and a
+    // same-named file on the server must never be read in their place. The
+    // rejection is a preflight contract error, so no step (e.g. a leading
+    // launch or tap) executes before it fires.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "echo", message: "before" },
+          { kind: "run", flow: "login.yaml" },
+          { kind: "echo", message: "after" },
+        ],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(tmpDir, "login.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "server-local file" }],
+      }),
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    await expect(
+      createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+    ).rejects.toThrow(/co-located/i);
+    // Preflight, not mid-run: nothing was dispatched to the device.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects an uploaded flow whose run: hides behind a when: block that would not fire", async () => {
+    // Without the preflight walking when: children, this flow reports green on
+    // iOS and only errors when the android guard first fires (e.g. in CI).
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      "steps:\n  - when:\n      platform: android\n    steps:\n      - run: login.yaml\n",
+      "utf8"
+    );
+
+    await expect(
+      createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+    ).rejects.toThrow(/co-located/i);
+  });
+
+  it("attributes a hard-stop-skipped run: step to its target stem, like every other path", async () => {
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "never runs" }],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { android: "com.acme.app" } }, // DEVICE is iOS → errors
+        { kind: "run", flow: "login.yaml" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "run:skip"]);
+    // Same attribution as an executed/errored run marker: the target stem,
+    // with the as-written path in target — not the enclosing flow.
+    expect(result.steps[1]).toMatchObject({ flow: "login", target: "login.yaml" });
+  });
+
+  it("keys and stores a composed fragment's snapshot with the root flow", async () => {
+    const sharedDir = path.join(tmpDir, "shared");
+    await fs.mkdir(sharedDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sharedDir, "visual.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+      }),
+      "utf8"
+    );
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "../../shared/visual.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    // The snapshot ran from shared/visual.yaml but stays anchored to the ROOT
+    // flow: baselines under the root flow's directory, keyed by the root name.
+    expect(vi.mocked(runSnapshot)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        flowsDir: path.join(tmpDir, ".argent", "flows"),
+        flowName: "main",
+      })
+    );
+  });
+
   it("stamps nesting depth on expanded fragment steps (omitted at top level)", async () => {
     await writeFlow("inner", {
       executionPrerequisite: "",
@@ -170,13 +483,13 @@ describe("flow composition (run:)", () => {
       executionPrerequisite: "",
       steps: [
         { kind: "tool", name: "tap", args: { x: 0.5 } },
-        { kind: "run", flow: "inner" },
+        { kind: "run", flow: "inner.yaml" },
       ],
     });
     await writeFlow("main", {
       executionPrerequisite: "",
       steps: [
-        { kind: "run", flow: "login" },
+        { kind: "run", flow: "login.yaml" },
         { kind: "echo", message: "done" },
       ],
     });
@@ -210,7 +523,7 @@ describe("flow composition (run:)", () => {
     });
     await writeFlow("main", {
       executionPrerequisite: "",
-      steps: [{ kind: "run", flow: "other-e2e" }],
+      steps: [{ kind: "run", flow: "other-e2e.yaml" }],
     });
     const runFlow = createRunFlowTool(mockRegistry());
     const result = asRun(
@@ -264,11 +577,11 @@ describe("flow composition (run:)", () => {
   });
 
   it("detects a cyclic run reference", async () => {
-    await writeFlow("a", { executionPrerequisite: "", steps: [{ kind: "run", flow: "b" }] });
-    await writeFlow("b", { executionPrerequisite: "", steps: [{ kind: "run", flow: "a" }] });
+    await writeFlow("a", { executionPrerequisite: "", steps: [{ kind: "run", flow: "b.yaml" }] });
+    await writeFlow("b", { executionPrerequisite: "", steps: [{ kind: "run", flow: "a.yaml" }] });
     await writeFlow("main", {
       executionPrerequisite: "",
-      steps: [{ kind: "run", flow: "a" }],
+      steps: [{ kind: "run", flow: "a.yaml" }],
     });
     const runFlow = createRunFlowTool(mockRegistry());
     const result = asRun(
@@ -276,6 +589,8 @@ describe("flow composition (run:)", () => {
     );
     const errored = result.steps.find((s) => s.status === "error");
     expect(errored?.reason).toMatch(/cyclic/i);
+    // The chain renders the human-readable stems, not canonical paths.
+    expect(errored?.reason).toContain("main → a → b → a");
     // The cycle is detected two fragments down; its error marker keeps that
     // depth (the fail() path stamps depthOf(scope) like the success marker),
     // so the error line renders inside the block that caused it.
@@ -429,6 +744,37 @@ describe("flow validation", () => {
     );
   });
 
+  it("rejects a bare saved-flow name in run: with a migration hint", () => {
+    expect(() => parseFlow("steps:\n  - run: login\n")).toThrow(/did you mean `run: login\.yaml`/);
+  });
+
+  it("rejects a run: path without the .yaml extension", () => {
+    expect(() => parseFlow("steps:\n  - run: flows/login.yml\n")).toThrow(/must end in \.yaml/);
+  });
+
+  it("names the lowercase requirement when only the run: extension's case is wrong", () => {
+    expect(() => parseFlow("steps:\n  - run: shared/Login.YAML\n")).toThrow(
+      /lowercase \.yaml extension/
+    );
+  });
+
+  it("rejects an absolute run: path", () => {
+    expect(() => parseFlow("steps:\n  - run: /anywhere/login.yaml\n")).toThrow(/must be relative/);
+    expect(() => parseFlow("steps:\n  - run: C:/anywhere/login.yaml\n")).toThrow(
+      /must be relative/
+    );
+    // Drive-relative: not isAbsolute, but resolves against the drive's cwd.
+    expect(() => parseFlow("steps:\n  - run: C:foo/login.yaml\n")).toThrow(/must be relative/);
+  });
+
+  it("rejects a run: path whose filename is not a safe flow name", () => {
+    expect(() => parseFlow("steps:\n  - run: ../we!rd.yaml\n")).toThrow(/letters, digits/);
+  });
+
+  it("rejects backslashes in a run: path", () => {
+    expect(() => parseFlow("steps:\n  - run: frag\\login.yaml\n")).toThrow(/forward slashes/);
+  });
+
   it("round-trips the new step kinds through YAML", () => {
     const flow = {
       executionPrerequisite: "",
@@ -444,7 +790,7 @@ describe("flow validation", () => {
           selector: { text: "Welcome", loose: true },
         },
         { kind: "snapshot" as const, name: "home", maxMismatch: 0.5 },
-        { kind: "run" as const, flow: "login" },
+        { kind: "run" as const, flow: "../shared/login.yaml" },
         // Mid-flow relaunch with a per-platform map.
         { kind: "launch" as const, app: { ios: "com.acme.app", android: "com.acme.android" } },
       ],

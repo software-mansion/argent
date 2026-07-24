@@ -118,8 +118,8 @@ async function captureTapSelector(
 // Replaying a fragment to set up state during recording is done by running it
 // through `flow-execute`. Recorded verbatim that becomes a brittle
 // `tool: flow-execute` step (baked-in project_root + device, no portability).
-// Instead, capture it as a `run: <name>` composition directive — mirroring the
-// gesture-tap → tap rewrite.
+// Instead, capture it as a `run: <name>.yaml` composition directive —
+// mirroring the gesture-tap → tap rewrite.
 const RUN_TARGET_COMMAND = "flow-execute";
 
 /**
@@ -265,12 +265,13 @@ async function rewriteSiblingFlowPath(
 
 /**
  * For a recorded `flow-execute` call, decide whether to record it as a
- * `run: <name>` directive. Returns the flow name to compose, or a warning
- * explaining why the raw `flow-execute` step was kept.
+ * `run: <name>.yaml` directive — the sibling-relative path form the runner
+ * resolves against the containing flow file's directory. Returns the path to
+ * compose, or a warning explaining why the raw `flow-execute` step was kept.
  *
- * `run:` composes any sibling flow — fragment or e2e — resolved in the
- * recording's `.argent/flows` dir (host-resolved composition, design §12). An
- * e2e target's `launch` simply runs inline. So we keep the raw step only when
+ * `run:` composes any sibling flow — fragment or e2e — resolved beside the
+ * recording's flow file (host-resolved composition, design §12). An e2e
+ * target's `launch` simply runs inline. So we keep the raw step only when
  * the target can't be resolved as a sibling, or the recording is remote (the
  * host can't read the client's sibling files to validate). A `flow_path`
  * target reaches here as its sibling `name` or not at all — see
@@ -373,7 +374,7 @@ async function captureRunTarget(
     // Parsing validates the sibling exists and is a well-formed flow; a failure
     // falls through to keeping the raw step.
     parseFlow(await fs.readFile(fragPath, "utf8"));
-    return { flow: name };
+    return { flow: `${name}.yaml` };
   } catch (err) {
     return {
       warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,

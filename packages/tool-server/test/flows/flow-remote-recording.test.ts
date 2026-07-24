@@ -484,7 +484,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
           viaUpload: false,
           statVerified: true,
         })
-      ).resolves.toEqual({ filePath: flowPath, flowName: "MixedCase" });
+      ).resolves.toEqual({ filePath: flowPath, flowName: "MixedCase", viaUpload: false });
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -509,7 +509,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
         viaUpload: false,
         statVerified: true,
       })
-    ).resolves.toEqual({ filePath: flowPath, flowName: "present" });
+    ).resolves.toEqual({ filePath: flowPath, flowName: "present", viaUpload: false });
   });
 
   it("rejects presence-only metadata without the client-stat match (statVerified)", async () => {

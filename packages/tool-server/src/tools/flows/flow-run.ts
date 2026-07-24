@@ -25,6 +25,7 @@ import {
   getFlowPath,
   isE2eFlow,
   parseFlow,
+  runTargetName,
   setActiveProjectRoot,
   type FlowFile,
   type FlowSelector,
@@ -473,6 +474,11 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
 // (via `deviceEnv`) and the compiler can find the ones that don't.
 interface ExecState extends Omit<ActionEnv, "device"> {
   device: DeviceInfo | null;
+  /**
+   * The ROOT flow file's directory — the anchor for snapshot baselines and a
+   * chromium launch's relative app path. `run:` targets instead anchor to the
+   * containing flow file's own directory (StepScope.flowDir).
+   */
   flowsDir: string;
   topFlowName: string;
   updateBaselines: boolean;
@@ -529,6 +535,37 @@ function displayFlowName(params: { name?: string; flow_path?: string }): string 
   return params.name || stem || params.flow_path || "(unspecified)";
 }
 
+/** Yield every parsed step, recursing into `when:` blocks (the parser's only nesting). */
+function* walkSteps(steps: FlowStep[]): Generator<FlowStep> {
+  for (const step of steps) {
+    yield step;
+    if (step.kind === "when") yield* walkSteps(step.steps);
+  }
+}
+
+/**
+ * Reject an uploaded root flow that contains a `run:` step (even inside a
+ * `when:` block) before anything executes: its referenced files stayed on the
+ * client, and a mid-run or guard-gated error could execute half the flow
+ * first — or first surface in CI.
+ */
+function assertUploadRunFree(flow: FlowFile): void {
+  for (const step of walkSteps(flow.steps)) {
+    if (step.kind !== "run") continue;
+    throw new FailureError(
+      `This flow uses run: composition ("run: ${step.flow}"), which requires a co-located ` +
+        `client and tool server — an uploaded flow's referenced files are not available on ` +
+        `this host.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_upload_run_composition",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+}
+
 export function createRunFlowTool(
   registry: Registry
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
@@ -558,7 +595,9 @@ when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device 
 for a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
 baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
-cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes a referenced fragment inline.
+cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
+inline — a YAML path resolved against the directory of the flow file that references it (co-located
+runs only).
 A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
@@ -579,13 +618,14 @@ returns a notice with the prerequisite instead of running.`,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const signal = ctx?.signal;
-      const { filePath, flowName } = await resolveFlowSource(
+      const { filePath, flowName, viaUpload } = await resolveFlowSource(
         params,
         ctx?.fileInputs?.flow_file,
         ctx?.fileInputs?.flow_path
       );
       const flowsDir = path.dirname(filePath);
       const flow = parseFlow(await fs.readFile(filePath, "utf8"));
+      if (viaUpload) assertUploadRunFree(flow);
 
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
       // launch step cannot declare one — validated at parse).
@@ -601,7 +641,7 @@ returns a notice with the prerequisite instead of running.`,
 
       // Resolve the run device (a Chromium e2e flow boots + owns its own app; see
       // resolveRunDevice). Any instance it booted is torn down in the finally.
-      const resolved = await resolveRunDevice(registry, ctx, flow, params, flowsDir);
+      const resolved = await resolveRunDevice(registry, ctx, flow, params, flowsDir, viaUpload);
       const device = resolved.device;
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
@@ -638,8 +678,7 @@ returns a notice with the prerequisite instead of running.`,
       let aborted: boolean;
       try {
         await execSteps(state, flow.steps, {
-          flow: flowName,
-          runStack: [flowName],
+          runStack: [{ canonical: await canonicalFlowPath(filePath), display: flowName }],
           depth: 0,
         });
       } finally {
@@ -682,12 +721,13 @@ async function resolveRunDevice(
   ctx: ToolContext | undefined,
   flow: FlowFile,
   params: Params,
-  flowDir: string
+  flowDir: string,
+  viaUpload: boolean
 ): Promise<{ device: DeviceInfo | null; booted: BootedChromium | null }> {
   if (!params.device) {
     const spec = chromiumBootSpec(flow, params.platform);
     if (spec) {
-      const booted = await bootChromiumForFlow(spec, flowDir);
+      const booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
       return { device: resolveDevice(booted.deviceId), booted };
     }
     // Checked after the chromium boot path, which only applies to a flow led by
@@ -737,17 +777,32 @@ function launchTargetPlatform(launch: Launch, platform: string | undefined): str
 
 /**
  * Boot the Electron app a chromium launch declares. A relative path resolves
- * against the flow file's directory (`flowDir`) — the same anchor `run:` and
- * baselines use — so the target is intrinsic to the flow, not the caller's cwd;
- * an absolute path is taken as-is. Boot failures propagate as-is — the Chromium
- * analog of `resolveFlowDevice` throwing on no booted device. The app must exist
- * on the *tool-server* host, so a flow-relative path won't resolve on a remote
- * tool-server (the flow file lives in a shipped temp dir there).
+ * against the root flow file's directory (`flowDir`) — the same anchor
+ * baselines use — so the target is intrinsic to the flow, not the caller's
+ * cwd; an absolute path is taken as-is. Boot failures propagate as-is — the
+ * Chromium analog of `resolveFlowDevice` throwing on no booted device.
  */
 async function bootChromiumForFlow(
   spec: { path: string; args?: string[] },
-  flowDir: string
+  flowDir: string,
+  viaUpload: boolean
 ): Promise<BootedChromium> {
+  // An uploaded flow's flowDir is a server temp dir — resolving a relative app
+  // path there would produce a misleading ENOENT or launch a same-named host
+  // path, so reject with the contract error instead.
+  if (viaUpload && !path.isAbsolute(spec.path)) {
+    throw new FailureError(
+      `A relative chromium app path ("${spec.path}") resolves against the flow file's ` +
+        `directory, which requires a co-located client and tool server — an uploaded flow ` +
+        `has no real flow directory on this host. Use an absolute tool-server path instead.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_upload_chromium_app_path",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
   const appPath = path.isAbsolute(spec.path) ? spec.path : path.resolve(flowDir, spec.path);
   const res = await bootElectronApp({ appPath, extraArgs: spec.args });
   return { deviceId: res.id, port: res.port, pid: res.pid };
@@ -910,21 +965,55 @@ function stepTarget(step: FlowStep): string | undefined {
     }
     case "snapshot":
       return step.cropOn ? `"${step.name}" cropOn ${selectorLabel(step.cropOn)}` : `"${step.name}"`;
+    case "run":
+      // The as-written path, so a report line shows exactly what the flow
+      // references (`run ../shared/login.yaml`), not just the attribution stem.
+      return step.flow;
     default:
       return undefined;
   }
 }
 
 /**
- * Where a list of steps executes: the fragment they are attributed to
- * (StepReport.flow), the `run:` chain for the cycle/depth guards, and the
- * nesting depth block directives accumulate for display. Threaded as one value
- * so a new block directive only has to hand its children {@link childScope}.
+ * One `run:` chain entry: the cycle guard compares canonical (realpath'd)
+ * paths; error messages render the human-readable display names.
+ */
+interface RunStackEntry {
+  canonical: string;
+  display: string;
+}
+
+/**
+ * Where a list of steps executes: the `run:` chain (cycle/depth guards) plus
+ * the display nesting depth. Attribution and anchor directory derive from the
+ * chain's top entry ({@link scopeFlow} / {@link scopeFlowDir}), so no second
+ * field can drift out of lockstep with the stack.
  */
 interface StepScope {
-  flow: string;
-  runStack: string[];
+  runStack: RunStackEntry[];
   depth: number;
+}
+
+/** The flow name steps in this scope are attributed to (StepReport.flow). */
+function scopeFlow(scope: StepScope): string {
+  return scope.runStack[scope.runStack.length - 1]!.display;
+}
+
+/**
+ * Attribution for one report line: a `run:` step belongs to the fragment it
+ * references — identical across the executed, errored, and every skip path —
+ * everything else to the containing flow.
+ */
+function stepFlow(step: FlowStep, scope: StepScope): string {
+  return step.kind === "run" ? runTargetName(step.flow) : scopeFlow(scope);
+}
+
+/**
+ * The directory `run:` paths resolve against — the canonical containing
+ * file's, so a symlinked flow anchors where its real file and siblings live.
+ */
+function scopeFlowDir(scope: StepScope): string {
+  return path.dirname(scope.runStack[scope.runStack.length - 1]!.canonical);
 }
 
 /** The scope a block directive's children execute in — one level deeper. */
@@ -953,7 +1042,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         index,
         kind: step.kind,
         status: "skip",
-        flow: scope.flow,
+        flow: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
         // Carry the echo's message so a skipped narration renders as a skip
@@ -974,7 +1063,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         index,
         kind: step.kind,
         status: "error",
-        flow: scope.flow,
+        flow: scopeFlow(scope),
         target: stepTarget(step),
         ...depthOf(scope),
         reason: `step needs a device but the flow was resolved as device-free — pass an explicit device`,
@@ -989,7 +1078,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         kind: step.kind,
         status: "skip",
         reason: "run aborted",
-        flow: scope.flow,
+        flow: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
         ...(step.kind === "echo" ? { message: step.message } : {}),
@@ -1043,10 +1132,7 @@ function reportBlockSkipped(
       kind: step.kind,
       status: "skip",
       reason,
-      // A `run:` line is attributed to the fragment it names, matching the
-      // executed marker in execRunStep; everything else belongs to the
-      // enclosing flow.
-      flow: step.kind === "run" ? step.flow : scope.flow,
+      flow: stepFlow(step, scope),
       target: stepTarget(step),
       ...depthOf(scope),
       ...(step.kind === "echo" ? { message: step.message } : {}),
@@ -1074,7 +1160,13 @@ async function execWhenStep(
   const target = stepTarget(step);
   // The marker sits at the enclosing depth; the guarded steps one deeper —
   // whether they execute or report as skipped.
-  const marker = { index, kind: "when", flow: scope.flow, target, ...depthOf(scope) } as const;
+  const marker = {
+    index,
+    kind: "when",
+    flow: scopeFlow(scope),
+    target,
+    ...depthOf(scope),
+  } as const;
   const inner = childScope(scope);
 
   let met: boolean;
@@ -1123,6 +1215,19 @@ async function execWhenStep(
   await execSteps(state, step.steps, inner);
 }
 
+/**
+ * Canonicalize a flow path for the cycle guard. Falls back to the resolved
+ * path when realpath fails (e.g. the file is gone) — the subsequent read
+ * reports the real error with the real path.
+ */
+async function canonicalFlowPath(p: string): Promise<string> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 async function execRunStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "run" }>,
@@ -1130,42 +1235,55 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
+  const display = runTargetName(target);
 
   const fail = (reason: string): void => {
     pushReport(state, {
       index,
       kind: "run",
       status: "error",
-      flow: target,
+      flow: display,
+      target,
       reason,
       ...depthOf(scope),
     });
     state.stopped = true;
   };
 
-  if (scope.runStack.includes(target)) {
-    return fail(`cyclic flow reference: ${[...scope.runStack, target].join(" → ")}`);
-  }
   if (scope.runStack.length >= MAX_RUN_DEPTH) {
     return fail("max run depth exceeded");
   }
 
+  const canonical = await canonicalFlowPath(path.resolve(scopeFlowDir(scope), target));
+  if (scope.runStack.some((entry) => entry.canonical === canonical)) {
+    return fail(
+      `cyclic flow reference: ${[...scope.runStack.map((entry) => entry.display), display].join(" → ")}`
+    );
+  }
+
   let fragment: FlowFile;
   try {
-    assertSafeFlowName(target);
-    const fragPath = path.join(state.flowsDir, `${target}.yaml`);
-    fragment = parseFlow(await fs.readFile(fragPath, "utf8"));
+    fragment = parseFlow(await fs.readFile(canonical, "utf8"));
   } catch (err) {
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
   // Marker for the composition point, then expand the fragment's steps inline,
-  // one level deeper, attributed to the fragment.
-  pushReport(state, { index, kind: "run", status: "pass", flow: target, ...depthOf(scope) });
+  // one level deeper, attributed to the fragment. The fragment's own directory
+  // becomes the anchor for `run:` paths inside it; baselines stay anchored to
+  // the root flow (state.flowsDir / state.topFlowName).
+  pushReport(state, {
+    index,
+    kind: "run",
+    status: "pass",
+    flow: display,
+    target,
+    ...depthOf(scope),
+  });
   await execSteps(
     state,
     fragment.steps,
-    childScope(scope, { flow: target, runStack: [...scope.runStack, target] })
+    childScope(scope, { runStack: [...scope.runStack, { canonical, display }] })
   );
 }
 
@@ -1178,7 +1296,7 @@ async function execLeafStep(
   const base = {
     index,
     kind: step.kind,
-    flow: scope.flow,
+    flow: scopeFlow(scope),
     target: stepTarget(step),
     ...depthOf(scope),
   } as const;
@@ -1337,7 +1455,7 @@ export async function resolveFlowSource(
   },
   fileInput?: ResolvedFileInput,
   flowPathInput?: ResolvedFileInput
-): Promise<{ filePath: string; flowName: string }> {
+): Promise<{ filePath: string; flowName: string; viaUpload: boolean }> {
   // The schemas' superRefine already enforces this for flow-execute and
   // flow-read-prerequisite; this copy covers direct execute() callers (tests,
   // in-process invocations) and keeps the params.name! below sound.
@@ -1507,7 +1625,7 @@ export async function resolveFlowSource(
       );
     }
 
-    return { filePath: params.flow_path, flowName };
+    return { filePath: params.flow_path, flowName, viaUpload: false };
   }
 
   const flowName = params.name!;
@@ -1529,7 +1647,8 @@ export async function resolveFlowSource(
   // snapshots fails against that temp dir, and the failure names it (a fragment
   // that could not be loaded, a baseline missing from a path under the system
   // temp dir) rather than the missing co-location that is the real cause.
-  if (params.flow_file && fileInput?.viaUpload) return { filePath: params.flow_file, flowName };
+  if (params.flow_file && fileInput?.viaUpload)
+    return { filePath: params.flow_file, flowName, viaUpload: true };
   if (
     params.flow_file &&
     (!path.isAbsolute(params.flow_file) ||
@@ -1583,5 +1702,5 @@ export async function resolveFlowSource(
 
   // Either the boundary's own path for this flow (containment-checked above,
   // so it resolves to `expected`) or `expected` itself.
-  return { filePath: params.flow_file || expected, flowName };
+  return { filePath: params.flow_file || expected, flowName, viaUpload: false };
 }
