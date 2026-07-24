@@ -660,6 +660,45 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
   });
 
+  it("floors a tiny nudge at the minimum scroll increment so it cannot read as a tap", async () => {
+    // A near-padding landing at 0.82..0.92 leaves 0.08 of clearance: the 0.02
+    // deficit's 1.5× ask is only 0.03, below the 0.05 tap-vs-scroll floor, so
+    // the dispatched nudge must be raised to exactly MIN_SCROLL_INCREMENT —
+    // a 0.03 swipe could register as a tap on the target. Headroom above the
+    // row (0.82) is ample, so its half-cap (0.41) does not mask the floor.
+    const nearPadding = screen([
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.82, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : nearPadding);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("floored-nudge", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "floored-nudge", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    // Momentum-free, floored to the minimum increment — not deficit × 1.5 (0.03).
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.05, 5);
+  });
+
   it("scrolls a target into view, then nudges its flush landing off the screen edge", async () => {
     // The end-to-end shape: a half-screen increment reveals the target flush at
     // the bottom (0.88..0.98), then a small nudge lifts it to padding. The two
