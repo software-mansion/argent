@@ -439,7 +439,9 @@ Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch)
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
-any selector may scope its matches to elements inside a container's frame via \`within: <selector>\`);
+any selector may scope its matches to elements inside a container's frame via \`within: <selector>\`, which
+chains outward to disambiguate nested containers — \`within: { id: card, within: { id: list } }\` reads
+"inside card inside list", each container's frame inside the next);
 \`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`await\` waits
 for a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`

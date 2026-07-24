@@ -684,4 +684,166 @@ describe("within (descendant) scoping", () => {
     });
     expect(scoped).toHaveLength(1);
   });
+
+  // ── Containment tolerance (WITHIN_EPS) ────────────────────────────────────
+  // The container's frame is x:0.2..0.6, y:0.2..0.6; each element below sits
+  // fully inside on three edges and overhangs the LEFT edge by a fixed amount,
+  // isolating the tolerance band so the assertions pin WITHIN_EPS from both
+  // sides — zeroing it drops the sub-pixel case, inflating it swallows real
+  // overflow.
+  const tolerance = (leftOverhang: number, label: string): DescribeNode =>
+    node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ identifier: "box", frame: { x: 0.2, y: 0.2, width: 0.4, height: 0.4 } }),
+        node({ label, frame: { x: 0.2 - leftOverhang, y: 0.3, width: 0.1, height: 0.1 } }),
+      ],
+    });
+
+  it("admits an element overhanging its container by less than the tolerance", () => {
+    // 0.003 of overhang is a border/shadow/rounding hair (< WITHIN_EPS): the
+    // element visually belongs to the container and must still resolve. This is
+    // the exact band the tolerance exists for — with WITHIN_EPS at 0 it drops.
+    const tree = tolerance(0.003, "Edge");
+    expect(findAll(tree, { text: "Edge", within: { identifier: "box" } })).toHaveLength(1);
+  });
+
+  it("rejects an element overhanging its container beyond the tolerance", () => {
+    // 0.03 of overhang is real overflow, not sub-pixel slack: the element sits
+    // outside the container and must not resolve — pinning the tolerance's upper
+    // edge so it can't be inflated into swallowing a true overflow.
+    const tree = tolerance(0.03, "Over");
+    expect(findAll(tree, { text: "Over", within: { identifier: "box" } })).toEqual([]);
+  });
+
+  it("treats an equal frame as within — coincident distinct nodes each scope the other", () => {
+    // Two DISTINCT nodes sharing the exact same frame are each inside the other:
+    // containment is inclusive (frames may coincide), and the only guard is the
+    // distinct-node rule (`c !== node`). This locks that observable semantic —
+    // the real case is a testID wrapper laid exactly over the control it wraps,
+    // where scoping to the wrapper must still resolve the control.
+    const tree = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          identifier: "wrapper",
+          role: "AXGroup",
+          frame: { x: 0.2, y: 0.3, width: 0.4, height: 0.1 },
+        }),
+        node({
+          identifier: "control",
+          label: "Submit",
+          frame: { x: 0.2, y: 0.3, width: 0.4, height: 0.1 },
+        }),
+      ],
+    });
+    // The control sits exactly inside its equal-framed wrapper.
+    expect(findAll(tree, { text: "Submit", within: { identifier: "wrapper" } })).toHaveLength(1);
+    // ...and two equal-framed nodes both matching one selector each count as
+    // within the other (mutual), so both survive the scope.
+    const twins = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          identifier: "a",
+          role: "AXButton",
+          frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 },
+        }),
+        node({
+          identifier: "b",
+          role: "AXButton",
+          frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 },
+        }),
+      ],
+    });
+    expect(findAll(twins, { role: "AXButton", within: { role: "AXButton" } })).toHaveLength(2);
+  });
+
+  // ── Grid-indexed containment (large container sets) ───────────────────────
+  it("indexed containment agrees with a naive scan on a large random tree", () => {
+    // Above CONTAINMENT_GRID_MIN containers, findAll indexes them in a grid
+    // instead of scanning; the indexed result must equal a brute-force scan.
+    // Deterministic LCG keeps the fuzz case reproducible (no Math.random flake).
+    let seed = 123456789;
+    const rand = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const containers: DescribeNode[] = [];
+    for (let i = 0; i < 80; i++) {
+      containers.push(
+        node({
+          role: "AXGroup",
+          identifier: `c${i}`,
+          frame: {
+            x: rand() * 0.8,
+            y: rand() * 0.8,
+            width: 0.1 + rand() * 0.15,
+            height: 0.1 + rand() * 0.15,
+          },
+        })
+      );
+    }
+    const leaves: DescribeNode[] = [];
+    for (let i = 0; i < 150; i++) {
+      leaves.push(
+        node({
+          identifier: `l${i}`,
+          label: "leaf",
+          frame: {
+            x: rand() * 0.95,
+            y: rand() * 0.95,
+            width: 0.02 + rand() * 0.03,
+            height: 0.02 + rand() * 0.03,
+          },
+        })
+      );
+    }
+    const tree = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [...containers, ...leaves],
+    });
+
+    const scoped = findAll(tree, { text: "leaf", within: { role: "AXGroup" } });
+    const eps = 0.005;
+    const within = (inner: DescribeNode["frame"], outer: DescribeNode["frame"]): boolean =>
+      inner.x >= outer.x - eps &&
+      inner.y >= outer.y - eps &&
+      inner.x + inner.width <= outer.x + outer.width + eps &&
+      inner.y + inner.height <= outer.y + outer.height + eps;
+    const expected = leaves.filter((l) => containers.some((c) => within(l.frame, c.frame)));
+
+    const ids = (ns: DescribeNode[]): string[] => ns.map((n) => n.identifier!).sort();
+    expect(scoped.length).toBeGreaterThan(0); // the fuzz actually exercises containment
+    expect(ids(scoped)).toEqual(ids(expected));
+  });
+
+  it("indexed containment honors the tolerance for an edge-overhanging leaf", () => {
+    // Force the grid path (> CONTAINMENT_GRID_MIN containers) and place the one
+    // matching leaf overhanging a cell's left edge by < WITHIN_EPS — the grid's
+    // eps-padded cell coverage must still find its container.
+    const children: DescribeNode[] = [];
+    for (let i = 0; i < 40; i++) {
+      const col = i % 8;
+      const row = Math.floor(i / 8);
+      children.push(
+        node({
+          role: "AXGroup",
+          identifier: `cell-${i}`,
+          frame: { x: col * 0.12, y: row * 0.12, width: 0.1, height: 0.1 },
+        })
+      );
+    }
+    // Inside cell-0 (x 0..0.1, y 0..0.1), overhanging its left edge by 0.003.
+    children.push(
+      node({ label: "Pick", frame: { x: -0.003, y: 0.02, width: 0.05, height: 0.05 } })
+    );
+    const tree = node({ role: "Screen", frame: { x: 0, y: 0, width: 1, height: 1 }, children });
+    const scoped = findAll(tree, { text: "Pick", within: { role: "AXGroup" } });
+    expect(scoped).toHaveLength(1);
+  });
 });

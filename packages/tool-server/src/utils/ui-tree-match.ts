@@ -252,6 +252,71 @@ function frameWithin(inner: DescribeFrame, outer: DescribeFrame): boolean {
   );
 }
 
+// Resolving a `within` scope asks "does this candidate sit inside SOME distinct
+// container?" for every candidate against every container. The naive form scans
+// the whole container set per candidate — O(candidates × containers) — which a
+// broad container selector (`within: { role: <common role> }`, a form the
+// nested slot explicitly allows) drives quadratic on the flattened flow tree
+// (bounded per platform — 12k nodes on Android/Chromium, depth-capped on iOS),
+// and findAll re-runs on every settle/poll. Above a small container count, index
+// the containers in a coarse uniform grid so a candidate only tests the
+// containers registered in its own top-left cell. The realistic container shapes
+// — scattered role matches, a list of stacked rows, a grid of cards — each land
+// only a handful of containers per cell, dropping the scan to near-linear. Only
+// a `within` selector ever builds this; an unscoped findAll never reaches it.
+// (The one input the grid can't prune is many mutually-overlapping containers
+// crammed into one cell — it degrades gracefully back to the naive scan there,
+// never worse, since the exact check still short-circuits on the first hit.)
+const CONTAINMENT_GRID_N = 16; // cells per axis over the normalized [0,1]² frame
+const CONTAINMENT_GRID_MIN = 32; // fewer containers than this: a direct scan wins
+
+// The grid column/row a normalized coordinate falls in, clamped to [0, N): a
+// frame can sit a hair off-screen (negative, or ≥ 1), and every such point must
+// still map to a real cell.
+function gridCell(coord: number): number {
+  const c = Math.floor(coord * CONTAINMENT_GRID_N);
+  return c < 0 ? 0 : c >= CONTAINMENT_GRID_N ? CONTAINMENT_GRID_N - 1 : c;
+}
+
+/**
+ * Build a predicate `inside(node)` — true when the node's frame sits inside a
+ * DISTINCT container in `containers` (the {@link frameWithin} containment a
+ * `within` scope needs). Below {@link CONTAINMENT_GRID_MIN} it scans directly;
+ * larger sets are indexed in a coarse grid keyed by top-left cell.
+ *
+ * A container is registered in every cell its frame covers, PADDED by
+ * {@link WITHIN_EPS}: a candidate may overhang a container edge by up to the
+ * tolerance, so its top-left corner can land one cell before the container's
+ * unpadded coverage — the pad guarantees the corner still hits a registered
+ * cell. The grid therefore only PRUNES; the exact `frameWithin` check on the
+ * bucket decides, so the padding never admits a false containment.
+ */
+function containmentTester(containers: DescribeNode[]): (node: DescribeNode) => boolean {
+  if (containers.length < CONTAINMENT_GRID_MIN) {
+    return (node) => containers.some((c) => c !== node && frameWithin(node.frame, c.frame));
+  }
+  const cells = new Map<number, DescribeNode[]>();
+  for (const c of containers) {
+    const f = c.frame;
+    const colEnd = gridCell(f.x + f.width + WITHIN_EPS);
+    const rowEnd = gridCell(f.y + f.height + WITHIN_EPS);
+    for (let row = gridCell(f.y - WITHIN_EPS); row <= rowEnd; row++) {
+      for (let col = gridCell(f.x - WITHIN_EPS); col <= colEnd; col++) {
+        const key = row * CONTAINMENT_GRID_N + col;
+        const bucket = cells.get(key);
+        if (bucket) bucket.push(c);
+        else cells.set(key, [c]);
+      }
+    }
+  }
+  return (node) => {
+    const bucket = cells.get(gridCell(node.frame.y) * CONTAINMENT_GRID_N + gridCell(node.frame.x));
+    return (
+      bucket !== undefined && bucket.some((c) => c !== node && frameWithin(node.frame, c.frame))
+    );
+  };
+}
+
 // Every node matching the selector in the tree, EXCLUDING `root` itself — the
 // synthetic full-screen container describe puts at the head of the tree. See the
 // long-form rationale in await-ui-element: matching the root would let a broad
@@ -279,8 +344,6 @@ export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] 
     const regex = selectorTextRegex(sel);
     return all.filter((n) => matchNodeWithRegex(n, sel, regex));
   };
-  const inSome = (node: DescribeNode, containers: DescribeNode[]): boolean =>
-    containers.some((c) => c !== node && frameWithin(node.frame, c.frame));
 
   // Flatten the `within` chain, outermost scope first: for
   // `{ text: "a", within: { id: "b", within: { text: "c" } } }` — "a inside b
@@ -292,11 +355,18 @@ export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] 
   for (const level of chain) {
     const levelMatches = matchesOf(level);
     const outer = containers;
-    containers = outer === undefined ? levelMatches : levelMatches.filter((n) => inSome(n, outer));
+    if (outer === undefined) {
+      containers = levelMatches;
+    } else {
+      const inside = containmentTester(outer);
+      containers = levelMatches.filter(inside);
+    }
   }
 
   const own = matchesOf(selector);
-  return containers === undefined ? own : own.filter((n) => inSome(n, containers!));
+  if (containers === undefined) return own;
+  const inside = containmentTester(containers);
+  return own.filter(inside);
 }
 
 // describe prunes off-screen / zero-size nodes, so a non-zero frame area is a
