@@ -14,11 +14,12 @@
   "ignoreWorkspaces": ["packages/argent-private"],
 
   "workspaces": {
-    // Root workspace: build/dev/release scripts. Scripts referenced from
-    // package.json (`scripts`, `node --test …`) are auto-detected as entries;
-    // these standalone dev/test helpers are invoked by hand, so name them.
+    // Root workspace: build/dev/release/CI scripts. The ones referenced from
+    // package.json are auto-detected; the rest are invoked by GitHub workflows
+    // or by hand (knip can't see those call sites), so treat every standalone
+    // script as an entry.
     ".": {
-      "entry": ["scripts/setup-in-workspace.cjs", "scripts/*.test.mjs"],
+      "entry": ["scripts/**/*.{cjs,mjs}"],
     },
 
     // @swmansion/argent is a thin dispatcher whose real payload is an esbuild
