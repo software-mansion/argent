@@ -18,6 +18,10 @@ name: Publish npm package
 #                        selector: the run fails if the ref's version doesn't
 #                        land on the channel you expected. `dry_run` exercises
 #                        the full build + bundle verification without publishing.
+#                        Note dry_run only rehearses the dispatch path — the
+#                        canary machinery (version stamping, --version check,
+#                        collision retry) is copied verbatim from
+#                        publish-next.yml and first runs here after cutover.
 #
 # Provenance / trusted publishing:
 #   The job has `id-token: write` and publishes with --provenance, so every
@@ -36,7 +40,9 @@ name: Publish npm package
 #      @swmansion/argent (org software-mansion, repo argent).
 #   3. Set the repository variable PUBLISH_NPM_UNIFIED=1 and, in the same PR,
 #      delete publish.yml and publish-next.yml — the gate exists precisely so
-#      canaries are never double-published while both workflows coexist.
+#      canaries are never double-published while both workflows coexist. Drop
+#      the two old workflow names from sync-next-tag.yml's workflow_run
+#      trigger in that PR too.
 #   4. Remove NODE_AUTH_TOKEN from the publish steps; optionally restrict the
 #      package's publishing access on npmjs.com to the trusted publisher only.
 
@@ -105,8 +111,13 @@ jobs:
 
       # One derivation point for everything mode-dependent: the publish mode,
       # the dist-tag, and which signed-binaries release tag to download from.
+      # inputs.ref reaches the script through env, never template interpolation —
+      # this file is the trusted publisher, so a crafted ref name must stay data.
       - name: Resolve publish mode
         id: mode
+        env:
+          REF: ${{ inputs.ref }}
+          CHANNEL: ${{ inputs.channel }}
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
             # Canary builds source the floating main build of the signed
@@ -120,13 +131,11 @@ jobs:
               *-*) DERIVED=next ;;
               *)   DERIVED=latest ;;
             esac
-            CHANNEL="${{ inputs.channel }}"
             if [ "$CHANNEL" != "auto" ] && [ "$CHANNEL" != "$DERIVED" ]; then
-              echo "::error::Version '$VERSION' at ref '${{ inputs.ref }}' belongs on the '$DERIVED' dist-tag, but channel '$CHANNEL' was requested. Pick the ref matching the channel you meant (or leave channel on 'auto')." >&2
+              echo "::error::Version '$VERSION' at ref '$REF' belongs on the '$DERIVED' dist-tag, but channel '$CHANNEL' was requested. Pick the ref matching the channel you meant (or leave channel on 'auto')." >&2
               exit 1
             fi
             echo "Resolved version: $VERSION → dist-tag '$DERIVED'"
-            REF="${{ inputs.ref }}"
             echo "mode=dispatch" >> "$GITHUB_OUTPUT"
             echo "dist_tag=$DERIVED" >> "$GITHUB_OUTPUT"
             echo "binaries_tag=argent-${REF//\//-}" >> "$GITHUB_OUTPUT"
@@ -138,14 +147,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download signed native binaries (dylibs, ax-service, Android helper APK)
-        run: bash scripts/download-native-binaries.sh "${{ steps.mode.outputs.binaries_tag }}"
+        run: bash scripts/download-native-binaries.sh "$BINARIES_TAG"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BINARIES_TAG: ${{ steps.mode.outputs.binaries_tag }}
 
       - name: Download Perfetto trace-processor WASM artifacts
-        run: bash scripts/download-trace-processor.sh "${{ steps.mode.outputs.binaries_tag }}"
+        run: bash scripts/download-trace-processor.sh "$BINARIES_TAG"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BINARIES_TAG: ${{ steps.mode.outputs.binaries_tag }}
 
       - run: npm ci
 
@@ -157,17 +168,22 @@ jobs:
       # both Linux keys (x86_64 "linux" and arm64 "linux-arm64") are gated by
       # ARGENT_REQUIRE_LINUX_BINARY so the existing release pipeline keeps
       # working until radon's Linux artifacts are reliably present — flip the
-      # env var to "1" once that lands. The inventory always logs what shipped
-      # so a silently-missing Linux binary shows up in the run.
+      # env var to "1" once that lands. win32 is gated the same way: it needs
+      # radon's Windows argent build (radon PR #134) merged plus one
+      # build-sim-server dispatch to publish the asset. The inventory always
+      # logs every platform so a silently-missing binary shows up in the run.
       - name: Verify per-platform simulator-server binaries
         env:
           ARGENT_REQUIRE_LINUX_BINARY: "0"
+          ARGENT_REQUIRE_WINDOWS_BINARY: "0"
         run: |
           set -e
           missing=0
           echo "simulator-server inventory:"
-          for plat in darwin linux linux-arm64; do
-            p="packages/argent/bin/${plat}/simulator-server"
+          for plat in darwin linux linux-arm64 win32; do
+            bin="simulator-server"
+            if [[ "$plat" == "win32" ]]; then bin="simulator-server.exe"; fi
+            p="packages/argent/bin/${plat}/${bin}"
             if [[ -x "$p" ]]; then
               size=$(wc -c <"$p")
               echo "  ✓ ${plat}: ${p} (${size} bytes; $(file -b "$p"))"
@@ -175,6 +191,7 @@ jobs:
               echo "  ✗ ${plat}: ${p} — missing"
               if [[ "$plat" == "darwin" ]]; then missing=1; fi
               if [[ "$plat" == linux* && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
+              if [[ "$plat" == "win32" && "${ARGENT_REQUIRE_WINDOWS_BINARY}" == "1" ]]; then missing=1; fi
             fi
           done
           [[ "$missing" == "0" ]] || { echo "::error::required simulator-server binary missing"; exit 1; }
@@ -247,9 +264,10 @@ jobs:
       # Dispatch publishes the ref's verbatim version on its derived dist-tag.
       - name: Publish
         if: steps.mode.outputs.mode == 'dispatch' && !inputs.dry_run
-        run: npm publish -w @swmansion/argent --tag "${{ steps.mode.outputs.dist_tag }}" --provenance
+        run: npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
 
       # Canary publish. Serialization makes concurrent index collisions
       # impossible, but npm's read-after-write lag could still hand a back-to-back
@@ -259,11 +277,12 @@ jobs:
         if: steps.mode.outputs.mode == 'canary'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
         run: |
           for attempt in 1 2 3; do
             VERSION="$(node -p "require('./packages/argent/package.json').version")"
             echo "Publishing ${VERSION} (attempt ${attempt})"
-            if npm publish -w @swmansion/argent --tag next --provenance; then
+            if npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance; then
               echo "Published ${VERSION}"
               exit 0
             fi
