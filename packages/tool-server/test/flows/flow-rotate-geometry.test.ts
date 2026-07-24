@@ -65,8 +65,7 @@ describe("buildRotateCandidate / selectRotateCandidate", () => {
   it("keeps both initial points inside the target on the chosen axis", () => {
     const frame = { width: 0.3, height: 0.2 };
     const selected = pick({ x: 0.5, y: 0.5 }, IOS_GUARDS, frame)!;
-    const separation =
-      selected.startAngle === 0 ? 2 * selected.radiusX : 2 * selected.radiusY;
+    const separation = selected.startAngle === 0 ? 2 * selected.radiusX : 2 * selected.radiusY;
     const span = selected.startAngle === 0 ? frame.width : frame.height;
     expect(separation).toBeLessThanOrEqual(span * TARGET_START_FRACTION + 1e-9);
   });
