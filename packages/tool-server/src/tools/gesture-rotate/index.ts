@@ -63,10 +63,17 @@ const zodSchema = z
   });
 
 // Explicit because the auto-derived JSON Schema loses the .refine() cross-field
-// rule — without the anyOf, a call omitting radius/radiusX/radiusY looks valid.
+// rules — the anyOf re-encodes both: the per-axis pair together, or radius with
+// neither half of the pair.
 const inputSchema = {
   ...zodObjectToJsonSchema(zodSchema),
-  anyOf: [{ required: ["radius"] }, { required: ["radiusX", "radiusY"] }],
+  anyOf: [
+    { required: ["radiusX", "radiusY"] },
+    {
+      required: ["radius"],
+      not: { anyOf: [{ required: ["radiusX"] }, { required: ["radiusY"] }] },
+    },
+  ],
 };
 
 type Params = z.infer<typeof zodSchema>;
