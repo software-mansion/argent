@@ -537,8 +537,11 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
  * warnings). The internal `loose` flag is dropped.
  */
 export function describeSelector(s: FlowSelector): string {
-  const fields = Object.entries(s)
-    .filter(([k]) => k !== "loose" && k !== "within")
+  // Split off the non-string members (`loose` flag, `within` scope) before
+  // Object.entries so the remaining values are all strings — `within` renders
+  // separately below, and stringifying its object here would be meaningless.
+  const { loose: _loose, within, ...rest } = s;
+  const fields = Object.entries(rest)
     // `identifier` is spelled `id` in flow YAML — print the spelling the flow
     // file uses so the message reads like the step it refers to. A regex
     // matcher prints in /slashes/ so it can't be misread as a literal.
@@ -548,7 +551,7 @@ export function describeSelector(s: FlowSelector): string {
     .join(" ");
   // The ancestor scope renders after the fields, parenthesized so a chained
   // scope's own fields can't be misread as the target's.
-  return s.within === undefined ? fields : `${fields} within (${describeSelector(s.within)})`;
+  return within === undefined ? fields : `${fields} within (${describeSelector(within)})`;
 }
 
 /**
