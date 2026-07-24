@@ -12,6 +12,7 @@ import {
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
+import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
@@ -277,6 +278,8 @@ export type FlowStep =
     }
   | { kind: "wait"; ms: number }
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
+  | { kind: "pinch"; selector?: FlowSelector; scale: number }
+  | { kind: "rotate"; selector?: FlowSelector; by: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number };
 
 export type FlowFile = {
@@ -418,6 +421,8 @@ type YamlStep =
   | { assert: YamlWaitCondition }
   | { wait: number }
   | { "scroll-to": YamlScrollBody }
+  | { pinch: { on?: YamlSelector; scale: number } }
+  | { rotate: { on?: YamlSelector; by: number } }
   | { snapshot: string | { name: string; maxMismatch?: number } };
 
 type YamlFlowFile = {
@@ -710,6 +715,20 @@ function toYamlStep(step: FlowStep): YamlStep {
         },
       };
     }
+    case "pinch":
+      // Canonical spelling puts `on` before `scale` (key order is preserved).
+      return {
+        pinch: step.selector
+          ? { on: selectorToYaml(step.selector), scale: step.scale }
+          : { scale: step.scale },
+      };
+    case "rotate":
+      // Canonical key order puts `on` before `by` (key order is preserved).
+      return {
+        rotate: step.selector
+          ? { on: selectorToYaml(step.selector), by: step.by }
+          : { by: step.by },
+      };
     case "snapshot":
       // A name-only snapshot sugars to a bare string.
       return step.maxMismatch === undefined
@@ -1102,6 +1121,8 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "assert",
   "wait",
   "scroll-to",
+  "pinch",
+  "rotate",
   "snapshot",
 ];
 
@@ -1255,6 +1276,85 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
   }
 
   return { kind: "long-press", ...parseTarget(body, "long-press") };
+}
+
+/**
+ * Parse a `pinch` body — options-map only (`{ on?, scale }`): unlike tap, a
+ * bare `pinch: "Map"` is ambiguous (in or out?), so there is no bare form.
+ * `scale` is validity-checked only (finite, > 0, ≠ 1 — a no-op scale is
+ * almost certainly a mistake); there is deliberately no magnitude cap — an
+ * extreme scale just decomposes into more chained gestures at run time.
+ */
+function parsePinch(body: unknown, entry: unknown): FlowStep {
+  if (body === null || typeof body !== "object") {
+    badEntry(
+      entry,
+      'pinch takes an options map — e.g. pinch: { on: "Map", scale: 3 } (a bare "pinch: Map" is ambiguous: in or out?)'
+    );
+  }
+  const obj = body as Record<string, unknown>;
+  if (
+    obj.text !== undefined ||
+    obj.id !== undefined ||
+    obj.identifier !== undefined ||
+    obj.role !== undefined
+  ) {
+    badEntry(entry, 'pinch takes a nested selector — e.g. pinch: { on: "Map", scale: 3 }');
+  }
+  rejectUnknownKeys(entry, obj, ["on", "scale"], "pinch");
+  if (
+    typeof obj.scale !== "number" ||
+    !Number.isFinite(obj.scale) ||
+    obj.scale <= 0 ||
+    obj.scale === 1
+  ) {
+    badEntry(
+      entry,
+      "pinch.scale must be a finite number > 0 and ≠ 1 (2 = zoom in 2×, 0.5 = zoom out to half)"
+    );
+  }
+  const step: FlowStep = { kind: "pinch", scale: obj.scale };
+  if (obj.on !== undefined) step.selector = parseSelector(obj.on, "pinch.on");
+  return step;
+}
+
+/**
+ * Parse a `rotate` body — options-map only (`{ on?, by }`): like pinch, there
+ * is no bare form (`rotate: "Map"` names no angle). `by` is degrees,
+ * + clockwise / − counter-clockwise, finite, ≠ 0, and within
+ * ±{@link MAX_ROTATE_BY_DEG} — the largest sweep one continuous gesture
+ * delivers at the fixed run-time pace. This is the two-finger gesture — not
+ * the `rotate` tool, which changes device orientation.
+ */
+function parseRotate(body: unknown, entry: unknown): FlowStep {
+  if (body === null || typeof body !== "object") {
+    badEntry(
+      entry,
+      'rotate takes an options map — e.g. rotate: { on: "Map", by: 90 } (an angle is required)'
+    );
+  }
+  const obj = body as Record<string, unknown>;
+  if (
+    obj.text !== undefined ||
+    obj.id !== undefined ||
+    obj.identifier !== undefined ||
+    obj.role !== undefined
+  ) {
+    badEntry(entry, 'rotate takes a nested selector — e.g. rotate: { on: "Map", by: 90 }');
+  }
+  rejectUnknownKeys(entry, obj, ["on", "by"], "rotate");
+  if (typeof obj.by !== "number" || !Number.isFinite(obj.by) || obj.by === 0) {
+    badEntry(entry, "rotate.by must be a finite non-zero number of degrees (+CW, −CCW)");
+  }
+  if (Math.abs(obj.by) > MAX_ROTATE_BY_DEG) {
+    badEntry(
+      entry,
+      `rotate.by must be within ±${MAX_ROTATE_BY_DEG}° — one continuous gesture at ~300°/s (10 s max)`
+    );
+  }
+  const step: FlowStep = { kind: "rotate", by: obj.by };
+  if (obj.on !== undefined) step.selector = parseSelector(obj.on, "rotate.on");
+  return step;
 }
 
 /**
@@ -1492,6 +1592,10 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
     if (b.within !== undefined) step.within = parseSelector(b.within, "scroll-to.within");
     return step;
   }
+
+  if ("pinch" in raw) return parsePinch((raw as { pinch: unknown }).pinch, raw);
+
+  if ("rotate" in raw) return parseRotate((raw as { rotate: unknown }).rotate, raw);
 
   if ("snapshot" in raw) {
     const body = (raw as { snapshot: unknown }).snapshot;

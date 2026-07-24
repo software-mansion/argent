@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 .yarn
 
 # Build outputs
@@ -6,7 +6,7 @@ dist/
 build/
 packages/*/dist/
 packages/*/build/
-packages/*/node_modules/
+packages/*/node_modules
 
 # TypeScript build info
 *.tsbuildinfo

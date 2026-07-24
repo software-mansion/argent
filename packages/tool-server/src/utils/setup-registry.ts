@@ -62,6 +62,9 @@ import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/nativ
 import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
 import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
+import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
+import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
+import { screenRecordingStopTool } from "../tools/screen-recording/screen-recording-stop";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
 import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit-query";
 import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
@@ -98,6 +101,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(nativeProfilerSessionBlueprint);
+  registry.registerBlueprint(screenRecordingSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
@@ -115,6 +119,8 @@ export function createRegistry(): Registry {
   registry.registerTool(openUrlTool);
   registry.registerTool(createScreenshotTool(registry));
   registry.registerTool(screenshotDiffTool);
+  registry.registerTool(createScreenRecordingStartTool(registry));
+  registry.registerTool(screenRecordingStopTool);
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);
   registry.registerTool(chromiumCookiesTool);

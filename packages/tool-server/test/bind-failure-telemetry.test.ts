@@ -17,6 +17,14 @@ const registryMock = vi.hoisted(() => ({
   dispose: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The probe is mocked so no test ever issues a real network request — the
+// un-mocked probe would GET http://127.0.0.1:3001/tools, and the outcome (and
+// so the test verdict) would depend on whatever happens to be listening on the
+// developer's real default tool-server port when the suite runs.
+const probeMock = vi.hoisted(() => ({
+  probeArgentToolServer: vi.fn<(host: string, port: number) => Promise<boolean>>(),
+}));
+
 // A minimal stand-in for the http.Server returned by app.listen(): just enough
 // of the surface index.ts touches — `.on("error")` to register the handler, a
 // manual `.emit()` to fire it, and the `.address()`/`.close()` shutdown() calls.
@@ -38,6 +46,11 @@ const serverMock = vi.hoisted(() => {
     },
     emit(event: string, ...args: unknown[]) {
       for (const cb of listeners.get(event) ?? []) cb(...args);
+    },
+    // Each test re-imports index.ts and calls start() again; without this the
+    // previous test's bind-error handler (a stale closure) would fire too.
+    reset() {
+      listeners.clear();
     },
     address: () => ({ port: 3001 }),
     close: (cb: () => void) => cb(),
@@ -74,6 +87,7 @@ vi.mock("@argent/registry", async (importOriginal) => {
 vi.mock("../src/utils/setup-registry", () => ({
   createRegistry: vi.fn(() => registryMock),
 }));
+vi.mock("../src/utils/probe-argent-tool-server", () => probeMock);
 vi.mock("../src/http", () => ({
   createHttpApp: vi.fn(() => httpHandleMock),
 }));
@@ -89,11 +103,24 @@ vi.mock("../src/utils/simulator-watcher", () => ({
   })),
 }));
 
+// Boot a fresh start() (fresh module state + a newly registered bind-error
+// handler) and fire a bind error at it once the handler is attached.
+async function startAndEmitBindError(err: NodeJS.ErrnoException): Promise<void> {
+  const { start } = await import("../src/index");
+  start();
+  await vi.waitFor(() => {
+    expect(serverMock.listenerCount("error")).toBeGreaterThan(0);
+  });
+  serverMock.emit("error", err);
+}
+
 describe("tool-server bind-failure telemetry", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.resetModules();
+    serverMock.reset();
     exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   });
 
@@ -101,18 +128,12 @@ describe("tool-server bind-failure telemetry", () => {
     exitSpy.mockRestore();
   });
 
-  it("captures the syscall on a startup-phase crash when the listener fails to bind", async () => {
-    const { start } = await import("../src/index");
+  it("captures the syscall on a startup-phase crash when nothing healthy owns the port", async () => {
+    // EADDRINUSE, but the probe finds no healthy argent peer (foreign holder,
+    // wedged server, or race already resolved) → still a genuine crash.
+    probeMock.probeArgentToolServer.mockResolvedValue(false);
 
-    start();
-
-    // Wait until the `.then` branch has run and registered the bind-error
-    // handler on the server, then simulate an EADDRINUSE bind failure.
-    await vi.waitFor(() => {
-      expect(serverMock.listenerCount("error")).toBeGreaterThan(0);
-    });
-    serverMock.emit(
-      "error",
+    await startAndEmitBindError(
       Object.assign(new Error("listen EADDRINUSE: address already in use 127.0.0.1:3001"), {
         code: "EADDRINUSE",
         syscall: "listen",
@@ -122,6 +143,8 @@ describe("tool-server bind-failure telemetry", () => {
     await vi.waitFor(() => {
       expect(telemetryMock.shutdown).toHaveBeenCalledWith(1500);
     });
+
+    expect(probeMock.probeArgentToolServer).toHaveBeenCalledWith("127.0.0.1", 3001);
 
     // The bind failure routes through crashShutdown: reason:"crash", phased as
     // "startup" (the listen callback never ran), with the syscall captured as
@@ -140,6 +163,58 @@ describe("tool-server bind-failure telemetry", () => {
       crash_fingerprint: expect.stringMatching(/^[0-9a-f]{16}$/),
       crash_phase: "startup",
     });
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("defers cleanly (exit 0, reason 'deferred', no crash fields) when a healthy argent peer owns the port", async () => {
+    probeMock.probeArgentToolServer.mockResolvedValue(true);
+
+    await startAndEmitBindError(
+      Object.assign(new Error("listen EADDRINUSE: address already in use 127.0.0.1:3001"), {
+        code: "EADDRINUSE",
+        syscall: "listen",
+      })
+    );
+
+    await vi.waitFor(() => {
+      expect(telemetryMock.shutdown).toHaveBeenCalledWith(1500);
+    });
+
+    expect(probeMock.probeArgentToolServer).toHaveBeenCalledWith("127.0.0.1", 3001);
+
+    // The redundant instance leaves the crash population entirely: a clean stop
+    // with its own distinct reason (not "signal", so a supervisor relaunch loop
+    // over deferrals stays identifiable), no failure signal, no crash
+    // diagnostics — asserted via exact object equality.
+    expect(telemetryMock.track).toHaveBeenCalledWith("toolserver:stop", {
+      reason: "deferred",
+      uptime_ms: expect.any(Number),
+      total_tool_calls: 0,
+    });
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(exitSpy).not.toHaveBeenCalledWith(1);
+  });
+
+  it("crashes without probing on a non-EADDRINUSE bind error", async () => {
+    await startAndEmitBindError(
+      Object.assign(new Error("listen EACCES: permission denied 127.0.0.1:3001"), {
+        code: "EACCES",
+        syscall: "listen",
+      })
+    );
+
+    await vi.waitFor(() => {
+      expect(telemetryMock.shutdown).toHaveBeenCalledWith(1500);
+    });
+
+    expect(probeMock.probeArgentToolServer).not.toHaveBeenCalled();
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "toolserver:stop",
+      expect.objectContaining({
+        reason: "crash",
+        error_syscall: "EACCES",
+      })
+    );
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });

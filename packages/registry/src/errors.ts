@@ -31,6 +31,7 @@ export const FAILURE_COMMANDS = [
   "android_devtools",
   "ax_service",
   "simulator_server",
+  "ffmpeg",
   "cdp",
   "electron",
   "npm",

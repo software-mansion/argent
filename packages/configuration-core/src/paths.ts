@@ -1,11 +1,20 @@
 import * as os from "node:os";
 import * as path from "node:path";
+import { resolveProjectRoot, type FlagScope } from "./flags.js";
 
 // Filesystem locations under the shared `~/.argent` home. These are general
 // (config.json holds telemetry consent, first-run notices, Lens preferences,
 // ...), so they live in configuration-core rather than any one consumer.
 // Telemetry-specific paths (the identity file, the debug log) stay in
 // `@argent/telemetry` and are built on top of `argentHomeDir`.
+
+/** Overrides for resolving config paths — used by tests to sandbox locations. */
+export interface ConfigPathOptions {
+  /** Directory to resolve the project root from (defaults to `process.cwd()`). */
+  cwd?: string;
+  /** Home directory for the global scope (defaults to HOME/USERPROFILE). */
+  homeDir?: string;
+}
 
 // Resolve at call time so tests can override HOME/USERPROFILE per case.
 function nonEmpty(value: string | undefined): string | null {
@@ -23,8 +32,29 @@ export function argentHomeDir(): string {
   return path.join(home, ".argent");
 }
 
-/** Shared config document (`~/.argent/config.json`). Holds several independent
- * keys — every writer must merge rather than overwrite (see `updateConfig`). */
-export function configFilePath(): string {
-  return path.join(argentHomeDir(), "config.json");
+/**
+ * The `.argent` directory for a config scope. `global` is `~/.argent`; `project`
+ * is `<project-root>/.argent`, where the root is resolved by walking up from
+ * `cwd` for a `.argent` / `.git` / `package.json` marker (same rule as flags).
+ */
+export function configDir(scope: FlagScope = "global", options: ConfigPathOptions = {}): string {
+  if (scope === "global") {
+    return options.homeDir ? path.join(options.homeDir, ".argent") : argentHomeDir();
+  }
+  const cwd = options.cwd ?? process.cwd();
+  return path.join(resolveProjectRoot(cwd), ".argent");
+}
+
+/**
+ * Shared config document for a scope. Defaults to the global
+ * `~/.argent/config.json` (backward-compatible with the no-arg callers); pass
+ * `"project"` for `<project-root>/.argent/config.json`. Holds several
+ * independent keys — every writer must merge rather than overwrite (see
+ * `updateConfig`).
+ */
+export function configFilePath(
+  scope: FlagScope = "global",
+  options: ConfigPathOptions = {}
+): string {
+  return path.join(configDir(scope, options), "config.json");
 }

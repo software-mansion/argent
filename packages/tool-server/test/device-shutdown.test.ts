@@ -11,6 +11,10 @@ const resolveDeviceMock = vi.fn();
 vi.mock("../src/utils/device-info", () => ({
   resolveDevice: (id: string) => resolveDeviceMock(id),
 }));
+const resolveAndroidBinaryMock = vi.fn();
+vi.mock("../src/utils/android-binary", () => ({
+  resolveAndroidBinary: (name: string) => resolveAndroidBinaryMock(name),
+}));
 
 import {
   shutdownOwnedDevice,
@@ -34,6 +38,7 @@ function execFails(message: string) {
 beforeEach(() => {
   execFileMock.mockReset();
   resolveDeviceMock.mockReset();
+  resolveAndroidBinaryMock.mockReset().mockResolvedValue("/sdk/platform-tools/adb");
   execSucceeds();
 });
 
@@ -48,8 +53,20 @@ describe("shutdownOwnedDevice (best-effort, swallows errors)", () => {
     );
   });
 
-  it("Android -> adb -s <serial> emu kill", async () => {
+  it("Android -> resolved adb -s <serial> emu kill", async () => {
     resolveDeviceMock.mockReturnValue({ platform: "android", kind: "emulator" });
+    await shutdownOwnedDevice("emulator-5554");
+    expect(resolveAndroidBinaryMock).toHaveBeenCalledWith("adb");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "/sdk/platform-tools/adb",
+      ["-s", "emulator-5554", "emu", "kill"],
+      expect.any(Function)
+    );
+  });
+
+  it('Android with unresolvable adb -> falls back to bare "adb"', async () => {
+    resolveDeviceMock.mockReturnValue({ platform: "android", kind: "emulator" });
+    resolveAndroidBinaryMock.mockResolvedValue(null);
     await shutdownOwnedDevice("emulator-5554");
     expect(execFileMock).toHaveBeenCalledWith(
       "adb",
@@ -98,9 +115,14 @@ describe("shutdownDevice (surfaces the outcome)", () => {
     );
   });
 
-  it("Android emulator -> ok:true and adb emu kill", async () => {
+  it("Android emulator -> ok:true and resolved adb emu kill", async () => {
     resolveDeviceMock.mockReturnValue({ platform: "android", kind: "emulator" });
     expect(await shutdownDevice("emulator-5554")).toEqual({ ok: true });
+    expect(execFileMock).toHaveBeenCalledWith(
+      "/sdk/platform-tools/adb",
+      ["-s", "emulator-5554", "emu", "kill"],
+      expect.any(Function)
+    );
   });
 
   it("physical Android device -> ok:false with a reason, no exec", async () => {

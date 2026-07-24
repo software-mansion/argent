@@ -4,9 +4,11 @@ import * as path from "node:path";
 import * as os from "node:os";
 import {
   FLAG_REGISTRY,
+  findProjectRoot,
   getFlagDefinition,
   getFlagsPath,
   isFlagEnabled,
+  isFeatureEnabled,
   readFlags,
   resolveProjectRoot,
   setFlag,
@@ -18,6 +20,7 @@ import {
 // test never depends on which flags ship in the production FLAG_REGISTRY.
 const TEST_REGISTRY: readonly FlagDefinition[] = [
   { name: "my-feature-flag", description: "Primary test flag." },
+  { name: "opt-out-flag", description: "On by default.", defaultEnabled: true },
 ];
 
 // All tests redirect global+project storage into tmp dirs by mutating
@@ -124,6 +127,24 @@ describe("resolveProjectRoot", () => {
     const nested = path.join(tmpProject, "sub");
     fs.mkdirSync(nested);
     expect(resolveProjectRoot(nested)).toBe(tmpProject);
+  });
+});
+
+describe("findProjectRoot", () => {
+  it("returns the marker directory when one exists", () => {
+    const nested = path.join(tmpProject, "a", "b");
+    fs.mkdirSync(nested, { recursive: true });
+    expect(findProjectRoot(nested)).toBe(tmpProject);
+  });
+
+  it("returns null when no marker exists in ancestry (unlike resolveProjectRoot)", () => {
+    const bare = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-flags-noroot-")));
+    try {
+      expect(findProjectRoot(bare)).toBeNull();
+      expect(resolveProjectRoot(bare)).toBe(bare);
+    } finally {
+      fs.rmSync(bare, { recursive: true, force: true });
+    }
   });
 });
 
@@ -293,5 +314,38 @@ describe("FLAG_REGISTRY / getFlagDefinition", () => {
       expect(def.name).toMatch(/^[a-zA-Z][a-zA-Z0-9._-]*$/);
       expect(def.description.trim().length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("opt-out (default-on) flags", () => {
+  it("isFlagEnabled honors a caller-supplied default for an unset flag", () => {
+    expect(isFlagEnabled("opt-out-flag")).toBe(false); // storage-only default is off
+    expect(isFlagEnabled("opt-out-flag", { default: true })).toBe(true);
+  });
+
+  it("isFeatureEnabled reads an unset opt-out flag as ON via its declared default", () => {
+    expect(isFeatureEnabled("opt-out-flag", {}, TEST_REGISTRY)).toBe(true);
+    // an opt-in flag (no defaultEnabled) still reads off when unset
+    expect(isFeatureEnabled("my-feature-flag", {}, TEST_REGISTRY)).toBe(false);
+  });
+
+  it("isFeatureEnabled reads an explicit false as OFF (the disable case)", () => {
+    setFlag("opt-out-flag", false, "global");
+    expect(isFeatureEnabled("opt-out-flag", {}, TEST_REGISTRY)).toBe(false);
+  });
+
+  it("isFeatureEnabled reads an explicit true as ON", () => {
+    setFlag("opt-out-flag", true, "global");
+    expect(isFeatureEnabled("opt-out-flag", {}, TEST_REGISTRY)).toBe(true);
+  });
+
+  it("project scope overrides the ON default for an opt-out flag", () => {
+    setFlag("opt-out-flag", false, "project");
+    expect(isFeatureEnabled("opt-out-flag", {}, TEST_REGISTRY)).toBe(false);
+  });
+
+  it("the shipped video-watermark flag is declared opt-out (on by default)", () => {
+    expect(getFlagDefinition("video-watermark")?.defaultEnabled).toBe(true);
+    expect(isFeatureEnabled("video-watermark")).toBe(true); // unset ⇒ on
   });
 });

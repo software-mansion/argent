@@ -16,6 +16,17 @@ import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 const DEGRADED_HINT =
   "This simulator was not booted through argent — system dialogs and native modals may not appear. You MUST call boot-device with force=true now to restart the simulator and apply full accessibility settings before continuing.";
 
+// The ios-remote (sim-remote) path needs the TCP-transport ax-service binary and
+// dylibs, which are shipped/built separately and can be absent in a local or old
+// build. When they are, the ax-service factory throws a "TCP-transport ... not
+// found" error that has nothing to do with the simulator's boot state — so
+// steer clear of DEGRADED_HINT (which tells the agent to force-reboot, a dead
+// end here) and surface the resolver's actionable message verbatim instead.
+function tcpArtifactHint(err: unknown): string | undefined {
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return /TCP-transport (?:binary|dylib) not found/.test(message) ? message : undefined;
+}
+
 // tvOS classifies as platform "ios" by UDID shape. The `describe` tool routes
 // TV targets to the focus-driven `describeTv` before this iOS branch runs, so
 // the short-circuit below is only reached by internal callers that invoke
@@ -93,11 +104,13 @@ export async function describeIos(
     const response = await axApi.describe();
     tree = adaptAXDescribeToDescribeResult(response);
     hint = axApi.degraded ? DEGRADED_HINT : undefined;
-  } catch {
+  } catch (err) {
     // ax-service failed to start or timed out — treat as degraded with an
-    // empty tree so we still attempt the native-devtools fallback below.
+    // empty tree so we still attempt the native-devtools fallback below. A
+    // missing TCP-transport artifact (ios-remote) is a config error, not a boot
+    // state one: surface its actionable message instead of the reboot hint.
     tree = emptyTree();
-    hint = DEGRADED_HINT;
+    hint = tcpArtifactHint(err) ?? DEGRADED_HINT;
   }
 
   if (tree.children.length > 0) {

@@ -95,6 +95,7 @@ Commands:
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
+  config      Manage configuration (list / get / set / unset, project & global)
   telemetry   Manage opt-out telemetry (status / enable / disable)
 
 Options:
@@ -163,6 +164,8 @@ async function main(): Promise<void> {
       return (await loadCli()).disable(rest);
     case "flags":
       return (await loadCli()).flags(rest);
+    case "config":
+      return (await loadCli()).config(rest);
     case "telemetry":
       return (await loadCli()).telemetry(rest);
     case "--version":

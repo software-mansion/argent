@@ -1,0 +1,299 @@
+name: Publish npm package
+
+# Unified npm publishing workflow — successor to publish.yml ("Publish to npm")
+# and publish-next.yml ("Publish prerelease to npm (next)"). Merging them into
+# one file is a prerequisite for npm trusted publishing, which registers a
+# single workflow filename as the package's trusted publisher.
+#
+# Modes (derived from the trigger + the ref's version, never spelled twice):
+#
+#   push to main       → canary: version derived + stamped (<base>-next.<k>),
+#                        published under the `next` dist-tag. Gated behind the
+#                        PUBLISH_NPM_UNIFIED repository variable (=1 since the
+#                        2026-07 cutover; unsetting it is the canary
+#                        kill-switch — manual dispatches keep working).
+#   workflow_dispatch  → publishes the ref's package.json version verbatim.
+#                        The dist-tag is derived from the version itself:
+#                          prerelease (has a "-IDENTIFIER" suffix) → `next`
+#                          stable                                  → `latest`
+#                        The optional `channel` input is an assertion, not a
+#                        selector: the run fails if the ref's version doesn't
+#                        land on the channel you expected. `dry_run` exercises
+#                        the full build + bundle verification without publishing.
+#                        Note dry_run only rehearses the dispatch path — the
+#                        canary machinery (version stamping, --version check,
+#                        collision retry) was copied verbatim from the retired
+#                        publish-next.yml.
+#
+# Provenance / trusted publishing:
+#   THIS file (publish-npm.yml) is registered on npmjs.com as the npm Trusted
+#   Publisher for @swmansion/argent (registered 2026-07-24, verified with the
+#   v0.17.1-next.1 publish): npm's OIDC exchange authenticates the publish —
+#   no npm token is involved. The job has `id-token: write` and publishes with
+#   --provenance, so every release carries a provenance attestation (the repo
+#   is public and package.json's `repository.url` matches, which is what the
+#   registry verifies). NPM_TOKEN remains as a repo secret only for
+#   sync-next-tag.yml, which mutates dist-tags — OIDC only covers publishing.
+#   Renaming or moving this file breaks publishing until the trusted-publisher
+#   registration on npmjs.com is updated to match.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to publish (e.g. v0.17.0 or v0.17.0-next.0)"
+        required: true
+        type: string
+      channel:
+        description: "Expected dist-tag; 'auto' derives it from the version (prerelease → next, stable → latest), an explicit value makes the run fail on a mismatch"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - latest
+          - next
+      dry_run:
+        description: "Build and verify the bundle, but skip npm publish"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  # Serialize canary publishes: the per-base counter is derived from the
+  # registry (next index after the highest published `<base>-next.<k>`), so two
+  # overlapping runs could otherwise read the same index and collide on npm.
+  # Manual dispatches get their own lane. Never cancel an in-flight publish.
+  group: publish-npm-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # PUBLISH_NPM_UNIFIED originally kept canary-on-push dormant while this
+    # workflow coexisted with the old publish-next.yml; post-cutover it serves
+    # as the canary kill-switch. Manual dispatches always run.
+    if: github.event_name == 'workflow_dispatch' || vars.PUBLISH_NPM_UNIFIED == '1'
+    permissions:
+      contents: read
+      id-token: write # npm provenance attestation + trusted-publishing OIDC exchange
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # push → the pushed commit; dispatch → the requested ref.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@swmansion"
+
+      # Trusted publishing needs npm >= 11.5.1; pin the major instead of
+      # trusting whatever Node 24 happens to bundle on the runner image.
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+
+      # One derivation point for everything mode-dependent: the publish mode,
+      # the dist-tag, and which signed-binaries release tag to download from.
+      # inputs.ref reaches the script through env, never template interpolation —
+      # this file is the trusted publisher, so a crafted ref name must stay data.
+      - name: Resolve publish mode
+        id: mode
+        env:
+          REF: ${{ inputs.ref }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Canary builds source the floating main build of the signed
+            # binaries; the version is derived + stamped later, at publish time.
+            echo "mode=canary" >> "$GITHUB_OUTPUT"
+            echo "dist_tag=next" >> "$GITHUB_OUTPUT"
+            echo "binaries_tag=argent-main" >> "$GITHUB_OUTPUT"
+          else
+            VERSION=$(node -p "require('./packages/argent/package.json').version")
+            case "$VERSION" in
+              *-*) DERIVED=next ;;
+              *)   DERIVED=latest ;;
+            esac
+            if [ "$CHANNEL" != "auto" ] && [ "$CHANNEL" != "$DERIVED" ]; then
+              echo "::error::Version '$VERSION' at ref '$REF' belongs on the '$DERIVED' dist-tag, but channel '$CHANNEL' was requested. Pick the ref matching the channel you meant (or leave channel on 'auto')." >&2
+              exit 1
+            fi
+            echo "Resolved version: $VERSION → dist-tag '$DERIVED'"
+            echo "mode=dispatch" >> "$GITHUB_OUTPUT"
+            echo "dist_tag=$DERIVED" >> "$GITHUB_OUTPUT"
+            echo "binaries_tag=argent-${REF//\//-}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download signed simulator-server binary
+        run: bash scripts/download-simulator-server.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download signed native binaries (dylibs, ax-service, Android helper APK)
+        run: bash scripts/download-native-binaries.sh "$BINARIES_TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BINARIES_TAG: ${{ steps.mode.outputs.binaries_tag }}
+
+      - name: Download Perfetto trace-processor WASM artifacts
+        run: bash scripts/download-trace-processor.sh "$BINARIES_TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BINARIES_TAG: ${{ steps.mode.outputs.binaries_tag }}
+
+      - run: npm ci
+
+      - run: npx tsc --build
+
+      - run: npm run build -w @swmansion/argent
+
+      # Per-platform bundle layout (commit 80e724a). darwin is always required;
+      # both Linux keys (x86_64 "linux" and arm64 "linux-arm64") are gated by
+      # ARGENT_REQUIRE_LINUX_BINARY so the existing release pipeline keeps
+      # working until radon's Linux artifacts are reliably present — flip the
+      # env var to "1" once that lands. win32 is gated the same way: it needs
+      # radon's Windows argent build (radon PR #134) merged plus one
+      # build-sim-server dispatch to publish the asset. The inventory always
+      # logs every platform so a silently-missing binary shows up in the run.
+      - name: Verify per-platform simulator-server binaries
+        env:
+          ARGENT_REQUIRE_LINUX_BINARY: "0"
+          ARGENT_REQUIRE_WINDOWS_BINARY: "0"
+        run: |
+          set -e
+          missing=0
+          echo "simulator-server inventory:"
+          for plat in darwin linux linux-arm64 win32; do
+            bin="simulator-server"
+            if [[ "$plat" == "win32" ]]; then bin="simulator-server.exe"; fi
+            p="packages/argent/bin/${plat}/${bin}"
+            if [[ -x "$p" ]]; then
+              size=$(wc -c <"$p")
+              echo "  ✓ ${plat}: ${p} (${size} bytes; $(file -b "$p"))"
+            else
+              echo "  ✗ ${plat}: ${p} — missing"
+              if [[ "$plat" == "darwin" ]]; then missing=1; fi
+              if [[ "$plat" == linux* && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
+              if [[ "$plat" == "win32" && "${ARGENT_REQUIRE_WINDOWS_BINARY}" == "1" ]]; then missing=1; fi
+            fi
+          done
+          [[ "$missing" == "0" ]] || { echo "::error::required simulator-server binary missing"; exit 1; }
+      - run: test -x packages/argent/bin/darwin/ax-service
+      - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      # tvOS (Apple TV) binaries — fail the publish if any is missing rather
+      # than silently shipping a package where tv-* tools crash at runtime.
+      - run: test -x packages/argent/bin/darwin/tvos-ax-service
+      - run: test -x packages/argent/bin/darwin/tvos-hid-daemon
+      - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
+      # TCP-transport (sim-remote / ios-remote) binaries — the ax-service and
+      # native-devtools variants the remote code path spawns/injects over a
+      # sim-remote-tunnelled TCP socket. Absent from 0.15.0 because the release
+      # never built them; gate the publish so they can't silently regress again.
+      # (bin/tcp is platform-NEUTRAL — axServiceBinaryPathTcp() resolves
+      # bin/tcp on every host, never a bin/<platform>/tcp subdir.)
+      - run: test -x packages/argent/bin/tcp/ax-service
+      - run: test -f packages/argent/dylibs/tcp/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/tcp/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/tcp/libArgentInjectionBootstrap.dylib
+      - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
+      - run: test -d packages/argent/assets/queries
+      - run: test -f packages/argent/assets/manifest.json
+      - run: test -f packages/argent/assets/trace-processor/trace_processor.wasm
+      - run: test -f packages/argent/assets/trace-processor/engine_bundle.node.js
+      - run: test -f packages/argent/assets/trace-processor/engine.mjs
+      - run: test -f packages/argent/assets/trace-processor/LICENSE
+      - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
+      - run: ls packages/argent/bin/argent-android-devtools-*.apk
+
+      # Canary version: <patch-bump of highest published>-next.<counter>, where
+      # the counter resets to 0 per base and increments per publish (derived
+      # from the registry). Stamped into package.json so the published build
+      # reports it. Done after `npm ci` (the checked-out lockfile still matches
+      # the original version at install time) and after the build (the CLI reads
+      # its version from package.json at runtime — nothing bakes it in), but
+      # before pack/publish.
+      - name: Compute and stamp canary version
+        if: steps.mode.outputs.mode == 'canary'
+        id: canary
+        run: |
+          VERSION="$(node scripts/next-canary-version.mjs --write)"
+          echo "Canary version: ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # The shipped CLI reads its version from package.json at runtime, so this
+      # is exactly what `argent --version` prints after install. Fail loudly if
+      # they ever diverge.
+      - name: Verify argent --version reports the canary version
+        if: steps.mode.outputs.mode == 'canary'
+        run: |
+          REPORTED="$(node packages/argent/dist/cli.js --version)"
+          EXPECTED="${{ steps.canary.outputs.version }}"
+          echo "argent --version → ${REPORTED} (expected ${EXPECTED})"
+          [ "${REPORTED}" = "${EXPECTED}" ] || { echo "::error::argent --version (${REPORTED}) != published version (${EXPECTED})"; exit 1; }
+
+      - run: npm pack --dry-run -w @swmansion/argent
+
+      - name: Dry run — skipping publish
+        if: steps.mode.outputs.mode == 'dispatch' && inputs.dry_run
+        run: |
+          VERSION=$(node -p "require('./packages/argent/package.json').version")
+          echo "dry_run: would have published ${VERSION} under dist-tag '${{ steps.mode.outputs.dist_tag }}'"
+          echo "Dry run — **not** published: \`@swmansion/argent@${VERSION}\` (dist-tag \`${{ steps.mode.outputs.dist_tag }}\`)" >> "$GITHUB_STEP_SUMMARY"
+
+      # Dispatch publishes the ref's verbatim version on its derived dist-tag.
+      - name: Publish
+        if: steps.mode.outputs.mode == 'dispatch' && !inputs.dry_run
+        run: npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance
+        env:
+          DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
+
+      # Canary publish. Serialization makes concurrent index collisions
+      # impossible, but npm's read-after-write lag could still hand a back-to-back
+      # run a stale version list, so retry a version-exists collision by
+      # recomputing + restamping. Any other publish failure is real and fails fast.
+      - name: Publish canary
+        if: steps.mode.outputs.mode == 'canary'
+        env:
+          DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
+        run: |
+          for attempt in 1 2 3; do
+            VERSION="$(node -p "require('./packages/argent/package.json').version")"
+            echo "Publishing ${VERSION} (attempt ${attempt})"
+            if npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance; then
+              echo "Published ${VERSION}"
+              exit 0
+            fi
+            if npm view "@swmansion/argent@${VERSION}" version >/dev/null 2>&1; then
+              echo "::warning::${VERSION} already on npm (lost a race / stale read) — recomputing"
+              node scripts/next-canary-version.mjs --write
+              sleep 10
+            else
+              echo "::error::npm publish failed for ${VERSION} (not a version collision)"
+              exit 1
+            fi
+          done
+          echo "::error::canary publish still colliding after 3 attempts"
+          exit 1
+
+      - name: Publish summary
+        if: success() && !(steps.mode.outputs.mode == 'dispatch' && inputs.dry_run)
+        run: |
+          VERSION=$(node -p "require('./packages/argent/package.json').version")
+          echo "Published \`@swmansion/argent@${VERSION}\` under dist-tag \`${{ steps.mode.outputs.dist_tag }}\` (with provenance)" >> "$GITHUB_STEP_SUMMARY"
+
+      # `npm publish --tag` already tags this release. Re-pointing `next` at
+      # the highest published version (and self-healing it if it was left
+      # stale) is handled by the "Sync 'next' dist-tag" workflow, which runs
+      # automatically once this workflow succeeds.

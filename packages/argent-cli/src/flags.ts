@@ -163,7 +163,12 @@ function runToggle(
   try {
     if (command === "enable") {
       setFlag(parsed.name, true, parsed.scope);
+    } else if (getFlagDefinition(parsed.name, registry)?.defaultEnabled) {
+      // Opt-out flag (on by default): persist an explicit `false` so the
+      // feature actually turns off. Unsetting would revert it to its ON default.
+      setFlag(parsed.name, false, parsed.scope);
     } else {
+      // Opt-in flag: clear the entry back to its off default.
       unsetFlag(parsed.name, parsed.scope);
     }
   } catch (err) {
@@ -218,7 +223,8 @@ Options:
     return {
       name: def.name,
       description: def.description,
-      enabled: eff?.value ?? false,
+      // An unset opt-out flag reads as on (its declared default).
+      enabled: eff?.value ?? def.defaultEnabled ?? false,
       scope: eff?.scope ?? null,
     };
   });

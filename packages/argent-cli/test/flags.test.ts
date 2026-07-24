@@ -22,6 +22,11 @@ const TEST_REGISTRY: readonly FlagDefinition[] = [
   { name: "x", description: "Round-trip test flag." },
   { name: "a", description: "Listing flag A." },
   { name: "b", description: "Listing flag B." },
+  {
+    name: "opt-out-flag",
+    description: "On by default; disable persists off.",
+    defaultEnabled: true,
+  },
 ];
 
 // All tests redirect global+project storage into tmp dirs by mutating
@@ -131,6 +136,29 @@ describe("enable / disable CLI", () => {
     const out = captureConsole(() => disable(["never-set"]));
     expect(out.stdout).toContain('Disabled flag "never-set" (global)');
     expect(readFlags("global")).toEqual({});
+  });
+
+  it("disable persists an explicit false for an opt-out flag (not a no-op unset)", () => {
+    // An opt-out flag is on by default, so `disable` must write `false` — an
+    // unset would just revert it to its on default.
+    const out = captureConsole(() => disable(["opt-out-flag"], TEST_REGISTRY));
+    expect(out.stdout).toContain('Disabled flag "opt-out-flag" (global)');
+    expect(readFlags("global")).toEqual({ "opt-out-flag": false });
+    expect(isFlagEnabled("opt-out-flag")).toBe(false);
+  });
+
+  it("enable then disable on an opt-out flag round-trips true → false", () => {
+    captureConsole(() => enable(["opt-out-flag"], TEST_REGISTRY));
+    expect(readFlags("global")).toEqual({ "opt-out-flag": true });
+    captureConsole(() => disable(["opt-out-flag"], TEST_REGISTRY));
+    expect(readFlags("global")).toEqual({ "opt-out-flag": false });
+  });
+
+  it("the shipped `argent disable video-watermark` writes false", () => {
+    // Uses the production FLAG_REGISTRY (no injected registry) — the real UX.
+    const out = captureConsole(() => disable(["video-watermark"]));
+    expect(out.stdout).toContain('Disabled flag "video-watermark" (global)');
+    expect(readFlags("global")).toEqual({ "video-watermark": false });
   });
 
   it("--scope project targets project storage", () => {

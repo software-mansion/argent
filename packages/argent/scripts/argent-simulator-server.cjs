@@ -21,11 +21,16 @@ const fs = require("node:fs");
 const platformKey =
   process.platform === "linux" && process.arch === "arm64" ? "linux-arm64" : process.platform;
 
-const binary = path.join(__dirname, platformKey, "simulator-server");
+// PE `.exe` on Windows, extensionless ELF/Mach-O elsewhere. Mirrors
+// simulatorServerBinaryName() in @argent/native-devtools-ios; inlined because
+// this file ships verbatim as the npm `bin` entry and can't import.
+const binaryName = process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
+
+const binary = path.join(__dirname, platformKey, binaryName);
 if (!fs.existsSync(binary)) {
   console.error(
     `argent-simulator-server: no binary for platform "${platformKey}" at ${binary}.\n` +
-      `Supported hosts today: darwin, linux (x86_64 and arm64).`
+      `Supported hosts today: darwin, linux (x86_64 and arm64), win32.`
   );
   process.exit(1);
 }

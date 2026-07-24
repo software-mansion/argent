@@ -9,13 +9,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const execFileMock = vi.fn(
   (
-    _cmd: string,
-    _args: readonly string[],
+    cmd: string,
+    args: readonly string[],
     opts: unknown,
     cb?: (err: Error | null, out: { stdout: string; stderr: string }) => void
   ) => {
     const callback = typeof opts === "function" ? opts : cb!;
-    callback(null, { stdout: "", stderr: "" });
+    // A host-binary dependency probe (`command -v <name>` via /bin/sh, or
+    // `where <name>` on Windows) resolves through `commandOnPath`, which treats
+    // EMPTY stdout as "not on PATH". So a probe must echo a path for the dep to
+    // count as available; other execFile calls (simctl launch/terminate) don't
+    // consume stdout in these tests.
+    const isProbe =
+      (cmd === "/bin/sh" && typeof args[1] === "string" && args[1].startsWith("command -v ")) ||
+      cmd === "where";
+    callback(null, { stdout: isProbe ? "/usr/bin/probe\n" : "", stderr: "" });
   }
 );
 

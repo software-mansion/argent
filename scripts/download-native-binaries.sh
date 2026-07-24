@@ -118,17 +118,20 @@ fi
 # dylibs over a TCP socket tunnelled by sim-remote, rather than the AF_UNIX
 # sockets the local path uses — so it needs -DARGENT_USE_TCP=1 builds kept in a
 # separate tcp/ slot (axServiceBinaryPathTcp()/bootstrapDylibPathTcp() read from
-# bin/darwin/tcp/ and dylibs/tcp/). Like the tvOS dylibs, the three TCP dylibs
-# share basenames with the flat iOS dylibs, so they ship as a tarball extracted
-# into dylibs/tcp/; tcp-ax-service has a unique release name and lands flat as
-# bin/darwin/tcp/ax-service.
+# bin/tcp/ and dylibs/tcp/). Both are platform-NEUTRAL: these are darwin/iOS-sim
+# artifacts uploaded to and run on the *remote* macOS orchestrator, so they must
+# resolve from any host platform (a Linux host must not look under bin/linux/).
+# Like the tvOS dylibs, the three TCP dylibs share basenames with the flat iOS
+# dylibs, so they ship as a tarball extracted into dylibs/tcp/; tcp-ax-service
+# has a unique release name and lands flat as bin/tcp/ax-service.
 #
 # These assets only exist on releases built with TCP support. A pre-sim-remote
 # tag simply has no TCP artifacts, so a missing asset is skipped with a warning
 # rather than aborting the whole download (`gh release download` exits non-zero
 # on no match, which under `set -e` would otherwise leave a half-populated tree).
 TCP_DYLIBS_DIR="${DYLIBS_DIR}/tcp"
-TCP_BIN_DIR="${IOS_BIN_DIR}/tcp"
+# Platform-neutral (bin/tcp, not bin/darwin/tcp): see the comment above.
+TCP_BIN_DIR="${BIN_DIR}/tcp"
 mkdir -p "${TCP_DYLIBS_DIR}" "${TCP_BIN_DIR}"
 
 echo "  Downloading TCP dylibs..."

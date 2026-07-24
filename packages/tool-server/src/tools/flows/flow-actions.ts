@@ -24,6 +24,20 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
 import {
+  buildAxisCandidate,
+  decomposePinch,
+  selectPinchCandidate,
+  systemEdgeGuards,
+  PINCH_SETTLE_MS,
+  type PinchCandidate,
+} from "./flow-pinch-geometry";
+import {
+  buildRotateCandidate,
+  deriveRotateDurationMs,
+  selectRotateCandidate,
+  type RotateCandidate,
+} from "./flow-rotate-geometry";
+import {
   describeSelector,
   describeTextExpectation,
   type FlowSelector,
@@ -72,7 +86,7 @@ export const ABORTED_OUTCOME: DirectiveOutcome = {
 /** The selector-acting steps {@link runDirective} handles. */
 export type DirectiveStep = Extract<
   FlowStep,
-  { kind: "tap" | "long-press" | "type" | "await" | "assert" | "scroll-to" }
+  { kind: "tap" | "long-press" | "type" | "await" | "assert" | "scroll-to" | "pinch" | "rotate" }
 >;
 
 /** Dispatch a tool with the run's resolved device id bound into its args. */
@@ -578,7 +592,7 @@ function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
 }
 
-/** Execute one selector-acting directive (`tap` / `long-press` / `type` / `await` / `assert` / `scroll-to`). */
+/** Execute one selector-acting directive (`tap` / `long-press` / `type` / `await` / `assert` / `scroll-to` / `pinch` / `rotate`). */
 export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
   // Vega is remote-driven — there is no touch input, so the touch directives
   // can never act on it. Fail upfront with authoring guidance instead of a
@@ -588,11 +602,25 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     (step.kind === "tap" ||
       step.kind === "long-press" ||
       step.kind === "type" ||
-      step.kind === "scroll-to")
+      step.kind === "scroll-to" ||
+      step.kind === "pinch" ||
+      step.kind === "rotate")
   ) {
     return {
       ok: false,
       reason: `${step.kind} is a touch directive and Vega is remote-driven — move focus with \`tool: tv-remote\` steps (and type via \`tool: keyboard\`) instead`,
+    };
+  }
+  // Chromium: not "no backend" — CDP can dispatch two-finger touch, but a
+  // mouse-driven desktop app has no uniform pinch-zoom mapping (and no
+  // rotate-gesture idiom at all) for it to hit.
+  if ((step.kind === "pinch" || step.kind === "rotate") && env.device.platform === "chromium") {
+    return {
+      ok: false,
+      reason:
+        step.kind === "pinch"
+          ? "pinch is unsupported on chromium — desktop apps have no uniform pinch-zoom mapping (they zoom via ctrl+wheel or their own controls); drive the app's zoom UI with tap/keyboard instead"
+          : "rotate is unsupported on chromium — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead",
     };
   }
   switch (step.kind) {
@@ -611,6 +639,10 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
       if (r.aborted) return ABORTED_OUTCOME;
       return { ok: Boolean(r.frame), reason: r.reason };
     }
+    case "pinch":
+      return runPinch(env, step);
+    case "rotate":
+      return runRotate(env, step);
   }
 }
 
@@ -696,6 +728,167 @@ async function runLongPress(
         { type: "Up", x: point.x, y: point.y, delayMs: duration },
       ],
     });
+  }
+  return { ok: true };
+}
+
+/**
+ * Pinch-zoom by `scale` centered on a selector's frame (settled tree +
+ * auto-wait, like tap) or on the screen center when no selector is given. The
+ * scale decomposes into equal-ratio sub-gestures chained with a recognizer
+ * reset delay; per sub-gesture, a horizontal and a vertical candidate are
+ * built from the axis-matching frame dimension and the better one dispatched
+ * (see flow-pinch-geometry). Open-loop by design: there is no "current zoom"
+ * to read back, so flows assert on the result, not the multiplier.
+ */
+async function runPinch(
+  env: ActionEnv,
+  step: { selector?: FlowSelector; scale: number }
+): Promise<DirectiveOutcome> {
+  let center = { x: 0.5, y: 0.5 };
+  let frame: DescribeFrame | undefined;
+  if (step.selector) {
+    const resolved = await waitForFrame(env, step.selector);
+    if (resolved === "aborted") return ABORTED_OUTCOME;
+    if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
+    frame = resolved;
+    center = getDescribeTapPoint(resolved);
+  }
+
+  const { n, per } = decomposePinch(step.scale);
+  // Guards are resolved exactly once per directive; geometry only ever
+  // receives them as data (the seam for a future per-device query).
+  const guards = systemEdgeGuards(env.device);
+  const candidates = [
+    buildAxisCandidate({ angle: 0, center, targetSpan: frame?.width, per, guards }),
+    buildAxisCandidate({ angle: 90, center, targetSpan: frame?.height, per, guards }),
+  ].filter((c): c is PinchCandidate => c !== undefined);
+  const selected = selectPinchCandidate(candidates);
+  if (!selected) {
+    // The only geometry failure: literally no room to move the fingers —
+    // never "target too small" (a tiny target is still attempted).
+    return {
+      ok: false,
+      reason: `pinch found no on-screen finger travel around (${center.x}, ${center.y})`,
+    };
+  }
+
+  const args: Record<string, unknown> = {
+    centerX: center.x,
+    centerY: center.y,
+    startDistance: selected.start,
+    endDistance: selected.end,
+    angle: selected.angle,
+  };
+  // Centroid drift rides the gesture only on the moving axis, and only when
+  // the clamp actually moved it.
+  const startCenter = selected.angle === 0 ? center.x : center.y;
+  if (selected.endCenter !== startCenter) {
+    args[selected.angle === 0 ? "endCenterX" : "endCenterY"] = selected.endCenter;
+  }
+
+  for (let i = 0; i < n; i++) {
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
+    await invokeOnDevice(env, "gesture-pinch", args);
+    if (i < n - 1 && !(await sleepOrAbort(PINCH_SETTLE_MS, env.signal))) return ABORTED_OUTCOME;
+  }
+  return { ok: true };
+}
+
+/**
+ * Best-effort screen aspect (width / height) for the rotate directive's
+ * physical-circle geometry. One dedicated tree read instead of threading
+ * dimensions through settleTree/waitForFrame: the settle loop already reads
+ * the tree several times per step, so the extra fetch is noise, and the
+ * resolution path every other directive shares stays untouched.
+ */
+async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
+  try {
+    const { screen } = await fetchFlowTree(env.registry, env.device);
+    return screen && screen.width > 0 && screen.height > 0
+      ? screen.width / screen.height
+      : undefined;
+  } catch {
+    return undefined; // fail soft: the caller falls back to the legacy ellipse
+  }
+}
+
+/**
+ * Rotate by `by` degrees (+ clockwise) about a selector's frame centre
+ * (settled tree + auto-wait, like tap) or the screen centre. One continuous
+ * gesture — fingers orbit the fixed centroid at a constant physical radius,
+ * so any angle dispatches without decomposition or settle delays, and the
+ * angular delta is exact with zero pan/pinch coupling. The initial finger
+ * axis is the safer of horizontal and vertical (see flow-rotate-geometry);
+ * duration derives from the angle at the fixed ~90°/300ms pace — `by` is
+ * bounded at parse. NOT the `rotate` tool — that changes device orientation.
+ */
+async function runRotate(
+  env: ActionEnv,
+  step: { selector?: FlowSelector; by: number }
+): Promise<DirectiveOutcome> {
+  let center = { x: 0.5, y: 0.5 };
+  let frame: DescribeFrame | undefined;
+  if (step.selector) {
+    const resolved = await waitForFrame(env, step.selector);
+    if (resolved === "aborted") return ABORTED_OUTCOME;
+    if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
+    frame = resolved;
+    center = getDescribeTapPoint(resolved);
+  }
+
+  // Unknown aspect (source without dimensions, or a failed read) degrades to
+  // aspect 1: the legacy normalized-space orbit — a physical ellipse — rather
+  // than a hard error.
+  const aspect = await fetchScreenAspect(env);
+
+  // Guards are resolved exactly once per directive; geometry only ever
+  // receives them as data (the seam for a future per-device query).
+  const guards = systemEdgeGuards(env.device);
+  const candidates = [
+    buildRotateCandidate({
+      startAngle: 0,
+      center,
+      targetSpan: frame?.width,
+      guards,
+      aspect: aspect ?? 1,
+    }),
+    buildRotateCandidate({
+      startAngle: 90,
+      center,
+      targetSpan: frame?.height,
+      guards,
+      aspect: aspect ?? 1,
+    }),
+  ].filter((c): c is RotateCandidate => c !== undefined);
+  const selected = selectRotateCandidate(candidates);
+  if (!selected) {
+    // The only geometry failure: no positive on-screen orbit radius — never
+    // "target too small" (a tiny target is still attempted).
+    return {
+      ok: false,
+      reason: `rotate found no on-screen orbit radius around (${center.x}, ${center.y})`,
+    };
+  }
+
+  if (env.signal?.aborted) return ABORTED_OUTCOME;
+  try {
+    await invokeOnDevice(env, "gesture-rotate", {
+      centerX: center.x,
+      centerY: center.y,
+      ...(aspect === undefined
+        ? { radius: selected.radiusX }
+        : { radiusX: selected.radiusX, radiusY: selected.radiusY }),
+      startAngle: selected.startAngle,
+      // endAngle > startAngle = clockwise in the tool, matching +by.
+      endAngle: selected.startAngle + step.by,
+      durationMs: deriveRotateDurationMs(step.by),
+    });
+  } catch (err) {
+    // The tool rejects when cancelled mid-gesture; per ABORTED_OUTCOME that must
+    // read as an aborted skip, never a step failure with the tool's message.
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
+    throw err;
   }
   return { ok: true };
 }

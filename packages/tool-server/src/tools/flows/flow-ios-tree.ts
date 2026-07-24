@@ -197,6 +197,18 @@ function projectIosNode(
  * would otherwise have hidden.
  */
 export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
+  return adaptFullHierarchy(raw).tree;
+}
+
+/**
+ * Like {@link adaptFullHierarchyToDescribeResult}, but also reports the screen
+ * size (points) the frames were normalized against — the rotate directive's
+ * physical-circle geometry needs the aspect ratio.
+ */
+export function adaptFullHierarchy(raw: unknown): {
+  tree: DescribeNode;
+  screen?: { width: number; height: number };
+} {
   const windows =
     typeof raw === "object" && raw !== null && Array.isArray((raw as { windows?: unknown }).windows)
       ? (raw as { windows: unknown[] }).windows
@@ -223,11 +235,14 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
     }
   }
 
-  return parseDescribeResult({
+  const tree = parseDescribeResult({
     role: "AXGroup",
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children,
   });
+  return screenW > 0 && screenH > 0
+    ? { tree, screen: { width: screenW, height: screenH } }
+    : { tree };
 }
 
 // ── Fetch ────────────────────────────────────────────────────────────────────
@@ -290,7 +305,8 @@ export async function queryFullHierarchyTree(
     throw new Error(`getFullHierarchy failed for ${target.bundleId}: ${rawResult.error}`);
   }
 
-  return { tree: adaptFullHierarchyToDescribeResult(rawResult), source: "native-devtools" };
+  const { tree, screen } = adaptFullHierarchy(rawResult);
+  return { tree, source: "native-devtools", ...(screen ? { screen } : {}) };
 }
 
 function errMsg(err: unknown): string {

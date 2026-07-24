@@ -12,3 +12,6 @@ pnpm-lock.yaml
 # Generated.
 **/tsconfig.tsbuildinfo
 scripts/e2e-full/results/
+
+# Assets Prettier has no parser for.
+**/*.svg

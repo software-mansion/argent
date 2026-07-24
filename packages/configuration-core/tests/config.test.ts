@@ -3,13 +3,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { argentHomeDir, configFilePath } from "../src/paths.js";
+import { readConfigObject, updateConfig } from "../src/config.js";
 import {
-  readConfigObject,
-  updateConfig,
   getRememberedAgent,
   setRememberedAgent,
   clearRememberedAgent,
-} from "../src/config.js";
+} from "../src/config-access.js";
 
 // Redirect the `~/.argent` home into a tmp dir by mutating process.env.HOME
 // (consumed by os.homedir() via argentHomeDir).

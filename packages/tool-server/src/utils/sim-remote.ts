@@ -167,6 +167,12 @@ export async function simctlSpawn(
   const cmd = ["spawn", stripRemotePrefix(udid)];
   if (opts.binPath) cmd.push("--bin", opts.binPath);
   if (opts.detach) cmd.push("--detach");
+  // Force the one-shot `{exit_code,stdout,stderr}` (or `{pid}` when detached)
+  // JSON object. Without `--json`, a non-detached `sim-remote spawn` streams the
+  // child's raw output live, which we then fail to `JSON.parse` below. `--detach`
+  // happens to emit JSON regardless, but the non-detached callers (bootstrapAx's
+  // `defaults write`, listRunningBundleIds' `launchctl list`) need this flag.
+  cmd.push("--json");
   const args = opts.args ?? [];
   if (args.length > 0) cmd.push("--", ...args);
   // Uploading a binary can take a moment; allow more than the default.
