@@ -134,13 +134,18 @@ describe("hidden timeout diagnostics", () => {
   });
 
   it("does not pass a hidden assert when the element was NEVER seen and the tree source is dark", async () => {
-    // The repro that motivated the flow-ios-tree no-windows guard: a
-    // non-injectable target (an Apple system app — library validation) yields a
-    // tree source that cannot read the hierarchy. The element is never seen at
-    // all, so `everMatched` never flips and the blind-read guard's
-    // everMatched-only backstop can't catch it. The source therefore throws on a
-    // no-windows read: every fetch rejects, so the assert reports the outage
-    // instead of taking an empty tree as proof the element is gone.
+    // The runner's half of the no-windows fix: a `hidden` assert whose element
+    // is NEVER seen, so `everMatched` never flips and the blind-read guard's
+    // everMatched-only backstop can't catch it — the only defense is the tree
+    // source refusing the read. The rejecting fetch is SCRIPTED here (this
+    // file mocks fetchFlowTree wholesale; the message just mirrors
+    // flow-ios-tree's no-windows guard, which flow-ios-tree-no-windows.test.ts
+    // exercises at the unit level and flow-hidden-no-windows-e2e.test.ts
+    // end-to-end). What this case locks in is the caller's contract with that
+    // upstream throw: when every fetch rejects, the assert fails with the
+    // outage — the /not injectable/ check pins the fetch error's text landing
+    // in the step reason — instead of treating an unreadable screen as a
+    // no-match that satisfies `hidden`.
     currentFetch = () => {
       throw new Error(
         "getFullHierarchy returned no windows for com.apple.Preferences — the app is not injectable"
