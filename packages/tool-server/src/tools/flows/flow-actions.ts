@@ -233,11 +233,22 @@ export function probeWhenCondition(
  * `{ text }` / `{ id }` selectors carry no flag and match strictly.
  * Lives in the flow runner only; the shared match engine and the tools that
  * consume it are untouched.
+ *
+ * A `within` scope expands recursively: each level's alternatives cross-combine
+ * (a bare-string `within: foo` contributes an identifier pass and a text pass,
+ * a map level contributes itself), ordered identifier-first at every level so
+ * the doctrine matches the top level's. In practice the product stays tiny:
+ * only a bare string is loose and a bare string ends its chain, so a chain
+ * carries at most one loose level. The returned selectors are fully strict —
+ * no `loose` flag survives at any depth.
  */
 function selectorAlternatives(sel: FlowSelector): Selector[] {
-  return sel.loose && sel.text !== undefined
-    ? [{ identifier: sel.text }, { text: sel.text }]
-    : [sel];
+  const { loose, within, ...own } = sel;
+  const ownAlts: Selector[] =
+    loose && own.text !== undefined ? [{ identifier: own.text }, { text: own.text }] : [own];
+  if (within === undefined) return ownAlts;
+  const withinAlts = selectorAlternatives(within);
+  return ownAlts.flatMap((o) => withinAlts.map((w) => ({ ...o, within: w })));
 }
 
 /**

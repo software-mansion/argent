@@ -225,8 +225,18 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
  * inverses). It is never forwarded into a tool's input — explicit `{ text }` /
  * `{ id }` selectors stay strict everywhere, including across the
  * serialize/parse round-trip every recorded step performs.
+ *
+ * `within` re-narrows to FlowSelector so the flag survives at every nesting
+ * level: a map selector is itself always strict, but its `within` may be a
+ * bare string (`within: profile-card`), and that level keeps the loose
+ * identifier-first fallback. Only a bare string can be loose and a bare string
+ * carries no `within` of its own, so a loose level is always the END of a
+ * chain — the runner's alternative expansion relies on this shape.
  */
-export type FlowSelector = Selector & { loose?: boolean };
+export type FlowSelector = Omit<Selector, "within"> & {
+  loose?: boolean;
+  within?: FlowSelector;
+};
 
 /**
  * The platforms a `when: { platform: … }` condition can name — derived from
@@ -343,12 +353,20 @@ export function chromiumLaunchSpec(
  * the same doctrine as the `text` condition's `matches`: unanchored,
  * case-sensitive, validated at parse. In action ranking a pattern that
  * consumes a node's whole label/value counts as an exact match.
+ *
+ * A map selector may also carry `within: <selector>` — a container scope: the
+ * element's frame must sit inside the frame of a distinct element matching
+ * the nested selector, e.g. `{ text: "Delete", within: { id: "settings-card" } }`.
+ * Geometric by design (flow trees are flat — see the `Selector` type). The
+ * nested slot takes every selector form, including bare-string sugar and its
+ * own `within`, chaining outward.
  */
 type YamlSelector =
   | string
-  | (Omit<Selector, "identifier" | "text" | "textMatches"> & {
+  | (Omit<Selector, "identifier" | "text" | "textMatches" | "within"> & {
       id?: string;
       text?: string | { matches: string };
+      within?: YamlSelector;
     });
 
 /**
@@ -478,12 +496,14 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     (sel.text === undefined ||
       sel.textMatches !== undefined ||
       sel.identifier !== undefined ||
-      sel.role !== undefined)
+      sel.role !== undefined ||
+      sel.within !== undefined)
   ) {
     const incompatible = [
       sel.textMatches !== undefined ? "textMatches" : undefined,
       sel.identifier !== undefined ? "identifier" : undefined,
       sel.role !== undefined ? "role" : undefined,
+      sel.within !== undefined ? "within" : undefined,
     ].filter((field): field is string => field !== undefined);
     throw new Error(
       "Cannot serialize loose flow selector without changing its meaning: bare-string YAML " +
@@ -502,11 +522,13 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     return sel.text;
   }
   // YAML spells the identifier field `id` (parseSelector maps it back), and
-  // the internal `textMatches` field spells `text: { matches }`.
-  const { loose: _loose, identifier, textMatches, ...rest } = sel;
+  // the internal `textMatches` field spells `text: { matches }`. A `within`
+  // scope recurses — each level keeps its own bare-string/map spelling.
+  const { loose: _loose, identifier, textMatches, within, ...rest } = sel;
   const out: Exclude<YamlSelector, string> = { ...rest };
   if (textMatches !== undefined) out.text = { matches: textMatches };
   if (identifier !== undefined) out.id = identifier;
+  if (within !== undefined) out.within = selectorToYaml(within);
   return out;
 }
 
@@ -515,17 +537,18 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
  * warnings). The internal `loose` flag is dropped.
  */
 export function describeSelector(s: FlowSelector): string {
-  return (
-    Object.entries(s)
-      .filter(([k]) => k !== "loose")
-      // `identifier` is spelled `id` in flow YAML — print the spelling the flow
-      // file uses so the message reads like the step it refers to. A regex
-      // matcher prints in /slashes/ so it can't be misread as a literal.
-      .map(([k, v]) =>
-        k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
-      )
-      .join(" ")
-  );
+  const fields = Object.entries(s)
+    .filter(([k]) => k !== "loose" && k !== "within")
+    // `identifier` is spelled `id` in flow YAML — print the spelling the flow
+    // file uses so the message reads like the step it refers to. A regex
+    // matcher prints in /slashes/ so it can't be misread as a literal.
+    .map(([k, v]) =>
+      k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
+    )
+    .join(" ");
+  // The ancestor scope renders after the fields, parenthesized so a chained
+  // scope's own fields can't be misread as the target's.
+  return s.within === undefined ? fields : `${fields} within (${describeSelector(s.within)})`;
 }
 
 /**
@@ -832,10 +855,25 @@ function rejectUnknownKeys(
 }
 
 // Keys a selector map accepts: the schema fields plus the YAML `id` spelling
-// (`identifier` stays accepted as its parse-only alias).
-const SELECTOR_KEYS: readonly string[] = ["text", "id", "identifier", "role"];
+// (`identifier` stays accepted as its parse-only alias) and the `within`
+// ancestor scope (a nested selector slot).
+const SELECTOR_KEYS: readonly string[] = ["text", "id", "identifier", "role", "within"];
 
-function parseSelector(raw: unknown, where: string): FlowSelector {
+/**
+ * Nesting cap for a selector's `within` chain — the selector analog of
+ * MAX_WHEN_DEPTH: hand-authored scopes are one or two levels deep, but the
+ * yaml library materializes a cyclic alias (`&s { text: x, within: *s }`) as a
+ * cyclic object, and without a cap that cycle would recurse without end.
+ */
+const MAX_SELECTOR_WITHIN_DEPTH = 10;
+
+function parseSelector(raw: unknown, where: string, depth = 0): FlowSelector {
+  if (depth >= MAX_SELECTOR_WITHIN_DEPTH) {
+    badEntry(
+      raw,
+      `${where}: selector \`within\` scopes nest deeper than ${MAX_SELECTOR_WITHIN_DEPTH} levels — check for a cyclic YAML alias (\`&s { …, within: *s }\`)`
+    );
+  }
   // Bare-string sugar: a string is shorthand for a text selector, marked
   // `loose` so the flow runner tries the identifier locator first and falls
   // back to text — a hand-written `foo` then matches `testID="foo"` too. An
@@ -850,12 +888,31 @@ function parseSelector(raw: unknown, where: string): FlowSelector {
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     rejectUnknownKeys(raw, raw as Record<string, unknown>, SELECTOR_KEYS, `${where}: selector`);
   }
+  // Split off the `within` ancestor scope before field validation — it is a
+  // nested selector slot (recursively parsed, every form accepted), not a
+  // field the shared schema knows. A scope alone selects nothing: `within`
+  // only narrows WHERE to look, so the selector still needs its own fields.
+  let within: FlowSelector | undefined;
+  let fieldsRaw = raw;
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw) && "within" in raw) {
+    const { within: withinRaw, ...restRaw } = raw as { within: unknown } & Record<string, unknown>;
+    if (Object.keys(restRaw).length === 0) {
+      badEntry(
+        raw,
+        `${where}: a selector's \`within\` only scopes where to look — the selector still needs its own text/id/role naming what to find there`
+      );
+    }
+    within = parseSelector(withinRaw, `${where}.within`, depth + 1);
+    fieldsRaw = restRaw;
+  }
+  const attachWithin = (sel: FlowSelector): FlowSelector =>
+    within === undefined ? sel : { ...sel, within };
   // Map form: `id` is the YAML spelling of the internal `identifier` field —
   // rewrite it before schema validation. `identifier` still parses as an alias
   // (existing flow files), but a map carrying both is ambiguous and rejected.
-  let normalized = raw;
-  if (raw !== null && typeof raw === "object" && "id" in raw) {
-    const { id, ...rest } = raw as { id: unknown } & Record<string, unknown>;
+  let normalized = fieldsRaw;
+  if (fieldsRaw !== null && typeof fieldsRaw === "object" && "id" in fieldsRaw) {
+    const { id, ...rest } = fieldsRaw as { id: unknown } & Record<string, unknown>;
     if ("identifier" in rest) {
       badEntry(raw, `${where}: selector takes \`id\` or \`identifier\` (its alias), not both`);
     }
@@ -896,12 +953,12 @@ function parseSelector(raw: unknown, where: string): FlowSelector {
       if (!fields.success) {
         badEntry(raw, `${where}: ${fields.error.issues[0]?.message ?? "invalid selector"}`);
       }
-      return { ...fields.data, textMatches: pattern };
+      return attachWithin({ ...fields.data, textMatches: pattern });
     }
   }
   const r = selectorSchema.safeParse(normalized);
   if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
-  return r.data;
+  return attachWithin(r.data);
 }
 
 const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden", "text"];
@@ -1131,6 +1188,22 @@ function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
 }
 
 /**
+ * Does this map carry any selector key (including the `within` scope)? Used to
+ * tell a selector map apart from the point/option forms in the gesture-body
+ * checks below, so a scoped selector mixed with coordinates or options gets
+ * the same pointed rejection as any other selector field.
+ */
+function hasSelectorField(obj: Record<string, unknown>): boolean {
+  return (
+    obj.text !== undefined ||
+    obj.id !== undefined ||
+    obj.identifier !== undefined ||
+    obj.role !== undefined ||
+    obj.within !== undefined
+  );
+}
+
+/**
  * Parse a gesture target (`tap`/`long-press` body or its `on:` value): a
  * selector (bare string = loose, map = strict) or a raw normalized point
  * `{ x, y }`. A map mixing selector fields with x/y is ambiguous (which
@@ -1146,12 +1219,7 @@ function parseTarget(
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if (obj.x !== undefined || obj.y !== undefined) {
-      if (
-        obj.text !== undefined ||
-        obj.id !== undefined ||
-        obj.identifier !== undefined ||
-        obj.role !== undefined
-      ) {
+      if (hasSelectorField(obj)) {
         badEntry(raw, `${where} takes a selector or x/y coordinates, not both`);
       }
       if (typeof obj.x !== "number" || typeof obj.y !== "number") {
@@ -1185,12 +1253,7 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
   if (obj.on !== undefined || obj.times !== undefined) {
-    if (
-      obj.text !== undefined ||
-      obj.id !== undefined ||
-      obj.identifier !== undefined ||
-      obj.role !== undefined
-    ) {
+    if (hasSelectorField(obj)) {
       badEntry(
         entry,
         'the tap options form takes a nested selector — e.g. tap: { on: { text: "Photo" }, times: 2 }'
@@ -1226,12 +1289,7 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
   if (obj.on !== undefined || obj.duration !== undefined) {
-    if (
-      obj.text !== undefined ||
-      obj.id !== undefined ||
-      obj.identifier !== undefined ||
-      obj.role !== undefined
-    ) {
+    if (hasSelectorField(obj)) {
       badEntry(
         entry,
         'the long-press options form takes a nested selector — e.g. long-press: { on: { text: "Row" }, duration: 1200 }'
@@ -1282,12 +1340,7 @@ function parsePinch(body: unknown, entry: unknown): FlowStep {
     );
   }
   const obj = body as Record<string, unknown>;
-  if (
-    obj.text !== undefined ||
-    obj.id !== undefined ||
-    obj.identifier !== undefined ||
-    obj.role !== undefined
-  ) {
+  if (hasSelectorField(obj)) {
     badEntry(entry, 'pinch takes a nested selector — e.g. pinch: { on: "Map", scale: 3 }');
   }
   rejectUnknownKeys(entry, obj, ["on", "scale"], "pinch");
@@ -1353,13 +1406,13 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   // degenerates into a constant — the same silently-wrong class the per-step
   // `optional:` rejection exists for, so it fails at parse too.
   const { selector, expectedText } = cond;
-  for (const s of [
-    expectedText,
-    selector.text,
-    selector.textMatches,
-    selector.identifier,
-    selector.role,
-  ]) {
+  // Walk the whole selector chain: a placeholder in a `within` scope degrades
+  // the guard exactly as one in the target's own fields would.
+  const guardStrings: (string | undefined)[] = [expectedText];
+  for (let s: FlowSelector | undefined = selector; s !== undefined; s = s.within) {
+    guardStrings.push(s.text, s.textMatches, s.identifier, s.role);
+  }
+  for (const s of guardStrings) {
     if (s !== undefined && s.includes(SECRET_PLACEHOLDER_MARKER)) {
       badEntry(
         { when: raw },

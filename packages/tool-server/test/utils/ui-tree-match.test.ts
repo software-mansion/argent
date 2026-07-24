@@ -495,3 +495,193 @@ describe("identifier matching", () => {
     expect(findAll(tree, { identifier: "autosave-banner" })).toHaveLength(1);
   });
 });
+
+describe("within (descendant) scoping", () => {
+  // Two cards each containing a "Delete" button, plus an unscoped one at the
+  // top level — the classic "same label everywhere" screen `within` exists for.
+  const cards = node({
+    role: "AXWindow",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      node({
+        role: "AXButton",
+        label: "Delete",
+        frame: { x: 0.1, y: 0.05, width: 0.2, height: 0.05 },
+      }),
+      node({
+        role: "AXGroup",
+        identifier: "profile-card",
+        frame: { x: 0, y: 0.2, width: 1, height: 0.3 },
+        children: [
+          node({
+            role: "AXButton",
+            label: "Delete",
+            frame: { x: 0.1, y: 0.4, width: 0.2, height: 0.05 },
+          }),
+        ],
+      }),
+      node({
+        role: "AXGroup",
+        identifier: "billing-card",
+        frame: { x: 0, y: 0.6, width: 1, height: 0.3 },
+        children: [
+          node({
+            role: "AXButton",
+            label: "Delete",
+            frame: { x: 0.1, y: 0.8, width: 0.2, height: 0.05 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  it("findAll keeps only matches inside the container", () => {
+    const matches = findAll(cards, { text: "Delete", within: { identifier: "billing-card" } });
+    expect(matches).toHaveLength(1);
+    expect(matches[0].frame.y).toBe(0.8);
+  });
+
+  it("selectorToFrame resolves the scoped element, not the first in reading order", () => {
+    const frame = selectorToFrame(cards, {
+      text: "Delete",
+      within: { identifier: "profile-card" },
+    });
+    expect(frame).toMatchObject({ y: 0.4 });
+  });
+
+  it("an unscoped selector still sees every match", () => {
+    expect(findAll(cards, { text: "Delete" })).toHaveLength(3);
+  });
+
+  it("a missing container yields no matches even though the target text exists", () => {
+    expect(findAll(cards, { text: "Delete", within: { identifier: "no-such-card" } })).toEqual([]);
+  });
+
+  it("the container must be a DISTINCT element — a node can never scope itself", () => {
+    // profile-card is the only node matching the scope, and it is the node
+    // being selected; `within` demands a distinct container, so nothing matches.
+    expect(
+      findAll(cards, { identifier: "profile-card", within: { identifier: "profile-card" } })
+    ).toEqual([]);
+  });
+
+  it("scoping is geometric, so it works on the flat tree shape the flow adapters emit", () => {
+    // Production flow trees flatten every platform hierarchy into leaves under
+    // one synthetic root (flow-tree-flatten) — containment must come from
+    // frames, not ancestry.
+    const flat = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ identifier: "billing-card", frame: { x: 0, y: 0.6, width: 1, height: 0.3 } }),
+        node({ label: "Delete", frame: { x: 0.1, y: 0.2, width: 0.2, height: 0.05 } }),
+        node({ label: "Delete", frame: { x: 0.1, y: 0.8, width: 0.2, height: 0.05 } }),
+      ],
+    });
+    const matches = findAll(flat, { text: "Delete", within: { identifier: "billing-card" } });
+    expect(matches).toHaveLength(1);
+    expect(matches[0].frame.y).toBe(0.8);
+  });
+
+  it("an element whose frame overflows the container is not within it, ancestry or not", () => {
+    // A tree child rendered outside its parent's frame (overlay, badge) is
+    // visually NOT inside the container — geometry, not ancestry, decides.
+    const overlay = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          identifier: "card",
+          frame: { x: 0, y: 0.2, width: 0.5, height: 0.2 },
+          children: [node({ label: "Badge", frame: { x: 0.7, y: 0.7, width: 0.1, height: 0.05 } })],
+        }),
+      ],
+    });
+    expect(findAll(overlay, { text: "Badge", within: { identifier: "card" } })).toEqual([]);
+  });
+
+  it("the synthetic root cannot satisfy a scope", () => {
+    // The root wraps every screen — letting it match would make a broad
+    // role-based scope vacuous (same doctrine as target matching).
+    expect(findAll(cards, { text: "Delete", within: { role: "AXWindow" } })).toEqual([]);
+  });
+
+  it("chained scopes require nested containers, in order", () => {
+    const tree = node({
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          identifier: "settings",
+          frame: { x: 0, y: 0, width: 1, height: 0.5 },
+          children: [
+            node({
+              identifier: "cards",
+              frame: { x: 0, y: 0.1, width: 1, height: 0.3 },
+              children: [
+                node({ label: "Delete", frame: { x: 0.1, y: 0.2, width: 0.2, height: 0.05 } }),
+              ],
+            }),
+          ],
+        }),
+        // A "cards" container NOT inside "settings" — its Delete must not match.
+        node({
+          identifier: "cards",
+          frame: { x: 0, y: 0.6, width: 1, height: 0.3 },
+          children: [
+            node({ label: "Delete", frame: { x: 0.1, y: 0.7, width: 0.2, height: 0.05 } }),
+          ],
+        }),
+      ],
+    });
+    const matches = findAll(tree, {
+      text: "Delete",
+      within: { identifier: "cards", within: { identifier: "settings" } },
+    });
+    expect(matches).toHaveLength(1);
+    expect(matches[0].frame.y).toBe(0.2);
+    // Reversed nesting (settings inside cards) exists nowhere in this tree.
+    expect(
+      findAll(tree, {
+        text: "Delete",
+        within: { identifier: "settings", within: { identifier: "cards" } },
+      })
+    ).toEqual([]);
+  });
+
+  it("one container cannot satisfy two chain levels", () => {
+    const doubled = (leafLabel: string, depth: number): DescribeNode => {
+      let child = node({ label: leafLabel, frame: { x: 0.1, y: 0.4, width: 0.2, height: 0.05 } });
+      for (let i = 0; i < depth; i++) {
+        child = node({
+          label: "Row",
+          frame: { x: 0, y: 0, width: 1, height: 1 },
+          children: [child],
+        });
+      }
+      return node({
+        role: "AXWindow",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [child],
+      });
+    };
+    const twoRows = { text: "Leaf", within: { text: "Row", within: { text: "Row" } } };
+    // Two distinct "Row" containers satisfy "Row inside Row"…
+    expect(findAll(doubled("Leaf", 2), twoRows)).toHaveLength(1);
+    // …a single one cannot double-count for both levels.
+    expect(findAll(doubled("Leaf", 1), twoRows)).toEqual([]);
+  });
+
+  it("a scope can use the regex text matcher", () => {
+    const matches = findAll(cards, {
+      text: "Delete",
+      within: { textMatches: "^$" }, // matches no container label
+    });
+    expect(matches).toEqual([]);
+    const scoped = findAll(cards, {
+      role: "AXButton",
+      within: { identifier: "profile-card" },
+    });
+    expect(scoped).toHaveLength(1);
+  });
+});

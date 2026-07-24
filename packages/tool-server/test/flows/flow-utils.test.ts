@@ -1025,3 +1025,158 @@ describe("setActiveProjectRoot validation", () => {
     expect(() => setActiveProjectRoot("/tmp/argent-pr194-c-test")).not.toThrow();
   });
 });
+
+// ── within (descendant) selector scoping ─────────────────────────────
+
+describe("within selector scoping", () => {
+  it("parses a within scope on a tap selector", () => {
+    const flow = parseFlow("steps:\n  - tap: { text: Delete, within: { id: profile-card } }\n");
+    expect(flow.steps).toEqual([
+      {
+        kind: "tap",
+        selector: { text: "Delete", within: { identifier: "profile-card" } },
+      },
+    ]);
+  });
+
+  it("a bare-string within stays loose (identifier-first, then text)", () => {
+    const flow = parseFlow("steps:\n  - tap: { text: Delete, within: profile-card }\n");
+    expect(flow.steps).toEqual([
+      {
+        kind: "tap",
+        selector: { text: "Delete", within: { text: "profile-card", loose: true } },
+      },
+    ]);
+  });
+
+  it("within chains outward and round-trips exactly", () => {
+    const flow: FlowFile = {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "tap",
+          selector: {
+            text: "Delete",
+            within: { identifier: "cards", within: { text: "Settings" } },
+          },
+        },
+        {
+          kind: "await",
+          condition: "visible",
+          selector: { text: "Saved", within: { text: "toast-area", loose: true } },
+        },
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "total", within: { role: "AXTable" } },
+          expectedText: "Total: 3",
+          textMatch: "equals",
+        },
+      ],
+    };
+    expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+  });
+
+  it("serializes a loose within back to its bare-string spelling", () => {
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "tap",
+          selector: { text: "Delete", within: { text: "profile-card", loose: true } },
+        },
+      ],
+    });
+    expect(yaml).toContain("within: profile-card");
+  });
+
+  it("accepts the regex text matcher inside a within scope", () => {
+    const flow = parseFlow(
+      "steps:\n  - assert: { visible: { text: Delete, within: { text: { matches: '^Card \\d+$' } } } }\n"
+    );
+    expect(flow.steps).toEqual([
+      {
+        kind: "assert",
+        condition: "visible",
+        selector: { text: "Delete", within: { textMatches: "^Card \\d+$" } },
+      },
+    ]);
+  });
+
+  it("rejects a selector that is ONLY a within scope", () => {
+    expect(() => parseFlow("steps:\n  - tap: { within: { id: card } }\n")).toThrow(
+      /still needs its own text\/id\/role/
+    );
+  });
+
+  it("rejects unknown keys inside a within scope, naming the nested slot", () => {
+    expect(() => parseFlow("steps:\n  - tap: { text: Delete, within: { idd: card } }\n")).toThrow(
+      /tap\.within: selector has unknown key `idd` \(did you mean `id`\?\)/
+    );
+  });
+
+  it("rejects id+identifier both set inside a within scope", () => {
+    expect(() =>
+      parseFlow("steps:\n  - tap: { text: A, within: { id: x, identifier: x } }\n")
+    ).toThrow(/`id` or `identifier` \(its alias\), not both/);
+  });
+
+  it("rejects a cyclic within alias via the depth cap", () => {
+    const yaml = "steps:\n  - tap: &s { text: Delete, within: *s }\n";
+    expect(() => parseFlow(yaml)).toThrow(/nest deeper than|cyclic YAML alias/);
+  });
+
+  it("rejects a within selector mixed with coordinates", () => {
+    expect(() => parseFlow("steps:\n  - tap: { within: { id: card }, x: 0.5, y: 0.5 }\n")).toThrow(
+      /takes a selector or x\/y coordinates, not both/
+    );
+  });
+
+  it("rejects a within key beside the tap options form", () => {
+    expect(() =>
+      parseFlow("steps:\n  - tap: { on: Photo, times: 2, within: { id: card } }\n")
+    ).toThrow(/the tap options form takes a nested selector/);
+  });
+
+  it("within works in scroll-to's target while scroll-to's own within stays the container anchor", () => {
+    const flow = parseFlow(
+      [
+        "steps:",
+        "  - scroll-to:",
+        "      target: { text: Delete, within: { id: cards } }",
+        "      direction: down",
+        "      within: { id: settings-list }",
+      ].join("\n") + "\n"
+    );
+    expect(flow.steps).toEqual([
+      {
+        kind: "scroll-to",
+        target: { text: "Delete", within: { identifier: "cards" } },
+        direction: "down",
+        within: { identifier: "settings-list" },
+      },
+    ]);
+  });
+
+  it("describeSelector renders the scope chain in parentheses", () => {
+    expect(
+      describeSelector({
+        text: "Delete",
+        within: { identifier: "cards", within: { text: "Settings" } },
+      })
+    ).toBe('text="Delete" within (id="cards" within (text="Settings"))');
+  });
+
+  it("when guards reject a {{secret:…}} placeholder hidden in a within scope", () => {
+    expect(() =>
+      parseFlow(
+        [
+          "steps:",
+          "  - when: { visible: { text: Delete, within: { text: '{{secret:TOKEN}}' } } }",
+          "    steps:",
+          "      - echo: hi",
+        ].join("\n") + "\n"
+      )
+    ).toThrow(/secret/);
+  });
+});

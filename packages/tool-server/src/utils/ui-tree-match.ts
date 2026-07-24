@@ -88,6 +88,23 @@ export type Selector = z.infer<typeof selectorSchema> & {
    * draws below).
    */
   textMatches?: string;
+  /**
+   * Flow-only container scope (`{ text: "Delete", within: { id: "card" } }` in
+   * flow YAML): the node must additionally sit INSIDE a distinct element
+   * matching this selector — its frame contained in the container's frame
+   * (small tolerance for sub-pixel overhang). Deliberately geometric, not
+   * tree-ancestry: every flow adapter flattens its platform tree into leaves
+   * under one synthetic root (see `flow-tree-flatten`), so ancestry does not
+   * survive to replay — and visual containment is what "the button inside the
+   * card" means to a flow author anyway (the same frame-based reading of
+   * "within" the scroll-to directive's container anchor uses). Scopes chain
+   * outward (`a within b within c` reads "a inside b inside c", each
+   * container's frame inside the next). Resolved by {@link findAll}, which
+   * sees the whole tree; {@link matchNode} is a single-node predicate and
+   * evaluates own fields only. A type-level extension, not a schema field,
+   * for the same reason as `textMatches`.
+   */
+  within?: Selector;
 };
 
 export type WaitCondition = "exists" | "visible" | "hidden" | "text";
@@ -210,29 +227,76 @@ function selectorTextRegex(selector: Selector): RegExp | undefined {
     : uiTreeMatchInternals.createRegExp(selector.textMatches);
 }
 
+/**
+ * Single-node predicate over the selector's OWN fields (text/regex/identifier/
+ * role). Ancestor scoping (`within`) needs the tree and is resolved by
+ * {@link findAll}; a `within` on the selector is ignored here by design.
+ */
 export function matchNode(node: DescribeNode, selector: Selector): boolean {
   return matchNodeWithRegex(node, selector, selectorTextRegex(selector));
 }
 
-function collectMatches(
-  node: DescribeNode,
-  selector: Selector,
-  textRegex: RegExp | undefined,
-  acc: DescribeNode[]
-): void {
-  if (matchNodeWithRegex(node, selector, textRegex)) acc.push(node);
-  for (const child of node.children) collectMatches(child, selector, textRegex, acc);
+// `within` containment tolerance (normalized units): a hair of overhang — a
+// border, a shadow, sub-pixel rounding — must not disqualify an element that
+// visually sits in its container. Matches the magnitude of the flow runner's
+// edge tolerance (EDGE_EPS in flow-actions).
+const WITHIN_EPS = 0.005;
+
+/** Is `inner` contained in `outer`, within {@link WITHIN_EPS} per edge? */
+function frameWithin(inner: DescribeFrame, outer: DescribeFrame): boolean {
+  return (
+    inner.x >= outer.x - WITHIN_EPS &&
+    inner.y >= outer.y - WITHIN_EPS &&
+    inner.x + inner.width <= outer.x + outer.width + WITHIN_EPS &&
+    inner.y + inner.height <= outer.y + outer.height + WITHIN_EPS
+  );
 }
 
-// Every node matching the selector in the subtree, EXCLUDING `root` itself — the
+// Every node matching the selector in the tree, EXCLUDING `root` itself — the
 // synthetic full-screen container describe puts at the head of the tree. See the
 // long-form rationale in await-ui-element: matching the root would let a broad
-// role selector satisfy `visible`/`exists` on any screen.
+// role selector satisfy `visible`/`exists` on any screen. The exclusion covers
+// `within` containers too: the synthetic root wraps every screen, so letting it
+// satisfy a scope would make `within` vacuous for broad container selectors.
+//
+// A `within` scope is resolved GEOMETRICALLY — the candidate's frame contained
+// in a matching container's frame — never by tree ancestry: the flow adapters
+// flatten every platform tree into leaves under one synthetic root (see
+// `flow-tree-flatten`), so parent/child structure does not survive to replay,
+// while frames do. The container must be a DISTINCT node (an element never
+// scopes itself, so `a within a` needs two nested elements), and a chain
+// resolves outermost-first: each level keeps only the containers that
+// themselves sit inside a distinct container of the level above.
 export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
-  const acc: DescribeNode[] = [];
-  const textRegex = selectorTextRegex(selector);
-  for (const child of root.children) collectMatches(child, selector, textRegex, acc);
-  return acc;
+  const all: DescribeNode[] = [];
+  const collect = (node: DescribeNode): void => {
+    all.push(node);
+    for (const child of node.children) collect(child);
+  };
+  for (const child of root.children) collect(child);
+
+  const matchesOf = (sel: Selector): DescribeNode[] => {
+    const regex = selectorTextRegex(sel);
+    return all.filter((n) => matchNodeWithRegex(n, sel, regex));
+  };
+  const inSome = (node: DescribeNode, containers: DescribeNode[]): boolean =>
+    containers.some((c) => c !== node && frameWithin(node.frame, c.frame));
+
+  // Flatten the `within` chain, outermost scope first: for
+  // `{ text: "a", within: { id: "b", within: { text: "c" } } }` — "a inside b
+  // inside c" — c's containers are resolved first, then b's are filtered to
+  // the ones sitting inside them.
+  const chain: Selector[] = [];
+  for (let s = selector.within; s !== undefined; s = s.within) chain.unshift(s);
+  let containers: DescribeNode[] | undefined;
+  for (const level of chain) {
+    const levelMatches = matchesOf(level);
+    const outer = containers;
+    containers = outer === undefined ? levelMatches : levelMatches.filter((n) => inSome(n, outer));
+  }
+
+  const own = matchesOf(selector);
+  return containers === undefined ? own : own.filter((n) => inSome(n, containers!));
 }
 
 // describe prunes off-screen / zero-size nodes, so a non-zero frame area is a

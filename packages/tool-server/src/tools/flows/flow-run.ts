@@ -438,7 +438,8 @@ export function createRunFlowTool(
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
-holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`);
+holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
+any selector may scope its matches to elements inside a container's frame via \`within: <selector>\`);
 \`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`await\` waits
 for a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
@@ -700,7 +701,12 @@ function selectorLabel(sel: FlowSelector): string {
   if (sel.textMatches !== undefined) parts.push(`/${sel.textMatches}/`);
   if (sel.identifier) parts.push(`id=${sel.identifier}`);
   if (sel.role) parts.push(`role=${sel.role}`);
-  return parts.join(" ");
+  const own = parts.join(" ");
+  // A `within` scope renders after the fields, parenthesized and recursive, so
+  // two steps that differ only by scope don't collapse to the same target label
+  // in the report — mirroring `describeSelector`'s reason-string spelling so the
+  // two surfaces stay in lockstep (see `conditionLabel`).
+  return sel.within === undefined ? own : `${own} within (${selectorLabel(sel.within)})`;
 }
 
 /**
