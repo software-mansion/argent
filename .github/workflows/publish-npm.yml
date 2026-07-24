@@ -9,7 +9,9 @@ name: Publish npm package
 #
 #   push to main       → canary: version derived + stamped (<base>-next.<k>),
 #                        published under the `next` dist-tag. Gated behind the
-#                        PUBLISH_NPM_UNIFIED repository variable (see Cutover).
+#                        PUBLISH_NPM_UNIFIED repository variable (=1 since the
+#                        2026-07 cutover; unsetting it is the canary
+#                        kill-switch — manual dispatches keep working).
 #   workflow_dispatch  → publishes the ref's package.json version verbatim.
 #                        The dist-tag is derived from the version itself:
 #                          prerelease (has a "-IDENTIFIER" suffix) → `next`
@@ -20,31 +22,20 @@ name: Publish npm package
 #                        the full build + bundle verification without publishing.
 #                        Note dry_run only rehearses the dispatch path — the
 #                        canary machinery (version stamping, --version check,
-#                        collision retry) is copied verbatim from
-#                        publish-next.yml and first runs here after cutover.
+#                        collision retry) was copied verbatim from the retired
+#                        publish-next.yml.
 #
 # Provenance / trusted publishing:
-#   The job has `id-token: write` and publishes with --provenance, so every
-#   release from this workflow carries a provenance attestation immediately —
-#   the repo is public and package.json's `repository.url` matches, which is
-#   what the registry verifies. Once @swmansion/argent registers THIS file
-#   (publish-npm.yml) as its npm Trusted Publisher, npm's OIDC exchange takes
-#   over authentication; at that point remove the NODE_AUTH_TOKEN lines from
-#   the publish steps below (the token remains needed by sync-next-tag.yml,
-#   which mutates dist-tags — OIDC only covers publishing).
-#
-# Cutover plan (old workflows stay until all steps are done):
-#   1. Merge this workflow. Test it with a workflow_dispatch dry_run, then a
-#      real prerelease dispatch (a -next.N ref).
-#   2. On npmjs.com, register publish-npm.yml as the trusted publisher for
-#      @swmansion/argent (org software-mansion, repo argent).
-#   3. Set the repository variable PUBLISH_NPM_UNIFIED=1 and, in the same PR,
-#      delete publish.yml and publish-next.yml — the gate exists precisely so
-#      canaries are never double-published while both workflows coexist. Drop
-#      the two old workflow names from sync-next-tag.yml's workflow_run
-#      trigger in that PR too.
-#   4. Remove NODE_AUTH_TOKEN from the publish steps; optionally restrict the
-#      package's publishing access on npmjs.com to the trusted publisher only.
+#   THIS file (publish-npm.yml) is registered on npmjs.com as the npm Trusted
+#   Publisher for @swmansion/argent (registered 2026-07-24, verified with the
+#   v0.17.1-next.1 publish): npm's OIDC exchange authenticates the publish —
+#   no npm token is involved. The job has `id-token: write` and publishes with
+#   --provenance, so every release carries a provenance attestation (the repo
+#   is public and package.json's `repository.url` matches, which is what the
+#   registry verifies). NPM_TOKEN remains as a repo secret only for
+#   sync-next-tag.yml, which mutates dist-tags — OIDC only covers publishing.
+#   Renaming or moving this file breaks publishing until the trusted-publisher
+#   registration on npmjs.com is updated to match.
 
 on:
   push:
@@ -82,9 +73,9 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Canary-on-push stays dormant until cutover (step 3 in the header plan) so
-    # this workflow can coexist with publish-next.yml without publishing every
-    # main commit twice. Manual dispatches always run.
+    # PUBLISH_NPM_UNIFIED originally kept canary-on-push dormant while this
+    # workflow coexisted with the old publish-next.yml; post-cutover it serves
+    # as the canary kill-switch. Manual dispatches always run.
     if: github.event_name == 'workflow_dispatch' || vars.PUBLISH_NPM_UNIFIED == '1'
     permissions:
       contents: read
@@ -266,7 +257,6 @@ jobs:
         if: steps.mode.outputs.mode == 'dispatch' && !inputs.dry_run
         run: npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
 
       # Canary publish. Serialization makes concurrent index collisions
@@ -276,7 +266,6 @@ jobs:
       - name: Publish canary
         if: steps.mode.outputs.mode == 'canary'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
         run: |
           for attempt in 1 2 3; do
