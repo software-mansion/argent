@@ -473,9 +473,9 @@ function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
  * 12k-node cap. The quadratic tail is real — 5 ms at 800 nodes, 555 ms at
  * 12k — but only when the anchor selector matches essentially EVERY node,
  * which unions a pick per anchor and is not a locator anyone writes; and it
- * multiplies by the loose-alternative count when a scope is a bare string
- * (bounded by MAX_SELECTOR_SCOPES, but super-linearly — a nested scope's own
- * `next` re-resolves per alternative). Unlike {@link afterTester} this
+ * multiplies by the loose-alternative count when a scope is a bare string —
+ * at most 32, since a bare string is a leaf and so at most five of
+ * MAX_SELECTOR_SCOPES levels can be loose. Unlike {@link afterTester} this
  * cannot short-circuit: it must see every candidate to know which is nearest.
  * An index would cut the tail, but the one this replaced was a second
  * implementation of the rules above and the two disagreed near the tolerance —
