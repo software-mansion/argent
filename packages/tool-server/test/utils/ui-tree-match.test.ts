@@ -1229,6 +1229,102 @@ describe("after / next (sibling) scoping", () => {
     expect(findAll(mirrored, { role: "AXButton", after: { identifier: "anchor" } })).toEqual([]);
   });
 
+  it("never lets two coincident marks follow EACH OTHER, on either axis", () => {
+    // The tolerance cannot order two frames thinner than it and closer together
+    // than it. If a mutual verdict were read as "ordered", both would follow the
+    // other and a two-node screen would answer a `+` combinator with two
+    // elements. Vega keeps zero-area nodes, so these frames are reachable.
+    const pair = (a: DescribeNode["frame"], b: DescribeNode["frame"]): DescribeNode =>
+      node({
+        role: "Screen",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          node({ role: "AXSep", identifier: "a", frame: a }),
+          node({ role: "AXSep", identifier: "b", frame: b }),
+        ],
+      });
+    const cases: [DescribeNode["frame"], DescribeNode["frame"]][] = [
+      // Vertical rules of zero width, coincident.
+      [
+        { x: 0.5, y: 0.2, width: 0, height: 0.4 },
+        { x: 0.5, y: 0.2, width: 0, height: 0.4 },
+      ],
+      // Two hairlines side by side, widths summing to the tolerance.
+      [
+        { x: 0.5, y: 0.2, width: 0.005, height: 0.4 },
+        { x: 0.5, y: 0.2, width: 0.005, height: 0.4 },
+      ],
+      // 0.2%-wide vertical hairlines 0.3% apart.
+      [
+        { x: 0.5, y: 0.2, width: 0.002, height: 0.4 },
+        { x: 0.503, y: 0.2, width: 0.002, height: 0.4 },
+      ],
+      // Horizontal rules of zero height, coincident (the vertical mirror).
+      [
+        { x: 0.2, y: 0.5, width: 0.4, height: 0 },
+        { x: 0.2, y: 0.5, width: 0.4, height: 0 },
+      ],
+    ];
+    for (const [a, b] of cases) {
+      const tree = pair(a, b);
+      expect(findAll(tree, { role: "AXSep", after: { role: "AXSep" } })).toEqual([]);
+      expect(findAll(tree, { role: "AXSep", next: { role: "AXSep" } })).toEqual([]);
+    }
+    // ...while a genuinely separated pair still orders normally.
+    const ordered = pair(
+      { x: 0.1, y: 0.2, width: 0.002, height: 0.4 },
+      { x: 0.9, y: 0.2, width: 0.002, height: 0.4 }
+    );
+    expect(ids(findAll(ordered, { role: "AXSep", after: { role: "AXSep" } }))).toEqual(["b"]);
+  });
+
+  it("picks the same follower whatever order the adapter emitted the candidates in", () => {
+    // Position alone leaves these tied, so the pick has to keep going into the
+    // frame's extent — otherwise the resolved tap point moves with the tree's
+    // emission order, which no flow author can see or control.
+    const emit = (children: DescribeNode[]): DescribeNode =>
+      node({ role: "Screen", frame: { x: 0, y: 0, width: 1, height: 1 }, children });
+    const anchor = node({
+      identifier: "anchor",
+      frame: { x: 0.05, y: 0.1, width: 0.2, height: 0.04 },
+    });
+    for (const [p, q] of [
+      // Zero area both ways, different lengths.
+      [
+        node({
+          role: "AXC",
+          identifier: "short",
+          frame: { x: 0.4, y: 0.3, width: 0.2, height: 0 },
+        }),
+        node({ role: "AXC", identifier: "long", frame: { x: 0.4, y: 0.3, width: 0.5, height: 0 } }),
+      ],
+      // Equal area, different shape.
+      [
+        node({
+          role: "AXC",
+          identifier: "wide",
+          frame: { x: 0.4, y: 0.1, width: 0.4, height: 0.1 },
+        }),
+        node({
+          role: "AXC",
+          identifier: "tall",
+          frame: { x: 0.4, y: 0.1, width: 0.2, height: 0.2 },
+        }),
+      ],
+    ] as [DescribeNode, DescribeNode][]) {
+      const forward = findAll(emit([anchor, p, q]), {
+        role: "AXC",
+        next: { identifier: "anchor" },
+      });
+      const reversed = findAll(emit([anchor, q, p]), {
+        role: "AXC",
+        next: { identifier: "anchor" },
+      });
+      expect(ids(forward)).toEqual(ids(reversed));
+      expect(ids(forward)).toHaveLength(1);
+    }
+  });
+
   it("groups a mutual-hairline row-mate with the row, not with the rows below", () => {
     // The anchor and A are each thinner than the tolerance and closer than it,
     // so each reads as "above" the other — they are one row. If the follower
@@ -1339,17 +1435,21 @@ describe("after / next (sibling) scoping", () => {
     // zero-height rules), the shapes where `frameAfter` is reflexive.
     const leaves: DescribeNode[] = [];
     for (let i = 0; i < 160; i++) {
-      const degenerate = i % 17 === 0;
+      // A third of the corpus is hairline-thin and snapped to a coarse grid, so
+      // pairs the tolerance genuinely cannot order — the mutual case both axes
+      // must refuse to decide — actually occur (asserted below).
+      const hairline = i % 3 === 0;
+      const snap = (v: number): number => Math.round(v * 40) / 40;
       leaves.push(
         node({
           role: "AXAnchor",
           identifier: `l${i}`,
           label: "leaf",
           frame: {
-            x: rand() * 0.9,
-            y: rand() * 0.9,
-            width: degenerate ? 0 : 0.02 + rand() * 0.2,
-            height: degenerate ? 0 : 0.02 + rand() * 0.2,
+            x: hairline ? snap(rand() * 0.9) : rand() * 0.9,
+            y: hairline ? snap(rand() * 0.9) : rand() * 0.9,
+            width: hairline ? rand() * 0.005 : 0.02 + rand() * 0.2,
+            height: hairline ? rand() * 0.005 : 0.02 + rand() * 0.2,
           },
         })
       );
@@ -1371,9 +1471,21 @@ describe("after / next (sibling) scoping", () => {
       const isBelow = above(a, n);
       const isAbove = above(n, a);
       if (isBelow !== isAbove) return isBelow ? "below" : "no";
-      return a.x + a.width <= n.x + eps ? "band" : "no";
+      const isRight = a.x + a.width <= n.x + eps;
+      const isLeft = n.x + n.width <= a.x + eps;
+      return isRight !== isLeft && isRight ? "band" : "no";
     };
     const isAfter = (n: F, a: F): boolean => kindOf(n, a) !== "no";
+
+    // Anti-vacuity: the corpus must actually contain pairs the tolerance cannot
+    // order, or the mutual-case rules below go untested by this fuzz.
+    let mutualPairs = 0;
+    for (const p of leaves) {
+      for (const q of leaves) {
+        if (p !== q && above(p.frame, q.frame) && above(q.frame, p.frame)) mutualPairs++;
+      }
+    }
+    expect(mutualPairs).toBeGreaterThan(0);
     const expectedAfter = leaves.filter((l) =>
       anchors.some((a) => a !== l && isAfter(l.frame, a.frame))
     );
@@ -1384,16 +1496,16 @@ describe("after / next (sibling) scoping", () => {
 
     // `next` = per anchor: the leftmost follower sharing its row band, else the
     // topmost of those strictly below it; ties fall to the smaller frame.
-    const area = (f: F): number => f.width * f.height;
+    const cmpPick = (a: F, b: F): number =>
+      a.width * a.height - b.width * b.height || a.width - b.width || a.height - b.height;
     const best = (group: DescribeNode[], major: "x" | "y"): DescribeNode =>
       group.reduce((m, l) => {
         const minor = major === "x" ? "y" : "x";
-        const win =
-          l.frame[major] < m.frame[major] ||
-          (l.frame[major] === m.frame[major] &&
-            (l.frame[minor] < m.frame[minor] ||
-              (l.frame[minor] === m.frame[minor] && area(l.frame) < area(m.frame))));
-        return win ? l : m;
+        const d =
+          l.frame[major] - m.frame[major] ||
+          l.frame[minor] - m.frame[minor] ||
+          cmpPick(l.frame, m.frame);
+        return d < 0 ? l : m;
       });
     const picked = new Set<DescribeNode>();
     for (const a of anchors) {

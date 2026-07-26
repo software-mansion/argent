@@ -386,12 +386,15 @@ type FollowKind = "below" | "band" | "no";
  * re-deriving the group from a second {@link frameAbove} call put a mutual-case
  * row-mate in the "below" group, where it lost to a band-mate further right.
  *
- * That mutual case: two frames each no taller than the tolerance, closer
- * together than it, are "above" each other under {@link frameAbove}. Reading
- * that as "below" in both directions would make an element to the anchor's LEFT
- * follow it, so it falls through to the horizontal rule — which is what a pair
- * of hairlines a fraction of a percent apart look like anyway: one row. That
- * also keeps the relation antisymmetric, which the `next` reduction relies on.
+ * BOTH axes are decided the same way, and for the same reason. Two frames
+ * thinner than the tolerance and closer together than it are "above" each other
+ * (and, side by side, "left of" each other) — the tolerance cannot tell them
+ * apart. Reading such a pair as ordered in both directions is what would let an
+ * element to the anchor's LEFT follow it, so a mutual verdict never decides:
+ * vertically it falls through to the row rule (a pair of hairlines a fraction
+ * of a percent apart is one row), and horizontally it means "no order at all"
+ * — two visually coincident marks, neither after the other. The relation is
+ * therefore antisymmetric, which the `next` reduction relies on.
  *
  * Mostly not a containment test — an element well inside the anchor is neither
  * above nor entirely right of it. The exception is a child flush with the
@@ -403,7 +406,9 @@ function followKind(node: DescribeFrame, anchor: DescribeFrame): FollowKind {
   const below = frameAbove(anchor, node);
   const above = frameAbove(node, anchor);
   if (below !== above) return below ? "below" : "no";
-  return anchor.x + anchor.width <= node.x + WITHIN_EPS ? "band" : "no";
+  const right = anchor.x + anchor.width <= node.x + WITHIN_EPS;
+  const left = node.x + node.width <= anchor.x + WITHIN_EPS;
+  return right !== left && right ? "band" : "no";
 }
 
 function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
@@ -426,17 +431,25 @@ function afterTester(anchors: DescribeNode[]): (node: DescribeNode) => boolean {
 }
 
 // Ranking among an anchor's followers, once they are split into the two groups
-// below. Each ends in frame AREA so that coincident top-left corners — a
-// container and the label leaf flush inside it, an everyday shape in a
-// flattened tree — resolve to the smaller, more specific element rather than to
-// whichever the tree happened to list first. That matches the "smallest frame
-// wins" doctrine `selectorToFrame` and `nodeAtPoint` already rank by.
+// below. Each continues past position into frame AREA so that coincident
+// top-left corners — a container and the label leaf flush inside it, an
+// everyday shape in a flattened tree — resolve to the smaller, more specific
+// element rather than to whichever the tree happened to list first (matching
+// the "smallest frame wins" doctrine `selectorToFrame` and `nodeAtPoint`
+// already rank by), then into the individual extents, which separate the shapes
+// area alone cannot: two zero-area rules of different lengths, and a wide-short
+// frame against a narrow-tall one. Only frames identical on all four fields are
+// left to tree order, and those are indistinguishable to act on anyway.
+function comparePick(a: DescribeFrame, b: DescribeFrame): number {
+  return frameArea(a) - frameArea(b) || a.width - b.width || a.height - b.height;
+}
+
 function compareBandPick(a: DescribeFrame, b: DescribeFrame): number {
-  return a.x - b.x || a.y - b.y || frameArea(a) - frameArea(b);
+  return a.x - b.x || a.y - b.y || comparePick(a, b);
 }
 
 function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
-  return a.y - b.y || a.x - b.x || frameArea(a) - frameArea(b);
+  return a.y - b.y || a.x - b.x || comparePick(a, b);
 }
 
 /**
