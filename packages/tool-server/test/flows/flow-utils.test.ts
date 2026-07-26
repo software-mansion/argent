@@ -1284,9 +1284,14 @@ describe("sibling selector scopes and the universal selector", () => {
   });
 
   it("rejects a non-`true` any value rather than reading it as a locator", () => {
-    expect(() => parseFlow("steps:\n  - tap: { any: false, within: { id: card } }\n")).toThrow(
-      /`any` takes only `true`/
-    );
+    // Falsy AND truthy: a truthiness check would wave `any: 1` / `any: yes`
+    // through as the universal selector — a spelling no reader can predict and
+    // the serializer cannot reproduce.
+    for (const value of ["false", "1", "yes", "'true'", "0"]) {
+      expect(() => parseFlow(`steps:\n  - tap: { any: ${value}, within: { id: card } }\n`)).toThrow(
+        /`any` takes only `true`/
+      );
+    }
   });
 
   it("rejects unknown keys inside a sibling scope, naming the nested slot", () => {
@@ -1295,10 +1300,59 @@ describe("sibling selector scopes and the universal selector", () => {
     );
   });
 
-  it("rejects a cyclic sibling alias via the depth cap", () => {
+  it("rejects a cyclic sibling alias via the scope budget", () => {
     expect(() => parseFlow("steps:\n  - tap: &s { text: Delete, after: *s }\n")).toThrow(
-      /nest deeper than|cyclic YAML alias/
+      /more than \d+ scopes|cyclic YAML alias/
     );
+  });
+
+  it("bounds a selector's whole scope TREE, not just its depth", () => {
+    // Three relations per level means a depth cap alone still admits 3^depth
+    // scopes — and the runner expands one alternative per combination of
+    // bare-string scopes, so a few hundred bytes of YAML would exhaust the heap
+    // before any tree is ever read. Six scopes down one branch is fine; the
+    // same six spread across branches must cost the same budget.
+    const chain = (n: number): string =>
+      Array.from({ length: n }, () => "{ id: c, within: ").join("") +
+      "{ id: leaf }" +
+      Array.from({ length: n }, () => " }").join("");
+    expect(() => parseFlow(`steps:\n  - tap: { text: T, within: ${chain(5)} }\n`)).not.toThrow();
+    expect(() => parseFlow(`steps:\n  - tap: { text: T, within: ${chain(6)} }\n`)).toThrow(
+      /more than 6 scopes/
+    );
+    // The branching form the depth cap alone would have let through: 3 + 9 = 12
+    // scopes across two levels, all shallow.
+    const branch = "{ id: b, within: x, after: y, next: z }";
+    expect(() =>
+      parseFlow(
+        `steps:\n  - tap: { text: T, within: ${branch}, after: ${branch}, next: ${branch} }\n`
+      )
+    ).toThrow(/more than 6 scopes/);
+  });
+
+  it("serializeFlow refuses an `any` selector the parser would reject on read-back", () => {
+    // appendStep re-parses the whole file on every recorded step, so a selector
+    // that violates the parser's `any` rules must fail where it was built, not
+    // on some later append.
+    const step = (selector: Record<string, unknown>): Parameters<typeof serializeFlow>[0] => ({
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector } as never],
+    });
+    expect(() => serializeFlow(step({ any: true }))).toThrow(/needs a scope/);
+    expect(() =>
+      serializeFlow(step({ any: true, text: "Save", within: { identifier: "c" } }))
+    ).toThrow(/cannot be combined with text\/id\/role/);
+    expect(() => serializeFlow(step({ any: false, within: { identifier: "c" } }))).toThrow(
+      /takes only `true`/
+    );
+    expect(() => serializeFlow(step({ within: { identifier: "c" } }))).toThrow(
+      /only narrows where to look/
+    );
+    // The legal shape still round-trips.
+    const yaml = serializeFlow(step({ any: true, within: { identifier: "c" } }));
+    expect(parseFlow(yaml).steps).toEqual([
+      { kind: "tap", selector: { any: true, within: { identifier: "c" } } },
+    ]);
   });
 
   it("rejects a sibling-scoped selector mixed with coordinates or tap options", () => {
@@ -1330,12 +1384,26 @@ describe("sibling selector scopes and the universal selector", () => {
     ).toBe('* within (id="row") after (text="Name")');
   });
 
-  it("when guards reject a {{secret:…}} placeholder hidden in a sibling scope", () => {
+  it("when guards reject a {{secret:…}} placeholder hidden in ANY scope", () => {
+    // Every relation, so no branch of the walk can be skipped unnoticed.
+    for (const scope of ["within", "after", "next"]) {
+      expect(() =>
+        parseFlow(
+          [
+            "steps:",
+            `  - when: { visible: { role: Switch, ${scope}: { text: '{{secret:TOKEN}}' } } }`,
+            "    steps:",
+            "      - echo: hi",
+          ].join("\n") + "\n"
+        )
+      ).toThrow(/secret/);
+    }
+    // ...including one buried two relations deep.
     expect(() =>
       parseFlow(
         [
           "steps:",
-          "  - when: { visible: { role: Switch, next: { text: '{{secret:TOKEN}}' } } }",
+          "  - when: { visible: { role: Switch, after: { id: row, within: { text: '{{secret:TOKEN}}' } } } }",
           "    steps:",
           "      - echo: hi",
         ].join("\n") + "\n"

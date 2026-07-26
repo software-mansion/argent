@@ -11,6 +11,7 @@ import {
   textMatches,
   treeFingerprint,
   uiTreeMatchInternals,
+  type Selector,
 } from "../../src/utils/ui-tree-match";
 
 function node(partial: Partial<DescribeNode> & { frame: DescribeNode["frame"] }): DescribeNode {
@@ -919,9 +920,107 @@ describe("after / next (sibling) scoping", () => {
   });
 
   it("the synthetic root can never be an anchor", () => {
-    // Were the root admitted, it would sit above/left of nothing and follow
-    // nothing — but a root-matching anchor selector must find no anchor at all.
-    expect(findAll(settings, { role: "AXSwitch", after: { role: "AXWindow" } })).toEqual([]);
+    // The root's frame is the whole screen, so an anchor selector that matches
+    // it would put every element in its row band and to its right — the test is
+    // only meaningful against a control that proves such a frame CAN anchor.
+    const banner = (role: string): DescribeNode =>
+      node({
+        role: "AXWindow",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          node({ role, identifier: "strip", frame: { x: 0, y: 0.1, width: 0.5, height: 0.05 } }),
+          node({
+            role: "AXSwitch",
+            identifier: "sw",
+            frame: { x: 0.8, y: 0.1, width: 0.15, height: 0.05 },
+          }),
+        ],
+      });
+    // A non-root node with that role does anchor the switch...
+    expect(
+      ids(findAll(banner("AXWindow"), { role: "AXSwitch", after: { role: "AXWindow" } }))
+    ).toEqual(["sw"]);
+    // ...so a tree whose ONLY AXWindow is the root yields nothing.
+    expect(findAll(banner("AXGroup"), { role: "AXSwitch", after: { role: "AXWindow" } })).toEqual(
+      []
+    );
+  });
+
+  it("nothing follows itself, even when its own frame is degenerate", () => {
+    // A zero-width rule or zero-height separator satisfies `frameAfter` against
+    // ITSELF (its trailing edge is its leading edge), so a self-matching
+    // selector is the only thing the distinctness guards stand between.
+    const degenerate = (frame: DescribeNode["frame"]): DescribeNode =>
+      node({
+        role: "Screen",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [node({ role: "AXMark", identifier: "only", frame })],
+      });
+    for (const frame of [
+      { x: 0.5, y: 0.2, width: 0, height: 0.1 }, // zero width
+      { x: 0.2, y: 0.5, width: 0.6, height: 0 }, // zero height
+    ]) {
+      expect(findAll(degenerate(frame), { role: "AXMark", after: { role: "AXMark" } })).toEqual([]);
+      expect(findAll(degenerate(frame), { role: "AXMark", next: { role: "AXMark" } })).toEqual([]);
+    }
+  });
+
+  it("treats the tolerance as inclusive at exactly one epsilon", () => {
+    // The boundary the overhang tests bracket but never land on: an anchor
+    // ending at 0.04 and a follower starting at 0.035 are exactly WITHIN_EPS
+    // apart, and the follower must count as the next row.
+    const edge = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ label: "Anchor", frame: { x: 0.1, y: 0, width: 0.3, height: 0.04 } }),
+        node({
+          identifier: "edge",
+          role: "AXButton",
+          frame: { x: 0.1, y: 0.035, width: 0.3, height: 0.04 },
+        }),
+      ],
+    });
+    expect(ids(findAll(edge, { role: "AXButton", after: { text: "Anchor" } }))).toEqual(["edge"]);
+    expect(ids(findAll(edge, { role: "AXButton", next: { text: "Anchor" } }))).toEqual(["edge"]);
+  });
+
+  it("`within` narrows the pool BEFORE `next` picks from it", () => {
+    // The ordering only shows when the anchor's nearest follower sits OUTSIDE
+    // the container: resolving `next` first would pick the decoy and then drop
+    // it, leaving nothing.
+    const cards = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ label: "Name", frame: { x: 0.05, y: 0.5, width: 0.1, height: 0.04 } }),
+        node({
+          identifier: "decoy",
+          role: "AXButton",
+          frame: { x: 0.2, y: 0.5, width: 0.1, height: 0.04 },
+        }),
+        node({
+          identifier: "card-b",
+          role: "AXGroup",
+          frame: { x: 0.5, y: 0.45, width: 0.5, height: 0.15 },
+        }),
+        node({
+          identifier: "edit-b",
+          role: "AXButton",
+          frame: { x: 0.8, y: 0.5, width: 0.1, height: 0.04 },
+        }),
+      ],
+    });
+    expect(ids(findAll(cards, { role: "AXButton", next: { text: "Name" } }))).toEqual(["decoy"]);
+    expect(
+      ids(
+        findAll(cards, {
+          role: "AXButton",
+          next: { text: "Name" },
+          within: { identifier: "card-b" },
+        })
+      )
+    ).toEqual(["edit-b"]);
   });
 
   it("containment is not following — an element inside the anchor does not follow it", () => {
@@ -1091,50 +1190,144 @@ describe("after / next (sibling) scoping", () => {
     expect(evaluateCondition("visible", undefined, empty)).toBe(false);
   });
 
-  // ── Indexed sibling resolution (large node sets) ──────────────────────────
-  it("indexed after/next agree with a naive scan on a large random tree", () => {
-    // Both relations prune with a y-sorted index plus a prefix-max reach bound;
-    // the pruned result must equal the brute-force definition on every input.
+  it("resolves a pair of hairlines sharing a row — `next` can never be emptier than `after`", () => {
+    // Both frames are thinner than the tolerance, so each reads as "above" the
+    // other. Treating that as "below" in both directions would make the LEFT
+    // element follow the right one; it has to fall through to the row rule.
+    const hairlines = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ identifier: "anchor", frame: { x: 0.1, y: 0.06, width: 0.2, height: 0.005 } }),
+        node({
+          identifier: "right",
+          role: "AXButton",
+          frame: { x: 0.6, y: 0.06, width: 0.2, height: 0.005 },
+        }),
+      ],
+    });
+    expect(ids(findAll(hairlines, { role: "AXButton", after: { identifier: "anchor" } }))).toEqual([
+      "right",
+    ]);
+    expect(ids(findAll(hairlines, { role: "AXButton", next: { identifier: "anchor" } }))).toEqual([
+      "right",
+    ]);
+    // ...and the mirror never holds: nothing to the anchor's left follows it.
+    const mirrored = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ identifier: "anchor", frame: { x: 0.6, y: 0.502, width: 0.2, height: 0.001 } }),
+        node({
+          identifier: "left",
+          role: "AXButton",
+          frame: { x: 0.1, y: 0.5, width: 0.2, height: 0.001 },
+        }),
+      ],
+    });
+    expect(findAll(mirrored, { role: "AXButton", next: { identifier: "anchor" } })).toEqual([]);
+    expect(findAll(mirrored, { role: "AXButton", after: { identifier: "anchor" } })).toEqual([]);
+  });
+
+  it("breaks a coincident-corner tie by frame, not by tree order", () => {
+    // A container and the label flush inside it share a top-left corner — an
+    // everyday shape on a flattened tree. The pick must be the same element
+    // whichever order the adapter happened to emit them in.
+    const pair = (first: "container" | "leaf"): DescribeNode => {
+      const container = node({
+        identifier: "container",
+        role: "AXButton",
+        frame: { x: 0.5, y: 0.1, width: 0.4, height: 0.04 },
+      });
+      const leaf = node({
+        identifier: "leaf",
+        role: "AXButton",
+        frame: { x: 0.5, y: 0.1, width: 0.1, height: 0.02 },
+      });
+      return node({
+        role: "Screen",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          node({ label: "Wi-Fi", frame: { x: 0.05, y: 0.1, width: 0.3, height: 0.04 } }),
+          ...(first === "container" ? [container, leaf] : [leaf, container]),
+        ],
+      });
+    };
+    expect(ids(findAll(pair("container"), { role: "AXButton", next: { text: "Wi-Fi" } }))).toEqual([
+      "leaf",
+    ]);
+    expect(ids(findAll(pair("leaf"), { role: "AXButton", next: { text: "Wi-Fi" } }))).toEqual([
+      "leaf",
+    ]);
+  });
+
+  it("a universal selector resolves to the reader's first element, not the smallest", () => {
+    // With no field to be exact about, the smallest-frame rule would target a
+    // hairline spacer. A field-less selector names a region, so the action must
+    // land on the same element a condition would quote.
+    const card = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          identifier: "card",
+          role: "AXGroup",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.4 },
+        }),
+        node({ label: "Confirm order", frame: { x: 0.15, y: 0.2, width: 0.7, height: 0.15 } }),
+        // A hairline BELOW the button: by far the smallest match, but not the
+        // first one a reader meets — so the two rankings disagree here.
+        node({ identifier: "rule", frame: { x: 0.15, y: 0.4, width: 0.7, height: 0.002 } }),
+      ],
+    });
+    const scoped: Selector = { within: { identifier: "card" } };
+    const matches = findAll(card, scoped);
+    expect(matches).toHaveLength(2);
+    expect(selectorToFrame(card, scoped)).toMatchObject({ y: 0.2 });
+    // ...and that is the element a condition reads too, so an assert and the
+    // action it guards can never disagree about which element they mean.
+    expect(evaluateCondition("text", "Confirm order", matches)).toBe(true);
+  });
+
+  // ── Sibling resolution on large node sets ─────────────────────────────────
+  it("after/next agree with the brute-force spec on a large random tree", () => {
+    // A differential check of the whole resolution path — own-field matching,
+    // distinctness, the group split, the union over anchors — against a direct
+    // transcription of the spec. Anchors and candidates deliberately OVERLAP
+    // (every anchor is also a candidate), so the distinctness rule is exercised
+    // on every iteration rather than being vacuously true.
     // Deterministic LCG keeps the fuzz case reproducible (no Math.random flake).
     let seed = 987654321;
     const rand = (): number => {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff;
       return seed / 0x7fffffff;
     };
-    const anchors: DescribeNode[] = [];
+    // Every node carries BOTH the anchor role and the candidate label, so each
+    // node is its own potential anchor and the distinctness rule is live on
+    // every comparison. Some frames are deliberately degenerate (zero-width /
+    // zero-height rules), the shapes where `frameAfter` is reflexive.
     const leaves: DescribeNode[] = [];
-    for (let i = 0; i < 60; i++) {
-      anchors.push(
-        node({
-          role: "AXAnchor",
-          identifier: `a${i}`,
-          frame: {
-            x: rand() * 0.9,
-            y: rand() * 0.9,
-            width: 0.02 + rand() * 0.2,
-            height: 0.02 + rand() * 0.2,
-          },
-        })
-      );
-    }
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 160; i++) {
+      const degenerate = i % 17 === 0;
       leaves.push(
         node({
+          role: "AXAnchor",
           identifier: `l${i}`,
           label: "leaf",
           frame: {
             x: rand() * 0.9,
             y: rand() * 0.9,
-            width: 0.02 + rand() * 0.1,
-            height: 0.02 + rand() * 0.1,
+            width: degenerate ? 0 : 0.02 + rand() * 0.2,
+            height: degenerate ? 0 : 0.02 + rand() * 0.2,
           },
         })
       );
     }
+    const anchors = leaves;
     const tree = node({
       role: "Screen",
       frame: { x: 0, y: 0, width: 1, height: 1 },
-      children: [...anchors, ...leaves],
+      children: leaves,
     });
 
     const eps = 0.005;
@@ -1145,20 +1338,25 @@ describe("after / next (sibling) scoping", () => {
       if (above(n, a)) return false;
       return a.x + a.width <= n.x + eps;
     };
-    const expectedAfter = leaves.filter((l) => anchors.some((a) => isAfter(l.frame, a.frame)));
+    const expectedAfter = leaves.filter((l) =>
+      anchors.some((a) => a !== l && isAfter(l.frame, a.frame))
+    );
     expect(expectedAfter.length).toBeGreaterThan(0); // the fuzz exercises the relation
     expect(ids(findAll(tree, { text: "leaf", after: { role: "AXAnchor" } }))).toEqual(
       ids(expectedAfter)
     );
 
     // `next` = per anchor: the leftmost follower sharing its row band, else the
-    // topmost of those strictly below it.
+    // topmost of those strictly below it; ties fall to the smaller frame.
+    const area = (f: F): number => f.width * f.height;
     const best = (group: DescribeNode[], major: "x" | "y"): DescribeNode =>
       group.reduce((m, l) => {
         const minor = major === "x" ? "y" : "x";
         const win =
           l.frame[major] < m.frame[major] ||
-          (l.frame[major] === m.frame[major] && l.frame[minor] < m.frame[minor]);
+          (l.frame[major] === m.frame[major] &&
+            (l.frame[minor] < m.frame[minor] ||
+              (l.frame[minor] === m.frame[minor] && area(l.frame) < area(m.frame))));
         return win ? l : m;
       });
     const picked = new Set<DescribeNode>();

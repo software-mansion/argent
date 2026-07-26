@@ -210,6 +210,20 @@ export function textMatches(
   return mode === "equals" ? equalsCI(actual, expected) : includesCI(actual, expected);
 }
 
+/**
+ * Does the selector constrain WHICH element it matches, rather than only where
+ * to look? False exactly for the universal selector (flow YAML's `any: true`),
+ * whose relational scopes are its whole content.
+ */
+function hasOwnConstraint(selector: Selector): boolean {
+  return (
+    selector.text !== undefined ||
+    selector.textMatches !== undefined ||
+    selector.identifier !== undefined ||
+    selector.role !== undefined
+  );
+}
+
 function matchNodeWithRegex(
   node: DescribeNode,
   selector: Selector,
@@ -261,10 +275,13 @@ export function matchNode(node: DescribeNode, selector: Selector): boolean {
   return matchNodeWithRegex(node, selector, selectorTextRegex(selector));
 }
 
-// `within` containment tolerance (normalized units): a hair of overhang — a
-// border, a shadow, sub-pixel rounding — must not disqualify an element that
-// visually sits in its container. Matches the magnitude of the flow runner's
-// edge tolerance (EDGE_EPS in flow-actions).
+// Frame-comparison tolerance (normalized units): a hair of overhang — a border,
+// a shadow, sub-pixel rounding — must not change what the eye plainly sees.
+// `frameWithin` reads it as containment slack (an element overhanging its
+// container's edge is still in it); `frameAbove` reads it as the row-band merge
+// threshold (two frames whose edges touch within it are still one row, not two).
+// Matches the magnitude of the flow runner's edge tolerance (EDGE_EPS in
+// flow-actions).
 const WITHIN_EPS = 0.005;
 
 /** Is `inner` contained in `outer`, within {@link WITHIN_EPS} per edge? */
@@ -359,153 +376,98 @@ function frameAbove(a: DescribeFrame, b: DescribeFrame): boolean {
 /**
  * Does `node` FOLLOW `anchor` in reading order — strictly below it, or sharing
  * its row band and entirely to its right? The geometric reading of a CSS
- * sibling combinator on a flattened tree. Not a containment test: an element
- * inside the anchor is neither above nor entirely right of it, so it does not
- * follow it.
+ * sibling combinator on a flattened tree.
+ *
+ * Note the MUTUAL case: two frames each no taller than the tolerance, closer
+ * together than it, are "above" each other under {@link frameAbove}. Reading
+ * that as "below" in both directions would make an element to the anchor's LEFT
+ * come after it, so it falls through to the horizontal rule — which is what a
+ * pair of hairlines a fraction of a percent apart look like anyway: one row.
+ * That also keeps this relation antisymmetric, which the `next` reduction below
+ * relies on.
+ *
+ * Mostly not a containment test — an element well inside the anchor is neither
+ * above nor entirely right of it. The exception is a child flush with the
+ * anchor's bottom or right edge and no thicker than the tolerance (a hairline
+ * divider, a scroll indicator): it satisfies both this and {@link frameWithin}.
  */
 function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
-  if (frameAbove(anchor, node)) return true;
-  if (frameAbove(node, anchor)) return false;
+  const below = frameAbove(anchor, node);
+  const above = frameAbove(node, anchor);
+  if (below !== above) return below;
   return anchor.x + anchor.width <= node.x + WITHIN_EPS;
-}
-
-/**
- * Nodes sorted by (y, x) plus the prefix maximum of their bottom edges — the
- * index both sibling relations scan. Sorting by y makes "strictly below this
- * frame" a contiguous suffix ({@link ReadingIndex.firstBelow}), and `maxReach`
- * bounds the backwards walk over the remaining prefix: once no node at or
- * before an index can reach down to a given y, no earlier one can either.
- * Without it, resolving a relation on a screen-bottom element would rescan
- * every node above it on every poll.
- */
-interface ReadingIndex {
-  nodes: DescribeNode[];
-  maxReach: number[];
-  /** First index whose node starts at or below `bottom` (all later ones too). */
-  firstBelow(bottom: number): number;
-}
-
-function readingIndex(nodes: DescribeNode[]): ReadingIndex {
-  const sorted = [...nodes].sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x);
-  const maxReach = new Array<number>(sorted.length);
-  let reach = -Infinity;
-  for (let i = 0; i < sorted.length; i++) {
-    const f = sorted[i]!.frame;
-    reach = Math.max(reach, f.y + f.height);
-    maxReach[i] = reach;
-  }
-  return {
-    nodes: sorted,
-    maxReach,
-    firstBelow(bottom: number): number {
-      // frameAbove(<frame ending at `bottom`>, n) ⇔ n.frame.y >= bottom - EPS,
-      // monotone in y — so a binary search over the y-sorted array is exact.
-      const target = bottom - WITHIN_EPS;
-      let lo = 0;
-      let hi = sorted.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (sorted[mid]!.frame.y >= target) hi = mid;
-        else lo = mid + 1;
-      }
-      return lo;
-    },
-  };
 }
 
 /**
  * Build a predicate `follows(node)` — true when the node follows a DISTINCT
  * anchor in reading order (the CSS `~` an `after` scope needs).
  *
- * Two cases, split for cost. A node is below SOME anchor iff the smallest
- * anchor bottom is at/above its top, so that case is O(1) from the two
- * smallest bottoms (two, so an anchor that is the node itself can be skipped
- * without rescanning). Only when no anchor is above the node can the row-band
- * case still hold — and then EVERY anchor reaches below the node's top, so the
- * anchors worth testing are exactly the band-sharing ones the index walk
- * visits.
+ * A direct scan, deliberately: unlike {@link containmentTester}'s grid, an
+ * index buys nothing here. The pruning a sorted index could offer is subsumed
+ * by {@link frameAfter}'s own short-circuit — the first anchor ending above the
+ * node settles it — so on every realistic tree shape the sort alone costs more
+ * than the scan it replaces (measured 2-13x slower, from a settings-list shape
+ * up to a 3k-anchor selector over 1.5k candidates).
  */
 function afterTester(anchors: DescribeNode[]): (node: DescribeNode) => boolean {
-  const index = readingIndex(anchors);
-  // The two anchors with the smallest bottom edge, in order.
-  let lowest: DescribeNode | undefined;
-  let second: DescribeNode | undefined;
-  const bottom = (n: DescribeNode): number => n.frame.y + n.frame.height;
-  for (const a of anchors) {
-    if (lowest === undefined || bottom(a) < bottom(lowest)) {
-      second = lowest;
-      lowest = a;
-    } else if (second === undefined || bottom(a) < bottom(second)) {
-      second = a;
-    }
-  }
-  return (node) => {
-    const f = node.frame;
-    const highest = lowest === node ? second : lowest;
-    if (highest !== undefined && frameAbove(highest.frame, f)) return true;
-    // Anchors from `firstBelow` on start at or below this node's bottom edge
-    // and cannot precede it; walk back over the rest until none can reach the
-    // node's band.
-    for (let i = index.firstBelow(f.y + f.height) - 1; i >= 0; i--) {
-      if (index.maxReach[i]! <= f.y + WITHIN_EPS) break;
-      const a = index.nodes[i]!;
-      if (a !== node && frameAfter(f, a.frame)) return true;
-    }
-    return false;
-  };
+  return (node) => anchors.some((a) => a !== node && frameAfter(node.frame, a.frame));
+}
+
+// Ranking among an anchor's followers, once they are split into the two groups
+// below. Each ends in frame AREA so that coincident top-left corners — a
+// container and the label leaf flush inside it, an everyday shape in a
+// flattened tree — resolve to the smaller, more specific element rather than to
+// whichever the tree happened to list first. That matches the "smallest frame
+// wins" doctrine `selectorToFrame` and `nodeAtPoint` already rank by.
+function compareBandPick(a: DescribeFrame, b: DescribeFrame): number {
+  return a.x - b.x || a.y - b.y || frameArea(a) - frameArea(b);
+}
+
+function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
+  return a.y - b.y || a.x - b.x || frameArea(a) - frameArea(b);
 }
 
 /**
- * The CSS `+` reduction: keep only the NEAREST candidate following each anchor
- * (a distinct node), unioned over anchors — as CSS `A + B` is itself the union
- * over every A of the one sibling right after it — and returned in the
- * candidates' own order.
+ * The CSS `+` reduction: keep only the nearest candidate following each anchor,
+ * unioned over anchors — as CSS `A + B` is itself the union over every A of the
+ * one sibling right after it — and returned in the candidates' own order.
  *
- * "Nearest" splits the followers the way a reader does, which also makes it a
- * TOTAL order (so the pick cannot depend on scan order): a follower sharing the
- * anchor's row band beats anything on the rows below — that is the row's own
- * control, the locator this relation exists for — and within each group the
- * leftmost (band) / topmost (below) wins, ties broken by the other axis.
+ * "Nearest" splits the followers the way a reader does: one sharing the
+ * anchor's row band beats anything on the rows below, because that is the row's
+ * own control — the locator `next` exists for. Within each group the leftmost
+ * (band) / topmost (below) wins, then the smaller frame.
  *
- * `firstBelow` splits the two groups exactly, so the below-group pick is the
- * first entry of a y-sorted array and the band scan is bounded by the prefix
- * reach: once no earlier candidate reaches the anchor's top edge, none can
- * share its band.
+ * A single direct scan per anchor, for the same reason {@link afterTester} is
+ * one: sorting the candidates costs about a dozen naive passes, which the one
+ * or two anchors a `next` scope realistically resolves can never amortize (a
+ * broad anchor selector unions a pick per anchor, which is not a locator anyone
+ * writes). An earlier indexed variant was also a second implementation of these
+ * semantics, and the two disagreed on frames near the tolerance.
+ *
+ * Note that the pick is made over ALL candidates, visible or not: this reduces
+ * the match SET, before any condition looks at it. On the platforms whose flow
+ * adapters keep zero-area nodes (Vega), a ghost node between the anchor and the
+ * real control therefore wins the pick and a `visible` check on it fails —
+ * scope by {@link Selector.after} or {@link Selector.within} there instead.
  */
 function nearestAfter(candidates: DescribeNode[], anchors: DescribeNode[]): DescribeNode[] {
   if (candidates.length === 0 || anchors.length === 0) return [];
-  const index = readingIndex(candidates);
   const picked = new Set<DescribeNode>();
   for (const anchor of anchors) {
     const af = anchor.frame;
-    // Candidates from here on start at or below the anchor's bottom edge —
-    // exactly the "strictly below" group; everything before it either shares
-    // the anchor's band or sits above it.
-    const from = index.firstBelow(af.y + af.height);
-    let best: DescribeNode | undefined;
-    for (let i = from - 1; i >= 0; i--) {
-      if (index.maxReach[i]! <= af.y + WITHIN_EPS) break;
-      const c = index.nodes[i]!;
-      if (c === anchor || !frameAfter(c.frame, af)) continue;
+    let band: DescribeNode | undefined;
+    let below: DescribeNode | undefined;
+    for (const c of candidates) {
+      if (c === anchor) continue;
       const f = c.frame;
-      if (
-        best === undefined ||
-        f.x < best.frame.x ||
-        (f.x === best.frame.x && f.y < best.frame.y)
-      ) {
-        best = c;
+      if (!frameAfter(f, af)) continue;
+      if (frameAbove(af, f)) {
+        if (below === undefined || compareBelowPick(f, below.frame) < 0) below = c;
+      } else if (band === undefined || compareBandPick(f, band.frame) < 0) {
+        band = c;
       }
     }
-    if (best === undefined) {
-      // Nothing in the anchor's own row: take the topmost of what is strictly
-      // below it, which a (y, x)-sorted array puts first.
-      for (let i = from; i < index.nodes.length; i++) {
-        if (index.nodes[i] !== anchor) {
-          best = index.nodes[i];
-          break;
-        }
-      }
-    }
+    const best = band ?? below;
     if (best !== undefined) picked.add(best);
   }
   return candidates.filter((c) => picked.has(c));
@@ -736,10 +698,18 @@ function exactFieldCount(
  * hits, then the smallest frame wins (the most specific element, mirroring
  * nodeAtPoint's reverse lookup), with reading order as the final tiebreak.
  * Returns undefined when no visible element matches.
+ *
+ * The universal selector (flow YAML's `any: true`) is the one case that ranking
+ * cannot serve: with no field to be exact about, "smallest" degenerates to
+ * "whatever hairline spacer the scope happens to contain". A field-less
+ * selector names a REGION, not a kind of element, so its matches are read the
+ * way every condition reads a match set — first in reading order — which also
+ * keeps the element an action targets the same one an `assert` would quote.
  */
 export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
   const visible = findAll(root, selector).filter(isVisible);
   if (visible.length === 0) return undefined;
+  if (!hasOwnConstraint(selector)) return firstInReadingOrder(visible)?.frame;
   const fullTextRegex = fullConsumptionRegex(selector);
   let best: DescribeNode | undefined;
   let bestExact = -1;

@@ -34,6 +34,7 @@ import {
 import {
   describeSelector,
   describeTextExpectation,
+  SELECTOR_RELATIONS,
   type FlowSelector,
   type FlowStep,
   type ScrollDirection,
@@ -237,11 +238,15 @@ export function probeWhenCondition(
  * Every relational scope (`within`/`after`/`next`) expands recursively: each
  * level's alternatives cross-combine (a bare-string `within: foo` contributes
  * an identifier pass and a text pass, a map level contributes itself), ordered
- * identifier-first at every level so the doctrine matches the top level's. In
- * practice the product stays tiny: only a bare string is loose and a bare
- * string carries no scope of its own, so each scope contributes at most one
- * loose level. The returned selectors are fully strict — no `loose` flag
- * survives at any depth.
+ * identifier-first at every level so the doctrine matches the top level's. The
+ * returned selectors are fully strict — no `loose` flag survives at any depth.
+ *
+ * The product is exponential in the number of BARE-STRING scopes, which is what
+ * bounds it: only a bare string is loose, a bare string carries no scope of its
+ * own, and the parser caps a selector's whole relation tree at
+ * MAX_SELECTOR_SCOPES — so the worst case is a few dozen passes and a
+ * hand-authored selector is one or two. (That cap is a tree-SIZE bound for
+ * exactly this reason: a depth bound alone would admit 3^depth loose leaves.)
  *
  * `any` is dropped here: it is the flow-side marker that legitimizes a
  * field-less selector, and a field-less selector is already what the match
@@ -249,13 +254,11 @@ export function probeWhenCondition(
  */
 function selectorAlternatives(sel: FlowSelector): Selector[] {
   const { loose, any: _any, within, after, next, ...own } = sel;
+  const scopes = { within, after, next };
   let alts: Selector[] =
     loose && own.text !== undefined ? [{ identifier: own.text }, { text: own.text }] : [own];
-  for (const [relation, scope] of [
-    ["within", within],
-    ["after", after],
-    ["next", next],
-  ] as const) {
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = scopes[relation];
     if (scope === undefined) continue;
     const scopeAlts = selectorAlternatives(scope);
     alts = alts.flatMap((o) => scopeAlts.map((s) => ({ ...o, [relation]: s })));

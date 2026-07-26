@@ -257,7 +257,7 @@ export type FlowSelector = Omit<Selector, "within" | "after" | "next"> & {
  */
 export const SELECTOR_RELATIONS = ["within", "after", "next"] as const;
 
-export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
+type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
 
 /**
  * The selector itself plus every selector nested in its relation tree. Used by
@@ -265,7 +265,7 @@ export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
  * constraint buried in an `after`/`within` scope is treated exactly like one
  * in the target's own fields.
  */
-export function selectorTree(sel: FlowSelector): FlowSelector[] {
+function selectorTree(sel: FlowSelector): FlowSelector[] {
   const out: FlowSelector[] = [];
   const walk = (s: FlowSelector): void => {
     out.push(s);
@@ -540,6 +540,46 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     );
   }
 
+  // The parser's two `any` rules are invariants of the YAML spelling, not of
+  // this type, so a hand-built selector can violate them — and would serialize
+  // to a flow file that `parseFlow` then refuses, which for a recorder means
+  // the failure lands on a LATER step (every append re-parses the whole file).
+  // Same boundary, same doctrine as the guards above: fail where the bad
+  // selector was built.
+  const scopeCount = SELECTOR_RELATIONS.filter((relation) => sel[relation] !== undefined).length;
+  if (sel.any !== undefined) {
+    if (sel.any !== true) {
+      throw new Error(
+        "Cannot serialize flow selector: `any` is the universal selector and takes only `true` — " +
+          "omit it to select by text/id/role."
+      );
+    }
+    if (sel.text !== undefined || sel.textMatches !== undefined || sel.identifier || sel.role) {
+      throw new Error(
+        "Cannot serialize flow selector: `any` already matches every element, so it cannot be " +
+          "combined with text/id/role — keep one or the other."
+      );
+    }
+    if (scopeCount === 0) {
+      throw new Error(
+        "Cannot serialize flow selector: `any` matches every element on screen, so it needs a " +
+          `scope (${SELECTOR_RELATIONS.join("/")}) to narrow what it selects.`
+      );
+    }
+  } else if (
+    scopeCount > 0 &&
+    sel.text === undefined &&
+    sel.textMatches === undefined &&
+    !sel.identifier &&
+    !sel.role
+  ) {
+    throw new Error(
+      `Cannot serialize flow selector: a scope (${SELECTOR_RELATIONS.join("/")}) only narrows ` +
+        "where to look — the selector still needs its own text/id/role naming what to find " +
+        "there, or `any: true` for any element."
+    );
+  }
+
   // Bare-string YAML is the only spelling that carries `loose` (the
   // identifier-first, then text fallback). A map is necessarily strict, so a
   // loose selector with any additional/alternative field cannot round-trip.
@@ -579,13 +619,15 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   // the internal `textMatches` field spells `text: { matches }`. A relational
   // scope recurses — each level keeps its own bare-string/map spelling.
   const { loose: _loose, any, identifier, textMatches, within, after, next, ...rest } = sel;
+  const scopes = { within, after, next };
   const out: Exclude<YamlSelector, string> = { ...rest };
   if (any) out.any = true;
   if (textMatches !== undefined) out.text = { matches: textMatches };
   if (identifier !== undefined) out.id = identifier;
-  if (within !== undefined) out.within = selectorToYaml(within);
-  if (after !== undefined) out.after = selectorToYaml(after);
-  if (next !== undefined) out.next = selectorToYaml(next);
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = scopes[relation];
+    if (scope !== undefined) out[relation] = selectorToYaml(scope);
+  }
   return out;
 }
 
@@ -599,6 +641,7 @@ export function describeSelector(s: FlowSelector): string {
   // the scopes render separately below, and stringifying their objects here
   // would be meaningless.
   const { loose: _loose, any, within, after, next, ...rest } = s;
+  const scopes = { within, after, next };
   const fields = Object.entries(rest)
     // `identifier` is spelled `id` in flow YAML — print the spelling the flow
     // file uses so the message reads like the step it refers to. A regex
@@ -613,12 +656,9 @@ export function describeSelector(s: FlowSelector): string {
   // Each scope renders after the fields, parenthesized so a nested scope's own
   // fields can't be misread as the target's, and labelled with the YAML key so
   // the message reads like the step it refers to.
-  for (const [key, scope] of [
-    ["within", within],
-    ["after", after],
-    ["next", next],
-  ] as const) {
-    if (scope !== undefined) parts.push(`${key} (${describeSelector(scope)})`);
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = scopes[relation];
+    if (scope !== undefined) parts.push(`${relation} (${describeSelector(scope)})`);
   }
   return parts.join(" ");
 }
@@ -939,18 +979,28 @@ const SELECTOR_KEYS: readonly string[] = [
 ];
 
 /**
- * Nesting cap for a selector's relation tree — the selector analog of
- * MAX_WHEN_DEPTH: hand-authored scopes are one or two levels deep, but the
- * yaml library materializes a cyclic alias (`&s { text: x, within: *s }`) as a
- * cyclic object, and without a cap that cycle would recurse without end.
+ * Total number of scopes one selector may carry, counted across its whole
+ * relation TREE rather than down a single branch — the selector analog of
+ * MAX_WHEN_DEPTH. A size bound, not a depth bound, because each level can open
+ * three branches: capping depth alone still admits 3^depth scopes, and the
+ * runner's loose-alternative expansion is exponential in the number of
+ * bare-string scopes (`selectorAlternatives`), so a few hundred bytes of YAML
+ * could exhaust the heap before a single tree read. Bounding the count bounds
+ * the depth too, so this keeps defusing the cyclic YAML alias
+ * (`&s { text: x, within: *s }`) the yaml library materializes as a cyclic
+ * object. Hand-authored selectors carry one or two scopes.
  */
-const MAX_SELECTOR_RELATION_DEPTH = 10;
+const MAX_SELECTOR_SCOPES = 6;
 
-function parseSelector(raw: unknown, where: string, depth = 0): FlowSelector {
-  if (depth >= MAX_SELECTOR_RELATION_DEPTH) {
+function parseSelector(
+  raw: unknown,
+  where: string,
+  budget: { scopes: number } = { scopes: MAX_SELECTOR_SCOPES }
+): FlowSelector {
+  if (budget.scopes < 0) {
     badEntry(
       raw,
-      `${where}: selector scopes (${SELECTOR_RELATIONS.join("/")}) nest deeper than ${MAX_SELECTOR_RELATION_DEPTH} levels — check for a cyclic YAML alias (\`&s { …, within: *s }\`)`
+      `${where}: a selector carries more than ${MAX_SELECTOR_SCOPES} scopes (${SELECTOR_RELATIONS.join("/")}) in total — check for a cyclic YAML alias (\`&s { …, within: *s }\`)`
     );
   }
   // Bare-string sugar: a string is shorthand for a text selector, marked
@@ -979,7 +1029,10 @@ function parseSelector(raw: unknown, where: string, depth = 0): FlowSelector {
     const restRaw = { ...(raw as Record<string, unknown>) };
     const present = SELECTOR_RELATIONS.filter((relation) => relation in restRaw);
     for (const relation of present) {
-      scopes[relation] = parseSelector(restRaw[relation], `${where}.${relation}`, depth + 1);
+      // One shared budget across the whole tree, decremented per scope: sibling
+      // branches spend from it too, so three-way nesting cannot multiply.
+      budget.scopes--;
+      scopes[relation] = parseSelector(restRaw[relation], `${where}.${relation}`, budget);
       delete restRaw[relation];
     }
     if ("any" in restRaw) {
