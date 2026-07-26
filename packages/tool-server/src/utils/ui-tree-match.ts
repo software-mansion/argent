@@ -468,13 +468,17 @@ function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
  * earlier indexed variant was also a second implementation of these semantics,
  * and the two disagreed on frames near the tolerance.
  *
- * Measured on a synthetic list at the flow tree's 12k-node cap: a single-anchor
- * scope (`next: { text: "Wi-Fi" }`, the shape this exists for) resolves in
- * 0.6 ms, and a settings-sized screen in 0.1 ms. The quadratic tail is real but
- * needs an anchor selector matching thousands of elements — 128 ms there —
- * which unions a pick per anchor and so is not a locator anyone writes. Unlike
- * {@link afterTester} this cannot short-circuit: it must see every candidate to
- * know which is nearest.
+ * Measured, single-anchor (`next: { text: "Wi-Fi" }`, the shape this exists
+ * for): 0.1 ms on a settings-sized screen, 1.2 ms even at the flow tree's
+ * 12k-node cap. The quadratic tail is real — 5 ms at 800 nodes, 555 ms at
+ * 12k — but only when the anchor selector matches essentially EVERY node,
+ * which unions a pick per anchor and is not a locator anyone writes; and it
+ * multiplies by the loose-alternative count (bounded by MAX_SELECTOR_SCOPES,
+ * worst case 32) when a scope is a bare string. Unlike {@link afterTester} this
+ * cannot short-circuit: it must see every candidate to know which is nearest.
+ * An index would cut the tail, but the one this replaced was a second
+ * implementation of the rules above and the two disagreed near the tolerance —
+ * a correctness bug in the common case is a bad trade for a misuse-case tail.
  *
  * Note that the pick is made over ALL candidates, visible or not: this reduces
  * the match SET, before any condition looks at it. On the platforms whose flow
@@ -530,23 +534,45 @@ export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] 
 }
 
 /**
- * Own-field matches from `all`, narrowed by each relational scope the selector
- * carries. `within` and `after` are per-node predicates; `next` reduces the
- * SET (it keeps the nearest follower), so it is applied last — a scoped
- * `{ any: true, next: X, within: Y }` means "the first element inside Y that
- * follows X", not "the first element after X, if it happens to be inside Y".
+ * The relational scopes a selector can carry, in the order
+ * {@link resolveSelector} applies them. Spelled once and consumed by both
+ * layers — the match engine here, and flow YAML's parser, serializer, report
+ * stringifiers and loose-alternative expansion — so they cannot drift on which
+ * keys are relations.
  */
+export const SELECTOR_RELATIONS = ["within", "after", "next"] as const;
+
+export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
+
+/**
+ * How each scope narrows a match set. `within` and `after` are per-node
+ * predicates; `next` reduces the SET (it keeps the nearest follower), which is
+ * why the order above applies it last — a scoped `{ any: true, next: X,
+ * within: Y }` means "the first element inside Y that follows X", not "the
+ * first element after X, if it happens to be inside Y".
+ *
+ * A `Record` keyed by the relation union, so adding a scope to
+ * {@link SELECTOR_RELATIONS} without teaching the engine what it MEANS is a
+ * compile error here rather than a scope the resolver silently ignores — which
+ * would read as a condition passing on a constraint that never held.
+ */
+const RELATION_RESOLVERS: Record<
+  SelectorRelation,
+  (matches: DescribeNode[], scope: DescribeNode[]) => DescribeNode[]
+> = {
+  within: (matches, scope) => matches.filter(containmentTester(scope)),
+  after: (matches, scope) => matches.filter(afterTester(scope)),
+  next: (matches, scope) => nearestAfter(matches, scope),
+};
+
+/** Own-field matches from `all`, narrowed by every scope the selector carries. */
 function resolveSelector(all: DescribeNode[], selector: Selector): DescribeNode[] {
   const regex = selectorTextRegex(selector);
   let matches = all.filter((n) => matchNodeWithRegex(n, selector, regex));
-  if (selector.within !== undefined) {
-    matches = matches.filter(containmentTester(resolveSelector(all, selector.within)));
-  }
-  if (selector.after !== undefined) {
-    matches = matches.filter(afterTester(resolveSelector(all, selector.after)));
-  }
-  if (selector.next !== undefined) {
-    matches = nearestAfter(matches, resolveSelector(all, selector.next));
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = selector[relation];
+    if (scope === undefined) continue;
+    matches = RELATION_RESOLVERS[relation](matches, resolveSelector(all, scope));
   }
   return matches;
 }

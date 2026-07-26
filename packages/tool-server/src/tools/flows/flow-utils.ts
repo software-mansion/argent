@@ -7,10 +7,17 @@ import {
   hasVisibleText,
   selectorFieldsSchema,
   selectorSchema,
+  SELECTOR_RELATIONS,
   type Selector,
+  type SelectorRelation,
   type WaitCondition,
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
+
+// Re-exported so the flow layer (parser, serializer, report stringifiers, the
+// runner's loose-alternative expansion) reads the relation list from the same
+// place the match engine defines it.
+export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
@@ -248,16 +255,6 @@ export type FlowSelector = Omit<Selector, "within" | "after" | "next"> & {
   after?: FlowSelector;
   next?: FlowSelector;
 };
-
-/**
- * The relational scopes a selector can carry, in the order the resolver
- * applies them. Spelled once so the parser, the serializer, the report
- * stringifiers, and the runner's loose-alternative expansion cannot drift on
- * which keys are relations.
- */
-export const SELECTOR_RELATIONS = ["within", "after", "next"] as const;
-
-type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
 
 /**
  * The selector itself plus every selector nested in its relation tree. Used by
@@ -1753,6 +1750,20 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
         !SCROLL_DIRECTIONS.includes(b.direction as ScrollDirection))
     ) {
       badEntry(raw, `scroll-to direction must be one of ${SCROLL_DIRECTIONS.join(", ")}`);
+    }
+    // Name the missing `target` rather than letting the selector schema report
+    // "expected object, received undefined" about a key the author never wrote.
+    // Newly worth spelling out: `within` is now a SELECTOR key too, so
+    // `scroll-to: { within: … }` reads like a scoped selector and is instead an
+    // options map with no target — and the sibling scopes don't belong here at
+    // all (they scope the target, which carries its own).
+    if (b.target === undefined) {
+      badEntry(
+        raw,
+        "scroll-to needs a `target` — its own `within` only anchors the gesture to a scroll " +
+          "container, e.g. scroll-to: { target: <selector>, within: { id: list } }. A selector " +
+          `scope (${SELECTOR_RELATIONS.join("/")}) goes inside \`target\`.`
+      );
     }
     const step: FlowStep = {
       kind: "scroll-to",

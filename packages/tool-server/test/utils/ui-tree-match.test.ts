@@ -824,28 +824,59 @@ describe("within (descendant) scoping", () => {
   });
 
   it("indexed containment honors the tolerance for an edge-overhanging leaf", () => {
-    // Force the grid path (> CONTAINMENT_GRID_MIN containers) and place the one
-    // matching leaf overhanging a cell's left edge by < WITHIN_EPS — the grid's
-    // eps-padded cell coverage must still find its container.
-    const children: DescribeNode[] = [];
+    // Force the grid path (> CONTAINMENT_GRID_MIN containers) with the one real
+    // container flush on an INTERIOR cell boundary — the grid is 16 cells per
+    // axis, so 0.0625 is exactly where cell 1 starts. The leaf overhangs its
+    // top-left by 0.003 (< WITHIN_EPS), which puts the leaf's own corner in
+    // cell 0 while the container's unpadded coverage starts at cell 1. Only the
+    // eps-padded registration bridges that gap; clamping cannot, the way it
+    // would for a leaf hanging off the screen edge.
+    const children: DescribeNode[] = [
+      node({
+        role: "AXGroup",
+        identifier: "target",
+        frame: { x: 0.0625, y: 0.0625, width: 0.05, height: 0.05 },
+      }),
+      node({ label: "Pick", frame: { x: 0.0595, y: 0.0595, width: 0.04, height: 0.04 } }),
+    ];
+    // Padding: far-away containers that cannot contain the leaf, purely to push
+    // the container count over CONTAINMENT_GRID_MIN.
     for (let i = 0; i < 40; i++) {
-      const col = i % 8;
-      const row = Math.floor(i / 8);
       children.push(
         node({
           role: "AXGroup",
-          identifier: `cell-${i}`,
-          frame: { x: col * 0.12, y: row * 0.12, width: 0.1, height: 0.1 },
+          identifier: `far-${i}`,
+          frame: {
+            x: 0.5 + (i % 5) * 0.09,
+            y: 0.5 + Math.floor(i / 5) * 0.06,
+            width: 0.04,
+            height: 0.04,
+          },
         })
       );
     }
-    // Inside cell-0 (x 0..0.1, y 0..0.1), overhanging its left edge by 0.003.
-    children.push(
-      node({ label: "Pick", frame: { x: -0.003, y: 0.02, width: 0.05, height: 0.05 } })
-    );
     const tree = node({ role: "Screen", frame: { x: 0, y: 0, width: 1, height: 1 }, children });
     const scoped = findAll(tree, { text: "Pick", within: { role: "AXGroup" } });
     expect(scoped).toHaveLength(1);
+  });
+
+  it("the grid path enforces the distinct-container rule too, not just the naive scan", () => {
+    // Above CONTAINMENT_GRID_MIN, containment runs through the grid, which
+    // carries its OWN copy of the "a node never contains itself" guard. Every
+    // node here matches both slots of `{ role, within: { role } }`, and none
+    // contains another, so the only way to match is by scoping itself.
+    const children: DescribeNode[] = [];
+    for (let i = 0; i < 40; i++) {
+      children.push(
+        node({
+          role: "AXGroup",
+          identifier: `g${i}`,
+          frame: { x: (i % 8) * 0.12, y: Math.floor(i / 8) * 0.12, width: 0.1, height: 0.1 },
+        })
+      );
+    }
+    const tree = node({ role: "Screen", frame: { x: 0, y: 0, width: 1, height: 1 }, children });
+    expect(findAll(tree, { role: "AXGroup", within: { role: "AXGroup" } })).toEqual([]);
   });
 });
 
@@ -1386,6 +1417,88 @@ describe("after / next (sibling) scoping", () => {
     expect(ids(findAll(pair("leaf"), { role: "AXButton", next: { text: "Wi-Fi" } }))).toEqual([
       "leaf",
     ]);
+  });
+
+  it("breaks a coincident-corner tie BELOW the anchor too, not just in its row", () => {
+    // The band group's tie rule is covered above; the below group has its own
+    // comparator, and nothing was pinning it — a container and the leaf flush
+    // inside it, both on a row under the anchor, fell back to tree order.
+    const pair = (first: "container" | "leaf"): DescribeNode => {
+      const container = node({
+        identifier: "container",
+        role: "AXButton",
+        frame: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 },
+      });
+      const leaf = node({
+        identifier: "leaf",
+        role: "AXButton",
+        frame: { x: 0.1, y: 0.5, width: 0.1, height: 0.02 },
+      });
+      return node({
+        role: "Screen",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          node({ label: "Header", frame: { x: 0.1, y: 0.1, width: 0.3, height: 0.04 } }),
+          ...(first === "container" ? [container, leaf] : [leaf, container]),
+        ],
+      });
+    };
+    for (const order of ["container", "leaf"] as const) {
+      expect(ids(findAll(pair(order), { role: "AXButton", next: { text: "Header" } }))).toEqual([
+        "leaf",
+      ]);
+    }
+  });
+
+  it("resolves a regex text matcher inside a sibling scope, not just a within scope", () => {
+    // The scope is resolved by a recursive call that must compile the nested
+    // selector's own pattern; dropping it would silently widen the anchor set.
+    // `sw0` sits ABOVE the only row the pattern matches, so it is excluded —
+    // but it DOES follow the header. Dropping the pattern widens the anchor set
+    // to every node, which pulls sw0 in: that is what makes this fixture able
+    // to tell a threaded matcher from a discarded one.
+    const rows = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ label: "Settings", frame: { x: 0.05, y: 0.05, width: 0.3, height: 0.04 } }),
+        node({
+          identifier: "sw0",
+          role: "AXSwitch",
+          frame: { x: 0.8, y: 0.1, width: 0.15, height: 0.05 },
+        }),
+        node({ label: "Row 1", frame: { x: 0.05, y: 0.2, width: 0.3, height: 0.04 } }),
+        node({
+          identifier: "sw1",
+          role: "AXSwitch",
+          frame: { x: 0.8, y: 0.195, width: 0.15, height: 0.05 },
+        }),
+        node({ label: "Summary", frame: { x: 0.05, y: 0.3, width: 0.3, height: 0.04 } }),
+        node({
+          identifier: "sw2",
+          role: "AXSwitch",
+          frame: { x: 0.8, y: 0.295, width: 0.15, height: 0.05 },
+        }),
+      ],
+    });
+    const pattern = "^Row \\d+$";
+    // `after` keeps every follower of the matched row — and nothing above it.
+    expect(ids(findAll(rows, { role: "AXSwitch", after: { textMatches: pattern } }))).toEqual([
+      "sw1",
+      "sw2",
+    ]);
+    // `next` narrows that to the matched row's own switch.
+    expect(ids(findAll(rows, { role: "AXSwitch", next: { textMatches: pattern } }))).toEqual([
+      "sw1",
+    ]);
+    // ...and `within` threads it the same way (the container is the row label
+    // itself here, so nothing sits inside it).
+    expect(findAll(rows, { role: "AXSwitch", within: { textMatches: pattern } })).toEqual([]);
+    // A pattern matching nothing leaves no anchor at all — not every node.
+    expect(findAll(rows, { role: "AXSwitch", next: { textMatches: "^Column \\d+$" } })).toEqual([]);
+    expect(findAll(rows, { role: "AXSwitch", after: { textMatches: "^Column \\d+$" } })).toEqual(
+      []
+    );
   });
 
   it("a universal selector resolves to the reader's first element, not the smallest", () => {

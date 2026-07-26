@@ -1375,6 +1375,26 @@ describe("sibling selector scopes and the universal selector", () => {
     ).toThrow(/incompatible fields: after/);
   });
 
+  it("names the missing scroll-to target instead of leaking a schema message", () => {
+    // `within` is a selector key now, so this body reads like a scoped selector
+    // — it is actually the options map, missing its target.
+    for (const body of ["{ within: { id: list } }", "{ direction: up }", "{}"]) {
+      expect(() => parseFlow(`steps:\n  - scroll-to: ${body}\n`)).toThrow(
+        /scroll-to needs a `target`/
+      );
+    }
+    // The sibling scopes are not step options at all.
+    expect(() => parseFlow("steps:\n  - scroll-to: { target: Row, after: { id: hdr } }\n")).toThrow(
+      /unknown key `after` — allowed keys: target, direction, within/
+    );
+    // ...while they are welcome inside the target.
+    expect(() =>
+      parseFlow(
+        "steps:\n  - scroll-to: { target: { text: Delete, after: { id: hdr } }, within: { id: list } }\n"
+      )
+    ).not.toThrow();
+  });
+
   it("describeSelector renders each scope, and `*` for the universal selector", () => {
     expect(describeSelector({ role: "Switch", next: { text: "Wi-Fi" } })).toBe(
       'role="Switch" next (text="Wi-Fi")'
