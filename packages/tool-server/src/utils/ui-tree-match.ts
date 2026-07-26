@@ -464,10 +464,17 @@ function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
  *
  * A single direct scan per anchor, for the same reason {@link afterTester} is
  * one: sorting the candidates costs about a dozen naive passes, which the one
- * or two anchors a `next` scope realistically resolves can never amortize (a
- * broad anchor selector unions a pick per anchor, which is not a locator anyone
- * writes). An earlier indexed variant was also a second implementation of these
- * semantics, and the two disagreed on frames near the tolerance.
+ * or two anchors a `next` scope realistically resolves can never amortize. An
+ * earlier indexed variant was also a second implementation of these semantics,
+ * and the two disagreed on frames near the tolerance.
+ *
+ * Measured on a synthetic list at the flow tree's 12k-node cap: a single-anchor
+ * scope (`next: { text: "Wi-Fi" }`, the shape this exists for) resolves in
+ * 0.6 ms, and a settings-sized screen in 0.1 ms. The quadratic tail is real but
+ * needs an anchor selector matching thousands of elements — 128 ms there —
+ * which unions a pick per anchor and so is not a locator anyone writes. Unlike
+ * {@link afterTester} this cannot short-circuit: it must see every candidate to
+ * know which is nearest.
  *
  * Note that the pick is made over ALL candidates, visible or not: this reduces
  * the match SET, before any condition looks at it. On the platforms whose flow
