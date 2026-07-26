@@ -1529,6 +1529,39 @@ describe("after / next (sibling) scoping", () => {
     expect(evaluateCondition("text", "Confirm order", matches)).toBe(true);
   });
 
+  it("resolves a universal selector to the same frame whatever the emission order", () => {
+    // A container and the leaf flush at its top-left corner tie on position, so
+    // a bare reading order would hand the tap to whichever the adapter listed
+    // first — and their extents differ, so that is a different tap centre.
+    const screen = (inner: DescribeNode[]): DescribeNode =>
+      node({
+        role: "Screen",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          node({
+            identifier: "card",
+            role: "AXGroup",
+            frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.3 },
+          }),
+          ...inner,
+        ],
+      });
+    const wrapper = node({
+      identifier: "wrapper",
+      frame: { x: 0.12, y: 0.12, width: 0.76, height: 0.26 },
+    });
+    const label = node({
+      identifier: "label",
+      frame: { x: 0.12, y: 0.12, width: 0.2, height: 0.03 },
+    });
+    const scoped: Selector = { within: { identifier: "card" } };
+    const forward = selectorToFrame(screen([wrapper, label]), scoped);
+    const reversed = selectorToFrame(screen([label, wrapper]), scoped);
+    expect(forward).toEqual(reversed);
+    // The more specific of the two, matching how every other pick ranks.
+    expect(forward).toMatchObject({ width: 0.2, height: 0.03 });
+  });
+
   // ── Sibling resolution on large node sets ─────────────────────────────────
   it("after/next agree with the brute-force spec on a large random tree", () => {
     // A differential check of the whole resolution path — own-field matching,

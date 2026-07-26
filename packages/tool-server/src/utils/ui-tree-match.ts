@@ -473,8 +473,9 @@ function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
  * 12k-node cap. The quadratic tail is real — 5 ms at 800 nodes, 555 ms at
  * 12k — but only when the anchor selector matches essentially EVERY node,
  * which unions a pick per anchor and is not a locator anyone writes; and it
- * multiplies by the loose-alternative count (bounded by MAX_SELECTOR_SCOPES,
- * worst case 32) when a scope is a bare string. Unlike {@link afterTester} this
+ * multiplies by the loose-alternative count when a scope is a bare string
+ * (bounded by MAX_SELECTOR_SCOPES, but super-linearly — a nested scope's own
+ * `next` re-resolves per alternative). Unlike {@link afterTester} this
  * cannot short-circuit: it must see every candidate to know which is nearest.
  * An index would cut the tail, but the one this replaced was a second
  * implementation of the rules above and the two disagreed near the tolerance —
@@ -761,13 +762,27 @@ function exactFieldCount(
  * cannot serve: with no field to be exact about, "smallest" degenerates to
  * "whatever hairline spacer the scope happens to contain". A field-less
  * selector names a REGION, not a kind of element, so its matches are read the
- * way every condition reads a match set — first in reading order — which also
- * keeps the element an action targets the same one an `assert` would quote.
+ * way every condition reads a match set — first in reading order — which keeps
+ * the element an action targets the same one an `assert` would quote.
+ *
+ * {@link compareBelowPick} rather than {@link firstInReadingOrder}, though:
+ * both order by (y, x), but a bare reading order leaves an exact positional
+ * tie — a container and the leaf flush at its top-left corner, the everyday
+ * flattened-tree shape the sibling picks already guard against — to be settled
+ * by the order the adapter happened to emit them in. Two frames with different
+ * extents means two different tap centres, so the tie continues into "most
+ * specific" instead.
  */
 export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
   const visible = findAll(root, selector).filter(isVisible);
   if (visible.length === 0) return undefined;
-  if (!hasOwnConstraint(selector)) return firstInReadingOrder(visible)?.frame;
+  if (!hasOwnConstraint(selector)) {
+    let first: DescribeNode | undefined;
+    for (const n of visible) {
+      if (first === undefined || compareBelowPick(n.frame, first.frame) < 0) first = n;
+    }
+    return first?.frame;
+  }
   const fullTextRegex = fullConsumptionRegex(selector);
   let best: DescribeNode | undefined;
   let bestExact = -1;
