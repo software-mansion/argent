@@ -26,6 +26,7 @@ import {
   type Launch,
   type WhenCondition,
   LAUNCH_PLATFORMS,
+  SELECTOR_RELATIONS,
 } from "./flow-utils";
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
@@ -439,9 +440,11 @@ Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch)
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
-any selector may scope its matches to elements inside a container's frame via \`within: <selector>\`, which
-chains outward to disambiguate nested containers — \`within: { id: card, within: { id: list } }\` reads
-"inside card inside list", each container's frame inside the next);
+any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`
+(descendant — inside that container's frame), \`after: <selector>\` (CSS \`~\` — following it in reading
+order), \`next: <selector>\` (CSS \`+\` — the nearest such follower), plus \`any: true\` (CSS \`*\`, only with a
+scope). Scopes nest to disambiguate — \`within: { id: card, within: { id: list } }\` reads "inside card
+inside list", each container's frame inside the next);
 \`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`await\` waits
 for a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
@@ -699,16 +702,23 @@ function pushReport(state: ExecState, report: StepReport): void {
 
 function selectorLabel(sel: FlowSelector): string {
   const parts: string[] = [];
+  // The universal selector prints as CSS spells it, so a scope-only target
+  // never renders as an empty label.
+  if (sel.any) parts.push("*");
   if (sel.text !== undefined) parts.push(`"${sel.text}"`);
   if (sel.textMatches !== undefined) parts.push(`/${sel.textMatches}/`);
   if (sel.identifier) parts.push(`id=${sel.identifier}`);
   if (sel.role) parts.push(`role=${sel.role}`);
-  const own = parts.join(" ");
-  // A `within` scope renders after the fields, parenthesized and recursive, so
-  // two steps that differ only by scope don't collapse to the same target label
-  // in the report — mirroring `describeSelector`'s reason-string spelling so the
-  // two surfaces stay in lockstep (see `conditionLabel`).
-  return sel.within === undefined ? own : `${own} within (${selectorLabel(sel.within)})`;
+  // Each relational scope renders after the fields, parenthesized and
+  // recursive, so two steps that differ only by scope don't collapse to the
+  // same target label in the report — mirroring `describeSelector`'s
+  // reason-string spelling so the two surfaces stay in lockstep (see
+  // `conditionLabel`).
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = sel[relation];
+    if (scope !== undefined) parts.push(`${relation} (${selectorLabel(scope)})`);
+  }
+  return parts.join(" ");
 }
 
 /**

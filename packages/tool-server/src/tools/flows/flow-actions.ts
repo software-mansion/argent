@@ -234,21 +234,33 @@ export function probeWhenCondition(
  * Lives in the flow runner only; the shared match engine and the tools that
  * consume it are untouched.
  *
- * A `within` scope expands recursively: each level's alternatives cross-combine
- * (a bare-string `within: foo` contributes an identifier pass and a text pass,
- * a map level contributes itself), ordered identifier-first at every level so
- * the doctrine matches the top level's. In practice the product stays tiny:
- * only a bare string is loose and a bare string ends its chain, so a chain
- * carries at most one loose level. The returned selectors are fully strict —
- * no `loose` flag survives at any depth.
+ * Every relational scope (`within`/`after`/`next`) expands recursively: each
+ * level's alternatives cross-combine (a bare-string `within: foo` contributes
+ * an identifier pass and a text pass, a map level contributes itself), ordered
+ * identifier-first at every level so the doctrine matches the top level's. In
+ * practice the product stays tiny: only a bare string is loose and a bare
+ * string carries no scope of its own, so each scope contributes at most one
+ * loose level. The returned selectors are fully strict — no `loose` flag
+ * survives at any depth.
+ *
+ * `any` is dropped here: it is the flow-side marker that legitimizes a
+ * field-less selector, and a field-less selector is already what the match
+ * engine reads as "every element".
  */
 function selectorAlternatives(sel: FlowSelector): Selector[] {
-  const { loose, within, ...own } = sel;
-  const ownAlts: Selector[] =
+  const { loose, any: _any, within, after, next, ...own } = sel;
+  let alts: Selector[] =
     loose && own.text !== undefined ? [{ identifier: own.text }, { text: own.text }] : [own];
-  if (within === undefined) return ownAlts;
-  const withinAlts = selectorAlternatives(within);
-  return ownAlts.flatMap((o) => withinAlts.map((w) => ({ ...o, within: w })));
+  for (const [relation, scope] of [
+    ["within", within],
+    ["after", after],
+    ["next", next],
+  ] as const) {
+    if (scope === undefined) continue;
+    const scopeAlts = selectorAlternatives(scope);
+    alts = alts.flatMap((o) => scopeAlts.map((s) => ({ ...o, [relation]: s })));
+  }
+  return alts;
 }
 
 /**

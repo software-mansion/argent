@@ -847,3 +847,331 @@ describe("within (descendant) scoping", () => {
     expect(scoped).toHaveLength(1);
   });
 });
+
+describe("after / next (sibling) scoping", () => {
+  // A settings list: three rows, each a label plus a switch to its right. The
+  // switches are taller than their labels and therefore sit a hair HIGHER — the
+  // shape a raw top-y reading order gets wrong, and the reason "after" compares
+  // row bands rather than top edges.
+  const rowY = { airplane: 0.2, wifi: 0.3, bluetooth: 0.4 };
+  const settings = node({
+    role: "AXWindow",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: Object.entries(rowY).flatMap(([name, y]) => [
+      node({
+        role: "AXStaticText",
+        label: name === "wifi" ? "Wi-Fi" : name,
+        frame: { x: 0.05, y, width: 0.3, height: 0.04 },
+      }),
+      node({
+        role: "AXSwitch",
+        identifier: `sw-${name}`,
+        frame: { x: 0.8, y: y - 0.005, width: 0.15, height: 0.05 },
+      }),
+    ]),
+  });
+  const ids = (ns: DescribeNode[]): string[] => ns.map((n) => n.identifier!).sort();
+
+  it("after keeps every match following the anchor, in reading order", () => {
+    // The Wi-Fi row's own switch (same band, to the right) and everything below
+    // it — but not the Airplane switch above.
+    expect(ids(findAll(settings, { role: "AXSwitch", after: { text: "Wi-Fi" } }))).toEqual([
+      "sw-bluetooth",
+      "sw-wifi",
+    ]);
+  });
+
+  it("next keeps only the NEAREST follower — the control belonging to that row", () => {
+    expect(ids(findAll(settings, { role: "AXSwitch", next: { text: "Wi-Fi" } }))).toEqual([
+      "sw-wifi",
+    ]);
+    expect(ids(findAll(settings, { role: "AXSwitch", next: { text: "airplane" } }))).toEqual([
+      "sw-airplane",
+    ]);
+  });
+
+  it("next unions over anchors — one nearest pick each, like CSS `A + B`", () => {
+    expect(ids(findAll(settings, { role: "AXSwitch", next: { role: "AXStaticText" } }))).toEqual([
+      "sw-airplane",
+      "sw-bluetooth",
+      "sw-wifi",
+    ]);
+  });
+
+  it("a same-band element to the LEFT of the anchor does not follow it", () => {
+    // The label is left of its own row's switch, so it never follows it — the
+    // asymmetry that makes `after` an ordering rather than a proximity test.
+    expect(findAll(settings, { text: "Wi-Fi", after: { identifier: "sw-wifi" } })).toEqual([]);
+  });
+
+  it("the anchor must be a DISTINCT element — nothing follows itself", () => {
+    // Every switch but the topmost follows another switch; the topmost follows
+    // none, and no switch is admitted by matching itself.
+    expect(ids(findAll(settings, { role: "AXSwitch", after: { role: "AXSwitch" } }))).toEqual([
+      "sw-bluetooth",
+      "sw-wifi",
+    ]);
+  });
+
+  it("a missing anchor yields no matches even though the target exists", () => {
+    expect(findAll(settings, { role: "AXSwitch", after: { text: "no-such-row" } })).toEqual([]);
+    expect(findAll(settings, { role: "AXSwitch", next: { text: "no-such-row" } })).toEqual([]);
+  });
+
+  it("the synthetic root can never be an anchor", () => {
+    // Were the root admitted, it would sit above/left of nothing and follow
+    // nothing — but a root-matching anchor selector must find no anchor at all.
+    expect(findAll(settings, { role: "AXSwitch", after: { role: "AXWindow" } })).toEqual([]);
+  });
+
+  it("containment is not following — an element inside the anchor does not follow it", () => {
+    const card = node({
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          identifier: "card",
+          role: "AXGroup",
+          frame: { x: 0, y: 0.1, width: 1, height: 0.3 },
+        }),
+        node({
+          identifier: "inner",
+          label: "Inner",
+          frame: { x: 0.1, y: 0.2, width: 0.2, height: 0.05 },
+        }),
+      ],
+    });
+    expect(findAll(card, { text: "Inner", after: { identifier: "card" } })).toEqual([]);
+    // ...while the same element IS inside it.
+    expect(ids(findAll(card, { text: "Inner", within: { identifier: "card" } }))).toEqual([
+      "inner",
+    ]);
+  });
+
+  it("admits a follower overhanging the anchor's bottom edge by less than the tolerance", () => {
+    // Anchor bottom 0.30; the follower starts 0.0045 above it — inside
+    // WITHIN_EPS, so it still reads as the next row rather than the same one.
+    const tree = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ label: "Header", frame: { x: 0.1, y: 0.26, width: 0.3, height: 0.04 } }),
+        node({
+          identifier: "near",
+          role: "AXButton",
+          frame: { x: 0.1, y: 0.2955, width: 0.3, height: 0.04 },
+        }),
+      ],
+    });
+    expect(ids(findAll(tree, { role: "AXButton", after: { text: "Header" } }))).toEqual(["near"]);
+  });
+
+  it("rejects a follower overhanging beyond the tolerance when it is also not to the right", () => {
+    const tree = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ label: "Header", frame: { x: 0.1, y: 0.26, width: 0.3, height: 0.04 } }),
+        // 0.006 above the anchor's bottom (past WITHIN_EPS) and horizontally
+        // overlapping it, so neither the below nor the right rule holds.
+        node({
+          identifier: "far",
+          role: "AXButton",
+          frame: { x: 0.1, y: 0.294, width: 0.3, height: 0.04 },
+        }),
+      ],
+    });
+    expect(findAll(tree, { role: "AXButton", after: { text: "Header" } })).toEqual([]);
+  });
+
+  it("a universal (field-less) selector resolves to the anchor's immediate neighbour", () => {
+    // The `any: true` spelling in flow YAML: no own constraint, so the scope
+    // alone decides. `next` then names the very next element on screen.
+    expect(ids(findAll(settings, { next: { text: "Wi-Fi" } }))).toEqual(["sw-wifi"]);
+  });
+
+  it("scopes compose — `within` narrows the pool `next` then picks from", () => {
+    // Two identical rows in two cards: scoping to one card must make `next`
+    // pick that card's control, not the first one on screen.
+    const twoCards = node({
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          identifier: "card-a",
+          role: "AXGroup",
+          frame: { x: 0, y: 0.1, width: 1, height: 0.2 },
+        }),
+        node({ label: "Name", frame: { x: 0.05, y: 0.15, width: 0.3, height: 0.04 } }),
+        node({
+          identifier: "edit-a",
+          role: "AXButton",
+          frame: { x: 0.8, y: 0.15, width: 0.15, height: 0.04 },
+        }),
+        node({
+          identifier: "card-b",
+          role: "AXGroup",
+          frame: { x: 0, y: 0.5, width: 1, height: 0.2 },
+        }),
+        node({ label: "Name", frame: { x: 0.05, y: 0.55, width: 0.3, height: 0.04 } }),
+        node({
+          identifier: "edit-b",
+          role: "AXButton",
+          frame: { x: 0.8, y: 0.55, width: 0.15, height: 0.04 },
+        }),
+      ],
+    });
+    // Scoping the ANCHOR leaves one anchor, so one pick.
+    expect(
+      ids(
+        findAll(twoCards, {
+          role: "AXButton",
+          next: { text: "Name", within: { identifier: "card-b" } },
+        })
+      )
+    ).toEqual(["edit-b"]);
+    // Scoping the TARGET narrows the pool `next` picks from instead: both
+    // rows' labels are still anchors, but the only button they can reach is
+    // card-b's.
+    expect(
+      ids(
+        findAll(twoCards, {
+          role: "AXButton",
+          next: { text: "Name" },
+          within: { identifier: "card-b" },
+        })
+      )
+    ).toEqual(["edit-b"]);
+    // Unscoped, each anchor contributes its own nearest match — CSS `A + B` is
+    // likewise the union over every A.
+    expect(ids(findAll(twoCards, { role: "AXButton", next: { text: "Name" } }))).toEqual([
+      "edit-a",
+      "edit-b",
+    ]);
+  });
+
+  it("a same-row follower beats one on the row below, whatever their top edges say", () => {
+    // The row's own control sits slightly HIGHER than the label; the next row's
+    // control sits lower but starts further left. Reading order must take the
+    // row-mate, not whichever frame happens to start highest.
+    const rows = node({
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ label: "Row", frame: { x: 0.05, y: 0.3, width: 0.3, height: 0.04 } }),
+        node({
+          identifier: "mate",
+          role: "AXButton",
+          frame: { x: 0.8, y: 0.29, width: 0.15, height: 0.06 },
+        }),
+        node({
+          identifier: "below",
+          role: "AXButton",
+          frame: { x: 0.05, y: 0.4, width: 0.15, height: 0.04 },
+        }),
+      ],
+    });
+    expect(ids(findAll(rows, { role: "AXButton", next: { text: "Row" } }))).toEqual(["mate"]);
+  });
+
+  it("selectorToFrame resolves a sibling-scoped target to the right element", () => {
+    expect(selectorToFrame(settings, { role: "AXSwitch", next: { text: "Wi-Fi" } })).toMatchObject({
+      y: rowY.wifi - 0.005,
+    });
+  });
+
+  it("evaluateCondition sees a sibling scope like any other match set", () => {
+    const scoped = findAll(settings, { role: "AXSwitch", next: { text: "bluetooth" } });
+    expect(evaluateCondition("visible", undefined, scoped)).toBe(true);
+    expect(evaluateCondition("hidden", undefined, scoped)).toBe(false);
+    // Nothing follows the last row's switch, so a scope anchored on it is empty
+    // — `hidden` holds, `visible` does not.
+    const empty = findAll(settings, { role: "AXSwitch", after: { identifier: "sw-bluetooth" } });
+    expect(evaluateCondition("hidden", undefined, empty)).toBe(true);
+    expect(evaluateCondition("visible", undefined, empty)).toBe(false);
+  });
+
+  // ── Indexed sibling resolution (large node sets) ──────────────────────────
+  it("indexed after/next agree with a naive scan on a large random tree", () => {
+    // Both relations prune with a y-sorted index plus a prefix-max reach bound;
+    // the pruned result must equal the brute-force definition on every input.
+    // Deterministic LCG keeps the fuzz case reproducible (no Math.random flake).
+    let seed = 987654321;
+    const rand = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const anchors: DescribeNode[] = [];
+    const leaves: DescribeNode[] = [];
+    for (let i = 0; i < 60; i++) {
+      anchors.push(
+        node({
+          role: "AXAnchor",
+          identifier: `a${i}`,
+          frame: {
+            x: rand() * 0.9,
+            y: rand() * 0.9,
+            width: 0.02 + rand() * 0.2,
+            height: 0.02 + rand() * 0.2,
+          },
+        })
+      );
+    }
+    for (let i = 0; i < 120; i++) {
+      leaves.push(
+        node({
+          identifier: `l${i}`,
+          label: "leaf",
+          frame: {
+            x: rand() * 0.9,
+            y: rand() * 0.9,
+            width: 0.02 + rand() * 0.1,
+            height: 0.02 + rand() * 0.1,
+          },
+        })
+      );
+    }
+    const tree = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [...anchors, ...leaves],
+    });
+
+    const eps = 0.005;
+    type F = DescribeNode["frame"];
+    const above = (a: F, b: F): boolean => a.y + a.height <= b.y + eps;
+    const isAfter = (n: F, a: F): boolean => {
+      if (above(a, n)) return true;
+      if (above(n, a)) return false;
+      return a.x + a.width <= n.x + eps;
+    };
+    const expectedAfter = leaves.filter((l) => anchors.some((a) => isAfter(l.frame, a.frame)));
+    expect(expectedAfter.length).toBeGreaterThan(0); // the fuzz exercises the relation
+    expect(ids(findAll(tree, { text: "leaf", after: { role: "AXAnchor" } }))).toEqual(
+      ids(expectedAfter)
+    );
+
+    // `next` = per anchor: the leftmost follower sharing its row band, else the
+    // topmost of those strictly below it.
+    const best = (group: DescribeNode[], major: "x" | "y"): DescribeNode =>
+      group.reduce((m, l) => {
+        const minor = major === "x" ? "y" : "x";
+        const win =
+          l.frame[major] < m.frame[major] ||
+          (l.frame[major] === m.frame[major] && l.frame[minor] < m.frame[minor]);
+        return win ? l : m;
+      });
+    const picked = new Set<DescribeNode>();
+    for (const a of anchors) {
+      const followers = leaves.filter((l) => l !== a && isAfter(l.frame, a.frame));
+      const band = followers.filter((l) => !above(a.frame, l.frame));
+      const below = followers.filter((l) => above(a.frame, l.frame));
+      if (band.length > 0) picked.add(best(band, "x"));
+      else if (below.length > 0) picked.add(best(below, "y"));
+    }
+    expect(picked.size).toBeGreaterThan(0);
+    expect(ids(findAll(tree, { text: "leaf", next: { role: "AXAnchor" } }))).toEqual(
+      ids([...picked])
+    );
+  });
+});

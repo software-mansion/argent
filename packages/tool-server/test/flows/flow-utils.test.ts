@@ -1180,3 +1180,166 @@ describe("within selector scoping", () => {
     ).toThrow(/secret/);
   });
 });
+
+// ── sibling scopes (`after`/`next`) and the `any` universal selector ──
+
+describe("sibling selector scopes and the universal selector", () => {
+  it("parses `after` (CSS ~) and `next` (CSS +) scopes", () => {
+    const flow = parseFlow(
+      [
+        "steps:",
+        "  - tap: { role: Switch, next: { text: Wi-Fi } }",
+        "  - assert: { visible: { role: Button, after: { text: Danger zone } } }",
+      ].join("\n") + "\n"
+    );
+    expect(flow.steps).toEqual([
+      { kind: "tap", selector: { role: "Switch", next: { text: "Wi-Fi" } } },
+      {
+        kind: "assert",
+        condition: "visible",
+        selector: { role: "Button", after: { text: "Danger zone" } },
+      },
+    ]);
+  });
+
+  it("parses `any: true` paired with a scope and round-trips exactly", () => {
+    const yaml =
+      [
+        "steps:",
+        "  - tap: { any: true, next: { text: Airplane }, within: { id: row } }",
+        "  - assert: { hidden: { any: true, within: { id: empty-state } } }",
+      ].join("\n") + "\n";
+    const flow = parseFlow(yaml);
+    expect(flow.steps).toEqual([
+      {
+        kind: "tap",
+        selector: { any: true, within: { identifier: "row" }, next: { text: "Airplane" } },
+      },
+      {
+        kind: "assert",
+        condition: "hidden",
+        selector: { any: true, within: { identifier: "empty-state" } },
+      },
+    ]);
+    expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+  });
+
+  it("a bare-string sibling scope stays loose, and serializes back to the bare spelling", () => {
+    const flow = parseFlow("steps:\n  - tap: { role: Switch, next: wifi-row }\n");
+    expect(flow.steps).toEqual([
+      { kind: "tap", selector: { role: "Switch", next: { text: "wifi-row", loose: true } } },
+    ]);
+    expect(serializeFlow(flow)).toContain("next: wifi-row");
+    expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+  });
+
+  it("scopes combine and nest, round-tripping through YAML", () => {
+    const flow = parseFlow(
+      [
+        "steps:",
+        "  - tap:",
+        "      role: Button",
+        "      within: { id: cards }",
+        "      after: { text: Danger, within: { id: cards } }",
+      ].join("\n") + "\n"
+    );
+    expect(flow.steps).toEqual([
+      {
+        kind: "tap",
+        selector: {
+          role: "Button",
+          within: { identifier: "cards" },
+          after: { text: "Danger", within: { identifier: "cards" } },
+        },
+      },
+    ]);
+    expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+  });
+
+  it("accepts the regex text matcher inside a sibling scope", () => {
+    const flow = parseFlow(
+      "steps:\n  - tap: { role: Switch, next: { text: { matches: '^Row \\d+$' } } }\n"
+    );
+    expect(flow.steps).toEqual([
+      { kind: "tap", selector: { role: "Switch", next: { textMatches: "^Row \\d+$" } } },
+    ]);
+  });
+
+  it("rejects a selector that is ONLY a sibling scope", () => {
+    expect(() => parseFlow("steps:\n  - tap: { after: { text: Danger } }\n")).toThrow(
+      /`after` only scopes where to look — the selector still needs its own text\/id\/role/
+    );
+  });
+
+  it("rejects `any: true` alongside the fields it would make redundant", () => {
+    expect(() =>
+      parseFlow("steps:\n  - tap: { any: true, role: Button, next: { text: Wi-Fi } }\n")
+    ).toThrow(/already matches every element — drop it, or drop the `role`/);
+  });
+
+  it("rejects a bare `any: true` with no scope to narrow it", () => {
+    expect(() => parseFlow("steps:\n  - tap: { any: true }\n")).toThrow(
+      /matches every element on screen — pair it with a scope \(within\/after\/next\)/
+    );
+  });
+
+  it("rejects a non-`true` any value rather than reading it as a locator", () => {
+    expect(() => parseFlow("steps:\n  - tap: { any: false, within: { id: card } }\n")).toThrow(
+      /`any` takes only `true`/
+    );
+  });
+
+  it("rejects unknown keys inside a sibling scope, naming the nested slot", () => {
+    expect(() => parseFlow("steps:\n  - tap: { role: Switch, next: { roel: Button } }\n")).toThrow(
+      /tap\.next: selector has unknown key `roel` \(did you mean `role`\?\)/
+    );
+  });
+
+  it("rejects a cyclic sibling alias via the depth cap", () => {
+    expect(() => parseFlow("steps:\n  - tap: &s { text: Delete, after: *s }\n")).toThrow(
+      /nest deeper than|cyclic YAML alias/
+    );
+  });
+
+  it("rejects a sibling-scoped selector mixed with coordinates or tap options", () => {
+    expect(() => parseFlow("steps:\n  - tap: { after: { id: card }, x: 0.5, y: 0.5 }\n")).toThrow(
+      /takes a selector or x\/y coordinates, not both/
+    );
+    expect(() =>
+      parseFlow("steps:\n  - tap: { on: Photo, times: 2, next: { id: card } }\n")
+    ).toThrow(/the tap options form takes a nested selector/);
+  });
+
+  it("a loose bare-string selector cannot carry a scope through serialization", () => {
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tap", selector: { text: "Delete", loose: true, after: { identifier: "hdr" } } },
+        ],
+      })
+    ).toThrow(/incompatible fields: after/);
+  });
+
+  it("describeSelector renders each scope, and `*` for the universal selector", () => {
+    expect(describeSelector({ role: "Switch", next: { text: "Wi-Fi" } })).toBe(
+      'role="Switch" next (text="Wi-Fi")'
+    );
+    expect(
+      describeSelector({ any: true, within: { identifier: "row" }, after: { text: "Name" } })
+    ).toBe('* within (id="row") after (text="Name")');
+  });
+
+  it("when guards reject a {{secret:…}} placeholder hidden in a sibling scope", () => {
+    expect(() =>
+      parseFlow(
+        [
+          "steps:",
+          "  - when: { visible: { role: Switch, next: { text: '{{secret:TOKEN}}' } } }",
+          "    steps:",
+          "      - echo: hi",
+        ].join("\n") + "\n"
+      )
+    ).toThrow(/secret/);
+  });
+});

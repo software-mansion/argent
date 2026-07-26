@@ -228,3 +228,142 @@ describe("within (descendant) selector resolution", () => {
     expect(result.taps).toHaveLength(0);
   }, 10_000);
 });
+
+// A settings list: three rows, each a label plus a switch to its right. The
+// switches are taller than their labels, so each sits a hair HIGHER — the shape
+// that makes a naive top-to-bottom reading order pick the wrong row's control.
+function settingsRows(): DescribeNode {
+  return screen(
+    [
+      ["Airplane Mode", 0.2],
+      ["Wi-Fi", 0.35],
+      ["Bluetooth", 0.5],
+    ].flatMap(([label, y]) => [
+      n({ label: label as string, frame: { x: 0.05, y: y as number, width: 0.4, height: 0.04 } }),
+      n({
+        role: "AXSwitch",
+        frame: { x: 0.8, y: (y as number) - 0.005, width: 0.15, height: 0.05 },
+      }),
+    ])
+  );
+}
+
+describe("after / next (sibling) selector resolution", () => {
+  it("tap resolves the switch belonging to the named row, not the first on screen", async () => {
+    currentTree = settingsRows;
+
+    await writeFlow("nextrow", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { role: "AXSwitch", next: { text: "Wi-Fi" } } }],
+    });
+
+    const result = await run("nextrow");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass"]);
+    // Centre of the Wi-Fi row's switch (y 0.345 + 0.05/2), not Airplane Mode's.
+    expect(result.taps).toHaveLength(1);
+    expect(result.taps[0].x).toBeCloseTo(0.875, 6);
+    expect(result.taps[0].y).toBeCloseTo(0.37, 6);
+  });
+
+  it("a universal `any: true` selector taps the element right after the anchor", async () => {
+    currentTree = settingsRows;
+
+    await writeFlow("anynext", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { any: true, next: { text: "Bluetooth" } } }],
+    });
+
+    const result = await run("anynext");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass"]);
+    expect(result.taps[0].y).toBeCloseTo(0.52, 6);
+  });
+
+  it("assert hidden holds when the only match sits BEFORE the anchor", async () => {
+    // The Airplane Mode row is above the Wi-Fi one, so it follows nothing there
+    // — while the very same target is plainly visible unscoped, and the rows
+    // below Airplane Mode do follow it.
+    currentTree = settingsRows;
+
+    await writeFlow("afterhidden", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "hidden",
+          selector: { text: "Airplane Mode", after: { text: "Wi-Fi" } },
+        },
+        { kind: "assert", condition: "visible", selector: { text: "Airplane Mode" } },
+        {
+          kind: "assert",
+          condition: "visible",
+          selector: { text: "Bluetooth", after: { text: "Wi-Fi" } },
+        },
+      ],
+    });
+
+    const result = await run("afterhidden");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "assert:pass",
+      "assert:pass",
+      "assert:pass",
+    ]);
+  });
+
+  it("a bare-string sibling scope resolves identifier-first, like every loose selector", async () => {
+    // The anchor is exposed ONLY via testID — a strict text scope would never
+    // find it, so the loose fallback has to reach the identifier pass at depth.
+    currentTree = () =>
+      screen([
+        n({ identifier: "wifi-row", frame: { x: 0.05, y: 0.35, width: 0.4, height: 0.04 } }),
+        n({ role: "AXSwitch", frame: { x: 0.8, y: 0.345, width: 0.15, height: 0.05 } }),
+      ]);
+
+    await writeFlow("loosenext", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "tap",
+          selector: { role: "AXSwitch", next: { text: "wifi-row", loose: true } },
+        },
+      ],
+    });
+
+    const result = await run("loosenext");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass"]);
+    expect(result.taps[0].y).toBeCloseTo(0.37, 6);
+  });
+
+  it("the step report target renders sibling scopes so scoped steps aren't indistinguishable", async () => {
+    currentTree = settingsRows;
+
+    await writeFlow("scopelabels", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", selector: { role: "AXSwitch", next: { text: "Wi-Fi" } } },
+        { kind: "tap", selector: { any: true, next: { text: "Bluetooth" } } },
+      ],
+    });
+
+    const result = await run("scopelabels");
+    expect(result.steps.map((s) => s.target)).toEqual([
+      'role=AXSwitch next ("Wi-Fi")',
+      '* next ("Bluetooth")',
+    ]);
+  });
+
+  // An unresolved action intentionally consumes its 7.5s auto-wait budget.
+  it("a failed sibling-scoped tap names the scope in its reason", async () => {
+    currentTree = () =>
+      screen([n({ role: "AXSwitch", frame: { x: 0.8, y: 0.1, width: 0.15, height: 0.05 } })]);
+
+    await writeFlow("nextmiss", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { role: "AXSwitch", next: { text: "Wi-Fi" } } }],
+    });
+
+    const result = await run("nextmiss");
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toContain('next (text="Wi-Fi")');
+    expect(result.taps).toHaveLength(0);
+  }, 10_000);
+});

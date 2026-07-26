@@ -226,17 +226,57 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
  * `{ id }` selectors stay strict everywhere, including across the
  * serialize/parse round-trip every recorded step performs.
  *
- * `within` re-narrows to FlowSelector so the flag survives at every nesting
- * level: a map selector is itself always strict, but its `within` may be a
- * bare string (`within: profile-card`), and that level keeps the loose
- * identifier-first fallback. Only a bare string can be loose and a bare string
- * carries no `within` of its own, so a loose level is always the END of a
- * chain — the runner's alternative expansion relies on this shape.
+ * The relational slots (`within`/`after`/`next`) re-narrow to FlowSelector so
+ * the flag survives at every nesting level: a map selector is itself always
+ * strict, but its scope may be a bare string (`within: profile-card`), and
+ * that level keeps the loose identifier-first fallback. Only a bare string can
+ * be loose and a bare string carries no relation of its own, so a loose level
+ * is always a LEAF of the relation tree — the runner's alternative expansion
+ * relies on this shape.
+ *
+ * `any` is the universal selector (CSS `*`): it carries no own constraint, so
+ * the parser only accepts it paired with a relation. The match engine needs no
+ * field for it — a selector with no own fields already matches every node —
+ * so it stays on this flow-side type and is dropped before the engine sees the
+ * selector (see `selectorAlternatives`), keeping `await-ui-element`'s schema
+ * surface unchanged.
  */
-export type FlowSelector = Omit<Selector, "within"> & {
+export type FlowSelector = Omit<Selector, "within" | "after" | "next"> & {
   loose?: boolean;
+  any?: boolean;
   within?: FlowSelector;
+  after?: FlowSelector;
+  next?: FlowSelector;
 };
+
+/**
+ * The relational scopes a selector can carry, in the order the resolver
+ * applies them. Spelled once so the parser, the serializer, the report
+ * stringifiers, and the runner's loose-alternative expansion cannot drift on
+ * which keys are relations.
+ */
+export const SELECTOR_RELATIONS = ["within", "after", "next"] as const;
+
+export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
+
+/**
+ * The selector itself plus every selector nested in its relation tree. Used by
+ * whole-chain checks (the `when` guard's secret-placeholder scan) so a
+ * constraint buried in an `after`/`within` scope is treated exactly like one
+ * in the target's own fields.
+ */
+export function selectorTree(sel: FlowSelector): FlowSelector[] {
+  const out: FlowSelector[] = [];
+  const walk = (s: FlowSelector): void => {
+    out.push(s);
+    for (const relation of SELECTOR_RELATIONS) {
+      const nested = s[relation];
+      if (nested !== undefined) walk(nested);
+    }
+  };
+  walk(sel);
+  return out;
+}
 
 /**
  * The platforms a `when: { platform: … }` condition can name — derived from
@@ -354,19 +394,31 @@ export function chromiumLaunchSpec(
  * case-sensitive, validated at parse. In action ranking a pattern that
  * consumes a node's whole label/value counts as an exact match.
  *
- * A map selector may also carry `within: <selector>` — a container scope: the
- * element's frame must sit inside the frame of a distinct element matching
- * the nested selector, e.g. `{ text: "Delete", within: { id: "settings-card" } }`.
- * Geometric by design (flow trees are flat — see the `Selector` type). The
- * nested slot takes every selector form, including bare-string sugar and its
- * own `within`, chaining outward.
+ * A map selector may also carry relational scopes, the geometric readings of
+ * the CSS combinators (flow trees are flat — see the `Selector` type), each
+ * taking a full nested selector (bare-string sugar included) that may nest
+ * further:
+ *   - `within: <selector>` — CSS descendant: the element's frame sits inside
+ *     the frame of a distinct element matching the scope,
+ *     e.g. `{ text: "Delete", within: { id: "settings-card" } }`.
+ *   - `after: <selector>` — CSS `~`: the element follows a distinct match in
+ *     reading order, e.g. `{ role: Button, after: { text: "Danger zone" } }`.
+ *   - `next: <selector>` — CSS `+`: as `after`, narrowed to the NEAREST
+ *     follower, e.g. `{ role: Switch, next: { text: "Wi-Fi" } }`.
+ *
+ * `any: true` is the CSS `*` universal selector — no own constraint, so it is
+ * accepted only alongside a relation, and never alongside `text`/`id`/`role`
+ * (which it would make redundant).
  */
 type YamlSelector =
   | string
-  | (Omit<Selector, "identifier" | "text" | "textMatches" | "within"> & {
+  | (Omit<Selector, "identifier" | "text" | "textMatches" | "within" | "after" | "next"> & {
       id?: string;
+      any?: boolean;
       text?: string | { matches: string };
       within?: YamlSelector;
+      after?: YamlSelector;
+      next?: YamlSelector;
     });
 
 /**
@@ -497,13 +549,15 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
       sel.textMatches !== undefined ||
       sel.identifier !== undefined ||
       sel.role !== undefined ||
-      sel.within !== undefined)
+      sel.any !== undefined ||
+      SELECTOR_RELATIONS.some((relation) => sel[relation] !== undefined))
   ) {
     const incompatible = [
       sel.textMatches !== undefined ? "textMatches" : undefined,
       sel.identifier !== undefined ? "identifier" : undefined,
       sel.role !== undefined ? "role" : undefined,
-      sel.within !== undefined ? "within" : undefined,
+      sel.any !== undefined ? "any" : undefined,
+      ...SELECTOR_RELATIONS.map((relation) => (sel[relation] !== undefined ? relation : undefined)),
     ].filter((field): field is string => field !== undefined);
     throw new Error(
       "Cannot serialize loose flow selector without changing its meaning: bare-string YAML " +
@@ -522,13 +576,16 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     return sel.text;
   }
   // YAML spells the identifier field `id` (parseSelector maps it back), and
-  // the internal `textMatches` field spells `text: { matches }`. A `within`
+  // the internal `textMatches` field spells `text: { matches }`. A relational
   // scope recurses — each level keeps its own bare-string/map spelling.
-  const { loose: _loose, identifier, textMatches, within, ...rest } = sel;
+  const { loose: _loose, any, identifier, textMatches, within, after, next, ...rest } = sel;
   const out: Exclude<YamlSelector, string> = { ...rest };
+  if (any) out.any = true;
   if (textMatches !== undefined) out.text = { matches: textMatches };
   if (identifier !== undefined) out.id = identifier;
   if (within !== undefined) out.within = selectorToYaml(within);
+  if (after !== undefined) out.after = selectorToYaml(after);
+  if (next !== undefined) out.next = selectorToYaml(next);
   return out;
 }
 
@@ -537,10 +594,11 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
  * warnings). The internal `loose` flag is dropped.
  */
 export function describeSelector(s: FlowSelector): string {
-  // Split off the non-string members (`loose` flag, `within` scope) before
-  // Object.entries so the remaining values are all strings — `within` renders
-  // separately below, and stringifying its object here would be meaningless.
-  const { loose: _loose, within, ...rest } = s;
+  // Split off the non-string members (`loose` flag, `any` marker, relational
+  // scopes) before Object.entries so the remaining values are all strings —
+  // the scopes render separately below, and stringifying their objects here
+  // would be meaningless.
+  const { loose: _loose, any, within, after, next, ...rest } = s;
   const fields = Object.entries(rest)
     // `identifier` is spelled `id` in flow YAML — print the spelling the flow
     // file uses so the message reads like the step it refers to. A regex
@@ -549,9 +607,20 @@ export function describeSelector(s: FlowSelector): string {
       k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
     )
     .join(" ");
-  // The ancestor scope renders after the fields, parenthesized so a chained
-  // scope's own fields can't be misread as the target's.
-  return within === undefined ? fields : `${fields} within (${describeSelector(within)})`;
+  // The universal selector prints as CSS spells it, so a relation-only target
+  // never renders as an empty string.
+  const parts = [any ? "*" : undefined, fields || undefined].filter((p) => p !== undefined);
+  // Each scope renders after the fields, parenthesized so a nested scope's own
+  // fields can't be misread as the target's, and labelled with the YAML key so
+  // the message reads like the step it refers to.
+  for (const [key, scope] of [
+    ["within", within],
+    ["after", after],
+    ["next", next],
+  ] as const) {
+    if (scope !== undefined) parts.push(`${key} (${describeSelector(scope)})`);
+  }
+  return parts.join(" ");
 }
 
 /**
@@ -858,23 +927,30 @@ function rejectUnknownKeys(
 }
 
 // Keys a selector map accepts: the schema fields plus the YAML `id` spelling
-// (`identifier` stays accepted as its parse-only alias) and the `within`
-// ancestor scope (a nested selector slot).
-const SELECTOR_KEYS: readonly string[] = ["text", "id", "identifier", "role", "within"];
+// (`identifier` stays accepted as its parse-only alias), the `any` universal
+// marker, and the relational scopes (each a nested selector slot).
+const SELECTOR_KEYS: readonly string[] = [
+  "text",
+  "id",
+  "identifier",
+  "role",
+  "any",
+  ...SELECTOR_RELATIONS,
+];
 
 /**
- * Nesting cap for a selector's `within` chain — the selector analog of
+ * Nesting cap for a selector's relation tree — the selector analog of
  * MAX_WHEN_DEPTH: hand-authored scopes are one or two levels deep, but the
  * yaml library materializes a cyclic alias (`&s { text: x, within: *s }`) as a
  * cyclic object, and without a cap that cycle would recurse without end.
  */
-const MAX_SELECTOR_WITHIN_DEPTH = 10;
+const MAX_SELECTOR_RELATION_DEPTH = 10;
 
 function parseSelector(raw: unknown, where: string, depth = 0): FlowSelector {
-  if (depth >= MAX_SELECTOR_WITHIN_DEPTH) {
+  if (depth >= MAX_SELECTOR_RELATION_DEPTH) {
     badEntry(
       raw,
-      `${where}: selector \`within\` scopes nest deeper than ${MAX_SELECTOR_WITHIN_DEPTH} levels — check for a cyclic YAML alias (\`&s { …, within: *s }\`)`
+      `${where}: selector scopes (${SELECTOR_RELATIONS.join("/")}) nest deeper than ${MAX_SELECTOR_RELATION_DEPTH} levels — check for a cyclic YAML alias (\`&s { …, within: *s }\`)`
     );
   }
   // Bare-string sugar: a string is shorthand for a text selector, marked
@@ -891,25 +967,58 @@ function parseSelector(raw: unknown, where: string, depth = 0): FlowSelector {
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     rejectUnknownKeys(raw, raw as Record<string, unknown>, SELECTOR_KEYS, `${where}: selector`);
   }
-  // Split off the `within` ancestor scope before field validation — it is a
-  // nested selector slot (recursively parsed, every form accepted), not a
-  // field the shared schema knows. A scope alone selects nothing: `within`
-  // only narrows WHERE to look, so the selector still needs its own fields.
-  let within: FlowSelector | undefined;
+  // Split off the relational scopes before field validation — each is a nested
+  // selector slot (recursively parsed, every form accepted), not a field the
+  // shared schema knows. A scope alone selects nothing: it only narrows WHERE
+  // to look, so the selector still needs its own fields — or the explicit
+  // `any: true` universal marker saying "whatever is there".
+  const scopes: { [K in SelectorRelation]?: FlowSelector } = {};
+  let universal = false;
   let fieldsRaw = raw;
-  if (raw !== null && typeof raw === "object" && !Array.isArray(raw) && "within" in raw) {
-    const { within: withinRaw, ...restRaw } = raw as { within: unknown } & Record<string, unknown>;
-    if (Object.keys(restRaw).length === 0) {
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const restRaw = { ...(raw as Record<string, unknown>) };
+    const present = SELECTOR_RELATIONS.filter((relation) => relation in restRaw);
+    for (const relation of present) {
+      scopes[relation] = parseSelector(restRaw[relation], `${where}.${relation}`, depth + 1);
+      delete restRaw[relation];
+    }
+    if ("any" in restRaw) {
+      if (restRaw.any !== true) {
+        badEntry(
+          raw,
+          `${where}: \`any\` takes only \`true\` — it is the CSS \`*\` universal selector (drop the key to select by text/id/role instead)`
+        );
+      }
+      delete restRaw.any;
+      if (Object.keys(restRaw).length > 0) {
+        badEntry(
+          raw,
+          `${where}: \`any: true\` already matches every element — drop it, or drop the ${Object.keys(
+            restRaw
+          )
+            .map((k) => `\`${k}\``)
+            .join("/")} it makes redundant`
+        );
+      }
+      if (present.length === 0) {
+        badEntry(
+          raw,
+          `${where}: \`any: true\` matches every element on screen — pair it with a scope (${SELECTOR_RELATIONS.join(
+            "/"
+          )}) so it selects something specific`
+        );
+      }
+      universal = true;
+    } else if (present.length > 0 && Object.keys(restRaw).length === 0) {
       badEntry(
         raw,
-        `${where}: a selector's \`within\` only scopes where to look — the selector still needs its own text/id/role naming what to find there`
+        `${where}: a selector's \`${present.join("`/`")}\` only scopes where to look — the selector still needs its own text/id/role naming what to find there (or \`any: true\` for any element)`
       );
     }
-    within = parseSelector(withinRaw, `${where}.within`, depth + 1);
     fieldsRaw = restRaw;
   }
-  const attachWithin = (sel: FlowSelector): FlowSelector =>
-    within === undefined ? sel : { ...sel, within };
+  const attachScopes = (sel: FlowSelector): FlowSelector => ({ ...sel, ...scopes });
+  if (universal) return attachScopes({ any: true });
   // Map form: `id` is the YAML spelling of the internal `identifier` field —
   // rewrite it before schema validation. `identifier` still parses as an alias
   // (existing flow files), but a map carrying both is ambiguous and rejected.
@@ -956,12 +1065,12 @@ function parseSelector(raw: unknown, where: string, depth = 0): FlowSelector {
       if (!fields.success) {
         badEntry(raw, `${where}: ${fields.error.issues[0]?.message ?? "invalid selector"}`);
       }
-      return attachWithin({ ...fields.data, textMatches: pattern });
+      return attachScopes({ ...fields.data, textMatches: pattern });
     }
   }
   const r = selectorSchema.safeParse(normalized);
   if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
-  return attachWithin(r.data);
+  return attachScopes(r.data);
 }
 
 const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden", "text"];
@@ -1191,10 +1300,11 @@ function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
 }
 
 /**
- * Does this map carry any selector key (including the `within` scope)? Used to
- * tell a selector map apart from the point/option forms in the gesture-body
- * checks below, so a scoped selector mixed with coordinates or options gets
- * the same pointed rejection as any other selector field.
+ * Does this map carry any selector key (the `any` marker and the relational
+ * scopes included)? Used to tell a selector map apart from the point/option
+ * forms in the gesture-body checks below, so a scoped selector mixed with
+ * coordinates or options gets the same pointed rejection as any other selector
+ * field.
  */
 function hasSelectorField(obj: Record<string, unknown>): boolean {
   return (
@@ -1202,7 +1312,8 @@ function hasSelectorField(obj: Record<string, unknown>): boolean {
     obj.id !== undefined ||
     obj.identifier !== undefined ||
     obj.role !== undefined ||
-    obj.within !== undefined
+    obj.any !== undefined ||
+    SELECTOR_RELATIONS.some((relation) => obj[relation] !== undefined)
   );
 }
 
@@ -1409,10 +1520,10 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   // degenerates into a constant — the same silently-wrong class the per-step
   // `optional:` rejection exists for, so it fails at parse too.
   const { selector, expectedText } = cond;
-  // Walk the whole selector chain: a placeholder in a `within` scope degrades
-  // the guard exactly as one in the target's own fields would.
+  // Walk the whole relation tree: a placeholder in a `within`/`after`/`next`
+  // scope degrades the guard exactly as one in the target's own fields would.
   const guardStrings: (string | undefined)[] = [expectedText];
-  for (let s: FlowSelector | undefined = selector; s !== undefined; s = s.within) {
+  for (const s of selectorTree(selector)) {
     guardStrings.push(s.text, s.textMatches, s.identifier, s.role);
   }
   for (const s of guardStrings) {

@@ -105,6 +105,25 @@ export type Selector = z.infer<typeof selectorSchema> & {
    * for the same reason as `textMatches`.
    */
   within?: Selector;
+  /**
+   * Flow-only general-sibling scope (`{ role: Switch, after: { text: "Wi-Fi" } }`
+   * in flow YAML) — the CSS `~` combinator: the node must FOLLOW a distinct
+   * element matching this selector in reading order (see {@link frameAfter}:
+   * strictly below the anchor, or sharing its row band and entirely to its
+   * right). Geometric for the same reason `within` is — flow trees flatten, so
+   * every element is a sibling and only frames survive to replay. Resolved by
+   * {@link findAll}; a type-level extension, not a schema field.
+   */
+  after?: Selector;
+  /**
+   * Flow-only adjacent-sibling scope (`{ role: Switch, next: { text: "Wi-Fi" } }`
+   * in flow YAML) — the CSS `+` combinator: like {@link after}, but only the
+   * NEAREST following match is kept, per anchor (CSS `A + B` is likewise the
+   * union over every A of the one sibling right after it). This is the "the
+   * control belonging to this row's label" locator. Resolved by
+   * {@link findAll}; a type-level extension, not a schema field.
+   */
+  next?: Selector;
 };
 
 export type WaitCondition = "exists" | "visible" | "hidden" | "text";
@@ -229,8 +248,14 @@ function selectorTextRegex(selector: Selector): RegExp | undefined {
 
 /**
  * Single-node predicate over the selector's OWN fields (text/regex/identifier/
- * role). Ancestor scoping (`within`) needs the tree and is resolved by
- * {@link findAll}; a `within` on the selector is ignored here by design.
+ * role). The relational scopes (`within`/`after`/`next`) need the tree and are
+ * resolved by {@link findAll}; they are ignored here by design.
+ *
+ * A selector with no own fields matches EVERY node — the universal selector
+ * (CSS `*`, spelled `any: true` in flow YAML). Nothing can reach here that way
+ * by accident: `selectorSchema` requires a field, and the flow parser only
+ * lets a field-less selector through behind an explicit `any: true` paired
+ * with a relation.
  */
 export function matchNode(node: DescribeNode, selector: Selector): boolean {
   return matchNodeWithRegex(node, selector, selectorTextRegex(selector));
@@ -317,6 +342,175 @@ function containmentTester(containers: DescribeNode[]): (node: DescribeNode) => 
   };
 }
 
+// ── Reading-order sibling relations (`after` / `next`) ─────────────────────
+
+/**
+ * Is `a` entirely above `b` — a's bottom edge at or above b's top, within
+ * {@link WITHIN_EPS}? The vertical half of reading order. Two frames for which
+ * this fails BOTH ways share a row band (their vertical spans overlap) and are
+ * ordered horizontally instead — that band rule is what makes "the switch after
+ * the Wi-Fi label" work, since a row's control and its label rarely share a top
+ * edge and a raw top-y comparison would order them by which is taller.
+ */
+function frameAbove(a: DescribeFrame, b: DescribeFrame): boolean {
+  return a.y + a.height <= b.y + WITHIN_EPS;
+}
+
+/**
+ * Does `node` FOLLOW `anchor` in reading order — strictly below it, or sharing
+ * its row band and entirely to its right? The geometric reading of a CSS
+ * sibling combinator on a flattened tree. Not a containment test: an element
+ * inside the anchor is neither above nor entirely right of it, so it does not
+ * follow it.
+ */
+function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
+  if (frameAbove(anchor, node)) return true;
+  if (frameAbove(node, anchor)) return false;
+  return anchor.x + anchor.width <= node.x + WITHIN_EPS;
+}
+
+/**
+ * Nodes sorted by (y, x) plus the prefix maximum of their bottom edges — the
+ * index both sibling relations scan. Sorting by y makes "strictly below this
+ * frame" a contiguous suffix ({@link ReadingIndex.firstBelow}), and `maxReach`
+ * bounds the backwards walk over the remaining prefix: once no node at or
+ * before an index can reach down to a given y, no earlier one can either.
+ * Without it, resolving a relation on a screen-bottom element would rescan
+ * every node above it on every poll.
+ */
+interface ReadingIndex {
+  nodes: DescribeNode[];
+  maxReach: number[];
+  /** First index whose node starts at or below `bottom` (all later ones too). */
+  firstBelow(bottom: number): number;
+}
+
+function readingIndex(nodes: DescribeNode[]): ReadingIndex {
+  const sorted = [...nodes].sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x);
+  const maxReach = new Array<number>(sorted.length);
+  let reach = -Infinity;
+  for (let i = 0; i < sorted.length; i++) {
+    const f = sorted[i]!.frame;
+    reach = Math.max(reach, f.y + f.height);
+    maxReach[i] = reach;
+  }
+  return {
+    nodes: sorted,
+    maxReach,
+    firstBelow(bottom: number): number {
+      // frameAbove(<frame ending at `bottom`>, n) ⇔ n.frame.y >= bottom - EPS,
+      // monotone in y — so a binary search over the y-sorted array is exact.
+      const target = bottom - WITHIN_EPS;
+      let lo = 0;
+      let hi = sorted.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (sorted[mid]!.frame.y >= target) hi = mid;
+        else lo = mid + 1;
+      }
+      return lo;
+    },
+  };
+}
+
+/**
+ * Build a predicate `follows(node)` — true when the node follows a DISTINCT
+ * anchor in reading order (the CSS `~` an `after` scope needs).
+ *
+ * Two cases, split for cost. A node is below SOME anchor iff the smallest
+ * anchor bottom is at/above its top, so that case is O(1) from the two
+ * smallest bottoms (two, so an anchor that is the node itself can be skipped
+ * without rescanning). Only when no anchor is above the node can the row-band
+ * case still hold — and then EVERY anchor reaches below the node's top, so the
+ * anchors worth testing are exactly the band-sharing ones the index walk
+ * visits.
+ */
+function afterTester(anchors: DescribeNode[]): (node: DescribeNode) => boolean {
+  const index = readingIndex(anchors);
+  // The two anchors with the smallest bottom edge, in order.
+  let lowest: DescribeNode | undefined;
+  let second: DescribeNode | undefined;
+  const bottom = (n: DescribeNode): number => n.frame.y + n.frame.height;
+  for (const a of anchors) {
+    if (lowest === undefined || bottom(a) < bottom(lowest)) {
+      second = lowest;
+      lowest = a;
+    } else if (second === undefined || bottom(a) < bottom(second)) {
+      second = a;
+    }
+  }
+  return (node) => {
+    const f = node.frame;
+    const highest = lowest === node ? second : lowest;
+    if (highest !== undefined && frameAbove(highest.frame, f)) return true;
+    // Anchors from `firstBelow` on start at or below this node's bottom edge
+    // and cannot precede it; walk back over the rest until none can reach the
+    // node's band.
+    for (let i = index.firstBelow(f.y + f.height) - 1; i >= 0; i--) {
+      if (index.maxReach[i]! <= f.y + WITHIN_EPS) break;
+      const a = index.nodes[i]!;
+      if (a !== node && frameAfter(f, a.frame)) return true;
+    }
+    return false;
+  };
+}
+
+/**
+ * The CSS `+` reduction: keep only the NEAREST candidate following each anchor
+ * (a distinct node), unioned over anchors — as CSS `A + B` is itself the union
+ * over every A of the one sibling right after it — and returned in the
+ * candidates' own order.
+ *
+ * "Nearest" splits the followers the way a reader does, which also makes it a
+ * TOTAL order (so the pick cannot depend on scan order): a follower sharing the
+ * anchor's row band beats anything on the rows below — that is the row's own
+ * control, the locator this relation exists for — and within each group the
+ * leftmost (band) / topmost (below) wins, ties broken by the other axis.
+ *
+ * `firstBelow` splits the two groups exactly, so the below-group pick is the
+ * first entry of a y-sorted array and the band scan is bounded by the prefix
+ * reach: once no earlier candidate reaches the anchor's top edge, none can
+ * share its band.
+ */
+function nearestAfter(candidates: DescribeNode[], anchors: DescribeNode[]): DescribeNode[] {
+  if (candidates.length === 0 || anchors.length === 0) return [];
+  const index = readingIndex(candidates);
+  const picked = new Set<DescribeNode>();
+  for (const anchor of anchors) {
+    const af = anchor.frame;
+    // Candidates from here on start at or below the anchor's bottom edge —
+    // exactly the "strictly below" group; everything before it either shares
+    // the anchor's band or sits above it.
+    const from = index.firstBelow(af.y + af.height);
+    let best: DescribeNode | undefined;
+    for (let i = from - 1; i >= 0; i--) {
+      if (index.maxReach[i]! <= af.y + WITHIN_EPS) break;
+      const c = index.nodes[i]!;
+      if (c === anchor || !frameAfter(c.frame, af)) continue;
+      const f = c.frame;
+      if (
+        best === undefined ||
+        f.x < best.frame.x ||
+        (f.x === best.frame.x && f.y < best.frame.y)
+      ) {
+        best = c;
+      }
+    }
+    if (best === undefined) {
+      // Nothing in the anchor's own row: take the topmost of what is strictly
+      // below it, which a (y, x)-sorted array puts first.
+      for (let i = from; i < index.nodes.length; i++) {
+        if (index.nodes[i] !== anchor) {
+          best = index.nodes[i];
+          break;
+        }
+      }
+    }
+    if (best !== undefined) picked.add(best);
+  }
+  return candidates.filter((c) => picked.has(c));
+}
+
 // Every node matching the selector in the tree, EXCLUDING `root` itself — the
 // synthetic full-screen container describe puts at the head of the tree. See the
 // long-form rationale in await-ui-element: matching the root would let a broad
@@ -324,14 +518,13 @@ function containmentTester(containers: DescribeNode[]): (node: DescribeNode) => 
 // `within` containers too: the synthetic root wraps every screen, so letting it
 // satisfy a scope would make `within` vacuous for broad container selectors.
 //
-// A `within` scope is resolved GEOMETRICALLY — the candidate's frame contained
-// in a matching container's frame — never by tree ancestry: the flow adapters
-// flatten every platform tree into leaves under one synthetic root (see
-// `flow-tree-flatten`), so parent/child structure does not survive to replay,
-// while frames do. The container must be a DISTINCT node (an element never
-// scopes itself, so `a within a` needs two nested elements), and a chain
-// resolves outermost-first: each level keeps only the containers that
-// themselves sit inside a distinct container of the level above.
+// A relational scope is resolved GEOMETRICALLY — never by tree ancestry: the
+// flow adapters flatten every platform tree into leaves under one synthetic
+// root (see `flow-tree-flatten`), so parent/child structure does not survive to
+// replay, while frames do. Every relation requires a DISTINCT node (an element
+// never scopes itself, so `a within a` needs two nested elements), and each
+// nests: `within: { id: b, within: c }` resolves c's containers first, then
+// keeps only the b's sitting inside one of them.
 export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
   const all: DescribeNode[] = [];
   const collect = (node: DescribeNode): void => {
@@ -339,34 +532,29 @@ export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] 
     for (const child of node.children) collect(child);
   };
   for (const child of root.children) collect(child);
+  return resolveSelector(all, selector);
+}
 
-  const matchesOf = (sel: Selector): DescribeNode[] => {
-    const regex = selectorTextRegex(sel);
-    return all.filter((n) => matchNodeWithRegex(n, sel, regex));
-  };
-
-  // Flatten the `within` chain, outermost scope first: for
-  // `{ text: "a", within: { id: "b", within: { text: "c" } } }` — "a inside b
-  // inside c" — c's containers are resolved first, then b's are filtered to
-  // the ones sitting inside them.
-  const chain: Selector[] = [];
-  for (let s = selector.within; s !== undefined; s = s.within) chain.unshift(s);
-  let containers: DescribeNode[] | undefined;
-  for (const level of chain) {
-    const levelMatches = matchesOf(level);
-    const outer = containers;
-    if (outer === undefined) {
-      containers = levelMatches;
-    } else {
-      const inside = containmentTester(outer);
-      containers = levelMatches.filter(inside);
-    }
+/**
+ * Own-field matches from `all`, narrowed by each relational scope the selector
+ * carries. `within` and `after` are per-node predicates; `next` reduces the
+ * SET (it keeps the nearest follower), so it is applied last — a scoped
+ * `{ any: true, next: X, within: Y }` means "the first element inside Y that
+ * follows X", not "the first element after X, if it happens to be inside Y".
+ */
+function resolveSelector(all: DescribeNode[], selector: Selector): DescribeNode[] {
+  const regex = selectorTextRegex(selector);
+  let matches = all.filter((n) => matchNodeWithRegex(n, selector, regex));
+  if (selector.within !== undefined) {
+    matches = matches.filter(containmentTester(resolveSelector(all, selector.within)));
   }
-
-  const own = matchesOf(selector);
-  if (containers === undefined) return own;
-  const inside = containmentTester(containers);
-  return own.filter(inside);
+  if (selector.after !== undefined) {
+    matches = matches.filter(afterTester(resolveSelector(all, selector.after)));
+  }
+  if (selector.next !== undefined) {
+    matches = nearestAfter(matches, resolveSelector(all, selector.next));
+  }
+  return matches;
 }
 
 // describe prunes off-screen / zero-size nodes, so a non-zero frame area is a
