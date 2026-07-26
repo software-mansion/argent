@@ -1229,6 +1229,37 @@ describe("after / next (sibling) scoping", () => {
     expect(findAll(mirrored, { role: "AXButton", after: { identifier: "anchor" } })).toEqual([]);
   });
 
+  it("groups a mutual-hairline row-mate with the row, not with the rows below", () => {
+    // The anchor and A are each thinner than the tolerance and closer than it,
+    // so each reads as "above" the other — they are one row. If the follower
+    // test says "row-mate" but the grouping says "below", A drops into the
+    // lower-priority group and loses to B, which is further right.
+    const rows = node({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ identifier: "anchor", frame: { x: 0.1, y: 0.5, width: 0.2, height: 0.001 } }),
+        node({
+          identifier: "a",
+          role: "AXBtn",
+          frame: { x: 0.4, y: 0.502, width: 0.2, height: 0.001 },
+        }),
+        node({
+          identifier: "b",
+          role: "AXBtn",
+          frame: { x: 0.7, y: 0.45, width: 0.1, height: 0.2 },
+        }),
+      ],
+    });
+    // Both follow the anchor...
+    expect(ids(findAll(rows, { role: "AXBtn", after: { identifier: "anchor" } }))).toEqual([
+      "a",
+      "b",
+    ]);
+    // ...and the leftmost row-mate is the nearest.
+    expect(ids(findAll(rows, { role: "AXBtn", next: { identifier: "anchor" } }))).toEqual(["a"]);
+  });
+
   it("breaks a coincident-corner tie by frame, not by tree order", () => {
     // A container and the label flush inside it share a top-left corner — an
     // everyday shape on a flattened tree. The pick must be the same element
@@ -1333,11 +1364,16 @@ describe("after / next (sibling) scoping", () => {
     const eps = 0.005;
     type F = DescribeNode["frame"];
     const above = (a: F, b: F): boolean => a.y + a.height <= b.y + eps;
-    const isAfter = (n: F, a: F): boolean => {
-      if (above(a, n)) return true;
-      if (above(n, a)) return false;
-      return a.x + a.width <= n.x + eps;
+    // The spec: a follower sits on a row BELOW the anchor, or shares its row
+    // band and is entirely to its right. Two frames each within the tolerance
+    // of the other are one row, not two.
+    const kindOf = (n: F, a: F): "below" | "band" | "no" => {
+      const isBelow = above(a, n);
+      const isAbove = above(n, a);
+      if (isBelow !== isAbove) return isBelow ? "below" : "no";
+      return a.x + a.width <= n.x + eps ? "band" : "no";
     };
+    const isAfter = (n: F, a: F): boolean => kindOf(n, a) !== "no";
     const expectedAfter = leaves.filter((l) =>
       anchors.some((a) => a !== l && isAfter(l.frame, a.frame))
     );
@@ -1362,8 +1398,8 @@ describe("after / next (sibling) scoping", () => {
     const picked = new Set<DescribeNode>();
     for (const a of anchors) {
       const followers = leaves.filter((l) => l !== a && isAfter(l.frame, a.frame));
-      const band = followers.filter((l) => !above(a.frame, l.frame));
-      const below = followers.filter((l) => above(a.frame, l.frame));
+      const band = followers.filter((l) => kindOf(l.frame, a.frame) === "band");
+      const below = followers.filter((l) => kindOf(l.frame, a.frame) === "below");
       if (band.length > 0) picked.add(best(band, "x"));
       else if (below.length > 0) picked.add(best(below, "y"));
     }

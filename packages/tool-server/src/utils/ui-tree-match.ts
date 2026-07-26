@@ -391,11 +391,25 @@ function frameAbove(a: DescribeFrame, b: DescribeFrame): boolean {
  * anchor's bottom or right edge and no thicker than the tolerance (a hairline
  * divider, a scroll indicator): it satisfies both this and {@link frameWithin}.
  */
-function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
+type FollowKind = "below" | "band" | "no";
+
+/**
+ * How `node` sits relative to `anchor`: on a row below it, in its row band and
+ * to its right, or not following it at all. The classification {@link
+ * frameAfter} and {@link nearestAfter} both read, so the follower test and the
+ * grouping of followers can never disagree — deriving the group from a second
+ * `frameAbove` call put a mutual-case row-mate in the "below" group, where it
+ * lost to a band-mate further right.
+ */
+function followKind(node: DescribeFrame, anchor: DescribeFrame): FollowKind {
   const below = frameAbove(anchor, node);
   const above = frameAbove(node, anchor);
-  if (below !== above) return below;
-  return anchor.x + anchor.width <= node.x + WITHIN_EPS;
+  if (below !== above) return below ? "below" : "no";
+  return anchor.x + anchor.width <= node.x + WITHIN_EPS ? "band" : "no";
+}
+
+function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
+  return followKind(node, anchor) !== "no";
 }
 
 /**
@@ -460,11 +474,11 @@ function nearestAfter(candidates: DescribeNode[], anchors: DescribeNode[]): Desc
     for (const c of candidates) {
       if (c === anchor) continue;
       const f = c.frame;
-      if (!frameAfter(f, af)) continue;
-      if (frameAbove(af, f)) {
+      const kind = followKind(f, af);
+      if (kind === "band") {
+        if (band === undefined || compareBandPick(f, band.frame) < 0) band = c;
+      } else if (kind === "below") {
         if (below === undefined || compareBelowPick(f, below.frame) < 0) below = c;
-      } else if (band === undefined || compareBandPick(f, band.frame) < 0) {
-        band = c;
       }
     }
     const best = band ?? below;
