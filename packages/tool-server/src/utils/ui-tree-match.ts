@@ -373,33 +373,31 @@ function frameAbove(a: DescribeFrame, b: DescribeFrame): boolean {
   return a.y + a.height <= b.y + WITHIN_EPS;
 }
 
+/** Where `node` sits relative to an anchor in reading order. */
+type FollowKind = "below" | "band" | "no";
+
 /**
- * Does `node` FOLLOW `anchor` in reading order — strictly below it, or sharing
- * its row band and entirely to its right? The geometric reading of a CSS
- * sibling combinator on a flattened tree.
+ * Does `node` FOLLOW `anchor` in reading order, and how — on a row below it, or
+ * sharing its row band and entirely to its right? The geometric reading of a
+ * CSS sibling combinator on a flattened tree.
  *
- * Note the MUTUAL case: two frames each no taller than the tolerance, closer
+ * ONE classification, read by both {@link frameAfter} and {@link nearestAfter},
+ * so the follower test and the grouping of followers can never disagree:
+ * re-deriving the group from a second {@link frameAbove} call put a mutual-case
+ * row-mate in the "below" group, where it lost to a band-mate further right.
+ *
+ * That mutual case: two frames each no taller than the tolerance, closer
  * together than it, are "above" each other under {@link frameAbove}. Reading
  * that as "below" in both directions would make an element to the anchor's LEFT
- * come after it, so it falls through to the horizontal rule — which is what a
- * pair of hairlines a fraction of a percent apart look like anyway: one row.
- * That also keeps this relation antisymmetric, which the `next` reduction below
- * relies on.
+ * follow it, so it falls through to the horizontal rule — which is what a pair
+ * of hairlines a fraction of a percent apart look like anyway: one row. That
+ * also keeps the relation antisymmetric, which the `next` reduction relies on.
  *
  * Mostly not a containment test — an element well inside the anchor is neither
  * above nor entirely right of it. The exception is a child flush with the
  * anchor's bottom or right edge and no thicker than the tolerance (a hairline
- * divider, a scroll indicator): it satisfies both this and {@link frameWithin}.
- */
-type FollowKind = "below" | "band" | "no";
-
-/**
- * How `node` sits relative to `anchor`: on a row below it, in its row band and
- * to its right, or not following it at all. The classification {@link
- * frameAfter} and {@link nearestAfter} both read, so the follower test and the
- * grouping of followers can never disagree — deriving the group from a second
- * `frameAbove` call put a mutual-case row-mate in the "below" group, where it
- * lost to a band-mate further right.
+ * divider, a scroll indicator): it both follows the anchor and sits
+ * {@link frameWithin} it.
  */
 function followKind(node: DescribeFrame, anchor: DescribeFrame): FollowKind {
   const below = frameAbove(anchor, node);
