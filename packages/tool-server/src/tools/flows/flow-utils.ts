@@ -104,8 +104,14 @@ export function clearActiveProjectRoot(): void {
   activeProjectRoot = null;
 }
 
+/** The flows dir under an explicit root — for callers that must not resolve
+ * against the active-project-root global (see flow-add-step). */
+export function flowsDirFor(root: string): string {
+  return path.join(root, FLOWS_DIR_NAME);
+}
+
 export function getFlowsDir(): string {
-  return path.join(requireActiveProjectRoot(), FLOWS_DIR_NAME);
+  return flowsDirFor(requireActiveProjectRoot());
 }
 
 export function assertSafeFlowName(name: string): void {

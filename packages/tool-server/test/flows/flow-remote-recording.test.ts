@@ -142,6 +142,32 @@ describe("flow recording with a remote client (probe miss)", () => {
     ]);
   });
 
+  it("add-step rejects a flow-execute flow_path — a client sibling is unreadable here", async () => {
+    const registry = createMockRegistry({ "flow-execute": { result: { ok: true, steps: [] } } });
+    const addStep = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, executionPrerequisite: "Home" },
+      remoteCtx()
+    );
+
+    await expect(
+      addStep.execute(
+        {},
+        {
+          command: "flow-execute",
+          args: JSON.stringify({
+            flow_path: path.join(CLIENT_ROOT, ".argent", "flows", "login.yaml"),
+            project_root: CLIENT_ROOT,
+          }),
+        }
+      )
+    ).rejects.toThrow(/not persisted on this host/i);
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("finish-recording summarizes the in-memory flow and clears the session", async () => {
     await flowStartRecordingTool.execute(
       {},

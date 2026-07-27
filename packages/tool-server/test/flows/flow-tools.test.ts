@@ -10,6 +10,7 @@ import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recor
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import {
   createRunFlowTool,
+  resolveFlowSource,
   type FlowRunResult,
   type FlowPrerequisiteNotice,
 } from "../../src/tools/flows/flow-run";
@@ -495,22 +496,26 @@ describe("flow-add-step", () => {
 
     await flowStartRecordingTool.execute({}, { name: "compose-path", project_root: tmpDir });
     await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+    const sibling = path.join(tmpDir, ".argent", "flows", "login.yaml");
 
     const result = await tool.execute(
       {},
       {
         command: "flow-execute",
-        args: JSON.stringify({
-          flow_path: path.join(tmpDir, ".argent", "flows", "login.yaml"),
-          project_root: tmpDir,
-        }),
+        args: JSON.stringify({ flow_path: sibling, project_root: tmpDir }),
       }
     );
 
     expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login" }]);
+    // The live sub-invoke gets no file-input boundary, so it must run the
+    // sibling by name…
+    const nested = (registry.invokeTool as any).mock.calls[0][1];
+    expect(nested).toEqual({ name: "login", project_root: tmpDir });
+    // …which a real tool-server resolves to that same file.
+    expect(resolveFlowSource(nested)).toEqual({ filePath: sibling, flowName: "login" });
   });
 
-  it("warns that a flow_path outside the recording's flow directory cannot replay", async () => {
+  it("rejects a flow_path outside the recording's flow directory without running it", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
     });
@@ -520,18 +525,44 @@ describe("flow-add-step", () => {
     const outside = path.join(tmpDir, "elsewhere.yaml");
     await fs.writeFile(outside, "steps:\n  - echo: hi\n", "utf8");
 
-    const result = await tool.execute(
-      {},
-      {
-        command: "flow-execute",
-        args: JSON.stringify({ flow_path: outside, project_root: tmpDir }),
-      }
-    );
+    await expect(
+      tool.execute(
+        {},
+        {
+          command: "flow-execute",
+          args: JSON.stringify({ flow_path: outside, project_root: tmpDir }),
+        }
+      )
+    ).rejects.toThrow(/not in the recording's flow directory/i);
 
-    expect(result.message).toMatch(/outside the recording's flow directory and cannot replay/i);
-    expect(parseFlow(result.flowFile).steps).toEqual([
-      { kind: "tool", name: "flow-execute", args: { flow_path: outside, project_root: tmpDir } },
-    ]);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await readFlowFile("compose-outside")).steps).toEqual([]);
+  });
+
+  it("rejects a sibling flow_path that the call's project_root does not resolve to", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-mismatch", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          command: "flow-execute",
+          args: JSON.stringify({
+            flow_path: path.join(tmpDir, ".argent", "flows", "login.yaml"),
+            project_root: path.join(tmpDir, "other-project"),
+          }),
+        }
+      )
+    ).rejects.toThrow(/does not resolve "login" to it/);
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await readFlowFile("compose-mismatch")).steps).toEqual([]);
   });
 
   it("throws on invalid JSON in args", async () => {

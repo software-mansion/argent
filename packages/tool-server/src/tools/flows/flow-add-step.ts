@@ -1,7 +1,7 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { Registry, ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
 import {
   getActiveFlow,
   getRecordingSession,
@@ -9,6 +9,7 @@ import {
   parseFlow,
   assertSafeFlowName,
   describeSelector,
+  flowsDirFor,
   type FlowSavedTo,
   type FlowStep,
   type RecordingSession,
@@ -121,6 +122,81 @@ async function captureTapSelector(
 const RUN_TARGET_COMMAND = "flow-execute";
 
 /**
+ * Rewrite a nested `flow-execute` target from `flow_path` to the equivalent
+ * `name`, in place — or reject the call before anything runs.
+ *
+ * `flow-add-step` forwards the nested call's arguments as opaque JSON, so a
+ * `flow_path` inside them never crosses flow-execute's file-input boundary and
+ * `resolveFlowSource` would reject it outright. A sibling of the recording is
+ * the one target with a boundary-verified equivalent: the same file the
+ * `name` + `project_root` pair already resolves to, in a directory
+ * flow-start-recording established through its own boundary. Every other
+ * flow_path is refused here — it could not replay as a recorded step either,
+ * since a raw `tool:` step has no boundary to resolve a path through.
+ */
+function rewriteSiblingFlowPath(
+  session: RecordingSession | null,
+  args: Record<string, unknown>
+): void {
+  const flowPath = args.flow_path;
+  // A call naming both sources — or neither — is flow-execute's schema to judge.
+  if (typeof flowPath !== "string" || args.name !== undefined) return;
+
+  const invalid = (detail: string): FailureError =>
+    new FailureError(
+      `Cannot record a flow-execute of flow_path "${flowPath}": ${detail}. flow_path carries no ` +
+        `file-input resolution through flow-add-step's opaque args — pass name + project_root ` +
+        `for a flow saved beside the recording.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_add_step_flow_path",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+
+  if (!session || session.persist !== "host") {
+    throw invalid(
+      "the recording is not persisted on this host, so its siblings cannot be resolved here"
+    );
+  }
+  const ext = path.extname(flowPath);
+  if (ext !== ".yaml") {
+    // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
+    throw invalid(
+      ext.toLowerCase() === ".yaml"
+        ? `flow files must use the lowercase .yaml extension, not "${ext}"`
+        : "flow files must use the .yaml extension"
+    );
+  }
+  // The recording's own dir, not getFlowsDir(): only a sibling of the flow
+  // being recorded composes as `run:`.
+  const flowsDir = path.dirname(session.filePath);
+  if (path.resolve(path.dirname(flowPath)) !== path.resolve(flowsDir)) {
+    throw invalid(
+      `it is not in the recording's flow directory ("${flowsDir}"), and a raw tool: step has ` +
+        `no boundary to resolve a path through at replay`
+    );
+  }
+  const stem = path.basename(flowPath, ".yaml");
+  assertSafeFlowName(stem);
+  // Only sound while `name` under the caller's project_root names this very
+  // file — otherwise the rewrite would silently run a different flow.
+  const projectRoot = args.project_root;
+  if (
+    typeof projectRoot !== "string" ||
+    path.resolve(flowsDirFor(projectRoot), `${stem}.yaml`) !== path.resolve(flowPath)
+  ) {
+    throw invalid(
+      `project_root ${typeof projectRoot === "string" ? `"${projectRoot}"` : "(missing)"} does not resolve "${stem}" to it`
+    );
+  }
+
+  delete args.flow_path;
+  args.name = stem;
+}
+
+/**
  * For a recorded `flow-execute` call, decide whether to record it as a
  * `run: <name>` directive. Returns the flow name to compose, or a warning
  * explaining why the raw `flow-execute` step was kept.
@@ -130,47 +206,34 @@ const RUN_TARGET_COMMAND = "flow-execute";
  * e2e target's `launch` simply runs inline. So we keep the raw step only when
  * the target can't be resolved as a sibling, or the recording is remote (the
  * host can't read the client's sibling files to validate). A `flow_path`
- * target composes the same way (as its basename stem) when it names a sibling
- * `.yaml` of the recording; any other flow_path cannot replay at all — a raw
- * `tool:` step has no file-input boundary to resolve it through.
+ * target reaches here as its sibling `name` or not at all — see
+ * {@link rewriteSiblingFlowPath}.
  */
 async function captureRunTarget(
   session: RecordingSession | null,
   args: Record<string, unknown>
 ): Promise<{ flow?: string; warning?: string }> {
   const name = typeof args.name === "string" ? args.name : undefined;
-  const flowPath = typeof args.flow_path === "string" ? args.flow_path : undefined;
-  if (name === undefined && flowPath === undefined) {
+  if (name === undefined) {
     return { warning: "flow-execute call had no flow name; kept the raw step" };
   }
   if (!session || session.persist !== "host") {
     return {
-      warning: `kept the raw flow-execute step — run: composition is host-resolved, so a remote recording can't reference "${name ?? flowPath}" portably`,
+      warning: `kept the raw flow-execute step — run: composition is host-resolved, so a remote recording can't reference "${name}" portably`,
     };
   }
-  const flowsDir = path.dirname(session.filePath);
-  if (
-    name === undefined &&
-    (path.extname(flowPath!) !== ".yaml" ||
-      path.resolve(path.dirname(flowPath!)) !== path.resolve(flowsDir))
-  ) {
-    return {
-      warning: `flow_path "${flowPath}" is outside the recording's flow directory and cannot replay as a recorded step; kept the raw flow-execute step`,
-    };
-  }
-  const stem = name ?? path.basename(flowPath!, ".yaml");
   try {
-    assertSafeFlowName(stem);
+    assertSafeFlowName(name);
     // Resolve against the recording's own flows dir (the running flow-execute
     // may have mutated the active-project-root global), not getFlowsDir().
     // Parsing validates the sibling exists and is a well-formed flow; a failure
     // falls through to keeping the raw step.
-    const fragPath = path.join(flowsDir, `${stem}.yaml`);
+    const fragPath = path.join(path.dirname(session.filePath), `${name}.yaml`);
     parseFlow(await fs.readFile(fragPath, "utf8"));
-    return { flow: stem };
+    return { flow: name };
   } catch (err) {
     return {
-      warning: `could not resolve "${stem}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,
+      warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,
     };
   }
 }
@@ -197,6 +260,13 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
       const flowName = getActiveFlow();
       const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
 
+      // Read the session before the sub-invoke: a nested flow-execute leaves it
+      // untouched but mutates the active-project-root global this resolves against.
+      const session = getRecordingSession();
+      // A nested flow-execute must never carry a raw flow_path into the live
+      // invoke — it has no boundary metadata there and would be rejected.
+      if (params.command === RUN_TARGET_COMMAND) rewriteSiblingFlowPath(session, args);
+
       // Selector capture must read the tree BEFORE the tap runs: a navigating
       // tap (e.g. a list row that opens a detail screen) replaces the screen, so
       // the tapped element is gone by the time the tap returns. Resolve the
@@ -220,7 +290,6 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
 
       // Running a fragment via flow-execute mid-recording is recorded as a
       // `run:` composition directive rather than a raw, non-portable tool call.
-      const session = getRecordingSession();
       const runTarget =
         params.command === RUN_TARGET_COMMAND && params.delayMs === undefined
           ? await captureRunTarget(session, args)
