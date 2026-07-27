@@ -7,10 +7,17 @@ import {
   hasVisibleText,
   selectorFieldsSchema,
   selectorSchema,
+  SELECTOR_RELATIONS,
   type Selector,
+  type SelectorRelation,
   type WaitCondition,
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
+
+// Re-exported so the flow layer (parser, serializer, report stringifiers, the
+// runner's loose-alternative expansion) reads the relation list from the same
+// place the match engine defines it.
+export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
@@ -226,8 +233,48 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
  * inverses). It is never forwarded into a tool's input — explicit `{ text }` /
  * `{ id }` selectors stay strict everywhere, including across the
  * serialize/parse round-trip every recorded step performs.
+ *
+ * The relational slots (`within`/`after`/`next`) re-narrow to FlowSelector so
+ * the flag survives at every nesting level: a map selector is itself always
+ * strict, but its scope may be a bare string (`within: profile-card`), and
+ * that level keeps the loose identifier-first fallback. Only a bare string can
+ * be loose and a bare string carries no relation of its own, so a loose level
+ * is always a LEAF of the relation tree — the runner's alternative expansion
+ * relies on this shape.
+ *
+ * `any` is the universal selector (CSS `*`): it carries no own constraint, so
+ * the parser only accepts it paired with a relation. The match engine needs no
+ * field for it — a selector with no own fields already matches every node —
+ * so it stays on this flow-side type and is dropped before the engine sees the
+ * selector (see `selectorAlternatives`), keeping `await-ui-element`'s schema
+ * surface unchanged.
  */
-export type FlowSelector = Selector & { loose?: boolean };
+export type FlowSelector = Omit<Selector, "within" | "after" | "next"> & {
+  loose?: boolean;
+  any?: boolean;
+  within?: FlowSelector;
+  after?: FlowSelector;
+  next?: FlowSelector;
+};
+
+/**
+ * The selector itself plus every selector nested in its relation tree. Used by
+ * whole-chain checks (the `when` guard's secret-placeholder scan) so a
+ * constraint buried in an `after`/`within` scope is treated exactly like one
+ * in the target's own fields.
+ */
+function selectorTree(sel: FlowSelector): FlowSelector[] {
+  const out: FlowSelector[] = [];
+  const walk = (s: FlowSelector): void => {
+    out.push(s);
+    for (const relation of SELECTOR_RELATIONS) {
+      const nested = s[relation];
+      if (nested !== undefined) walk(nested);
+    }
+  };
+  walk(sel);
+  return out;
+}
 
 /**
  * The platforms a `when: { platform: … }` condition can name — derived from
@@ -280,7 +327,7 @@ export type FlowStep =
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
   | { kind: "rotate"; selector?: FlowSelector; by: number }
-  | { kind: "snapshot"; name: string; maxMismatch?: number };
+  | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector };
 
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
@@ -345,12 +392,32 @@ export function chromiumLaunchSpec(
  * the same doctrine as the `text` condition's `matches`: unanchored,
  * case-sensitive, validated at parse. In action ranking a pattern that
  * consumes a node's whole label/value counts as an exact match.
+ *
+ * A map selector may also carry relational scopes, the geometric readings of
+ * the CSS combinators (flow trees are flat — see the `Selector` type), each
+ * taking a full nested selector (bare-string sugar included) that may nest
+ * further:
+ *   - `within: <selector>` — CSS descendant: the element's frame sits inside
+ *     the frame of a distinct element matching the scope,
+ *     e.g. `{ text: "Delete", within: { id: "settings-card" } }`.
+ *   - `after: <selector>` — CSS `~`: the element follows a distinct match in
+ *     reading order, e.g. `{ role: Button, after: { text: "Danger zone" } }`.
+ *   - `next: <selector>` — CSS `+`: as `after`, narrowed to the NEAREST
+ *     follower, e.g. `{ role: Switch, next: { text: "Wi-Fi" } }`.
+ *
+ * `any: true` is the CSS `*` universal selector — no own constraint, so it is
+ * accepted only alongside a relation, and never alongside `text`/`id`/`role`
+ * (which it would make redundant).
  */
 type YamlSelector =
   | string
-  | (Omit<Selector, "identifier" | "text" | "textMatches"> & {
+  | (Omit<Selector, "identifier" | "text" | "textMatches" | "within" | "after" | "next"> & {
       id?: string;
+      any?: boolean;
       text?: string | { matches: string };
+      within?: YamlSelector;
+      after?: YamlSelector;
+      next?: YamlSelector;
     });
 
 /**
@@ -423,7 +490,7 @@ type YamlStep =
   | { "scroll-to": YamlScrollBody }
   | { pinch: { on?: YamlSelector; scale: number } }
   | { rotate: { on?: YamlSelector; by: number } }
-  | { snapshot: string | { name: string; maxMismatch?: number } };
+  | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } };
 
 type YamlFlowFile = {
   executionPrerequisite?: string;
@@ -473,6 +540,46 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     );
   }
 
+  // The parser's two `any` rules are invariants of the YAML spelling, not of
+  // this type, so a hand-built selector can violate them — and would serialize
+  // to a flow file that `parseFlow` then refuses, which for a recorder means
+  // the failure lands on a LATER step (every append re-parses the whole file).
+  // Same boundary, same doctrine as the guards above: fail where the bad
+  // selector was built.
+  const scopeCount = SELECTOR_RELATIONS.filter((relation) => sel[relation] !== undefined).length;
+  if (sel.any !== undefined) {
+    if (sel.any !== true) {
+      throw new Error(
+        "Cannot serialize flow selector: `any` is the universal selector and takes only `true` — " +
+          "omit it to select by text/id/role."
+      );
+    }
+    if (sel.text !== undefined || sel.textMatches !== undefined || sel.identifier || sel.role) {
+      throw new Error(
+        "Cannot serialize flow selector: `any` already matches every element, so it cannot be " +
+          "combined with text/id/role — keep one or the other."
+      );
+    }
+    if (scopeCount === 0) {
+      throw new Error(
+        "Cannot serialize flow selector: `any` matches every element on screen, so it needs a " +
+          `scope (${SELECTOR_RELATIONS.join("/")}) to narrow what it selects.`
+      );
+    }
+  } else if (
+    scopeCount > 0 &&
+    sel.text === undefined &&
+    sel.textMatches === undefined &&
+    !sel.identifier &&
+    !sel.role
+  ) {
+    throw new Error(
+      `Cannot serialize flow selector: a scope (${SELECTOR_RELATIONS.join("/")}) only narrows ` +
+        "where to look — the selector still needs its own text/id/role naming what to find " +
+        "there, or `any: true` for any element."
+    );
+  }
+
   // Bare-string YAML is the only spelling that carries `loose` (the
   // identifier-first, then text fallback). A map is necessarily strict, so a
   // loose selector with any additional/alternative field cannot round-trip.
@@ -481,12 +588,16 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     (sel.text === undefined ||
       sel.textMatches !== undefined ||
       sel.identifier !== undefined ||
-      sel.role !== undefined)
+      sel.role !== undefined ||
+      sel.any !== undefined ||
+      SELECTOR_RELATIONS.some((relation) => sel[relation] !== undefined))
   ) {
     const incompatible = [
       sel.textMatches !== undefined ? "textMatches" : undefined,
       sel.identifier !== undefined ? "identifier" : undefined,
       sel.role !== undefined ? "role" : undefined,
+      sel.any !== undefined ? "any" : undefined,
+      ...SELECTOR_RELATIONS.map((relation) => (sel[relation] !== undefined ? relation : undefined)),
     ].filter((field): field is string => field !== undefined);
     throw new Error(
       "Cannot serialize loose flow selector without changing its meaning: bare-string YAML " +
@@ -505,11 +616,18 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     return sel.text;
   }
   // YAML spells the identifier field `id` (parseSelector maps it back), and
-  // the internal `textMatches` field spells `text: { matches }`.
-  const { loose: _loose, identifier, textMatches, ...rest } = sel;
+  // the internal `textMatches` field spells `text: { matches }`. A relational
+  // scope recurses — each level keeps its own bare-string/map spelling.
+  const { loose: _loose, any, identifier, textMatches, within, after, next, ...rest } = sel;
+  const scopes = { within, after, next };
   const out: Exclude<YamlSelector, string> = { ...rest };
+  if (any) out.any = true;
   if (textMatches !== undefined) out.text = { matches: textMatches };
   if (identifier !== undefined) out.id = identifier;
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = scopes[relation];
+    if (scope !== undefined) out[relation] = selectorToYaml(scope);
+  }
   return out;
 }
 
@@ -518,17 +636,31 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
  * warnings). The internal `loose` flag is dropped.
  */
 export function describeSelector(s: FlowSelector): string {
-  return (
-    Object.entries(s)
-      .filter(([k]) => k !== "loose")
-      // `identifier` is spelled `id` in flow YAML — print the spelling the flow
-      // file uses so the message reads like the step it refers to. A regex
-      // matcher prints in /slashes/ so it can't be misread as a literal.
-      .map(([k, v]) =>
-        k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
-      )
-      .join(" ")
-  );
+  // Split off the non-string members (`loose` flag, `any` marker, relational
+  // scopes) before Object.entries so the remaining values are all strings —
+  // the scopes render separately below, and stringifying their objects here
+  // would be meaningless.
+  const { loose: _loose, any, within, after, next, ...rest } = s;
+  const scopes = { within, after, next };
+  const fields = Object.entries(rest)
+    // `identifier` is spelled `id` in flow YAML — print the spelling the flow
+    // file uses so the message reads like the step it refers to. A regex
+    // matcher prints in /slashes/ so it can't be misread as a literal.
+    .map(([k, v]) =>
+      k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
+    )
+    .join(" ");
+  // The universal selector prints as CSS spells it, so a relation-only target
+  // never renders as an empty string.
+  const parts = [any ? "*" : undefined, fields || undefined].filter((p) => p !== undefined);
+  // Each scope renders after the fields, parenthesized so a nested scope's own
+  // fields can't be misread as the target's, and labelled with the YAML key so
+  // the message reads like the step it refers to.
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = scopes[relation];
+    if (scope !== undefined) parts.push(`${relation} (${describeSelector(scope)})`);
+  }
+  return parts.join(" ");
 }
 
 /**
@@ -729,11 +861,18 @@ function toYamlStep(step: FlowStep): YamlStep {
           ? { on: selectorToYaml(step.selector), by: step.by }
           : { by: step.by },
       };
-    case "snapshot":
+    case "snapshot": {
       // A name-only snapshot sugars to a bare string.
-      return step.maxMismatch === undefined
-        ? { snapshot: step.name }
-        : { snapshot: { name: step.name, maxMismatch: step.maxMismatch } };
+      if (step.maxMismatch === undefined && step.cropOn === undefined) {
+        return { snapshot: step.name };
+      }
+      const body: { name: string; maxMismatch?: number; cropOn?: YamlSelector } = {
+        name: step.name,
+      };
+      if (step.maxMismatch !== undefined) body.maxMismatch = step.maxMismatch;
+      if (step.cropOn !== undefined) body.cropOn = selectorToYaml(step.cropOn);
+      return { snapshot: body };
+    }
     case "tool":
     default: {
       const y: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
@@ -842,10 +981,42 @@ function rejectUnknownKeys(
 }
 
 // Keys a selector map accepts: the schema fields plus the YAML `id` spelling
-// (`identifier` stays accepted as its parse-only alias).
-const SELECTOR_KEYS: readonly string[] = ["text", "id", "identifier", "role"];
+// (`identifier` stays accepted as its parse-only alias), the `any` universal
+// marker, and the relational scopes (each a nested selector slot).
+const SELECTOR_KEYS: readonly string[] = [
+  "text",
+  "id",
+  "identifier",
+  "role",
+  "any",
+  ...SELECTOR_RELATIONS,
+];
 
-function parseSelector(raw: unknown, where: string): FlowSelector {
+/**
+ * Total number of scopes one selector may carry, counted across its whole
+ * relation TREE rather than down a single branch — the selector analog of
+ * MAX_WHEN_DEPTH. A size bound, not a depth bound, because each level can open
+ * three branches: capping depth alone still admits 3^depth scopes, and the
+ * runner's loose-alternative expansion is exponential in the number of
+ * bare-string scopes (`selectorAlternatives`), so a few hundred bytes of YAML
+ * could exhaust the heap before a single tree read. Bounding the count bounds
+ * the depth too, so this keeps defusing the cyclic YAML alias
+ * (`&s { text: x, within: *s }`) the yaml library materializes as a cyclic
+ * object. Hand-authored selectors carry one or two scopes.
+ */
+const MAX_SELECTOR_SCOPES = 6;
+
+function parseSelector(
+  raw: unknown,
+  where: string,
+  budget: { scopes: number } = { scopes: MAX_SELECTOR_SCOPES }
+): FlowSelector {
+  if (budget.scopes < 0) {
+    badEntry(
+      raw,
+      `${where}: a selector carries more than ${MAX_SELECTOR_SCOPES} scopes (${SELECTOR_RELATIONS.join("/")}) in total — check for a cyclic YAML alias (\`&s { …, within: *s }\`)`
+    );
+  }
   // Bare-string sugar: a string is shorthand for a text selector, marked
   // `loose` so the flow runner tries the identifier locator first and falls
   // back to text — a hand-written `foo` then matches `testID="foo"` too. An
@@ -860,12 +1031,67 @@ function parseSelector(raw: unknown, where: string): FlowSelector {
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     rejectUnknownKeys(raw, raw as Record<string, unknown>, SELECTOR_KEYS, `${where}: selector`);
   }
+  // Split off the relational scopes before field validation — each is a nested
+  // selector slot (recursively parsed, every form accepted), not a field the
+  // shared schema knows. A scope alone selects nothing: it only narrows WHERE
+  // to look, so the selector still needs its own fields — or the explicit
+  // `any: true` universal marker saying "whatever is there".
+  const scopes: { [K in SelectorRelation]?: FlowSelector } = {};
+  let universal = false;
+  let fieldsRaw = raw;
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const restRaw = { ...(raw as Record<string, unknown>) };
+    const present = SELECTOR_RELATIONS.filter((relation) => relation in restRaw);
+    for (const relation of present) {
+      // One shared budget across the whole tree, decremented per scope: sibling
+      // branches spend from it too, so three-way nesting cannot multiply.
+      budget.scopes--;
+      scopes[relation] = parseSelector(restRaw[relation], `${where}.${relation}`, budget);
+      delete restRaw[relation];
+    }
+    if ("any" in restRaw) {
+      if (restRaw.any !== true) {
+        badEntry(
+          raw,
+          `${where}: \`any\` takes only \`true\` — it is the CSS \`*\` universal selector (drop the key to select by text/id/role instead)`
+        );
+      }
+      delete restRaw.any;
+      if (Object.keys(restRaw).length > 0) {
+        badEntry(
+          raw,
+          `${where}: \`any: true\` already matches every element — drop it, or drop the ${Object.keys(
+            restRaw
+          )
+            .map((k) => `\`${k}\``)
+            .join("/")} it makes redundant`
+        );
+      }
+      if (present.length === 0) {
+        badEntry(
+          raw,
+          `${where}: \`any: true\` matches every element on screen — pair it with a scope (${SELECTOR_RELATIONS.join(
+            "/"
+          )}) so it selects something specific`
+        );
+      }
+      universal = true;
+    } else if (present.length > 0 && Object.keys(restRaw).length === 0) {
+      badEntry(
+        raw,
+        `${where}: a selector's \`${present.join("`/`")}\` only scopes where to look — the selector still needs its own text/id/role naming what to find there (or \`any: true\` for any element)`
+      );
+    }
+    fieldsRaw = restRaw;
+  }
+  const attachScopes = (sel: FlowSelector): FlowSelector => ({ ...sel, ...scopes });
+  if (universal) return attachScopes({ any: true });
   // Map form: `id` is the YAML spelling of the internal `identifier` field —
   // rewrite it before schema validation. `identifier` still parses as an alias
   // (existing flow files), but a map carrying both is ambiguous and rejected.
-  let normalized = raw;
-  if (raw !== null && typeof raw === "object" && "id" in raw) {
-    const { id, ...rest } = raw as { id: unknown } & Record<string, unknown>;
+  let normalized = fieldsRaw;
+  if (fieldsRaw !== null && typeof fieldsRaw === "object" && "id" in fieldsRaw) {
+    const { id, ...rest } = fieldsRaw as { id: unknown } & Record<string, unknown>;
     if ("identifier" in rest) {
       badEntry(raw, `${where}: selector takes \`id\` or \`identifier\` (its alias), not both`);
     }
@@ -906,12 +1132,12 @@ function parseSelector(raw: unknown, where: string): FlowSelector {
       if (!fields.success) {
         badEntry(raw, `${where}: ${fields.error.issues[0]?.message ?? "invalid selector"}`);
       }
-      return { ...fields.data, textMatches: pattern };
+      return attachScopes({ ...fields.data, textMatches: pattern });
     }
   }
   const r = selectorSchema.safeParse(normalized);
   if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
-  return r.data;
+  return attachScopes(r.data);
 }
 
 const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden", "text"];
@@ -1142,6 +1368,24 @@ function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
 }
 
 /**
+ * Does this map carry any selector key (the `any` marker and the relational
+ * scopes included)? Used to tell a selector map apart from the point/option
+ * forms in the gesture-body checks below, so a scoped selector mixed with
+ * coordinates or options gets the same pointed rejection as any other selector
+ * field.
+ */
+function hasSelectorField(obj: Record<string, unknown>): boolean {
+  return (
+    obj.text !== undefined ||
+    obj.id !== undefined ||
+    obj.identifier !== undefined ||
+    obj.role !== undefined ||
+    obj.any !== undefined ||
+    SELECTOR_RELATIONS.some((relation) => obj[relation] !== undefined)
+  );
+}
+
+/**
  * Parse a gesture target (`tap`/`long-press` body or its `on:` value): a
  * selector (bare string = loose, map = strict) or a raw normalized point
  * `{ x, y }`. A map mixing selector fields with x/y is ambiguous (which
@@ -1157,12 +1401,7 @@ function parseTarget(
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if (obj.x !== undefined || obj.y !== undefined) {
-      if (
-        obj.text !== undefined ||
-        obj.id !== undefined ||
-        obj.identifier !== undefined ||
-        obj.role !== undefined
-      ) {
+      if (hasSelectorField(obj)) {
         badEntry(raw, `${where} takes a selector or x/y coordinates, not both`);
       }
       if (typeof obj.x !== "number" || typeof obj.y !== "number") {
@@ -1196,12 +1435,7 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
   if (obj.on !== undefined || obj.times !== undefined) {
-    if (
-      obj.text !== undefined ||
-      obj.id !== undefined ||
-      obj.identifier !== undefined ||
-      obj.role !== undefined
-    ) {
+    if (hasSelectorField(obj)) {
       badEntry(
         entry,
         'the tap options form takes a nested selector — e.g. tap: { on: { text: "Photo" }, times: 2 }'
@@ -1237,12 +1471,7 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
   if (obj.on !== undefined || obj.duration !== undefined) {
-    if (
-      obj.text !== undefined ||
-      obj.id !== undefined ||
-      obj.identifier !== undefined ||
-      obj.role !== undefined
-    ) {
+    if (hasSelectorField(obj)) {
       badEntry(
         entry,
         'the long-press options form takes a nested selector — e.g. long-press: { on: { text: "Row" }, duration: 1200 }'
@@ -1293,12 +1522,7 @@ function parsePinch(body: unknown, entry: unknown): FlowStep {
     );
   }
   const obj = body as Record<string, unknown>;
-  if (
-    obj.text !== undefined ||
-    obj.id !== undefined ||
-    obj.identifier !== undefined ||
-    obj.role !== undefined
-  ) {
+  if (hasSelectorField(obj)) {
     badEntry(entry, 'pinch takes a nested selector — e.g. pinch: { on: "Map", scale: 3 }');
   }
   rejectUnknownKeys(entry, obj, ["on", "scale"], "pinch");
@@ -1403,13 +1627,13 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   // degenerates into a constant — the same silently-wrong class the per-step
   // `optional:` rejection exists for, so it fails at parse too.
   const { selector, expectedText } = cond;
-  for (const s of [
-    expectedText,
-    selector.text,
-    selector.textMatches,
-    selector.identifier,
-    selector.role,
-  ]) {
+  // Walk the whole relation tree: a placeholder in a `within`/`after`/`next`
+  // scope degrades the guard exactly as one in the target's own fields would.
+  const guardStrings: (string | undefined)[] = [expectedText];
+  for (const s of selectorTree(selector)) {
+    guardStrings.push(s.text, s.textMatches, s.identifier, s.role);
+  }
+  for (const s of guardStrings) {
     if (s !== undefined && s.includes(SECRET_PLACEHOLDER_MARKER)) {
       badEntry(
         { when: raw },
@@ -1584,6 +1808,20 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
     ) {
       badEntry(raw, `scroll-to direction must be one of ${SCROLL_DIRECTIONS.join(", ")}`);
     }
+    // Name the missing `target` rather than letting the selector schema report
+    // "expected object, received undefined" about a key the author never wrote.
+    // Newly worth spelling out: `within` is now a SELECTOR key too, so
+    // `scroll-to: { within: … }` reads like a scoped selector and is instead an
+    // options map with no target — and the sibling scopes don't belong here at
+    // all (they scope the target, which carries its own).
+    if (b.target === undefined) {
+      badEntry(
+        raw,
+        "scroll-to needs a `target` — its own `within` only anchors the gesture to a scroll " +
+          "container, e.g. scroll-to: { target: <selector>, within: { id: list } }. A selector " +
+          `scope (${SELECTOR_RELATIONS.join("/")}) goes inside \`target\`.`
+      );
+    }
     const step: FlowStep = {
       kind: "scroll-to",
       target: parseSelector(b.target, "scroll-to.target"),
@@ -1601,13 +1839,18 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
     const body = (raw as { snapshot: unknown }).snapshot;
     // A misspelled `maxMissmatch` would silently drop the tolerance.
     if (body !== null && typeof body === "object" && !Array.isArray(body)) {
-      rejectUnknownKeys(raw, body as Record<string, unknown>, ["name", "maxMismatch"], "snapshot");
+      rejectUnknownKeys(
+        raw,
+        body as Record<string, unknown>,
+        ["name", "maxMismatch", "cropOn"],
+        "snapshot"
+      );
     }
     // Bare-string sugar: `snapshot: home` ≡ `snapshot: { name: home }`.
     const b =
       typeof body === "string"
         ? { name: body }
-        : (body as { name?: unknown; maxMismatch?: number });
+        : (body as { name?: unknown; maxMismatch?: number; cropOn?: unknown });
     if (!b || typeof b !== "object" || typeof b.name !== "string" || !b.name) {
       badEntry(raw, "snapshot needs a name (bare string or { name })");
     }
@@ -1632,6 +1875,12 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
         );
       }
       step.maxMismatch = m;
+    }
+    // `cropOn` narrows the comparison to one element's region. Selector-only —
+    // a point has no extent to crop to — so it takes the standard selector slot
+    // (bare-string loose / map strict), not the tap/long-press target form.
+    if (b.cropOn !== undefined) {
+      step.cropOn = parseSelector(b.cropOn, "snapshot.cropOn");
     }
     return step;
   }

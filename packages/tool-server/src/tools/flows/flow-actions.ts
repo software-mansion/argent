@@ -40,6 +40,7 @@ import {
 import {
   describeSelector,
   describeTextExpectation,
+  SELECTOR_RELATIONS,
   type FlowSelector,
   type FlowStep,
   type ScrollDirection,
@@ -239,11 +240,36 @@ export function probeWhenCondition(
  * `{ text }` / `{ id }` selectors carry no flag and match strictly.
  * Lives in the flow runner only; the shared match engine and the tools that
  * consume it are untouched.
+ *
+ * Every relational scope (`within`/`after`/`next`) expands recursively: each
+ * level's alternatives cross-combine (a bare-string `within: foo` contributes
+ * an identifier pass and a text pass, a map level contributes itself), ordered
+ * identifier-first at every level so the doctrine matches the top level's. The
+ * returned selectors are fully strict — no `loose` flag survives at any depth.
+ *
+ * The product is exponential in the number of BARE-STRING scopes, which is what
+ * bounds it: only a bare string is loose, a bare string carries no scope of its
+ * own, and the parser caps a selector's whole relation tree at
+ * MAX_SELECTOR_SCOPES — so the worst case is a few dozen passes and a
+ * hand-authored selector is one or two. (That cap is a tree-SIZE bound for
+ * exactly this reason: a depth bound alone would admit 3^depth loose leaves.)
+ *
+ * `any` is dropped here: it is the flow-side marker that legitimizes a
+ * field-less selector, and a field-less selector is already what the match
+ * engine reads as "every element".
  */
 function selectorAlternatives(sel: FlowSelector): Selector[] {
-  return sel.loose && sel.text !== undefined
-    ? [{ identifier: sel.text }, { text: sel.text }]
-    : [sel];
+  const { loose, any: _any, within, after, next, ...own } = sel;
+  const scopes = { within, after, next };
+  let alts: Selector[] =
+    loose && own.text !== undefined ? [{ identifier: own.text }, { text: own.text }] : [own];
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = scopes[relation];
+    if (scope === undefined) continue;
+    const scopeAlts = selectorAlternatives(scope);
+    alts = alts.flatMap((o) => scopeAlts.map((s) => ({ ...o, [relation]: s })));
+  }
+  return alts;
 }
 
 /**
@@ -329,8 +355,11 @@ export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefin
  * undefined once the deadline passes, or "aborted" when the run was cancelled —
  * the two misses must stay distinguishable, or a cancelled `tap`/`type` would
  * be reported as a genuine "element not found" failure.
+ *
+ * Exported for `snapshot: { cropOn }` (flow-visual.ts), which resolves the
+ * crop element's frame with the same settle + auto-wait the directives get.
  */
-async function waitForFrame(
+export async function waitForFrame(
   env: ActionEnv,
   selector: FlowSelector
 ): Promise<DescribeFrame | "aborted" | undefined> {
@@ -588,7 +617,7 @@ async function scrollToVisible(
 // whole page, mutate scroll state even when the step fails, and stretch a
 // failure to the scroll search's worst case. Off-screen targets take an
 // explicit `scroll-to` step — the failure reason points there.
-function offscreenHint(sel: FlowSelector): string {
+export function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
 }
 

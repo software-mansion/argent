@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PNG } from "pngjs";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
 import { ArtifactStore } from "../../src/artifacts";
-import { settleTree, invokeOnDevice, type ActionEnv } from "../../src/tools/flows/flow-actions";
+import type { DiffPngFilesOptions } from "../../src/tools/screenshot-diff/screenshot-diff";
+import {
+  settleTree,
+  invokeOnDevice,
+  waitForFrame,
+  type ActionEnv,
+} from "../../src/tools/flows/flow-actions";
 
 // Stub settle + capture so the tests exercise only the baseline write/diff decision.
 const h = vi.hoisted(() => ({
@@ -15,20 +23,44 @@ const h = vi.hoisted(() => ({
   contextDiffPath: "",
   /** Set by the differ mock: the scratch outputDir runSnapshot handed it. */
   outputDir: "",
+  /** Set by the differ mock: the currentPath it was asked to compare. */
+  diffCurrentPath: "",
+  /** Set by the differ mock: the top-mask policy it was passed. */
+  diffTopMask: "" as "" | NonNullable<DiffPngFilesOptions["topMask"]>,
+  /** Set by the differ mock: the normalizeSizes option it was passed. */
+  diffNormalizeSizes: undefined as boolean | undefined,
+  /** What the waitForFrame mock resolves a cropOn selector to. */
+  cropFrame: undefined as
+    | undefined
+    | "aborted"
+    | { x: number; y: number; width: number; height: number },
+  /** When set, the waitForFrame mock rejects with this (a tree-source outage). */
+  cropFrameError: null as null | Error,
   dimensionMismatch: null as null | {
     expected: { width: number; height: number };
     actual: { width: number; height: number };
   },
 }));
 
-vi.mock("../../src/tools/flows/flow-actions", () => ({
+vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
+  // The real offscreenHint: cropOn failures must surface the directives'
+  // standard not-found reason, so the tests assert against the real text.
+  offscreenHint: (await importOriginal<typeof import("../../src/tools/flows/flow-actions")>())
+    .offscreenHint,
   settleTree: vi.fn(async () => ({})),
   invokeOnDevice: vi.fn(async () => ({ image: { hostPath: h.shotPath } })),
+  waitForFrame: vi.fn(async () => {
+    if (h.cropFrameError) throw h.cropFrameError;
+    return h.cropFrame;
+  }),
 }));
 
 vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
-  diffPngFiles: vi.fn(async (options: { outputDir: string }) => {
+  diffPngFiles: vi.fn(async (options: DiffPngFilesOptions) => {
     h.outputDir = options.outputDir;
+    h.diffCurrentPath = options.currentPath;
+    h.diffTopMask = options.topMask ?? "status-bar";
+    h.diffNormalizeSizes = options.normalizeSizes;
     // The real differ bails before writing anything on a dimension mismatch.
     if (h.dimensionMismatch) {
       return { mismatchPercentage: 0, dimensionMismatch: h.dimensionMismatch };
@@ -64,6 +96,44 @@ async function writeFakePng(file: string, w = 390, h_ = 844): Promise<void> {
   await fs.writeFile(file, buf);
 }
 
+/** Real PNG for the cropOn tests — the crop decodes actual pixel data. */
+async function writeRealPng(file: string, w: number, h_: number): Promise<void> {
+  const png = new PNG({ width: w, height: h_ });
+  png.data.fill(128);
+  await fs.writeFile(file, PNG.sync.write(png));
+}
+
+async function pngSize(file: string): Promise<{ w: number; h: number }> {
+  const png = PNG.sync.read(await fs.readFile(file));
+  return { w: png.width, h: png.height };
+}
+
+/**
+ * Coordinate-encoded PNG: every pixel's channels name its own position
+ * (r = x, g = y, b = x + y), so a test can assert exactly WHICH region of the
+ * capture a crop contains — a transposed or shifted rect carries the wrong
+ * coordinates, where a uniform fill would make wrong pixels look right.
+ */
+async function writeCoordPng(file: string, w: number, h_: number): Promise<void> {
+  const png = new PNG({ width: w, height: h_ });
+  for (let y = 0; y < h_; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      png.data[i] = x & 0xff;
+      png.data[i + 1] = y & 0xff;
+      png.data[i + 2] = (x + y) & 0xff;
+      png.data[i + 3] = 255;
+    }
+  }
+  await fs.writeFile(file, PNG.sync.write(png));
+}
+
+async function pngPixel(file: string, x: number, y: number): Promise<[number, number, number]> {
+  const png = PNG.sync.read(await fs.readFile(file));
+  const i = (y * png.width + x) * 4;
+  return [png.data[i], png.data[i + 1], png.data[i + 2]];
+}
+
 function opts(overrides: Partial<Parameters<typeof runSnapshot>[1]> = {}) {
   return {
     flowsDir: tmpDir,
@@ -84,6 +154,11 @@ beforeEach(async () => {
   h.writeContextDiff = false;
   h.contextDiffPath = "";
   h.outputDir = "";
+  h.diffCurrentPath = "";
+  h.diffTopMask = "";
+  h.diffNormalizeSizes = undefined;
+  h.cropFrame = undefined;
+  h.cropFrameError = null;
   h.dimensionMismatch = null;
   await writeFakePng(h.shotPath);
 });
@@ -117,7 +192,9 @@ describe("runSnapshot baselines", () => {
       hostPath: baselinePath(),
       mimeType: "image/png",
     });
+    // Full-screen keys carry no `-crop-` suffix — that is cropOn-only identity.
     expect(r.snapshotKey).toBe("home__ios-390x844");
+    expect(r.snapshotKey).not.toContain("-crop-");
   });
 
   it("refreshes an existing baseline under updateBaselines", async () => {
@@ -138,6 +215,9 @@ describe("runSnapshot baselines", () => {
 
     expect(r.status).toBe("pass");
     expect(r.reason).toContain("diff 0.00%");
+    expect(h.diffTopMask).toBe("status-bar");
+    // Full-screen keeps the differ's default scale normalization (NOT false).
+    expect(h.diffNormalizeSizes).toBeUndefined();
     // A clean pass carries no artifacts — there is nothing to look at, and
     // handles would make renderers fetch two full-res PNGs just to print paths.
     expect(r.artifacts).toBeUndefined();
@@ -147,16 +227,18 @@ describe("runSnapshot baselines", () => {
   it("fails a dimension-mismatch bail instead of passing its 0% mismatch", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
+    // Full-screen keeps scale normalization, so the real differ only bails on a
+    // genuinely different aspect ratio — e.g. a rotated baseline vs the capture.
     h.dimensionMismatch = {
-      expected: { width: 390, height: 844 },
-      actual: { width: 393, height: 852 },
+      expected: { width: 844, height: 390 },
+      actual: { width: 390, height: 844 },
     };
 
     const r = await runSnapshot(env, opts());
 
     expect(r.status).toBe("fail");
+    expect(r.reason).toContain("844x390");
     expect(r.reason).toContain("390x844");
-    expect(r.reason).toContain("393x852");
     expect(r.reason).toContain("nothing was compared");
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
@@ -269,14 +351,241 @@ describe("runSnapshot diff-dir cleanup", () => {
 
   it("removes the scratch dir on a dimension-mismatch bail", async () => {
     await seedBaseline();
+    // Aspect ratios must genuinely differ for a full-screen bail (see above).
     h.dimensionMismatch = {
-      expected: { width: 390, height: 844 },
-      actual: { width: 393, height: 852 },
+      expected: { width: 844, height: 390 },
+      actual: { width: 390, height: 844 },
     };
 
     const r = await runSnapshot(env, opts());
 
     expect(r.status).toBe("fail");
     await expect(fs.access(h.outputDir)).rejects.toThrow();
+  });
+});
+
+describe("runSnapshot cropOn", () => {
+  const cropOn = { text: "Header", loose: true };
+  // A cropOn key = full-capture dims + hash of the canonical selector identity
+  // ([text, textMatches, identifier, role, loose]) — recomputed here
+  // independently to pin the on-disk format.
+  const cropKey = `home__ios-100x200-crop-${createHash("sha256")
+    .update(JSON.stringify(["Header", null, null, null, true]))
+    .digest("hex")
+    .slice(0, 8)}`;
+  // 100×200 capture; the frame's pixel rect is x 25–75, y 50–100 → a 50×50 crop.
+  const frame = { x: 0.25, y: 0.25, width: 0.5, height: 0.25 };
+  const cropBaselinePath = () => path.join(tmpDir, "__baselines__", "checkout", `${cropKey}.png`);
+
+  beforeEach(async () => {
+    await writeRealPng(h.shotPath, 100, 200);
+    h.cropFrame = frame;
+  });
+
+  it("stores the cropped region as the baseline, keyed by the full capture", async () => {
+    vi.mocked(settleTree).mockClear();
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
+
+    expect(r.status).toBe("pass");
+    expect(vi.mocked(waitForFrame)).toHaveBeenCalledWith(env, cropOn);
+    // waitForFrame settles internally — the plain settle must not run too.
+    expect(vi.mocked(settleTree)).not.toHaveBeenCalled();
+    // Key: the FULL capture's dimensions (device-class identity) plus the
+    // selector hash (crop identity). Content: the crop.
+    expect(r.snapshotKey).toBe(cropKey);
+    await expect(pngSize(cropBaselinePath())).resolves.toEqual({ w: 50, h: 50 });
+  });
+
+  it("compares the cropped image and sweeps the crop scratch dir on a pass", async () => {
+    await fs.mkdir(path.dirname(cropBaselinePath()), { recursive: true });
+    await writeRealPng(cropBaselinePath(), 50, 50);
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("pass");
+    // The differ compared the cropped scratch file, not the full capture…
+    expect(h.diffCurrentPath).not.toBe(h.shotPath);
+    expect(path.basename(h.diffCurrentPath)).toBe(`${cropKey}.png`);
+    // Crops are never top-masked — the top of a crop is element content, not
+    // the full screen's status bar.
+    expect(h.diffTopMask).toBe("none");
+    // Crop dims carry meaning — the differ must hard-fail any size drift.
+    expect(h.diffNormalizeSizes).toBe(false);
+    // …and the unregistered crop did not outlive the call.
+    await expect(fs.access(path.dirname(h.diffCurrentPath))).rejects.toThrow();
+  });
+
+  it("never masks a crop, even one overlapping the status-bar band", async () => {
+    // y 0.02–0.10 overlaps the top band — but masking a crop's overlap would
+    // degenerate into comparing NOTHING for an element fully inside the band
+    // (a vacuous pass), so a crop compares every pixel wherever it sits.
+    h.cropFrame = { x: 0, y: 0.02, width: 0.5, height: 0.08 };
+    await fs.mkdir(path.dirname(cropBaselinePath()), { recursive: true });
+    await writeRealPng(cropBaselinePath(), 50, 16);
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("pass");
+    expect(h.diffTopMask).toBe("none");
+  });
+
+  it("crops exactly the frame's pixel rect from the capture", async () => {
+    await writeCoordPng(h.shotPath, 100, 200);
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
+
+    expect(r.status).toBe("pass");
+    // frame {x: 0.25, y: 0.25, w: 0.5, h: 0.25} on 100×200 → rect x 25–75,
+    // y 50–100. The corner pixels' coordinate encoding pins the exact rect.
+    await expect(pngPixel(cropBaselinePath(), 0, 0)).resolves.toEqual([25, 50, 75]);
+    await expect(pngPixel(cropBaselinePath(), 49, 0)).resolves.toEqual([74, 50, 124]);
+    await expect(pngPixel(cropBaselinePath(), 0, 49)).resolves.toEqual([25, 99, 124]);
+    await expect(pngPixel(cropBaselinePath(), 49, 49)).resolves.toEqual([74, 99, 173]);
+  });
+
+  it("propagates a tree-source outage while resolving cropOn as an error", async () => {
+    // Deliberate asymmetry with the full-screen path's swallowed settle
+    // outage: without a tree there is no frame, and degrading to a full-screen
+    // capture would "compare" the whole screen against a cropped baseline.
+    // flow-run's snapshot arm turns the throw into a step error.
+    h.cropFrameError = new Error("native devtools disconnected");
+    vi.mocked(invokeOnDevice).mockClear();
+
+    await expect(runSnapshot(env, opts({ cropOn }))).rejects.toThrow(
+      "native devtools disconnected"
+    );
+    // Failed before capturing — no screenshot was taken.
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+  });
+
+  it("returns the cropped image as `current` on a missing baseline", async () => {
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain('no baseline for "home"');
+    const current = r.artifacts?.current as { hostPath: string };
+    expect(current.hostPath).not.toBe(h.shotPath);
+    // The artifact is what would have been compared — the crop, kept alive
+    // past the scratch-dir sweep for later materialization.
+    await expect(pngSize(current.hostPath)).resolves.toEqual({ w: 50, h: 50 });
+  });
+
+  it("keeps only the registered cropped `current` on an over-threshold failure", async () => {
+    await fs.mkdir(path.dirname(cropBaselinePath()), { recursive: true });
+    await writeRealPng(cropBaselinePath(), 50, 50);
+    h.mismatchPercentage = 3.1;
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    const current = r.artifacts?.current as { hostPath: string; filename: string };
+    await expect(pngSize(current.hostPath)).resolves.toEqual({ w: 50, h: 50 });
+    await expect(fs.readdir(path.dirname(current.hostPath))).resolves.toEqual([`${cropKey}.png`]);
+    // The crop file on disk shares the baseline's basename, and a remote client
+    // materializes downloads by filename — the two handles must not collide.
+    expect(current.filename).toBe(`${cropKey}-current.png`);
+    expect(r.artifacts?.baseline).toMatchObject({ filename: `${cropKey}.png` });
+  });
+
+  it("fails with the standard not-found reason without capturing when cropOn never resolves", async () => {
+    h.cropFrame = undefined;
+    vi.mocked(invokeOnDevice).mockClear();
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain('no visible element matched selector text="Header"');
+    expect(r.reason).toContain("scroll-to");
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+  });
+
+  it("skips without capturing when the run is aborted while resolving cropOn", async () => {
+    h.cropFrame = "aborted";
+    vi.mocked(invokeOnDevice).mockClear();
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("skip");
+    expect(r.reason).toContain("aborted");
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+  });
+
+  it("names element-size drift on a dimension-mismatch bail", async () => {
+    await fs.mkdir(path.dirname(cropBaselinePath()), { recursive: true });
+    await writeRealPng(cropBaselinePath(), 50, 60);
+    h.dimensionMismatch = {
+      expected: { width: 50, height: 60 },
+      actual: { width: 50, height: 50 },
+    };
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("cropOn region is 50x50");
+    expect(r.reason).toContain("crop a fixed-size container");
+    // Same collision risk as the over-threshold path: both handles download.
+    expect(r.artifacts?.current).toMatchObject({ filename: `${cropKey}-current.png` });
+    expect(r.artifacts?.baseline).toMatchObject({ filename: `${cropKey}.png` });
+  });
+
+  it("fails a sub-pixel crop region instead of writing an empty PNG", async () => {
+    h.cropFrame = { x: 0.5, y: 0.5, width: 0.001, height: 0.001 };
+    const preexistingCropDirs = new Set(
+      (await fs.readdir(os.tmpdir())).filter((e) => e.startsWith("argent-flow-crop-"))
+    );
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("empty at this resolution");
+    // The key still names the failure for an exporter (CLI --output), and the
+    // FULL capture is attached as `current` — no crop exists to show.
+    expect(r.snapshotKey).toBe(cropKey);
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    // The crop scratch dir (which never received a file) was swept.
+    const leftoverCropDirs = (await fs.readdir(os.tmpdir())).filter(
+      (e) => e.startsWith("argent-flow-crop-") && !preexistingCropDirs.has(e)
+    );
+    expect(leftoverCropDirs).toEqual([]);
+  });
+
+  it("keys same-name snapshots with different cropOn selectors to distinct baselines", async () => {
+    const r1 = await runSnapshot(env, opts({ updateBaselines: true, cropOn: { text: "Header" } }));
+    const r2 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { identifier: "hdr" } })
+    );
+
+    expect(r1.snapshotKey).toContain("-crop-");
+    expect(r2.snapshotKey).toContain("-crop-");
+    expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
+    // Two baseline files on disk — the second write did not clobber the first.
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files.sort()).toEqual([`${r1.snapshotKey}.png`, `${r2.snapshotKey}.png`].sort());
+  });
+
+  it("keys a selector canonically regardless of property insertion order", async () => {
+    const r1 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "a", role: "b" } })
+    );
+    const r2 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { role: "b", text: "a" } })
+    );
+
+    expect(r1.snapshotKey).toBe(r2.snapshotKey);
+  });
+
+  it("keys loose and strict spellings of the same text differently", async () => {
+    // `loose` changes resolution (identifier-first fallback) — a different element.
+    const r1 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "foo", loose: true } })
+    );
+    const r2 = await runSnapshot(env, opts({ updateBaselines: true, cropOn: { text: "foo" } }));
+
+    expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
   });
 });

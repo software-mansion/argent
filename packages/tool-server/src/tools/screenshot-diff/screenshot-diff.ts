@@ -118,6 +118,12 @@ export interface DiffPngFilesOptions {
   currentPath: string;
   outputDir: string;
   topMask?: TopMaskPolicy;
+  /**
+   * Default true: same-aspect images at different resolutions are resampled to
+   * a common size before comparing. Set false when dimensions carry meaning
+   * (e.g. element crops) — any dimension difference is then a hard mismatch.
+   */
+  normalizeSizes?: boolean;
 }
 
 export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDiffResult> {
@@ -131,8 +137,12 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
   // Same-aspect screenshots saved at different scales (e.g. a 0.3x baseline vs
   // a 1.0x live capture) are uniform scalings of one framebuffer, so normalize
   // them to a common size and compare instead of failing on the resolution
-  // mismatch. Genuinely different aspect ratios still hard-fail below.
-  const normalized = normalizeToCommonSize(decodedBaseline, decodedCurrent);
+  // mismatch. Genuinely different aspect ratios still hard-fail below — and
+  // with normalizeSizes: false, so does ANY dimension difference.
+  const normalized =
+    options.normalizeSizes === false
+      ? sameDimensionsOrNull(decodedBaseline, decodedCurrent)
+      : normalizeToCommonSize(decodedBaseline, decodedCurrent);
   if (!normalized) {
     return summarizeResult(
       buildDimensionMismatchResult({
@@ -213,6 +223,16 @@ function resolveDiffSettings(topMask: TopMaskPolicy): DiffSettings {
 
 function summarizeResult(result: Omit<PngDiffResult, "summary">): PngDiffResult {
   return { ...result, summary: formatScreenshotDiffSummary(result) };
+}
+
+// normalizeSizes: false — compare as-is when dims match exactly, else bail.
+function sameDimensionsOrNull(
+  baseline: DecodedPng,
+  current: DecodedPng
+): { baseline: DecodedPng; current: DecodedPng } | null {
+  return baseline.width === current.width && baseline.height === current.height
+    ? { baseline, current }
+    : null;
 }
 
 function buildDimensionMismatchResult(params: {
