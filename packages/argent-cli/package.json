@@ -16,12 +16,12 @@
     "@argent/registry": "file:../registry",
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
-    "@clack/prompts": "^1.6.0",
+    "@clack/prompts": "^1.7.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.1.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   }
 }
