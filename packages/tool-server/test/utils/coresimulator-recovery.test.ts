@@ -5,6 +5,7 @@ import {
   parseBootedUdids,
   recoverCoreSimulatorInjection,
   recoverySucceeded,
+  SHUTDOWN_STEP_TIMEOUT_MS,
   type ExecFn,
 } from "../../src/utils/coresimulator-recovery";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../src/utils/simctl-config";
@@ -125,6 +126,15 @@ describe("recoverCoreSimulatorInjection", () => {
     expect(BOOT_STEP_TIMEOUT_MS).toBeGreaterThan(SIMCTL_SPAWN_TIMEOUT_MS);
   });
 
+  it("gives shutdown all its own ceiling, not the 10s spawn one it would be SIGKILLed at", async () => {
+    const { calls, timeouts, exec } = recordingExec();
+    await recoverCoreSimulatorInjection("UDID-1", { exec });
+
+    const shutdownIdx = calls.findIndex(([, args]) => args.includes("shutdown"));
+    expect(timeouts[shutdownIdx]).toBe(SHUTDOWN_STEP_TIMEOUT_MS);
+    expect(SHUTDOWN_STEP_TIMEOUT_MS).toBeGreaterThan(SIMCTL_SPAWN_TIMEOUT_MS);
+  });
+
   it("leaves the device shut down when rebootAfter is false", async () => {
     const { calls, exec } = recordingExec();
     const steps = await recoverCoreSimulatorInjection("UDID-2", { rebootAfter: false, exec });
@@ -146,6 +156,82 @@ describe("recoverCoreSimulatorInjection", () => {
     expect(killall?.tolerated).toBe(true);
     expect(killall?.detail).toMatch(/no matching processes/i);
     expect(recoverySucceeded(steps)).toBe(true); // tolerated failures still count as success
+  });
+
+  it("reports recovered:false when killall fails for a real reason, not just 'nothing to kill'", async () => {
+    const exec: ExecFn = async (file) => {
+      if (file === "killall")
+        throw new Error("killall: warning: kill -TERM 57290: Operation not permitted");
+      return { stdout: "", stderr: "" };
+    };
+    const steps = await recoverCoreSimulatorInjection("UDID-5", { rebootAfter: false, exec });
+
+    const killall = steps.find((s) => s.step === "killall-coresimulatorservice");
+    expect(killall?.ok).toBe(false);
+    expect(killall?.tolerated).toBeUndefined();
+    expect(recoverySucceeded(steps)).toBe(false);
+  });
+
+  it("reports recovered:false when shutdown all fails for a real reason", async () => {
+    const exec: ExecFn = async (_file, args) => {
+      if (args.includes("shutdown")) throw new Error("Command failed: xcrun simctl shutdown all");
+      return { stdout: "", stderr: "" };
+    };
+    const steps = await recoverCoreSimulatorInjection("UDID-6", { rebootAfter: false, exec });
+
+    expect(steps.find((s) => s.step === "shutdown-all")?.ok).toBe(false);
+    expect(recoverySucceeded(steps)).toBe(false);
+  });
+
+  it("still tolerates shutdown all when there was nothing booted to shut down", async () => {
+    const exec: ExecFn = async (_file, args) => {
+      if (args.includes("shutdown")) {
+        throw new Error("Unable to shutdown device in current state: Shutdown");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const steps = await recoverCoreSimulatorInjection("UDID-7", { rebootAfter: false, exec });
+
+    const shutdown = steps.find((s) => s.step === "shutdown-all");
+    expect(shutdown?.ok).toBe(true);
+    expect(shutdown?.tolerated).toBe(true);
+    expect(recoverySucceeded(steps)).toBe(true);
+  });
+
+  it("tolerates the target already being booted — bootstatus re-checks it anyway", async () => {
+    const exec: ExecFn = async (_file, args) => {
+      if (args[1] === "boot") throw new Error("Unable to boot device in current state: Booted");
+      return { stdout: "", stderr: "" };
+    };
+    const steps = await recoverCoreSimulatorInjection("UDID-8", { exec });
+
+    const boot = steps.find((s) => s.step === "boot");
+    expect(boot?.ok).toBe(true);
+    expect(boot?.tolerated).toBe(true);
+    expect(recoverySucceeded(steps)).toBe(true);
+  });
+
+  it("records a step when the booted-device snapshot fails, instead of losing siblings silently", async () => {
+    // The snapshot runs before `shutdown all`, so losing it strands the
+    // siblings with no boot:<udid> step to bring them back.
+    const exec: ExecFn = async (_file, args) => {
+      if (args.includes("list")) throw new Error("xcrun: timed out after 10000ms");
+      return { stdout: "", stderr: "" };
+    };
+    const steps = await recoverCoreSimulatorInjection("UDID-9", { exec });
+
+    const snapshot = steps.find((s) => s.step === "snapshot-booted");
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.detail).toMatch(/will NOT be re-booted/i);
+    expect(steps.some((s) => s.step.startsWith("boot:"))).toBe(false);
+    // The target itself still recovered, so this must not fail the whole run.
+    expect(recoverySucceeded(steps)).toBe(true);
+  });
+
+  it("does not add a snapshot step when the listing succeeds", async () => {
+    const { exec } = recordingExec();
+    const steps = await recoverCoreSimulatorInjection("UDID-10", { exec });
+    expect(steps.some((s) => s.step === "snapshot-booted")).toBe(false);
   });
 
   it("records a hard failure on boot (not tolerated) but still runs bootstatus for the report", async () => {

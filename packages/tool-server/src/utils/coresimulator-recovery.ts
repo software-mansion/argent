@@ -20,6 +20,20 @@ export const CORE_SIMULATOR_SERVICE = "com.apple.CoreSimulator.CoreSimulatorServ
  */
 export const BOOT_STEP_TIMEOUT_MS = 240_000;
 
+/**
+ * `simctl shutdown all` outlives SIMCTL_SPAWN_TIMEOUT_MS on a host running
+ * several simulators, and a SIGKILLed shutdown leaves the target Booted so the
+ * `simctl boot` that follows fails. The ceiling exists only so the tool can't
+ * hang the MCP call forever.
+ */
+export const SHUTDOWN_STEP_TIMEOUT_MS = 60_000;
+
+/** Failures meaning the step's intent was already met, so the non-zero exit is benign. */
+const NO_MATCHING_PROCESS = /no matching process/i;
+const ALREADY_SHUTDOWN = /unable to shutdown device in current state: shutdown/i;
+/** `boot-device.ts` treats this same message as benign, and `bootstatus -b` re-checks it. */
+const ALREADY_BOOTED = /unable to boot device in current state: booted/i;
+
 /** One line of the recovery report: which step ran and how it went. */
 export interface RecoveryStep {
   step: string;
@@ -75,27 +89,24 @@ export function parseBootedUdids(stdout: string): string[] {
   }
 }
 
-async function listBootedDevices(exec: ExecFn): Promise<string[]> {
+async function listBootedDevices(exec: ExecFn): Promise<{ udids: string[]; error?: string }> {
   try {
     const { stdout } = await exec("xcrun", ["simctl", "list", "devices", "booted", "-j"]);
-    return parseBootedUdids(stdout);
-  } catch {
-    return [];
+    return { udids: parseBootedUdids(stdout) };
+  } catch (err) {
+    return { udids: [], error: formatErrorForAgent(err) };
   }
 }
 
 /**
- * Clear a wedged touch-injection pipeline on a *local* iOS simulator, in order:
- *   1. `simctl list devices booted -j` — snapshot booted sims (if rebootAfter)
- *   2. `simctl shutdown all`           — release every booted sim session
- *   3. `killall CoreSimulatorService`  — drop stale HID state (host-wide)
- *   4. `simctl boot <udid>` + siblings — re-boot the target, then restore the rest
- *   5. `simctl bootstatus <udid> -b`   — wait until the target is booted
+ * Clear a wedged touch-injection pipeline on a *local* iOS simulator by restarting
+ * the host CoreSimulator daemon.
  *
- * `killall`/`shutdown` with nothing to act on exit non-zero but leave the intended
- * state, so they are tolerated; sibling re-boots are tolerated too. Only the target
- * is waited on. The caller must first dispose argent's services for every local
- * Apple simulator.
+ * Failures are tolerated only when the message says the step's intent was already
+ * met; sibling re-boots are best-effort and always tolerated. Only the target is
+ * waited on. The caller must first dispose argent's services for every local Apple
+ * simulator, and must confirm `udid` names a real simulator — `shutdown all` and
+ * `killall` are host-wide and run before anything device-specific could fail.
  */
 export async function recoverCoreSimulatorInjection(
   udid: string,
@@ -109,35 +120,57 @@ export async function recoverCoreSimulatorInjection(
     step: string,
     file: string,
     args: string[],
-    opts: { tolerateFailure?: boolean; timeoutMs?: number } = {}
+    opts: { tolerate?: (message: string) => boolean; timeoutMs?: number } = {}
   ) => {
     try {
       await exec(file, args, opts.timeoutMs);
       steps.push({ step, ok: true });
     } catch (err) {
+      const detail = formatErrorForAgent(err);
+      const tolerated = opts.tolerate?.(detail) ?? false;
       steps.push({
         step,
-        ok: opts.tolerateFailure ?? false,
-        ...(opts.tolerateFailure ? { tolerated: true } : {}),
-        detail: formatErrorForAgent(err),
+        ok: tolerated,
+        ...(tolerated ? { tolerated: true } : {}),
+        detail,
       });
     }
   };
 
-  const previouslyBooted = rebootAfter ? await listBootedDevices(exec) : [];
+  let previouslyBooted: string[] = [];
+  if (rebootAfter) {
+    const snapshot = await listBootedDevices(exec);
+    previouslyBooted = snapshot.udids;
+    if (snapshot.error) {
+      steps.push({
+        step: "snapshot-booted",
+        ok: true,
+        tolerated: true,
+        detail:
+          `Could not list booted simulators (${snapshot.error}) — other simulators shut down ` +
+          "by this recovery will NOT be re-booted automatically; boot them with boot-device.",
+      });
+    }
+  }
 
-  await run("shutdown-all", "xcrun", ["simctl", "shutdown", "all"], { tolerateFailure: true });
+  await run("shutdown-all", "xcrun", ["simctl", "shutdown", "all"], {
+    timeoutMs: SHUTDOWN_STEP_TIMEOUT_MS,
+    tolerate: (m) => ALREADY_SHUTDOWN.test(m),
+  });
   await run("killall-coresimulatorservice", "killall", [CORE_SIMULATOR_SERVICE], {
-    tolerateFailure: true,
+    tolerate: (m) => NO_MATCHING_PROCESS.test(m),
   });
 
   if (rebootAfter) {
-    await run("boot", "xcrun", ["simctl", "boot", udid], { timeoutMs: BOOT_STEP_TIMEOUT_MS });
+    await run("boot", "xcrun", ["simctl", "boot", udid], {
+      timeoutMs: BOOT_STEP_TIMEOUT_MS,
+      tolerate: (m) => ALREADY_BOOTED.test(m),
+    });
     for (const sibling of previouslyBooted) {
       if (sibling === udid) continue;
       await run(`boot:${sibling}`, "xcrun", ["simctl", "boot", sibling], {
         timeoutMs: BOOT_STEP_TIMEOUT_MS,
-        tolerateFailure: true,
+        tolerate: () => true,
       });
     }
     await run("bootstatus", "xcrun", ["simctl", "bootstatus", udid, "-b"], {

@@ -37,7 +37,12 @@ import {
   ffmpegArgs,
   type PointerControl,
 } from "../src/tools/screen-recording/capture";
-import { setPointerTrail, setPointerVisible } from "../src/utils/simulator-client";
+import {
+  isPointerVisible,
+  notifyAttachClosed,
+  setPointerTrail,
+  setPointerVisible,
+} from "../src/utils/simulator-client";
 import { makePointerControl } from "../src/tools/screen-recording/screen-recording-start";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { openMjpegStream, readJpegDimensions } from "../src/tools/screen-recording/mjpeg-stream";
@@ -926,6 +931,7 @@ describe("touch visualizer wire protocol", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    notifyAttachClosed(fakeApi.apiUrl); // drop per-attach pointer state between cases
   });
 
   it("setPointerVisible POSTs {show} and reads status ok", async () => {
@@ -968,6 +974,35 @@ describe("touch visualizer wire protocol", () => {
       })
     );
     await expect(setPointerVisible(fakeApi, false)).resolves.toBe(false);
+  });
+
+  it("clears the pointer-visible flag even when the show:false POST is aborted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ status: "ok" })))
+    );
+    await setPointerVisible(fakeApi, true);
+    expect(isPointerVisible(fakeApi)).toBe(true);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+      })
+    );
+    await expect(setPointerVisible(fakeApi, false)).resolves.toBe(false);
+    expect(isPointerVisible(fakeApi)).toBe(false); // verification is not left standing down
+  });
+
+  it("does not mark the overlay visible when the show:true POST fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("ECONNREFUSED");
+      })
+    );
+    await expect(setPointerVisible(fakeApi, true)).resolves.toBe(false);
+    expect(isPointerVisible(fakeApi)).toBe(false);
   });
 
   it("issues disable's show:false only after an in-flight enable's show:true", async () => {

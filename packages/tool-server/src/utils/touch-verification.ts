@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
+import type { DeviceInfo } from "@argent/registry";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { httpScreenshot, isPointerVisible, onAttachClose } from "./simulator-client";
 import { sleep } from "./timing";
@@ -9,15 +10,16 @@ import { sleep } from "./timing";
  * delivery ack, so the only signal is whether the frame changed around the
  * injection — a heuristic, not proof (an inert control leaves the frame
  * unchanged too, and unrelated animation changes it), so callers surface it as
- * a warning, never a failure. Only the first touch per simulator-server attach
- * is auto-verified; once one lands (or proves unverifiable) later touches skip
- * the check. A respawned server (new apiUrl) starts fresh.
+ * a warning, never a failure. Automatic checks run until the attach settles, so
+ * on a healthy device only the first touch pays for one; a no-change leaves the
+ * attach unsettled, since that repeat is the wedge signal the whole thing exists
+ * to catch. A respawned server (new apiUrl) starts fresh.
  */
 
 /** Small fixed downscale for verification frames — we need a change signal, not detail. */
 const VERIFY_SCALE = 0.25;
 /** Let a touch's visual response begin before sampling the "after" frame. */
-const VERIFY_SETTLE_MS = 250;
+export const VERIFY_SETTLE_MS = 250;
 
 export type DeliveryVerdict = "landed" | "no-change" | "unknown" | "pointer-active";
 
@@ -110,23 +112,41 @@ export async function verifyTouchDelivery(
   return classifyDelivery(before, after);
 }
 
+/**
+ * `recover-touch-injection` declares `apple: { simulator: true }`, so naming it
+ * in a warning for anything else sends the agent at a guaranteed 400.
+ */
+export function canRecoverTouchInjection(device?: DeviceInfo): boolean {
+  return device?.platform === "ios" && device.kind === "simulator";
+}
+
 /** Human-facing warning for a verdict that isn't a clean "landed", or null when it is. */
 export function deliveryWarning(
   verdict: DeliveryVerdict,
-  opts: { recommendRecovery?: boolean } = {}
+  opts: { recommendRecovery?: boolean; device?: DeviceInfo } = {}
 ): string | null {
+  const recoverable = canRecoverTouchInjection(opts.device);
   switch (verdict) {
     case "landed":
       return null;
     case "no-change":
-      return (opts.recommendRecovery ?? true)
+      if (!(opts.recommendRecovery ?? true)) {
+        return (
+          "Touch was injected but the screen did not change. Many controls have no visible " +
+          "effect, so a single no-change is not conclusive — if you expected the screen to " +
+          "change, re-check with verify:true." +
+          (recoverable ? " A repeated no-change will flag a possibly wedged simulator." : "")
+        );
+      }
+      return recoverable
         ? "Touch was injected but the screen did not change — on an iOS simulator this can mean " +
             "touch injection has wedged (it accepts touches but silently drops them). If taps have " +
             "stopped landing, run recover-touch-injection for this device. (If this control " +
             "legitimately has no visible effect, ignore this.)"
-        : "Touch was injected but the screen did not change. Many controls have no visible effect, " +
-            "so a single no-change is not conclusive — if you expected the screen to change, re-check " +
-            "with verify:true; a repeated no-change will flag a possibly wedged simulator.";
+        : "Touch was injected but the screen did not change. Re-check the coordinates against " +
+            "describe (the point may be padding, a disabled control, or an already-selected item) " +
+            "before assuming the touch was dropped. (If this control legitimately has no visible " +
+            "effect, ignore this.)";
     case "unknown":
       return (
         "Could not capture before/after frames, so touch delivery could not be verified. " +
@@ -153,11 +173,13 @@ export function describeVerify(
   return (
     `${opts.prefix ?? ""}Confirm the ${noun} actually landed by checking the screen changed ` +
     "around it (a wedged iOS simulator can accept touches but silently drop them). Default is " +
-    "automatic: the first touch on each device per simulator-server session is verified, then " +
-    `checks stop once delivery is confirmed. Pass true to force the check on this ${noun}, false ` +
+    "automatic: touches on each device are checked until one is confirmed landed — usually just " +
+    "the first per simulator-server session, but a touch that changes nothing keeps the check on, " +
+    `since that repeat is the wedge signal. Pass true to force the check on this ${noun}, false ` +
     "to skip it. When a check runs, the result carries `verified` and, if the screen never " +
-    "changed, a `warning`; a repeated no-change (or a verify:true check) points at " +
-    "recover-touch-injection." +
+    "changed, a `warning` — on a local iOS simulator a repeated no-change (or a verify:true " +
+    "check) points at recover-touch-injection; on other devices it suggests re-checking the " +
+    "coordinates, since there is no equivalent wedge to clear." +
     (opts.tail ? ` ${opts.tail}` : "")
   );
 }
@@ -174,7 +196,8 @@ export function describeVerify(
 export async function runWithDeliveryVerification(
   api: SimulatorServerApi,
   verify: boolean | undefined,
-  action: () => Promise<void>
+  action: () => Promise<void>,
+  device?: DeviceInfo
 ): Promise<DeliveryCheck> {
   const explicit = verify === true;
   const auto = verify === undefined && shouldAutoVerify(api);
@@ -184,10 +207,9 @@ export async function runWithDeliveryVerification(
   }
   const verdict = await verifyTouchDelivery(api, action);
   recordVerdict(api, verdict);
-  // An automatic check during a recording can only ever say "pointer-active";
-  // stay quiet and let the first post-recording touch be the one checked.
+  // Nothing actionable to report — let the first post-recording touch speak.
   if (!explicit && verdict === "pointer-active") return {};
   const recommendRecovery = explicit || noChangeStreak(api) >= RECOVERY_HINT_STREAK;
-  const warning = deliveryWarning(verdict, { recommendRecovery });
+  const warning = deliveryWarning(verdict, { recommendRecovery, device });
   return { verified: verdict === "landed", ...(warning ? { warning } : {}) };
 }

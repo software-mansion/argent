@@ -67,7 +67,7 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
-Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (no fling), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. The first touch per device session is automatically delivery-verified (a wedged iOS simulator can accept touches but silently drop them): when a check runs the result also carries 'verified' and, if the screen never changed, a 'warning' pointing at recover-touch-injection; verify:true forces the check, verify:false skips it. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (no fling), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. Touches are automatically delivery-verified until one is confirmed landed (a wedged iOS simulator can accept touches but silently drop them) — usually just the first per device session, but a touch that changes nothing keeps the check on, since that repeat is the wedge signal: when a check runs the result also carries 'verified' and, if the screen never changed, a 'warning'. The warning only names recover-touch-injection on a local iOS simulator, and only once a no-change repeats or verify:true was passed. verify:true forces the check, verify:false skips it. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
@@ -78,11 +78,15 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
   async execute(services, params) {
     const duration = params.durationMs ?? 300;
     const settle = params.settle ?? false;
-    const timestampMs = Date.now();
+    // Re-stamped at the first Down: a verified swipe captures a frame first, and
+    // profiler annotations anchor on this timestamp.
+    let timestampMs = Date.now();
+    const device = resolveDevice(params.udid);
     const api = services.simulatorServer as SimulatorServerApi;
     const steps = Math.max(1, Math.round(duration / 16));
 
     const injectSwipe = async () => {
+      timestampMs = Date.now();
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
         // A plain swipe advances linearly; `settle` eases-out so the finger lifts
@@ -105,7 +109,7 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
       }
     };
 
-    const check = await runWithDeliveryVerification(api, params.verify, injectSwipe);
+    const check = await runWithDeliveryVerification(api, params.verify, injectSwipe, device);
     return { swiped: true, timestampMs, ...check };
   },
 };

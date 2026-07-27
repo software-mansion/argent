@@ -9,9 +9,11 @@ interface TouchCmd {
   y: number;
 }
 const sent: TouchCmd[] = [];
+const sentAt: number[] = [];
 vi.mock("../../src/utils/simulator-client", () => ({
   sendCommand: (_api: unknown, cmd: TouchCmd) => {
     sent.push(cmd);
+    sentAt.push(Date.now());
   },
 }));
 
@@ -42,6 +44,7 @@ const touchServices = { simulatorServer: {} } as never;
 
 beforeEach(() => {
   sent.length = 0;
+  sentAt.length = 0;
   mockCheck = {};
   runWithDeliveryVerificationMock.mockClear();
 });
@@ -144,6 +147,26 @@ describe("gesture-tap delivery verification", () => {
     expect(result.tapped).toBe(true);
     expect(result.verified).toBe(false);
     expect(result.warning).toBe("warn:no-change");
+  });
+
+  it("reports timestampMs of the first Down, not of the capture that precedes it", async () => {
+    // react-profiler-analyze computes commit offsets from this field, so a stamp
+    // taken before the capture inflates every reported delta by its cost.
+    const CAPTURE_MS = 60;
+    runWithDeliveryVerificationMock.mockImplementationOnce(async (_api, _verify, action) => {
+      await new Promise((resolve) => setTimeout(resolve, CAPTURE_MS));
+      await action();
+      return { verified: true };
+    });
+
+    const result = await gestureTapTool.execute(touchServices, {
+      udid: "X",
+      x: 0.5,
+      y: 0.5,
+      verify: true,
+    });
+
+    expect(sentAt[0] - result.timestampMs).toBeLessThan(CAPTURE_MS / 2);
   });
 
   it("marks a Chromium tap verified without an observational check (CDP already acks)", async () => {

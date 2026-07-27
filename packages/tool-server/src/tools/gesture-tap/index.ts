@@ -88,7 +88,7 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
 Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
 Set clickCount: 2 for a double-tap / double-click — the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
 Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. On iOS/Android the first tap per device session is automatically delivery-verified (a wedged iOS simulator can accept touches but silently drop them): when a check runs the result also carries 'verified' and, if the screen never changed, a 'warning' pointing at recover-touch-injection. Pass verify:true to force the check on any tap, verify:false to skip it. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
+Returns { tapped: true, timestampMs }. On iOS/Android taps are automatically delivery-verified until one is confirmed landed (a wedged iOS simulator can accept touches but silently drop them) — usually just the first tap per device session, but a tap that changes nothing keeps the check on, since that repeat is the wedge signal: when a check runs the result also carries 'verified' and, if the screen never changed, a 'warning'. The warning only names recover-touch-injection on a local iOS simulator, and only once a no-change repeats or verify:true was passed; a first automatic no-change is deliberately soft, since many controls have no visible effect. Pass verify:true to force the check on any tap, verify:false to skip it. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
 Before tapping, determine the correct coordinates by using discovery tools — pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker), since the native and RN-specific discovery tools don't apply. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",
@@ -103,7 +103,9 @@ Before tapping, determine the correct coordinates by using discovery tools — p
   },
   async execute(services, params) {
     const device = resolveDevice(params.udid);
-    const timestampMs = Date.now();
+    // Re-stamped at the first Down: a verified tap captures a frame first, and
+    // profiler annotations anchor on this timestamp.
+    let timestampMs = Date.now();
     const clickCount = params.clickCount ?? 1;
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
@@ -114,6 +116,7 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     }
     const api = services.simulatorServer as SimulatorServerApi;
     const injectTaps = async () => {
+      timestampMs = Date.now();
       for (let i = 1; i <= clickCount; i++) {
         if (i > 1) await sleep(MULTI_TAP_GAP_MS);
         sendCommand(api, {
@@ -135,7 +138,7 @@ Before tapping, determine the correct coordinates by using discovery tools — p
         });
       }
     };
-    const check = await runWithDeliveryVerification(api, params.verify, injectTaps);
+    const check = await runWithDeliveryVerification(api, params.verify, injectTaps, device);
     return { tapped: true, timestampMs, ...check };
   },
 };
