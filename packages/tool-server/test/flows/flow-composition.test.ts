@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ArtifactStore, type Registry } from "@argent/registry";
+import {
+  ArtifactStore,
+  FLOW_FILE_NAME_PATTERN,
+  FLOW_NAME_PATTERN,
+  type Registry,
+} from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
@@ -769,6 +774,20 @@ describe("flow validation", () => {
 
   it("rejects a run: path whose filename is not a safe flow name", () => {
     expect(() => parseFlow("steps:\n  - run: ../we!rd.yaml\n")).toThrow(/letters, digits/);
+  });
+
+  it("cites a pattern a rejected .yaml filename could actually match", () => {
+    // `my.flow.yaml` IS a .yaml file, so citing the dot-free flow-name pattern
+    // would demand a regex forbidding the extension the same check requires.
+    let message = "";
+    try {
+      parseFlow("steps:\n  - run: my.flow.yaml\n");
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain(String(FLOW_FILE_NAME_PATTERN));
+    expect(message).not.toContain(String(FLOW_NAME_PATTERN));
+    expect(message).toMatch(/letters, digits, underscore, hyphen before the \.yaml/);
   });
 
   it("rejects backslashes in a run: path", () => {

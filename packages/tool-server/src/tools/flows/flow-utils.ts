@@ -1784,7 +1784,7 @@ function parseRunTarget(raw: unknown, value: string): string {
   if (!FLOW_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
     badEntry(
       raw,
-      `a \`run\` target's filename must match ${FLOW_NAME_PATTERN} (letters, digits, underscore, hyphen)`
+      `a \`run\` target's filename must match ${FLOW_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the .yaml`
     );
   }
   return value;
