@@ -415,6 +415,55 @@ describe("argent flow run", () => {
     expect(logs.join("\n")).toBe(".argent/flows/sign-in.yaml");
   });
 
+  it("omits a directory named like a flow, which `flow run` rejects as not a file", async () => {
+    const listRoot = path.join(tempRoot, "list-dir-project");
+    const flowsDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(path.join(flowsDir, "bundle.yaml"), { recursive: true });
+    await fsp.writeFile(path.join(flowsDir, "checkout.yaml"), "steps: []\n");
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toBe(".argent/flows/checkout.yaml");
+  });
+
+  it("lists a symlink to a flow file, which `flow run` accepts, but not a broken one", async () => {
+    const listRoot = path.join(tempRoot, "list-symlink-project");
+    const flowsDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await fsp.writeFile(path.join(tempRoot, "shared-flow.yaml"), "steps: []\n");
+    await fsp.symlink(path.join(tempRoot, "shared-flow.yaml"), path.join(flowsDir, "linked.yaml"));
+    await fsp.symlink(path.join(tempRoot, "missing-flow.yaml"), path.join(flowsDir, "broken.yaml"));
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toBe(".argent/flows/linked.yaml");
+  });
+
+  it("prints the no-flows message when no entry in the directory is runnable", async () => {
+    const listRoot = path.join(tempRoot, "list-empty-project");
+    const flowsDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(path.join(flowsDir, "bundle.yaml"), { recursive: true });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toBe("No flows found in .argent/flows");
+  });
+
   it("renders the report — echo lines unnumbered, real steps numbered, reasons and fragment tags shown — and exits 1 on failure", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({

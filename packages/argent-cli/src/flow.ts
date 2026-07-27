@@ -431,6 +431,22 @@ export function renderReport(report: FlowReport): string {
   return lines.join("\n");
 }
 
+/**
+ * `flow run`'s filesystem acceptance test — stat (following symlinks, as run
+ * does) plus a readability probe — so `list` never advertises a path `run`
+ * rejects. Any per-entry failure (broken symlink, race, EACCES) just omits it.
+ */
+async function isRunnableFlowFile(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile()) return false;
+    await fsp.access(filePath, fsConstants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function flow(argv: string[], options: FlowCommandOptions): Promise<void> {
   const [sub, ...rest] = argv;
 
@@ -443,10 +459,14 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     const dir = path.join(process.cwd(), ".argent", "flows");
     try {
       const entries = await fsp.readdir(dir);
-      // Only paths `flow run` accepts: it also rejects stems failing SAFE_FLOW_NAME.
-      const paths = entries
+      // Only paths `flow run` accepts: it also rejects stems failing
+      // SAFE_FLOW_NAME, and anything that is not a readable file.
+      const named = entries
         .filter((f) => f.endsWith(".yaml") && SAFE_FLOW_NAME.test(path.basename(f, ".yaml")))
-        .sort()
+        .sort();
+      const runnable = await Promise.all(named.map((f) => isRunnableFlowFile(path.join(dir, f))));
+      const paths = named
+        .filter((_, i) => runnable[i])
         .map((f) => path.join(".argent", "flows", f));
       if (paths.length === 0) console.log("No flows found in .argent/flows");
       else console.log(paths.join("\n"));
