@@ -24,7 +24,12 @@ vi.mock("../../src/utils/simulator-client", () => ({
 type Check = { verified?: boolean; warning?: string };
 let mockCheck: Check = {};
 const runWithDeliveryVerificationMock = vi.fn(
-  async (_api: unknown, _verify: boolean | undefined, action: () => Promise<void>) => {
+  async (
+    _api: unknown,
+    _verify: boolean | undefined,
+    action: () => Promise<void>,
+    _device?: DeviceInfo
+  ) => {
     await action();
     return mockCheck;
   }
@@ -33,14 +38,17 @@ vi.mock("../../src/utils/touch-verification", () => ({
   runWithDeliveryVerification: (
     api: unknown,
     verify: boolean | undefined,
-    action: () => Promise<void>
-  ) => runWithDeliveryVerificationMock(api, verify, action),
+    action: () => Promise<void>,
+    device?: DeviceInfo
+  ) => runWithDeliveryVerificationMock(api, verify, action, device),
   describeVerify: (noun: string) => `verify ${noun}`,
 }));
 
 import { gestureTapTool } from "../../src/tools/gesture-tap";
+import type { DeviceInfo } from "@argent/registry";
 
 const touchServices = { simulatorServer: {} } as never;
+const ANDROID_DEVICE: DeviceInfo = { id: "X", platform: "android", kind: "device" };
 
 beforeEach(() => {
   sent.length = 0;
@@ -94,21 +102,45 @@ describe("gesture-tap delivery verification", () => {
     expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
       expect.anything(),
       undefined,
-      expect.any(Function)
+      expect.any(Function),
+      ANDROID_DEVICE
     );
 
     await gestureTapTool.execute(touchServices, { udid: "X", x: 0.5, y: 0.5, verify: true });
     expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
       expect.anything(),
       true,
-      expect.any(Function)
+      expect.any(Function),
+      ANDROID_DEVICE
     );
 
     await gestureTapTool.execute(touchServices, { udid: "X", x: 0.5, y: 0.5, verify: false });
     expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
       expect.anything(),
       false,
-      expect.any(Function)
+      expect.any(Function),
+      ANDROID_DEVICE
+    );
+  });
+
+  it("forwards the resolved device, which is what routes the no-change warning", async () => {
+    // Drop it and an Android caller gets pointed at recover-touch-injection —
+    // iOS-simulator-only, host-wide, and a guaranteed 400.
+    const IOS_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+    await gestureTapTool.execute(touchServices, { udid: IOS_UDID, x: 0.5, y: 0.5 });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined,
+      expect.any(Function),
+      { id: IOS_UDID, platform: "ios", kind: "simulator" }
+    );
+
+    await gestureTapTool.execute(touchServices, { udid: "emulator-5554", x: 0.5, y: 0.5 });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined,
+      expect.any(Function),
+      { id: "emulator-5554", platform: "android", kind: "emulator" }
     );
   });
 
