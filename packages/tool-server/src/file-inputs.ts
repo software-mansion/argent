@@ -70,37 +70,36 @@ export interface ResolveFileInputsResult {
 }
 
 /**
- * True when the wrapper's path is usable on THIS host. `directory` only needs
+ * `present`: the wrapper's path is usable on THIS host. `directory` only needs
  * to exist as a directory and `probe` to exist at all (size/mtime are
  * meaningless there); `file` and `tar-upload` must match the client-recorded
  * stat so a stale or unrelated file at the same path falls through to the
- * upload path instead of being read by accident.
+ * upload path instead of being read by accident. `statVerified` is the strong
+ * form — the wire carried both stat fields and the host file matched both —
+ * because presence alone is satisfiable by a hand-crafted stat-less wrapper
+ * and must not serve as containment.
  */
-async function probeHostPath(wire: FileInputWire, kind: FileInputSpec["kind"]): Promise<boolean> {
+async function probeHostPath(
+  wire: FileInputWire,
+  kind: FileInputSpec["kind"]
+): Promise<{ present: boolean; statVerified: boolean }> {
+  const miss = { present: false, statVerified: false };
   try {
     const st = await stat(wire.path);
-    if (kind === "directory") return st.isDirectory();
-    if (kind === "probe") return true;
-    if (kind === "tar-upload") {
-      if (st.isDirectory()) {
-        if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) {
-          return false;
-        }
-        return true;
-      }
-      if (!st.isFile()) return false;
-      if (wire.size != null && st.size !== wire.size) return false;
+    if (kind === "directory") return { present: st.isDirectory(), statVerified: false };
+    if (kind === "probe") return { present: true, statVerified: false };
+    if (kind === "tar-upload" && st.isDirectory()) {
       if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) {
-        return false;
+        return miss;
       }
-      return true;
+      return { present: true, statVerified: false };
     }
-    if (!st.isFile()) return false;
-    if (wire.size != null && st.size !== wire.size) return false;
-    if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) return false;
-    return true;
+    if (!st.isFile()) return miss;
+    if (wire.size != null && st.size !== wire.size) return miss;
+    if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) return miss;
+    return { present: true, statVerified: wire.size != null && wire.mtimeMs != null };
   } catch {
-    return false;
+    return miss;
   }
 }
 
@@ -190,10 +189,12 @@ async function resolveOne(
   tempDirs: string[],
   lookupUpload: UploadLookup | undefined
 ): Promise<{ value: string; meta: ResolvedFileInput }> {
+  const probe = await probeHostPath(wire, spec.kind);
   const meta: ResolvedFileInput = {
     clientPath: wire.path,
-    presentOnHost: await probeHostPath(wire, spec.kind),
+    presentOnHost: probe.present,
     viaUpload: false,
+    ...(probe.statVerified ? { statVerified: true } : {}),
   };
 
   if (spec.kind === "probe") {

@@ -268,7 +268,12 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_path: { clientPath: flowPath, presentOnHost: true, viaUpload: false },
+            flow_path: {
+              clientPath: flowPath,
+              presentOnHost: true,
+              viaUpload: false,
+              statVerified: true,
+            },
           },
         }
       );
@@ -307,6 +312,20 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     expect(() =>
       resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
         clientPath: path.join(os.tmpdir(), "different.yaml"),
+        presentOnHost: true,
+        viaUpload: false,
+        statVerified: true,
+      })
+    ).toThrow("flow_path file-input boundary");
+  });
+
+  it("rejects presence-only metadata without the client-stat match (statVerified)", () => {
+    // The shape a forged stat-less wrapper produces: the server's own stat
+    // succeeded, but nothing tied the caller to the file's client-side stat.
+    const flowPath = path.join(os.tmpdir(), "forged.yaml");
+    expect(() =>
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+        clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
       })

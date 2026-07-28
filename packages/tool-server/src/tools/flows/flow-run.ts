@@ -1264,8 +1264,10 @@ function errMsg(err: unknown): string {
 
 /**
  * Resolve the flow YAML source a tool reads. An explicit `flow_path` is accepted
- * only when the file-input boundary supplied matching resolution metadata for
- * the exact client path on this host. Uploaded explicit paths are rejected:
+ * only when the file-input boundary resolved the exact client path in place on
+ * this host AND matched the client-recorded stat (`statVerified`) — presence
+ * alone is satisfiable by a hand-crafted stat-less wrapper, so it is not
+ * containment. Uploaded explicit paths are rejected:
  * the uploaded root YAML would lose sibling `run:` files, baseline reads, and
  * baseline write-back. A raw `flow_path` is also rejected even if the file
  * exists, so callers cannot bypass the boundary and read arbitrary server
@@ -1326,6 +1328,7 @@ export function resolveFlowSource(
 
     const isVerifiedHostPath =
       flowPathInput?.presentOnHost === true &&
+      flowPathInput.statVerified === true &&
       path.isAbsolute(params.flow_path) &&
       path.resolve(params.flow_path) === path.resolve(flowPathInput.clientPath);
 

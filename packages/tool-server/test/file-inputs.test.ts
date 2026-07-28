@@ -41,8 +41,25 @@ describe("resolveFileInputs", () => {
 
     expect(args.input).toBe(filePath);
     expect(fileInputs).toEqual({
-      input: { clientPath: filePath, presentOnHost: true, viaUpload: false },
+      input: { clientPath: filePath, presentOnHost: true, viaUpload: false, statVerified: true },
     });
+  });
+
+  it("resolves a stat-less wrapper in place but without statVerified", async () => {
+    const filePath = path.join(tmpDir, "stat-less.yaml");
+    await fs.writeFile(filePath, "steps: []\n");
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: FILE_SPEC },
+      { input: wire({ path: filePath }) }
+    );
+
+    // Lenient presence stays (co-located callers that could not stat rely on
+    // it) but must not read as the strong same-file evidence containment
+    // gates require.
+    expect(args.input).toBe(filePath);
+    expect(fileInputs!.input).toMatchObject({ presentOnHost: true, viaUpload: false });
+    expect(fileInputs!.input.statVerified).toBeUndefined();
   });
 
   it("falls back to uploaded content when the stat does not match", async () => {

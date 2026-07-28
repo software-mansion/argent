@@ -123,6 +123,13 @@ export interface ResolvedFileInput {
   presentOnHost: boolean;
   /** True when the value was materialized from uploaded content. */
   viaUpload: boolean;
+  /**
+   * True only when the wire carried BOTH client stat fields (size and mtimeMs)
+   * and the host file matched both — the strong same-file evidence a
+   * containment gate can require; absent for directory/probe kinds and for
+   * stat-less wrappers (which `presentOnHost` deliberately still accepts).
+   */
+  statVerified?: boolean;
 }
 
 // ── Flow-name contract ───────────────────────────────────────────────
