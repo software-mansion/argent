@@ -286,7 +286,7 @@ function buildSelector(
   // `alternatives` is the answer to "what did it actually search for", which
   // the prose has never carried: a bare-string `tap: foo` looked for an
   // identifier `foo` AND text `foo`, in that order.
-  let alternatives: FlowFailureSelector["alternatives"] = [];
+  let alternatives: FlowFailureSelector["alternatives"];
   try {
     // Scrubbed like every other projection of the selector: the alternatives
     // are the selector's own fields re-spelled, so a `{{secret:…}}`-derived
