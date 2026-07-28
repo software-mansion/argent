@@ -519,6 +519,11 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
         `Expected a YAML file path. Saved-flow name lookup is no longer supported.\n` +
           `Did you mean: argent flow run .argent/flows/${suppliedPath}.yaml`
       );
+    } else if (path.basename(suppliedPath).toLowerCase() === ".yaml") {
+      // path.extname treats a bare ".yaml" as an extensionless dotfile, so name the missing stem.
+      console.error(
+        `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`
+      );
     } else if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
       // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
       console.error(

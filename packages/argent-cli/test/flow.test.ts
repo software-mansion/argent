@@ -351,6 +351,17 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
+  it.each([[".yaml"], ["dir/.yaml"], [".YAML"]])(
+    "names the missing stem when the path %s is only the extension",
+    async (supplied) => {
+      await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
+
+      expect(errs.join("\n")).toContain("Flow filename must have a non-empty name");
+      expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([
     ["env", "Unset ARGENT_TOOLS_URL"],
     ["link", "argent unlink"],
