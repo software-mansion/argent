@@ -11,6 +11,7 @@ import {
   isScreenshotDiffResult,
   flowRunToMcpContent,
   type FlowExecuteResult,
+  type FlowStepResult,
 } from "../src/content.js";
 import { ARTIFACT_MARKER, type ArtifactHandle } from "@argent/tools-client";
 
@@ -685,5 +686,359 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] A" });
     expect(blocks[2]).toEqual({ type: "text", text: "[2] B" });
     expect(blocks[3]).toEqual({ type: "text", text: "[3] C" });
+  });
+});
+
+// ── flowRunToMcpContent: the Failures section ────────────────────────
+//
+// Context economy is the whole point of this renderer, so the assertions are
+// mostly about what is NOT in the output: one image per run however many steps
+// failed, five candidates however many were ranked, and the element tree as a
+// path however many elements it holds.
+
+describe("flowRunToMcpContent failure diagnostics", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "content-failures-"));
+    process.env.ARGENT_ARTIFACTS_DIR = root;
+  });
+
+  afterEach(async () => {
+    delete process.env.ARGENT_ARTIFACTS_DIR;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const texts = (blocks: { type: string }[]): string[] =>
+    blocks.filter((b): b is { type: "text"; text: string } => b.type === "text").map((b) => b.text);
+
+  // A `failure` is untrusted wire JSON — a real tool-server sends fields this
+  // renderer's narrow copy doesn't declare (`screen.elements`, `category`, …)
+  // and a hostile one sends wrong types. Fixtures are plain objects, cast in
+  // exactly one place, so the tests can express both.
+  const wireFailure = (f: Record<string, unknown>): FlowStepResult["failure"] =>
+    f as FlowStepResult["failure"];
+
+  const candidate = (i: number) => ({
+    node: {
+      role: "button",
+      label: `Check out ${i}`,
+      identifier: `cta-${i}`,
+      frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.06 },
+    },
+    score: 0.9 - i / 10,
+    basis: "text-near",
+    selectorYaml: `{ id: cta-${i} }`,
+  });
+
+  // A tree big enough that inlining it would be the exact regression this
+  // renderer exists to avoid; each node carries a marker no other field uses.
+  const bigTree = Array.from({ length: 80 }, (_, i) => ({
+    role: "AXStaticText",
+    label: `TREE-ONLY-NODE-${i}`,
+    frame: { x: 0, y: i / 100, width: 1, height: 0.01 },
+  }));
+
+  function twoFailureRun(): FlowExecuteResult {
+    return {
+      flow: "checkout",
+      device: "SIM-1",
+      ok: false,
+      passed: 1,
+      failed: 1,
+      errored: 1,
+      skipped: 0,
+      steps: [
+        { index: 0, kind: "launch", status: "pass", target: "com.acme.shop", durationMs: 3100 },
+        {
+          index: 1,
+          kind: "tap",
+          status: "fail",
+          target: '"Checkout"',
+          durationMs: 5002,
+          reason: 'no visible element matched selector text="Checkout"',
+          failure: wireFailure({
+            code: "selector-not-found",
+            category: "selector",
+            determinacy: "determinate",
+            message: 'no visible element matched selector text="Checkout"',
+            hint: "the closest match differs only by a space",
+            candidates: Array.from({ length: 6 }, (_, i) => candidate(i)),
+            candidateCount: 12,
+            screen: {
+              state: "available",
+              source: "ax",
+              capturedAt: "at-failure",
+              elementCount: 47,
+              // A tool-server DOES put the element list on the wire; this
+              // renderer must never spend tokens on it.
+              elements: bigTree,
+            },
+            screenshot: artifactHandle("shot1", "step-02-screen.png", "image/png"),
+            tree: {
+              ...artifactHandle("tree1", "step-02-tree.txt", "text/plain"),
+              hostPath: "/srv/flow-artifacts/checkout/step-02-tree.txt",
+            },
+          }),
+        },
+        {
+          index: 2,
+          kind: "assert",
+          status: "error",
+          target: '"Order placed"',
+          durationMs: 1200,
+          reason: "the UI tree could not be read",
+          failure: wireFailure({
+            code: "tree-source-unavailable",
+            category: "environment",
+            determinacy: "indeterminate",
+            message: "the UI tree could not be read",
+            screen: {
+              state: "unavailable",
+              reason: "read-failed",
+              detail: "native devtools is not connected",
+            },
+            cause: { code: "NATIVE_DEVTOOLS_NOT_CONNECTED", message: "helper exited" },
+            screenshot: {
+              ...artifactHandle("shot2", "step-03-screen.png", "image/png"),
+              hostPath: "/srv/flow-artifacts/checkout/step-03-screen.png",
+            },
+            tree: {
+              ...artifactHandle("tree2", "step-03-tree.txt", "text/plain"),
+              hostPath: "/srv/flow-artifacts/checkout/step-03-tree.txt",
+            },
+          }),
+        },
+      ],
+    };
+  }
+
+  it("inlines exactly one image for a two-failure run and materializes only the first failure's evidence", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x11];
+    const fetchImpl = vi.fn(fetchReturning(pngBytes));
+
+    const blocks = await flowRunToMcpContent(twoFailureRun(), {
+      toolsUrl: "http://remote:3001",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const images = blocks.filter((b) => b.type === "image");
+    expect(images).toHaveLength(1);
+    expect(images[0]).toMatchObject({ data: Buffer.from(pngBytes).toString("base64") });
+
+    // One download, and it is the FIRST failure's screenshot. The second
+    // failure's screenshot and both tree dumps are referenced by path only.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("/artifacts/shot1");
+    const fetched = fetchImpl.mock.calls.map((c) => String(c[0])).join(" ");
+    expect(fetched).not.toContain("shot2");
+    expect(fetched).not.toContain("tree1");
+    expect(fetched).not.toContain("tree2");
+
+    const all = texts(blocks);
+    // The second failure prints its screenshot path rather than inlining it.
+    expect(all.join("\n")).toContain("screenshot: /srv/flow-artifacts/checkout/step-03-screen.png");
+    // …and the run closes with a pointer at the rest of the evidence.
+    expect(all).toContain("  (1 more failure — evidence at /srv/flow-artifacts/checkout)");
+  });
+
+  it("renders the section after the summary, with the code, determinacy framing and cause", async () => {
+    const blocks = await flowRunToMcpContent(twoFailureRun());
+    const all = texts(blocks);
+
+    const summaryAt = all.findIndex((t) => t.startsWith("FAIL — "));
+    const failuresAt = all.indexOf("Failures:");
+    expect(summaryAt).toBeGreaterThanOrEqual(0);
+    expect(failuresAt).toBeGreaterThan(summaryAt);
+
+    const first = all.find((t) => t.startsWith("  2) tap"))!;
+    expect(first.split("\n")[0]).toBe('  2) tap "Checkout" (5.0s)');
+    expect(first).toContain(
+      '     selector-not-found: no visible element matched selector text="Checkout"'
+    );
+    expect(first).toContain("     screen: 47 elements, captured at the failure, via ax");
+    expect(first).toContain("     hint: the closest match differs only by a space");
+
+    const second = all.find((t) => t.startsWith("  3) assert"))!;
+    expect(second).toContain(
+      "     indeterminate: argent could not see the screen — this is NOT a failed assertion."
+    );
+    expect(second).toContain(
+      "     screen: unavailable (read-failed) — native devtools is not connected"
+    );
+    expect(second).toContain("     cause: NATIVE_DEVTOOLS_NOT_CONNECTED: helper exited");
+  });
+
+  it("caps candidates at five and gives each a normalized tap centre", async () => {
+    const blocks = await flowRunToMcpContent(twoFailureRun());
+    const first = texts(blocks).find((t) => t.startsWith("  2) tap"))!;
+    const lines = first.split("\n");
+
+    expect(lines).toContain(
+      '     candidates (5 of 12, ranked; "at" is the normalized tap centre — verify by tapping it):'
+    );
+    // Frame centre: x + width/2, y + height/2 — the coordinates gesture-tap takes.
+    expect(lines).toContain(
+      '       0.90  "Check out 0"  button  id=cta-0  at 0.50, 0.23  (text-near)  → { id: cta-0 }'
+    );
+    const rendered = lines.filter((l) => l.trimStart().startsWith("0."));
+    expect(rendered).toHaveLength(5);
+    // The sixth ranked candidate is dropped, not wrapped onto another line.
+    expect(first).not.toContain("Check out 5");
+  });
+
+  it("emits the element tree as a path and never inlines the element list", async () => {
+    const blocks = await flowRunToMcpContent(twoFailureRun());
+    const all = texts(blocks).join("\n");
+
+    expect(all).toContain(
+      "     tree: /srv/flow-artifacts/checkout/step-02-tree.txt (read this file for the full element list)"
+    );
+    // Not one of the 80 elements the wire object carried reaches the output.
+    expect(all).not.toContain("TREE-ONLY-NODE");
+  });
+
+  it("spends the run's one image on a failing snapshot's diff, leaving later failures path-only", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x12];
+    const fetchImpl = vi.fn(fetchReturning(pngBytes));
+    const input: FlowExecuteResult = {
+      flow: "visual",
+      ok: false,
+      passed: 0,
+      failed: 2,
+      steps: [
+        {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          target: '"home"',
+          reason: "diff 3.10% > 0.5% (home)",
+          artifacts: { diff: artifactHandle("diff1", "home-diff.png", "image/png") },
+          failure: wireFailure({ code: "snapshot-diff", message: "diff 3.10% > 0.5% (home)" }),
+        },
+        {
+          index: 1,
+          kind: "tap",
+          status: "fail",
+          target: '"Retry"',
+          reason: "no visible element matched",
+          failure: wireFailure({
+            code: "selector-not-found",
+            message: "no visible element matched",
+            screenshot: artifactHandle("shot9", "step-02-screen.png", "image/png"),
+          }),
+        },
+      ],
+    };
+
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(blocks.filter((b) => b.type === "image")).toHaveLength(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("/artifacts/diff1");
+    const rendered = texts(blocks);
+    expect(rendered.join("\n")).toContain("screenshot: step-02-screen.png");
+    // A handle with no hostPath renders as a bare filename — no directory to
+    // point at, so the pointer falls back to the generic wording.
+    expect(rendered).toContain("  (1 more failure — evidence at the paths listed above)");
+  });
+
+  it("clamps hostile wire data instead of throwing or blowing up the block", async () => {
+    const huge = "x".repeat(1_000_000);
+    const input: FlowExecuteResult = {
+      flow: "hostile",
+      ok: false,
+      steps: [
+        {
+          index: 0,
+          kind: "tap",
+          status: "fail",
+          target: '"A"',
+          durationMs: Number.NaN,
+          failure: wireFailure({
+            code: "a-code-this-build-has-never-heard-of",
+            determinacy: "who knows",
+            message: huge,
+            hint: 42,
+            candidates: [
+              ...Array.from({ length: 10_000 }, () => ({
+                node: { label: huge, frame: { x: Number.NaN, y: 1, width: 1, height: 1 } },
+                score: Number.NaN,
+              })),
+            ],
+            candidateCount: "lots",
+            screen: { state: "available", elementCount: Number.POSITIVE_INFINITY, source: 7 },
+            screenshot: { nope: true },
+            tree: 12345,
+            cause: "not an object",
+          }),
+        },
+      ],
+    };
+
+    const blocks = await flowRunToMcpContent(input);
+    const block = texts(blocks).find((t) => t.startsWith("  1) tap"))!;
+    const lines = block.split("\n");
+
+    // A NaN duration renders no duration at all rather than "(NaNs)".
+    expect(lines[0]).toBe('  1) tap "A"');
+    // Unknown code renders generically, message truncated to the display cap.
+    expect(lines[1]!.startsWith("     a-code-this-build-has-never-heard-of: xxx")).toBe(true);
+    expect(lines[1]!.length).toBeLessThan(400);
+    // "who knows" is not "indeterminate" — no framing line.
+    expect(block).not.toContain("argent could not see the screen");
+    // 10 000 candidates clamp to 5; a NaN score renders as "?" and a NaN frame
+    // drops the tap centre rather than emitting "at NaN, NaN".
+    const candidates = lines.filter((l) => l.startsWith("       "));
+    expect(candidates).toHaveLength(5);
+    expect(candidates[0]!.startsWith("       ?  ")).toBe(true);
+    expect(block).not.toContain("NaN");
+    // Non-strings are ignored: no hint, no cause, no screenshot/tree lines, and
+    // an infinite element count contributes no "screen:" line.
+    expect(block).not.toContain("hint:");
+    expect(block).not.toContain("cause:");
+    expect(block).not.toContain("screenshot:");
+    expect(block).not.toContain("tree:");
+    expect(block).not.toContain("screen:");
+  });
+
+  it("renders a report with no failure exactly as it does today", async () => {
+    const input: FlowExecuteResult = {
+      flow: "legacy",
+      device: "SIM",
+      ok: false,
+      passed: 1,
+      failed: 1,
+      errored: 0,
+      skipped: 1,
+      steps: [
+        { index: 0, kind: "echo", status: "pass", message: "Opening the cart" },
+        { index: 1, kind: "tap", status: "pass", target: '"Cart"' },
+        {
+          index: 2,
+          kind: "snapshot",
+          status: "fail",
+          target: '"home"',
+          reason: "diff 3.10% > 0.5% (home)",
+          artifacts: { baseline: "/srv/b.png" },
+        },
+        { index: 3, kind: "assert", status: "skip", target: '"Order placed"' },
+      ],
+    };
+
+    // Pinned verbatim: an old tool-server sends no `failure`/`durationMs`, and
+    // its output must not shift by a single byte.
+    expect(await flowRunToMcpContent(input)).toEqual([
+      { type: "text", text: 'Running flow "legacy" on SIM (4 steps)' },
+      { type: "text", text: "[1] ✓ Opening the cart" },
+      { type: "text", text: '[2] ✓ tap "Cart"' },
+      { type: "text", text: '[3] ✗ snapshot "home" — diff 3.10% > 0.5% (home)' },
+      { type: "text", text: "  baseline: /srv/b.png" },
+      { type: "text", text: '[4] · assert "Order placed"' },
+      { type: "text", text: "FAIL — 1 passed, 1 failed, 0 errored, 1 skipped" },
+    ]);
   });
 });
