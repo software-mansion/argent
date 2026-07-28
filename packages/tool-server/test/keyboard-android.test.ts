@@ -359,6 +359,24 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(cmds).toEqual(["input text 'abc'", "input keyevent 66"]); // text, then KEYCODE_ENTER
   });
 
+  it("presses a named key after ALL segments of `%`-split text", async () => {
+    // The text-then-key rule has to hold against the multi-call shape too:
+    // `%`-bearing text becomes one `input text` per segment, and an Enter
+    // landing between them would submit `100%` and drop `safe`.
+    adbShell.mockClear();
+    const res = await impl.handler(
+      {},
+      { udid: SERIAL, text: "100%safe", key: "enter" } as KeyboardParams,
+      phone
+    );
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+      "input text '100%'",
+      "input text 'safe'",
+      "input keyevent 66",
+    ]);
+    expect(res).toEqual({ typed: "100%safe", keys: 9 });
+  });
+
   it("rejects a key + un-typeable text request with NO on-device side effect", async () => {
     // The text is validated up front, so a combined request whose text can't be
     // typed must reject before the key is pressed — not press the key and then

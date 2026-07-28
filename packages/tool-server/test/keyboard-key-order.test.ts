@@ -139,6 +139,8 @@ describe("keyboard text+key ordering", () => {
   // chromium and vega), so it pressed the key first while every other backend —
   // and the tool's own description — promised the reverse. A `key:"backspace"`
   // combined with text therefore ate a character of the field's PREVIOUS value.
+  // This is THE regression test for that flip; the reject-before-typing test
+  // below guards a different property and stays green against the old order.
   it("android: presses the named key after the text", async () => {
     adbShell.mockClear();
 
@@ -152,6 +154,9 @@ describe("keyboard text+key ordering", () => {
     expect(cmds).toEqual(["input text 'hi'", "input keyevent 66"]);
   });
 
+  // Guards the up-front `resolveAndroidNamedKeycode` hoist rather than the
+  // ordering flip: once the key is pressed AFTER the text, resolving its name
+  // lazily would reject an unknown key only once the text had already landed.
   it("android: rejects an unknown key before typing any text", async () => {
     adbShell.mockClear();
 
