@@ -53,6 +53,12 @@ export const screenRecordingStopTool: ToolDefinition<
   ScreenRecordingStopResult
 > = {
   id: "screen-recording-stop",
+  interaction: {
+    startedMsg: () => "Stopping screen recording",
+    completedMsg: ({ result }) => `Saved screen recording ${result.video.filename}`,
+    failedMsg: ({ failureSignal }) =>
+      `Failed to stop screen recording: ${failureSignal.error_code}`,
+  },
   capability,
   description: `Stop the screen recording started by \`screen-recording-start\` and retrieve the video: frame capture ends and ffmpeg finalizes the mp4.
 Also retrieves the video when the recording already ended on its own (time limit reached, capture process died) — call it even after the cap fired.

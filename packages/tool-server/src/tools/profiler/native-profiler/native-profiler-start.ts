@@ -60,6 +60,12 @@ export const nativeProfilerStartTool: ToolDefinition<
   { status: "recording"; pid: number; traceFile: string }
 > = {
   id: "native-profiler-start",
+  interaction: {
+    startedMsg: () => "Starting native profiler",
+    completedMsg: () => "Started native profiler",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to start native profiler: ${failureSignal.error_code}`,
+  },
   capability,
   description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory). Android: Perfetto (CPU, jank, RSS-growth weak signal).
 Auto-detects the running app process unless app_process is explicitly provided.

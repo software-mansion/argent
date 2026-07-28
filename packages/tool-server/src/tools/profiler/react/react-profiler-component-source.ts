@@ -24,6 +24,13 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
   Record<string, unknown>
 > = {
   id: "react-profiler-component-source",
+  interaction: {
+    startedMsg: ({ params }) => `Finding source for ${params.component_name}`,
+    completedMsg: ({ params, result }) =>
+      `${result.found ? "Found" : "Could not find"} source for ${params.component_name}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to find source for ${params.component_name}: ${failureSignal.error_code}`,
+  },
   description: `Find a React component's source via tree-sitter AST lookup: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source for a named React component.
 Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
 Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).

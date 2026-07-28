@@ -120,6 +120,11 @@ export async function tvTargetLongSide(file: string, scale: number): Promise<num
 export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {
   return {
     id: "screenshot",
+    interaction: {
+      startedMsg: () => "Capturing screenshot",
+      completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
+      failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
+    },
     description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,

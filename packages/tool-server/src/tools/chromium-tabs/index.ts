@@ -32,6 +32,21 @@ interface Result {
   tabs: TabInfo[];
 }
 
+function tabMessage(params: Params, result?: Result): string {
+  switch (params.action) {
+    case "list":
+      return result
+        ? `Listed ${result.tabs.length} ${result.tabs.length === 1 ? "tab" : "tabs"}`
+        : "Listing tabs";
+    case "select":
+      return `${result ? "Selected" : "Selecting"} tab ${params.tab}`;
+    case "new":
+      return result ? "Opened a new tab" : "Opening a new tab";
+    case "close":
+      return `${result ? "Closed" : "Closing"} tab ${params.tab ?? "active tab"}`;
+  }
+}
+
 // Chromium-only: iOS/Android have no tab/window concept, so the capability gate
 // rejects them up-front (no apple/android blocks declared).
 const capability: ToolCapability = {
@@ -40,6 +55,12 @@ const capability: ToolCapability = {
 
 export const chromiumTabsTool: ToolDefinition<Params, Result> = {
   id: "chromium-tabs",
+  interaction: {
+    startedMsg: ({ params }) => tabMessage(params),
+    completedMsg: ({ params, result }) => tabMessage(params, result),
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to ${params.action} browser tabs: ${failureSignal.error_code}`,
+  },
   description: `List and switch the tabs / windows of a Chromium (CDP) app (an Electron app's BrowserWindows or a Chromium browser's tabs), and open or close them.
 - action="list": enumerate page targets with stable ids (\`t1\`, \`t2\`, …), title, url, and which is active.
 - action="select" (tab=<tabId|label>): make that tab the active one. The active tab is what describe / gesture-tap / screenshot / debugger-evaluate / open-url all operate on, so switch before driving a different tab.

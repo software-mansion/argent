@@ -91,6 +91,19 @@ const capability: ToolCapability = {
 
 export const gestureRotateTool: ToolDefinition<Params, Result> = {
   id: "gesture-rotate",
+  interaction: {
+    startedMsg: ({ params }) => {
+      const degrees = Math.abs(params.endAngle - params.startAngle);
+      const direction = params.endAngle > params.startAngle ? "clockwise" : "counterclockwise";
+      return `Rotating gesture ${degrees}° ${direction}`;
+    },
+    completedMsg: ({ params }) => {
+      const degrees = Math.abs(params.endAngle - params.startAngle);
+      const direction = params.endAngle > params.startAngle ? "clockwise" : "counterclockwise";
+      return `Rotated gesture ${degrees}° ${direction}`;
+    },
+    failedMsg: ({ failureSignal }) => `Failed to rotate gesture: ${failureSignal.error_code}`,
+  },
   description: `Send a two-finger circular arc gesture to rotate on-screen content by a specified angle. Two fingers are placed opposite each other at a fixed radius from the center, then swept from startAngle to endAngle degrees. All positions and radii are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
 endAngle > startAngle = clockwise rotation. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn. A single radius applies to both axes, so on a non-square screen it traces a physical ellipse (finger separation varies through the turn); pass radiusX+radiusY (fractions of width/height with radiusX·width = radiusY·height) for a physically circular orbit instead.
 Auto-generates interpolated frames at ~60fps.

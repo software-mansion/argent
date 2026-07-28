@@ -156,6 +156,12 @@ export function createReactProfilerStopTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-stop",
+    interaction: {
+      startedMsg: () => "Stopping React profiler",
+      completedMsg: () => "Stopped React profiler",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to stop React profiler: ${failureSignal.error_code}`,
+    },
     description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
 Reads commit data from the in-app React DevTools backend.
 Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.

@@ -20,6 +20,12 @@ export function createStopSimulatorServerTool(
 ): ToolDefinition<{ udid: string }, { stopped: boolean; udid: string }> {
   return {
     id: "stop-simulator-server",
+    interaction: {
+      startedMsg: ({ params }) => `Stopping simulator server for ${params.udid}`,
+      completedMsg: ({ params }) => `Stopped simulator server for ${params.udid}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to stop simulator server for ${params.udid}: ${failureSignal.error_code}`,
+    },
     description: `Stop the transport session for a specific device (iOS / Android: simulator-server process; Chromium: CDP WebSocket) and free its resources. Use when you are done interacting with one device but want to keep others running. Returns { stopped, udid }. Fails silently if no session is open for the given id.`,
     zodSchema,
     services: () => ({}),

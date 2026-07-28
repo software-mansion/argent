@@ -122,6 +122,11 @@ export const updateArgentTool: ToolDefinition<{
   target?: "auto" | "global" | "local" | "both";
 }> = {
   id: "update-argent",
+  interaction: {
+    startedMsg: () => `Updating Argent to ${getUpdateState().installableVersion ?? "latest"}`,
+    completedMsg: () => `Updated Argent to ${getUpdateState().installableVersion ?? "latest"}`,
+    failedMsg: ({ failureSignal }) => `Failed to update Argent: ${failureSignal.error_code}`,
+  },
   description:
     "Apply a pending Argent update. Only call this tool when the user has explicitly consented to updating Argent in this conversation. Use when an update notification indicates a new version is available and the user agrees to update. By default updates the install serving this session; pass `target` to choose global/local/both. Returns { message } with the update status and version info. The tool server will restart automatically after the update. Fails if no update is available or an update is already in progress.",
   zodSchema,

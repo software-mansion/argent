@@ -28,6 +28,12 @@ export const debuggerStatusTool: ToolDefinition<
   }
 > = {
   id: "debugger-status",
+  interaction: {
+    startedMsg: () => "Checking JavaScript debugger",
+    completedMsg: () => "Checked JavaScript debugger",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to check JavaScript debugger: ${failureSignal.error_code}`,
+  },
   description: `Get JS runtime debugger connection status and diagnostic info.
 Use when you need to verify connectivity before using other debugger tools. Returns port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), isNewDebugger (false on the legacy inspector), connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning; no-op on Chromium). Fails if the runtime is unreachable.`,
   zodSchema,

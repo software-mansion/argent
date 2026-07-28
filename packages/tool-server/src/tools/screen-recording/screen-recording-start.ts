@@ -64,6 +64,12 @@ export function createScreenRecordingStartTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, StartRecordingResult> {
   return {
     id: "screen-recording-start",
+    interaction: {
+      startedMsg: () => "Starting screen recording",
+      completedMsg: () => "Started screen recording",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to start screen recording: ${failureSignal.error_code}`,
+    },
     capability,
     description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
 By default stretches where the screen does not change are trimmed out (see trimStatic), so a long session with only brief activity comes back as a short clip instead of minutes of dead air.

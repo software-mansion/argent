@@ -44,6 +44,15 @@ type Result =
 
 export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
   id: "native-find-views",
+  interaction: {
+    startedMsg: ({ params }) => `Searching native views in ${params.bundleId}`,
+    completedMsg: ({ params, result }) => {
+      const count = result.status === "ok" ? result.matches.length : 0;
+      return `Found ${count} native ${count === 1 ? "view" : "views"} in ${params.bundleId}`;
+    },
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to search native views in ${params.bundleId}: ${failureSignal.error_code}`,
+  },
   capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Search for specific UIViews in the running app by class name, accessibility identifier, label, tag, or React Native nativeID.
 Use when you need to locate a specific view by its properties without dumping the entire hierarchy.

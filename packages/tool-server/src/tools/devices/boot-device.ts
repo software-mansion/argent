@@ -127,6 +127,10 @@ type BootDeviceResult =
   | ElectronBootResult
   | NativeDevtoolsInitFailedResult;
 
+function bootTarget(params: BootDeviceParams): string {
+  return params.udid ?? params.avdName ?? params.vvdImage ?? params.electronAppPath ?? "device";
+}
+
 // Flags every boot-device launch should always pass. Two purposes:
 //
 //   - Performance: `-noaudio` skips guest pulseaudio init (one thread, ~50 MB
@@ -1414,6 +1418,12 @@ export function createBootDeviceTool(
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
   return {
     id: "boot-device",
+    interaction: {
+      startedMsg: ({ params }) => `Starting ${bootTarget(params)}`,
+      completedMsg: ({ params }) => `Started ${bootTarget(params)}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to start ${bootTarget(params)}: ${failureSignal.error_code}`,
+    },
     description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, or spawn an Electron app and wait until it is ready to accept interactions.
 Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.

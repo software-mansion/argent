@@ -28,6 +28,13 @@ export const debuggerConnectTool: ToolDefinition<
   }
 > = {
   id: "debugger-connect",
+  interaction: {
+    startedMsg: () => "Connecting JavaScript debugger",
+    completedMsg: ({ result }) =>
+      `Connected JavaScript debugger to ${result.appName || result.deviceName}`,
+    failedMsg: ({ failureSignal }) =>
+      `Failed to connect JavaScript debugger: ${failureSignal.error_code}`,
+  },
   description: `Connect to a JS runtime CDP debugger.
 iOS / Android / Vega: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device — port is ignored.
 Returns connection info including port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), and isNewDebugger. If already connected, returns the existing connection.

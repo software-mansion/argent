@@ -29,6 +29,12 @@ export const flowReadPrerequisiteTool: ToolDefinition<
   { flow: string; executionPrerequisite: string }
 > = {
   id: "flow-read-prerequisite",
+  interaction: {
+    startedMsg: () => "Reading flow prerequisite",
+    completedMsg: () => "Read flow prerequisite",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to read flow prerequisite: ${failureSignal.error_code}`,
+  },
   description: `Read the execution prerequisite of a saved flow without running it.
 Returns the prerequisite description so you can verify the required state is met before calling flow-execute.
 Use when you need to check what app/simulator state is required before executing a flow.

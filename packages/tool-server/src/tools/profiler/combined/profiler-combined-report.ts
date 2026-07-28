@@ -46,6 +46,12 @@ interface HangCommitCorrelation {
 
 export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-combined-report",
+  interaction: {
+    startedMsg: () => "Building combined performance report",
+    completedMsg: () => "Built combined performance report",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to build combined performance report: ${failureSignal.error_code}`,
+  },
   description: `Generate a cross-correlated report combining React Profiler and native profiler data.
 Maps native hangs to React commits using wall-clock time alignment.
 Requires both react-profiler-analyze and native-profiler-analyze to have been called first.

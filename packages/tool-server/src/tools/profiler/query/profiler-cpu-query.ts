@@ -344,6 +344,11 @@ function shortenUrl(url: string): string {
 
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-cpu-query",
+  interaction: {
+    startedMsg: ({ params }) => `Querying CPU profile by ${params.mode.replaceAll("_", " ")}`,
+    completedMsg: ({ params }) => `Queried CPU profile by ${params.mode.replaceAll("_", " ")}`,
+    failedMsg: ({ failureSignal }) => `Failed to query CPU profile: ${failureSignal.error_code}`,
+  },
   description: `Query Hermes CPU profile data with targeted modes for iterative investigation.
 Requires react-profiler-stop (and ideally react-profiler-analyze) to have been called first.
 Modes:

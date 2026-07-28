@@ -48,6 +48,11 @@ export const flowStartRecordingTool: ToolDefinition<
   { message: string; previousFlow?: string; flowFile: string; savedTo: FlowSavedTo }
 > = {
   id: "flow-start-recording",
+  interaction: {
+    startedMsg: () => "Starting flow recording",
+    completedMsg: () => "Started flow recording",
+    failedMsg: ({ failureSignal }) => `Failed to start flow recording: ${failureSignal.error_code}`,
+  },
   description: `Start recording a new flow. Creates a .yaml file in the .argent/flows/ directory.
 Use when you want to capture a reusable sequence of device interactions for later replay.
 Returns { message, flowFile, savedTo } and optionally { previousFlow } if a prior recording was abandoned.

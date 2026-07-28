@@ -72,6 +72,12 @@ export const reactProfilerAnalyzeTool: ToolDefinition<
   Record<string, unknown>
 > = {
   id: "react-profiler-analyze",
+  interaction: {
+    startedMsg: () => "Analyzing React profile",
+    completedMsg: () => "Analyzed React profile",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to analyze React profile: ${failureSignal.error_code}`,
+  },
   description: `Analyze stored profiling data and return a markdown performance report.
 Returns { report, reportFile, hotCommitsTotal, hotCommitsShown, sessionFiles }.
 The report is structured around hot React commits (≥16ms absolute floor) with per-commit

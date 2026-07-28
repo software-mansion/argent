@@ -48,6 +48,13 @@ export function createReactProfilerStatusTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-status",
+    interaction: {
+      startedMsg: () => "Checking React profiler",
+      completedMsg: ({ result }) =>
+        result.is_running ? "React profiler is running" : "React profiler is stopped",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to check React profiler: ${failureSignal.error_code}`,
+    },
     description: `Check the state of the React profiler session without side effects. Use after an interruption (debugger disconnect, unexpected error, agent pause) to decide whether to continue with react-profiler-stop, start a new session, or reconnect the debugger. Ownership is verified server-side against this tool-server's in-memory session — no token-threading is required. Returns { session_status, is_running, current_owner, … }. If this tool-server process restarted after react-profiler-start, status will report 'taken_over'; use react-profiler-start { force: true } to reclaim.`,
     zodSchema,
     // RN-only: companion to react-profiler-start.

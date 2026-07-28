@@ -418,6 +418,11 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
 
 export const profilerStackQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-stack-query",
+  interaction: {
+    startedMsg: ({ params }) => `Querying native stacks by ${params.mode.replaceAll("_", " ")}`,
+    completedMsg: ({ params }) => `Queried native stacks by ${params.mode.replaceAll("_", " ")}`,
+    failedMsg: ({ failureSignal }) => `Failed to query native stacks: ${failureSignal.error_code}`,
+  },
   description: `Query native profiler trace data for iterative investigation of native performance.
 Requires native-profiler-stop → native-profiler-analyze to have been called first.
 Modes:

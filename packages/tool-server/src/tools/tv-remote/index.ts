@@ -81,6 +81,14 @@ const capability: ToolCapability = {
 export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, TvRemoteResult> {
   return {
     id: "tv-remote",
+    interaction: {
+      startedMsg: ({ params }) =>
+        `Pressing ${params.button} on TV remote${(params.repeat ?? 1) > 1 ? ` ${params.repeat} times` : ""}`,
+      completedMsg: ({ params }) =>
+        `Pressed ${params.button} on TV remote${(params.repeat ?? 1) > 1 ? ` ${params.repeat} times` : ""}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to press ${params.button} on TV remote: ${failureSignal.error_code}`,
+    },
     description: `Press a TV remote / D-pad button (or a whole path of them) on a TV device — Apple TV (tvOS), Android TV (leanback), or Vega (Fire TV).
 A TV is navigated with a directional remote, not touch — use this instead of gesture-tap/swipe (which do not apply on a TV). Move focus with up/down/left/right, confirm with select, go back with back/menu, exit with home, and use playPause/rewind/fastForward/next/previous/volumeUp/volumeDown/mute for the corresponding remote keys. (On the Apple TV simulator the media-transport and volume keys are rejected — its HID stack ignores them; they work on Android TV and Vega.)
 Single press: { button: "down" }. Repeat the same button: { button: "down", repeat: 3 }.

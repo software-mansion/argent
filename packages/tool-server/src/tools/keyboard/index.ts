@@ -41,6 +41,14 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+function keyboardMessage(params: Params, tense: "present" | "past"): string {
+  if (params.text !== undefined && params.key !== undefined) {
+    return `${tense === "present" ? "Entering" : "Entered"} text and ${tense === "present" ? "pressing" : "pressed"} ${params.key}`;
+  }
+  if (params.text !== undefined) return tense === "present" ? "Entering text" : "Entered text";
+  return `${tense === "present" ? "Pressing" : "Pressed"} ${params.key ?? "key"}`;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
@@ -78,6 +86,11 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
   });
   return {
     id: "keyboard",
+    interaction: {
+      startedMsg: ({ params }) => keyboardMessage(params, "present"),
+      completedMsg: ({ params }) => keyboardMessage(params, "past"),
+      failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
+    },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
 Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the device's input backend is not reachable.

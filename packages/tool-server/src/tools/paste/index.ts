@@ -34,6 +34,12 @@ const capability: ToolCapability = {
 
 export const pasteTool: ToolDefinition<Params, Result> = {
   id: "paste",
+  interaction: {
+    startedMsg: () => "Pasting clipboard contents",
+    completedMsg: () => "Pasted clipboard contents",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to paste clipboard contents: ${failureSignal.error_code}`,
+  },
   description: `Fill the focused field on the iOS simulator by pasting text (fastest text entry).
 Use when you need to fill a text input with a long string faster than character-by-character typing.
 Returns { pasted: true }. Fails if no field is focused or the simulator server is not running.

@@ -27,6 +27,13 @@ export function createStopAllSimulatorServersTool(
 ): ToolDefinition<void, { stopped: string[] }> {
   return {
     id: "stop-all-simulator-servers",
+    interaction: {
+      startedMsg: () => "Stopping all simulator servers",
+      completedMsg: ({ result }) =>
+        `Stopped ${result.stopped.length} simulator ${result.stopped.length === 1 ? "server" : "servers"}`,
+      failedMsg: ({ failureSignal }) =>
+        `Failed to stop simulator servers: ${failureSignal.error_code}`,
+    },
     description: `Stop all running simulator-server processes (iOS + Android), native devtools services, and Chromium CDP sessions, freeing their resources. Call this when your session ends or the user says they are done. Returns { stopped } — an array of URNs that were shut down. Fails silently if no servers are running.`,
     services: () => ({}),
     async execute() {

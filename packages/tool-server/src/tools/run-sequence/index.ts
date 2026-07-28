@@ -84,6 +84,12 @@ export function createRunSequenceTool(
 ): ToolDefinition<Params, RunSequenceResult> {
   return {
     id: "run-sequence",
+    interaction: {
+      startedMsg: ({ params }) => `Running ${params.steps.length}-step interaction sequence`,
+      completedMsg: ({ params }) => `Ran ${params.steps.length}-step interaction sequence`,
+      failedMsg: ({ failureSignal }) =>
+        `Failed to run interaction sequence: ${failureSignal.error_code}`,
+    },
     description: `Execute multiple device interaction steps in a single call (iOS simulator, Android emulator, Apple TV / Android TV, or Chromium app).
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).

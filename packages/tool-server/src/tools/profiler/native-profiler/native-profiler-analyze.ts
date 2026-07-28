@@ -38,6 +38,12 @@ export const nativeProfilerAnalyzeTool: ToolDefinition<
   NativeProfilerAnalyzeToolResult
 > = {
   id: "native-profiler-analyze",
+  interaction: {
+    startedMsg: () => "Analyzing native profile",
+    completedMsg: () => "Analyzed native profile",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to analyze native profile: ${failureSignal.error_code}`,
+  },
   capability,
   description: `Analyze exported native trace data and return an LLM-optimized markdown report.
 iOS: parses CPU time profile, UI hangs, and memory leaks from the exported XML files.
