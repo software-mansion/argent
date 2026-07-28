@@ -1,0 +1,701 @@
+/**
+ * Pure formatting for flow run reports.
+ *
+ * Everything here is a `(data) => string` function: no `fs`, no `process`, no
+ * clock. `flow.ts` owns every side effect (reading argv, writing the report
+ * file, printing) so one set of line builders can serve the terminal failure
+ * block and the JUnit reporter without either growing its own dialect.
+ *
+ * The other reason this file is pure: a `failure` object arrives from a
+ * possibly-remote `argent link` tool-server, so it is untrusted input. It is
+ * normalized ONCE, here, through {@link normalizeFailure} — clamped, truncated,
+ * and coerced — and both renderers consume only the normalized form. A clamp
+ * that lived in one renderer would eventually be missing from the other.
+ */
+
+import { FlagParseException } from "./flag-parser.js";
+import type { FlowReport, StepReport } from "./flow.js";
+
+// ── Wire clamps ──────────────────────────────────────────────────────────
+//
+// `failure` is wire data from a possibly-remote server, so every bound below
+// is a display guard rather than a producer contract — the same doctrine
+// `stepIndent`/`MAX_RENDER_DEPTH` document for `depth` in flow.ts. A hostile
+// server must not be able to make the CLI allocate an unbounded string, drive
+// `padEnd`/`repeat` with a huge count, or inject lines into the block.
+
+/** Longest rendered wire string. Also bounds every column width below. */
+export const MAX_WIRE_FIELD_CHARS = 300;
+/** Matches the producer's FLOW_FAILURE_CANDIDATE_LIMIT; re-applied on receipt. */
+export const MAX_WIRE_CANDIDATES = 5;
+/** Matches the producer's FLOW_FAILURE_ELEMENT_LIMIT; re-applied on receipt. */
+export const MAX_WIRE_ELEMENTS = 40;
+
+/**
+ * Names spliced into derived paths (`.argent/flows/<name>.yaml`). Mirrors the
+ * tool-server's FLOW_NAME_PATTERN — a flow name that fails it is not rendered
+ * as a path at all rather than printed as a bogus location.
+ */
+const SAFE_FLOW_NAME = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Coerce an untrusted wire value to a single-line, bounded display string.
+ * Control characters (newlines included) collapse to spaces: without that a
+ * remote server could inject lines into the failure block, or into a JUnit
+ * attribute. Returns undefined for anything that isn't a non-empty string, so
+ * every call site can use presence as the "render this slot" test.
+ */
+export function wireText(value: unknown, limit = MAX_WIRE_FIELD_CHARS): string | undefined {
+  if (typeof value !== "string") return undefined;
+  // eslint-disable-next-line no-control-regex -- collapsing control characters is the point
+  const flat = value.replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, " ").trim();
+  if (flat === "") return undefined;
+  return flat.length <= limit ? flat : `${flat.slice(0, limit - 1)}…`;
+}
+
+function wireFinite(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function wireCount(value: unknown): number | undefined {
+  const n = wireFinite(value);
+  if (n === undefined || n < 0) return undefined;
+  return Math.floor(n);
+}
+
+/**
+ * Rewrite a wire artifact value to a printable path with zero fetches: a plain
+ * string passes through, a handle yields its server-side hostPath (or bare
+ * filename). Duck-typed rather than importing `isArtifactHandle` so this module
+ * stays dependency-free — and so a renderer called directly, before
+ * `resolveArtifactDisplayPaths` has run, still prints something.
+ */
+export function artifactPath(value: unknown): string | undefined {
+  if (typeof value === "string") return wireText(value);
+  if (!value || typeof value !== "object") return undefined;
+  const handle = value as Record<string, unknown>;
+  if (handle.__argentArtifact !== true) return undefined;
+  return wireText(handle.hostPath) ?? wireText(handle.filename);
+}
+
+/** `.argent/flows/<name>.yaml` — where every flow and fragment lives. */
+export function flowFilePath(flow: unknown): string | undefined {
+  const name = wireText(flow, 128);
+  if (!name || !SAFE_FLOW_NAME.test(name)) return undefined;
+  return `.argent/flows/${name}.yaml`;
+}
+
+// ── Shared step formatting ───────────────────────────────────────────────
+
+/**
+ * "what this step did" — the kind plus its target (the tool id for `tool`
+ * steps, the selector/snapshot name otherwise). Shared by the terminal step
+ * line and the JUnit testcase name so a step is spelled identically in both.
+ */
+export function stepLabel(s: StepReport): string {
+  const what = s.tool ?? s.target;
+  return what ? `${s.kind} ${what}` : s.kind;
+}
+
+/**
+ * `(3.1s)` — one decimal, always, so sub-100ms steps read as `(0.0s)` rather
+ * than collapsing to a bare `(0s)` that looks like a missing measurement.
+ * Negative/NaN durations (wire data) clamp to zero instead of printing junk.
+ */
+export function formatDuration(ms: number): string {
+  const finite = wireFinite(ms);
+  return `(${(Math.max(0, finite ?? 0) / 1000).toFixed(1)}s)`;
+}
+
+/** JUnit's `time` attribute: seconds at 3dp. An untimed step reports 0.000. */
+function junitTime(ms: unknown): string {
+  return (Math.max(0, wireFinite(ms) ?? 0) / 1000).toFixed(3);
+}
+
+// ── Normalized failure ───────────────────────────────────────────────────
+
+export interface NormalizedNode {
+  /** label, else value, else subtree text — whichever names the element. */
+  text?: string;
+  role?: string;
+  identifier?: string;
+  /** "visible" | "off-screen" | "hidden" — derived from the frame, never trusted prose. */
+  visibility?: string;
+  /** `at 0.50, 0.86` — the normalized centre, so an agent can tap it directly. */
+  center?: string;
+}
+
+export interface NormalizedCandidate {
+  score?: number;
+  node: NormalizedNode;
+  note?: string;
+}
+
+/**
+ * Every slot of the failure block, pre-formatted. Presence means "render this
+ * slot": the block is a slot system, not a template, and this is the only
+ * place that decides which slots a given failure fills.
+ */
+export interface NormalizedFailure {
+  code: string;
+  message?: string;
+  determinacy: "determinate" | "indeterminate";
+  /** Set only for the launch/environment shapes, where the evidence itself failed. */
+  environmental: boolean;
+  hint?: string;
+  selector?: string;
+  expected?: string;
+  actual?: string;
+  /** The element that WAS there — the `hidden`-unmet shape's stand-in for candidates. */
+  match?: NormalizedNode;
+  candidates: NormalizedCandidate[];
+  screen?: string;
+  reads?: string;
+  device?: string;
+  screenshot?: string;
+  tree?: string;
+  /** `.argent/flows/<flow>.yaml`, for the block header. */
+  sourceFile?: string;
+}
+
+function normalizeNode(raw: unknown): NormalizedNode | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const n = raw as Record<string, unknown>;
+  const node: NormalizedNode = {};
+  const text = wireText(n.label) ?? wireText(n.value) ?? wireText(n.text);
+  if (text !== undefined) node.text = text;
+  const role = wireText(n.role, 64);
+  if (role !== undefined) node.role = role;
+  const identifier = wireText(n.identifier, 128);
+  if (identifier !== undefined) node.identifier = identifier;
+  const frame = n.frame as Record<string, unknown> | undefined;
+  const x = wireFinite(frame?.x);
+  const y = wireFinite(frame?.y);
+  const width = wireFinite(frame?.width);
+  const height = wireFinite(frame?.height);
+  if (x !== undefined && y !== undefined && width !== undefined && height !== undefined) {
+    const cx = x + width / 2;
+    const cy = y + height / 2;
+    node.center = `at ${cx.toFixed(2)}, ${cy.toFixed(2)}`;
+    // Visibility is DERIVED, never taken from the wire: a zero-area frame is
+    // the whole diagnosis for selector-not-visible, and a centre outside the
+    // unit square is the diagnosis for "add a scroll-to step".
+    node.visibility =
+      width <= 0 || height <= 0
+        ? "hidden"
+        : cx < 0 || cx > 1 || cy < 0 || cy > 1
+          ? "off-screen"
+          : "visible";
+  }
+  return Object.keys(node).length === 0 ? undefined : node;
+}
+
+function normalizeCandidates(raw: unknown): NormalizedCandidate[] {
+  if (!Array.isArray(raw)) return [];
+  const out: NormalizedCandidate[] = [];
+  // Slice BEFORE mapping: a hostile 10 000-entry array must not be walked.
+  for (const entry of raw.slice(0, MAX_WIRE_CANDIDATES)) {
+    if (!entry || typeof entry !== "object") continue;
+    const c = entry as Record<string, unknown>;
+    const node = normalizeNode(c.node);
+    if (!node) continue;
+    const candidate: NormalizedCandidate = { node };
+    const score = wireFinite(c.score);
+    if (score !== undefined) candidate.score = Math.min(1, Math.max(0, score));
+    const note = wireText(c.note, 120);
+    if (note !== undefined) candidate.note = note;
+    out.push(candidate);
+  }
+  return out;
+}
+
+function normalizeScreen(raw: unknown, indeterminate: boolean): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const s = raw as Record<string, unknown>;
+  if (s.state === "available") {
+    const elements = Array.isArray(s.elements) ? s.elements.slice(0, MAX_WIRE_ELEMENTS) : [];
+    const count = wireCount(s.elementCount) ?? elements.length;
+    const parts = [`${count} element${count === 1 ? "" : "s"}`];
+    const size = s.size as Record<string, unknown> | undefined;
+    const width = wireCount(size?.width);
+    const height = wireCount(size?.height);
+    if (width !== undefined && height !== undefined) parts.push(`${width}x${height}`);
+    let line = parts.join(", ");
+    // An indeterminate failure's tree is by definition the last read argent
+    // could trust, not the state at the deadline — say so, or the element list
+    // reads as "this is what was on screen when the check failed".
+    if (indeterminate) line += " (last trusted read)";
+    else if (s.capturedAt === "after-failure") line += " (captured after the failure)";
+    return line;
+  }
+  if (s.state === "unavailable") {
+    const reason = wireText(s.reason, 64) ?? "unknown";
+    const detail = wireText(s.detail);
+    return `unavailable — ${reason}${detail ? `: ${detail}` : ""}`;
+  }
+  return undefined;
+}
+
+function normalizeExpected(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const e = raw as Record<string, unknown>;
+  if (e.kind === "condition") {
+    const text = wireText(e.text);
+    if (text !== undefined) {
+      const match = wireText(e.textMatch, 32);
+      return `${JSON.stringify(text)}${match ? ` (${match})` : ""}`;
+    }
+    return wireText(e.condition, 64);
+  }
+  if (e.kind === "scroll") {
+    const direction = wireText(e.direction, 32) ?? "scroll";
+    const within = wireText(e.within);
+    const max = wireCount(e.maxIterations);
+    return `scroll ${direction}${within ? ` within ${within}` : ""}${max === undefined ? "" : ` (max ${max} iterations)`}`;
+  }
+  if (e.kind === "snapshot") {
+    const key = wireText(e.snapshotKey, 128);
+    const max = wireFinite(e.maxMismatch);
+    return `snapshot${key ? ` ${key}` : ""}${max === undefined ? "" : ` (max ${max}% mismatch)`}`;
+  }
+  if (e.kind === "gesture") {
+    const gesture = wireText(e.gesture, 32);
+    const detail = wireText(e.detail);
+    if (!gesture) return detail;
+    return `${gesture}${detail ? ` ${detail}` : ""}`;
+  }
+  return undefined;
+}
+
+/**
+ * What the check actually read. Deliberately NOT the match counters — "0
+ * matches, 0 visible" restates the message, and `candidates`/`screen` already
+ * answer "what was there instead".
+ */
+function normalizeActual(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const a = raw as Record<string, unknown>;
+  const text = wireText(a.text) ?? wireText(a.ownText);
+  if (text !== undefined) return JSON.stringify(text);
+  const mismatch = wireFinite(a.mismatchPercentage);
+  if (mismatch !== undefined) return `${mismatch.toFixed(2)}% differs`;
+  return undefined;
+}
+
+/**
+ * The read breakdown, emitted only for the indeterminate tier — it exists to
+ * answer "could argent see the screen at all?", which is the only question
+ * that distinguishes "retry this" from "fix this".
+ */
+function normalizeReads(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const t = raw as Record<string, unknown>;
+  const parts: string[] = [];
+  const attempts = wireCount(t.attempts);
+  if (attempts !== undefined) parts.push(`${attempts} attempted`);
+  const trusted = wireCount(t.trustedAttempts);
+  if (trusted !== undefined) parts.push(`${trusted} trusted`);
+  const dark = wireFinite(t.darkTailMs);
+  if (dark !== undefined && dark > 0) {
+    parts.push(`last trusted ${(dark / 1000).toFixed(1)}s before the deadline`);
+  }
+  return parts.length === 0 ? undefined : parts.join(", ");
+}
+
+/**
+ * Fold an untrusted `failure` into the slots the renderers print. `fallback`
+ * supplies the flow name for the derived source path when the wire object
+ * carries none.
+ */
+export function normalizeFailure(
+  raw: unknown,
+  fallback: { flow?: string; device?: string } = {}
+): NormalizedFailure | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const f = raw as Record<string, unknown>;
+  // An unknown code renders generically: it is printed verbatim (bounded) and
+  // drives no behaviour, so a newer server's vocabulary degrades to prose
+  // rather than to a blank line.
+  const code = wireText(f.code, 64) ?? "unclassified";
+  const step = (f.step ?? {}) as Record<string, unknown>;
+  const category = wireText(f.category, 32);
+  const indeterminate =
+    f.determinacy === "indeterminate" ||
+    (f.determinacy === undefined && /^(condition-|when-guard-|tree-source-)/.test(code));
+
+  const out: NormalizedFailure = {
+    code,
+    determinacy: indeterminate ? "indeterminate" : "determinate",
+    environmental:
+      category === "launch" ||
+      category === "environment" ||
+      (category === undefined && /^(launch-|tree-source-)/.test(code)),
+    candidates: normalizeCandidates(f.candidates),
+  };
+
+  const message = wireText(f.message);
+  if (message !== undefined) out.message = message;
+  const hint = wireText(f.hint);
+  const screenHint = wireText((f.screen as Record<string, unknown> | undefined)?.hint);
+  if ((hint ?? screenHint) !== undefined) out.hint = hint ?? screenHint;
+
+  const selector = wireText((f.selector as Record<string, unknown> | undefined)?.described);
+  if (selector !== undefined) out.selector = selector;
+
+  const expected = normalizeExpected(f.expected);
+  if (expected !== undefined) out.expected = expected;
+  const actual = normalizeActual(f.actual);
+  if (actual !== undefined) out.actual = actual;
+  // `match:` fills the candidates slot for the shapes where the element WAS
+  // found (a `hidden` assertion that stayed visible). When the observation
+  // already produced an `actual:` line, that line carries the reading and a
+  // second row of the same element would just be noise.
+  if (actual === undefined) {
+    const match = normalizeNode((f.actual as Record<string, unknown> | undefined)?.element);
+    if (match) out.match = match;
+  }
+
+  const screen = normalizeScreen(f.screen, indeterminate);
+  if (screen !== undefined && !out.environmental) out.screen = screen;
+  if (indeterminate) {
+    const reads = normalizeReads(f.timing);
+    if (reads !== undefined) out.reads = reads;
+  }
+
+  // The launch/tree-source shapes have no screen and no tree — the evidence
+  // itself is what failed. The device identity takes their place.
+  if (out.environmental) {
+    const platform = wireText((f.data as Record<string, unknown> | undefined)?.platform, 32);
+    const device = wireText(fallback.device, 128);
+    if (device !== undefined) out.device = `${device}${platform ? ` (${platform})` : ""}`;
+  } else {
+    const tree = artifactPath(f.tree);
+    if (tree !== undefined) out.tree = tree;
+  }
+
+  const screenshot = artifactPath(f.screenshot);
+  if (screenshot !== undefined) out.screenshot = screenshot;
+
+  const source = (step.source ?? {}) as Record<string, unknown>;
+  const file = wireText(source.file, 256) ?? flowFilePath(step.flow ?? fallback.flow);
+  if (file !== undefined) {
+    const line = wireCount(source.line);
+    out.sourceFile = line !== undefined && line > 0 ? `${file}:${line}` : file;
+  }
+  return out;
+}
+
+// ── Candidate table ──────────────────────────────────────────────────────
+
+function candidateCells(c: NormalizedCandidate, withCenter: boolean): string[] {
+  const cells = [
+    c.score === undefined ? "" : c.score.toFixed(2),
+    c.node.text === undefined ? "" : JSON.stringify(c.node.text),
+    c.node.role ?? "",
+    c.node.identifier === undefined ? "" : `id=${c.node.identifier}`,
+    c.node.visibility ?? "",
+  ];
+  if (withCenter) cells.push(c.node.center ?? "");
+  cells.push(c.note === undefined ? "" : `— ${c.note}`);
+  return cells;
+}
+
+/**
+ * Column-aligned candidate rows. Every cell is already wire-bounded, so the
+ * widest column is bounded too and `padEnd` can never be handed a huge count.
+ * A column that is empty for every row is dropped rather than padded, so a
+ * tree with no identifiers doesn't print a ragged blank gutter.
+ */
+export function candidateRows(
+  candidates: NormalizedCandidate[],
+  opts: { withCenter?: boolean } = {}
+): string[] {
+  const rows = candidates.map((c) => candidateCells(c, opts.withCenter ?? false));
+  if (rows.length === 0) return [];
+  const columns = rows[0]!.length;
+  const kept: number[] = [];
+  for (let i = 0; i < columns; i++) if (rows.some((r) => r[i] !== "")) kept.push(i);
+  const widths = kept.map((i) => Math.max(...rows.map((r) => r[i]!.length)));
+  return rows.map((row) =>
+    kept
+      .map((column, k) => row[column]!.padEnd(widths[k]!))
+      .join("  ")
+      .trimEnd()
+  );
+}
+
+/** One `match:`-style row for a single element (no score column). */
+export function nodeRow(node: NormalizedNode): string {
+  return [
+    node.text === undefined ? "" : JSON.stringify(node.text),
+    node.role ?? "",
+    node.identifier === undefined ? "" : `id=${node.identifier}`,
+    node.visibility ?? "",
+    node.center ?? "",
+  ]
+    .filter((cell) => cell !== "")
+    .join("  ");
+}
+
+// ── Reporter specs ───────────────────────────────────────────────────────
+
+export type ReporterSpec = { format: "default" } | { format: "junit"; path: string };
+
+/**
+ * `default` | `junit:<path>`. Rejected specs throw FlagParseException so
+ * `argent flow run` exits 2 before the tool call — a report the operator asked
+ * for and did not get is worse than a run that never started, especially in CI
+ * where the XML is the only artifact anyone reads.
+ *
+ * Split on the FIRST colon so a Windows path (`junit:C:\out.xml`) survives.
+ */
+export function parseReporterSpec(spec: string): ReporterSpec {
+  const raw = typeof spec === "string" ? spec.trim() : "";
+  if (raw === "") throw new FlagParseException("--reporter requires a value");
+  const sep = raw.indexOf(":");
+  const format = sep === -1 ? raw : raw.slice(0, sep);
+  const rest = sep === -1 ? "" : raw.slice(sep + 1).trim();
+  if (format === "default") {
+    if (rest !== "") throw new FlagParseException("--reporter default does not take a path");
+    return { format: "default" };
+  }
+  if (format === "junit") {
+    if (rest === "")
+      throw new FlagParseException("--reporter junit requires a path (junit:<path>)");
+    return { format: "junit", path: rest };
+  }
+  throw new FlagParseException(
+    `--reporter has unknown format "${format}" (expected default or junit:<path>)`
+  );
+}
+
+// ── JUnit XML ────────────────────────────────────────────────────────────
+
+/**
+ * XML entity escaping plus a control-character strip. The strip is the part
+ * every hand-rolled escaper forgets: `text` reaches this file straight off a
+ * device's accessibility tree, and a stray `\x00`/`\x1b` makes the whole
+ * document unparseable — which in CI means the reporter silently produces no
+ * annotations at all. Tab/LF/CR are legal XML 1.0 characters and survive.
+ */
+export function xmlEscape(value: string): string {
+  return (
+    value
+      // eslint-disable-next-line no-control-regex -- stripping these is the point
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;")
+  );
+}
+
+/**
+ * The platform the runner actually resolved, read off the first step that
+ * carries a failure. Untrusted wire data like everything else here, so it goes
+ * through `wireText`; absent from a pre-`data` tool-server and from a run with
+ * no failing step, where the property is simply omitted.
+ */
+function resolvedPlatform(report: { steps?: unknown }): string | undefined {
+  const steps = Array.isArray(report.steps) ? report.steps : [];
+  for (const step of steps) {
+    if (typeof step !== "object" || step === null) continue;
+    const failure = (step as { failure?: unknown }).failure;
+    if (typeof failure !== "object" || failure === null) continue;
+    const data = (failure as { data?: unknown }).data;
+    if (typeof data !== "object" || data === null) continue;
+    const platform = wireText((data as Record<string, unknown>).platform, 32);
+    if (platform !== undefined) return platform;
+  }
+  return undefined;
+}
+
+export interface JUnitMeta {
+  device?: string;
+  platform?: string;
+  flowFile?: string;
+  hostname?: string;
+  /** ISO-8601. Derived from `report.startedAt` when omitted. */
+  timestamp?: string;
+  /** Whole-run wall clock. Falls back to `report.durationMs`, then to the step sum. */
+  durationMs?: number;
+}
+
+function attrs(pairs: [string, string | undefined][]): string {
+  return pairs
+    .filter((pair): pair is [string, string] => pair[1] !== undefined)
+    .map(([k, v]) => ` ${k}="${xmlEscape(v)}"`)
+    .join("");
+}
+
+/**
+ * The detail body of a `<failure>`/`<error>`: the same slots the terminal
+ * block prints, minus the context window (a CI checks UI shows the step name
+ * already) and minus column alignment (proportional fonts eat it anyway).
+ */
+function junitDetailLines(s: StepReport, f: NormalizedFailure | undefined): string[] {
+  const lines: string[] = [];
+  if (!f) {
+    const reason = wireText(s.reason);
+    return reason ? [reason] : [];
+  }
+  if (f.selector) lines.push(`selector: ${f.selector}`);
+  if (f.expected) lines.push(`expected: ${f.expected}`);
+  if (f.actual) lines.push(`actual: ${f.actual}`);
+  if (f.match) lines.push(`match: ${nodeRow(f.match)}`);
+  if (f.determinacy === "indeterminate") lines.push(`hint: ${INDETERMINATE_HINT}`);
+  if (f.hint) lines.push(`hint: ${f.hint}`);
+  if (f.candidates.length > 0) {
+    lines.push("candidates:");
+    for (const row of candidateRows(f.candidates)) lines.push(`  ${row}`);
+  }
+  if (f.screen) lines.push(`screen: ${f.screen}`);
+  if (f.reads) lines.push(`reads: ${f.reads}`);
+  if (f.device) lines.push(`device: ${f.device}`);
+  for (const [role, value] of Object.entries(s.artifacts ?? {})) {
+    const p = artifactPath(value);
+    if (p) lines.push(`${role}: ${p}`);
+  }
+  if (f.screenshot) lines.push(`screenshot: ${f.screenshot}`);
+  if (f.tree) lines.push(`tree: ${f.tree}`);
+  return lines;
+}
+
+/**
+ * A flow is a `<testsuite>`; each step is a `<testcase>`.
+ *
+ * Per-failure attribution in the checks UI is the entire value of JUnit in CI,
+ * and a flow is 10-50 individually-named steps — collapsing them into one
+ * testcase throws that away. It is also the only mapping that can use JUnit's
+ * `<failure>` vs `<error>` split, which argent already draws (`fail` = an
+ * assertion said no; `error` = the machinery broke).
+ *
+ * `echo` steps are narration, not steps: they are excluded from the counters
+ * (as the runner's own `summarize` excludes them), so emitting them as
+ * testcases would make `tests=` disagree with the testcase count. Their text
+ * joins the suite-level `<system-out>` instead.
+ */
+export function buildJUnitXml(report: FlowReport, meta: JUnitMeta = {}): string {
+  const flow = wireText(report.flow, 128) ?? "flow";
+  const steps = Array.isArray(report.steps) ? report.steps : [];
+  // Counts derive from the steps, never from the wire counters: the testcase
+  // elements and the attributes summarising them cannot then disagree.
+  const counted = steps.filter((s) => s.kind !== "echo");
+  const failures = counted.filter((s) => s.status === "fail").length;
+  const errors = counted.filter((s) => s.status === "error").length;
+  const skipped = counted.filter((s) => s.status === "skip").length;
+  // A cancelled run fails the verdict with every step pass/skip. Reporting it
+  // as a clean suite would show green in the checks UI next to a red build.
+  const incomplete = report.ok === false && failures === 0 && errors === 0;
+
+  const stepSum = counted.reduce((sum, s) => sum + (wireFinite(s.durationMs) ?? 0), 0);
+  const time = junitTime(meta.durationMs ?? report.durationMs ?? stepSum);
+  const startedAt = wireFinite(report.startedAt);
+  const timestamp =
+    meta.timestamp ?? (startedAt !== undefined ? new Date(startedAt).toISOString() : undefined);
+
+  const counters = attrs([
+    ["tests", String(counted.length)],
+    ["failures", String(failures)],
+    ["errors", String(errors + (incomplete ? 1 : 0))],
+    ["skipped", String(skipped)],
+    ["time", time],
+  ]);
+
+  const out: string[] = ['<?xml version="1.0" encoding="UTF-8"?>'];
+  out.push(`<testsuites name="argent flow"${counters}>`);
+  out.push(
+    `  <testsuite name="${xmlEscape(flow)}"${counters}${attrs([
+      ["timestamp", timestamp],
+      ["hostname", meta.hostname ?? wireText(report.device, 128)],
+    ])}>`
+  );
+
+  const properties: [string, string | undefined][] = [
+    ["argent.device", meta.device ?? wireText(report.device, 128)],
+    // `--platform` only narrows auto-detection, so it is absent on the common
+    // run; the RESOLVED platform rides in on the failure instead. Preferring
+    // the flag keeps an explicit choice authoritative, while the fallback is
+    // what stops the property from disappearing exactly when a CI reader most
+    // wants it — on a failing run nobody pinned a platform for.
+    ["argent.platform", meta.platform ?? resolvedPlatform(report)],
+    ["argent.flowFile", meta.flowFile ?? flowFilePath(report.flow)],
+  ];
+  const present = properties.filter((p): p is [string, string] => p[1] !== undefined);
+  if (present.length > 0) {
+    out.push("    <properties>");
+    for (const [name, value] of present) {
+      out.push(`      <property name="${xmlEscape(name)}" value="${xmlEscape(value)}"/>`);
+    }
+    out.push("    </properties>");
+  }
+
+  if (incomplete) {
+    out.push(
+      `    <error type="run-incomplete" message="${xmlEscape(
+        report.aborted ? "run cancelled before it completed" : "the run failed with no failing step"
+      )}"/>`
+    );
+  }
+
+  let ordinal = 0;
+  for (const s of steps) {
+    if (s.kind === "echo") continue;
+    ordinal++;
+    const name = `${String(ordinal).padStart(2, "0")} ${stepLabel(s)}`;
+    const open = `    <testcase${attrs([
+      ["classname", flow],
+      ["name", name],
+      ["time", junitTime(s.durationMs)],
+    ])}`;
+    if (s.status === "pass") {
+      out.push(`${open}/>`);
+      continue;
+    }
+    out.push(`${open}>`);
+    if (s.status === "skip") {
+      // Post-failure skips carry no reason of their own; say why they were not
+      // run rather than emitting a bare, unexplained <skipped/>.
+      const reason =
+        wireText(s.reason) ??
+        (failures + errors > 0 ? "run stopped at the first failure" : undefined);
+      out.push(`      <skipped${attrs([["message", reason]])}/>`);
+    } else {
+      const f = normalizeFailure(s.failure, { flow: s.flow ?? report.flow, device: report.device });
+      const tag = s.status === "error" ? "error" : "failure";
+      const detail = junitDetailLines(s, f).join("\n");
+      const head = `      <${tag}${attrs([
+        ["type", f?.code ?? s.status],
+        ["message", wireText(f?.message) ?? wireText(s.reason)],
+      ])}`;
+      if (detail === "") out.push(`${head}/>`);
+      else out.push(`${head}>${xmlEscape(detail)}</${tag}>`);
+      const sysout = [`status: ${s.status}`, `durationMs: ${wireFinite(s.durationMs) ?? 0}`];
+      if (f) sysout.push(`code: ${f.code}`);
+      out.push(`      <system-out>${xmlEscape(sysout.join("\n"))}</system-out>`);
+    }
+    out.push("    </testcase>");
+  }
+
+  const narration = steps
+    .filter((s) => s.kind === "echo")
+    .map((s) => wireText(s.message))
+    .filter((m): m is string => m !== undefined);
+  if (narration.length > 0) {
+    out.push(`    <system-out>${xmlEscape(narration.join("\n"))}</system-out>`);
+  }
+
+  out.push("  </testsuite>");
+  out.push("</testsuites>");
+  return `${out.join("\n")}\n`;
+}
+
+/**
+ * The sentence an indeterminate failure exists to deliver. "the check could
+ * not be evaluated" is not "the check failed" — an operator reading a CI log
+ * has to be able to tell them apart to choose between re-running and editing
+ * the flow, and every other signal (glyph, counters, exit code) is identical.
+ */
+export const INDETERMINATE_HINT =
+  "not a failed assertion — argent could not read the screen; re-run or fix the device/tree source rather than editing the flow";
