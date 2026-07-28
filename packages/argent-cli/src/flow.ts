@@ -8,7 +8,9 @@ import {
   getResolvedToolsUrl,
   isArtifactHandle,
   materializeArtifacts,
+  ToolInvocationError,
   type MaterializeContext,
+  type ToolsClient,
   type ToolsServerPaths,
 } from "@argent/tools-client";
 import { FlagParseException } from "./flag-parser.js";
@@ -94,7 +96,7 @@ function stepIndent(depth: number | undefined): string {
 function printHelp(): void {
   console.log(`Usage: argent flow <subcommand> [options]
 
-Run a YAML flow without an LLM in the loop. \`run\` takes either form:
+Run a YAML flow without an LLM in the loop. \`run\` takes any of these forms:
 
   a name   A flow saved under .argent/flows — "checkout" runs
            .argent/flows/checkout.yaml, resolved from the current directory
@@ -102,18 +104,28 @@ Run a YAML flow without an LLM in the loop. \`run\` takes either form:
            directory. It must not contain ".." segments (pass the resolved
            path instead); a path is what reaches flows kept elsewhere, and
            what \`argent flow list\` prints for nested ones
+  a dir    Every flow in that directory, run sequentially
 
-Either way the filename (minus .yaml) names the run's report and artifacts, so
-it must contain only letters, numbers, "_", or "-" — the same charset a name
-must match. A flow that begins with a \`launch\` step runs its app from scratch;
-any other flow (a fragment) runs against the device's current state — handy
-while authoring one. Runs require the auto-started local tool server;
+For a name and for a file path alike, the
+filename (minus .yaml) names the run's report and artifacts, so it must
+contain only letters, numbers, "_", or "-" — the same charset a name must
+match. A flow that begins with a \`launch\` step runs its app from scratch; any
+other flow (a fragment) runs against the device's current state — handy while
+authoring one.
+
+A directory run prints only failing steps plus a final flow summary;
+--recursive walks subdirectories too (dot-directories and node_modules are
+skipped). An invalid flow file fails alone and the batch continues; an infra
+error stops the batch and counts the remaining flows skipped.
+
+Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
 
 Subcommands:
-  run <flow|flow.yaml>   Run a saved flow by name, or a YAML file by path, and
-                         report pass/fail (exit reflects result)
-  list                   List runnable YAML paths in .argent/flows
+  run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
+                             every flow in a directory, and report pass/fail
+                             (exit reflects result)
+  list                       List runnable YAML paths in .argent/flows
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
@@ -121,9 +133,12 @@ Options (run):
   --update-baselines     Write/refresh screenshot baselines instead of diffing
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          under <dir>/<flow>/ — a stable path for CI artifact
-                         upload. A different flow file with the same filename
-                         sharing <dir> exports to <flow>-<pathhash>/ instead
-                         (with a warning), so no flow's evidence is overwritten
+                         upload; a directory run keys nested flows as
+                         <dir>/<subdir>/<flow>/. A different flow file with the
+                         same filename sharing <dir> exports to <flow>-<pathhash>/
+                         instead (with a warning), so no flow's evidence is
+                         overwritten
+  -r, --recursive        With a directory path, also run flows in subdirectories
   --json                 Print the raw JSON report
   --help, -h             Show this help
   --                     End of options — only needed for a flow whose name
@@ -133,29 +148,36 @@ Examples:
   argent flow run checkout --platform ios
   argent flow run .argent/flows/checkout.yaml --output flow-artifacts --json
   argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
+  argent flow run .argent/flows --recursive
 `);
 }
 
 export function parseRunArgs(argv: string[]): {
   /**
-   * The positional argument exactly as supplied — a saved-flow name or a YAML
-   * path. Which of the two it is, is resolveFlowRef's call; this parser only
-   * shuffles tokens and never inspects one.
+   * The positional argument exactly as supplied — a saved-flow name, a YAML
+   * path, or a directory path. Which of the three it is, is resolveFlowRef's
+   * and the directory stat's call; this parser only shuffles tokens and never
+   * inspects one.
    */
   flowRef?: string;
   device?: string;
   platform?: string;
   output?: string;
   updateBaselines: boolean;
+  recursive: boolean;
   json: boolean;
 } {
-  const out = { updateBaselines: false, json: false } as ReturnType<typeof parseRunArgs>;
+  const out = {
+    updateBaselines: false,
+    recursive: false,
+    json: false,
+  } as ReturnType<typeof parseRunArgs>;
   // Positionals are collected through one helper so the end-of-options marker
   // below cannot drift from the ordinary path in what it accepts.
   const takePositional = (tok: string): void => {
     if (out.flowRef !== undefined) {
       throw new FlagParseException(
-        `unexpected argument ${JSON.stringify(tok)}; flow run accepts one flow name or YAML file path`
+        `unexpected argument ${JSON.stringify(tok)}; flow run accepts one flow name, YAML file path, or directory path`
       );
     }
     out.flowRef = tok;
@@ -217,6 +239,11 @@ export function parseRunArgs(argv: string[]): {
     } else if (flag === "--json") {
       noValue("--json");
       out.json = true;
+    } else if (flag === "--recursive" || flag === "-r") {
+      // Bare `-r` never carries an inline value (the `=` split applies to
+      // `--` tokens only), so noValue guards just the long form.
+      noValue("--recursive");
+      out.recursive = true;
     } else if (flag === "--device") out.device = takeValue("--device");
     else if (flag === "--platform") out.platform = takeValue("--platform");
     else if (flag === "--output") out.output = takeValue("--output");
@@ -300,6 +327,39 @@ export function renderArtifactLines(report: FlowReport): string[] {
     for (const [k, v] of entries) lines.push(`       ${k}: ${v}`);
   }
   return lines;
+}
+
+/**
+ * Batch mode prints only what needs attention: each fail/error step with its
+ * under-lines, numbered by walking the full step list so the numbers match a
+ * single-mode rerun of the same flow.
+ */
+export function renderFailedSteps(report: FlowReport): string[] {
+  const lines: string[] = [];
+  let n = 0;
+  for (const s of report.steps) {
+    if (s.kind === "echo") continue;
+    n++;
+    if (s.status !== "fail" && s.status !== "error") continue;
+    lines.push(renderStepLine(s, n, report.flow));
+    if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    if (s.artifacts && typeof s.artifacts === "object") {
+      for (const [k, v] of Object.entries(s.artifacts)) {
+        if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
+      }
+    }
+  }
+  return lines;
+}
+
+/** Flow-level verdict of a directory run, mirroring renderSummary's shape. */
+export function renderBatchSummary(counts: {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+}): string {
+  return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped`;
 }
 
 /**
@@ -904,6 +964,214 @@ async function savedFlowHint(projectRoot: string, missingPath: string): Promise<
   );
 }
 
+/**
+ * Discover runnable flows under `dir`, as paths relative to it, sorted for a
+ * deterministic run order. Same acceptance rules as `flow list`, so `list` and
+ * a directory `run` can never disagree. The recursive walk skips
+ * dot-directories and node_modules and never follows a directory symlink (its
+ * dirent is not a directory, and a `*.yaml` one fails isRunnableFlowFile).
+ */
+async function collectFlowFiles(dir: string, recursive: boolean): Promise<string[]> {
+  const found: string[] = [];
+  const walk = async (current: string, rel: string): Promise<void> => {
+    for (const entry of await fsp.readdir(current, { withFileTypes: true })) {
+      const entryRel = rel ? path.join(rel, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        if (recursive && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+          // Best-effort like isRunnableFlowFile: an unreadable subtree is
+          // skipped so the rest of the walk still runs — only the top-level
+          // readdir failure (thrown by the outer walk call) aborts discovery.
+          await walk(path.join(current, entry.name), entryRel).catch(() => {});
+        }
+        continue;
+      }
+      if (!entry.name.endsWith(".yaml")) continue;
+      if (!SAFE_FLOW_NAME.test(path.basename(entry.name, ".yaml"))) continue;
+      if (await isRunnableFlowFile(path.join(current, entry.name))) found.push(entryRel);
+    }
+  };
+  await walk(dir, "");
+  return found.sort();
+}
+
+/**
+ * CLI runs rely on the caller and tool-server sharing a filesystem: the
+ * runner resolves `run:` targets against each containing flow file's
+ * directory (fragments may live across directories) and reads/writes
+ * `__baselines__` beside the canonicalized root YAML — all on the tool
+ * server's disk, so a remote server would resolve every one of those paths
+ * on its own filesystem, not this one. Keep the flow-execute tool itself
+ * remotely callable, but reject CLI routing that cannot guarantee the
+ * shared filesystem. This deliberately rejects even single-file flows that
+ * could run remotely — the CLI cannot tell them apart without parsing the
+ * flow. Prints the recovery hint and returns false when remote routing is
+ * configured.
+ */
+async function requireLocalToolServer(): Promise<boolean> {
+  const routing = await getResolvedToolsUrl();
+  if (routing.source === "none") return true;
+  // With ARGENT_TOOLS_URL set over an existing link file, unsetting only the
+  // env var re-routes through the shadowed link — the same refusal with the
+  // other source. Name both steps up front.
+  const recovery =
+    routing.source === "env"
+      ? routing.shadowedLink
+        ? "Unset ARGENT_TOOLS_URL and run `argent unlink`, then try again — " +
+          `a link to ${routing.shadowedLink.url} is also configured and takes over once the env var is unset.`
+        : "Unset ARGENT_TOOLS_URL and try again."
+      : "Run `argent unlink` and try again.";
+  console.error(
+    `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`
+  );
+  return false;
+}
+
+/** One flow-execute payload builder so single and batch runs cannot drift. */
+function buildRunPayload(
+  flowPath: string,
+  projectRoot: string,
+  args: ReturnType<typeof parseRunArgs>
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    flow_path: flowPath,
+    project_root: projectRoot,
+    // Headless runs never block on the LLM prerequisite handshake.
+    prerequisiteAcknowledged: true,
+  };
+  if (args.device) payload.device = args.device;
+  if (args.platform) payload.platform = args.platform;
+  if (args.updateBaselines) payload.updateBaselines = true;
+  return payload;
+}
+
+/**
+ * Durable diff output: copy failed-snapshot images out of the tool-server's
+ * cache before any renderer prints paths, so every output mode shows the
+ * durable location. The only artifact bytes the CLI ever fetches; baseUrl is
+ * resolved lazily so a run without --output makes no extra round-trip.
+ * Whatever handles remain (all of them without --output; passing snapshots
+ * and unexported roles with it) print as server-side paths.
+ */
+async function exportAndResolveArtifacts(
+  report: FlowReport,
+  outputDir: string | undefined,
+  flowPath: string,
+  baseUrl: ToolsClient["baseUrl"]
+): Promise<void> {
+  if (outputDir) {
+    const { url, token } = await baseUrl();
+    await exportFailureArtifacts(report, outputDir, flowPath, { toolsUrl: url, authToken: token });
+  }
+  resolveArtifactDisplayPaths(report);
+}
+
+/** One flow's outcome in a directory run — also the --json aggregate entry. */
+interface BatchFlowResult {
+  path: string;
+  status: "pass" | "fail" | "skip";
+  report?: FlowReport;
+  error?: string;
+}
+
+/**
+ * Run every discovered flow in `dir` sequentially. Reports failures only (no
+ * live step lines), then a flow-level summary; a flow failing its steps — or
+ * one the tool-server rejects as invalid (a bad YAML, an unparseable step) —
+ * lets the batch continue, while an infra error (transport throw, unclassified
+ * failure, non-report result) stops it and counts the remaining flows skipped.
+ */
+async function runFlowDirectory(
+  dir: string,
+  args: ReturnType<typeof parseRunArgs>,
+  projectRoot: string,
+  options: FlowCommandOptions
+): Promise<void> {
+  let flows: string[];
+  try {
+    flows = await collectFlowFiles(dir, args.recursive);
+  } catch {
+    console.error(`Could not read flow directory: ${dir}`);
+    return exitAfterFlush(2);
+  }
+  if (flows.length === 0) {
+    console.error(`No flows found in ${dir}`);
+    if (!args.recursive) console.error("Pass -r/--recursive to include subdirectories.");
+    return exitAfterFlush(2);
+  }
+
+  if (!(await requireLocalToolServer())) return exitAfterFlush(2);
+  const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
+
+  const outputBase = args.output ? path.resolve(args.output) : undefined;
+  const results: BatchFlowResult[] = [];
+  // A validation rejection is specific to one flow file, so the batch keeps
+  // going. Anything else — transport death, or a failure the server didn't
+  // classify (including one from a pre-signal server) — could make every
+  // remaining flow burn a device run against the same wall, so stop.
+  let stopped = false;
+  for (const [i, rel] of flows.entries()) {
+    if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
+    if (stopped) {
+      results.push({ path: rel, status: "skip" });
+      if (!args.json) console.log(`  ${STATUS_GLYPH.skip} not run (batch stopped)`);
+      continue;
+    }
+    let report: FlowReport | undefined;
+    try {
+      // No onProgress: batch output is failures-only, never live step lines.
+      const resp = await callTool(
+        "flow-execute",
+        buildRunPayload(path.join(dir, rel), projectRoot, args)
+      );
+      const data = resp.data as FlowReport;
+      // typeof guard: `in` throws on a primitive wire value, and that must
+      // classify as "no report", not as an infra throw.
+      if (data && typeof data === "object" && "steps" in data) report = data;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(message);
+      results.push({ path: rel, status: "fail", error: message });
+      const rejectedThisFlowOnly =
+        err instanceof ToolInvocationError && err.errorKind === "validation";
+      if (!rejectedThisFlowOnly) stopped = true;
+      continue;
+    }
+    if (!report) {
+      const message = `"${rel}" did not produce a run report.`;
+      console.error(message);
+      results.push({ path: rel, status: "fail", error: message });
+      stopped = true;
+      continue;
+    }
+    // Key exports by the flow's subdirectory so recursive same-stem flows
+    // cannot clobber each other (exportFailureArtifacts keys by stem only).
+    await exportAndResolveArtifacts(
+      report,
+      outputBase ? path.join(outputBase, path.dirname(rel)) : undefined,
+      path.join(dir, rel),
+      baseUrl
+    );
+    results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
+    if (!args.json) {
+      for (const line of renderFailedSteps(report)) console.log(line);
+      console.log(`  ${renderSummary(report, { withDevice: true })}`);
+    }
+  }
+
+  const counts = {
+    total: results.length,
+    passed: results.filter((r) => r.status === "pass").length,
+    failed: results.filter((r) => r.status === "fail").length,
+    skipped: results.filter((r) => r.status === "skip").length,
+  };
+  if (args.json) {
+    console.log(JSON.stringify({ ok: counts.failed === 0, ...counts, flows: results }, null, 2));
+  } else {
+    console.log(`\n${renderBatchSummary(counts)}`);
+  }
+  return exitAfterFlush(counts.failed === 0 ? 0 : 1);
+}
+
 export async function flow(argv: string[], options: FlowCommandOptions): Promise<void> {
   const [sub, ...rest] = argv;
 
@@ -954,7 +1222,9 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     throw err;
   }
   if (!args.flowRef) {
-    console.error("argent flow run <flow|flow.yaml> requires a flow name or a YAML file path.");
+    console.error(
+      "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path."
+    );
     printHelp();
     return exitAfterFlush(2);
   }
@@ -1003,19 +1273,50 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     );
     return exitAfterFlush(2);
   }
-  // A trailing separator asserts the path names a directory: the kernel
-  // refuses to open "ok.yaml/" as a file (ENOTDIR), yet path.resolve drops
-  // the separator lexically, so without this guard the CLI would stat and
-  // run a file its own argument does not name — the same dishonest-path
+  const resolvedPath = path.resolve(projectRoot, suppliedPath);
+  // Stat-first so a directory named `foo.yaml` still batches; on a failed stat
+  // without -r, fall through so the single-file messages stay identical. A
+  // name is not exempt: resolveFlowRef has already made it a path, and running
+  // both spellings of the same target through one dispatch is what keeps `run
+  // checkout` and `run .argent/flows/checkout.yaml` one run under one identity.
+  let isDirectory = false;
+  try {
+    isDirectory = (await fsp.stat(resolvedPath)).isDirectory();
+  } catch {
+    // Only a spelled-out path can be missing a directory the user meant; a
+    // name resolves to a .yaml file it never named, so "directory not found"
+    // would quote a path they never typed. That form falls through instead.
+    if (args.recursive && !fromName) {
+      console.error(`Flow directory not found: ${resolvedPath}`);
+      return exitAfterFlush(2);
+    }
+  }
+  if (isDirectory) {
+    return runFlowDirectory(resolvedPath, args, projectRoot, options);
+  }
+  if (args.recursive) {
+    console.error(
+      fromName
+        ? `flow run --recursive requires a directory path; "${args.flowRef}" is a saved-flow name, ` +
+            `which always addresses the single file ${suppliedPath}.`
+        : `flow run --recursive requires a directory path: ${suppliedPath}`
+    );
+    return exitAfterFlush(2);
+  }
+  // A trailing separator asserts the path names a directory. When it does —
+  // the directory dispatch above already ran — that assertion is honest (a
+  // shell-completed "flows/" batches, and a path of nothing but separators
+  // names the filesystem root). From here the path is a file's, so the
+  // kernel would refuse to open "ok.yaml/" (ENOTDIR), yet path.resolve
+  // drops the separator lexically — without this guard the CLI would stat
+  // and run a file its own argument does not name — the same dishonest-path
   // class as the ".." guard above, and like it ordered before the
   // extension/stem arms so the dishonesty wins over a shape complaint.
   // Ordered after the ".." guard: when a path carries both flaws, that
   // guard's recovery (a fully resolved path) also cures the trailing
   // separator, while stripping the separator here would leave the ".."
   // standing and demand a second correction. Stripping is always the right
-  // hint (unlike realpath, nothing needs to exist on disk). A path that is
-  // nothing but separators names the filesystem root honestly, so it falls
-  // through to the extension complaint instead of an empty hint.
+  // hint (unlike realpath, nothing needs to exist on disk).
   const separatorTrimmedPath = suppliedPath.replace(/[\\/]+$/, "");
   if (separatorTrimmedPath !== suppliedPath && separatorTrimmedPath !== "") {
     // Trimming "checkout/" leaves a token that now reads as a saved-flow name,
@@ -1076,7 +1377,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
-  const flowPath = path.resolve(projectRoot, suppliedPath);
+  const flowPath = resolvedPath;
   try {
     const stat = await fsp.stat(flowPath);
     if (!stat.isFile()) {
@@ -1149,45 +1450,11 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
-  // CLI runs rely on the caller and tool-server sharing a filesystem: the
-  // runner resolves `run:` targets against each containing flow file's
-  // directory (fragments may live across directories) and reads/writes
-  // `__baselines__` beside the canonicalized root YAML — all on the tool
-  // server's disk, so a remote server would resolve every one of those paths
-  // on its own filesystem, not this one. Keep the flow-execute tool itself
-  // remotely callable, but reject CLI routing that cannot guarantee the
-  // shared filesystem. This deliberately rejects even single-file flows that
-  // could run remotely — the CLI cannot tell them apart without parsing the
-  // flow.
-  const routing = await getResolvedToolsUrl();
-  if (routing.source !== "none") {
-    // With ARGENT_TOOLS_URL set over an existing link file, unsetting only the
-    // env var re-routes through the shadowed link — the same refusal with the
-    // other source. Name both steps up front.
-    const recovery =
-      routing.source === "env"
-        ? routing.shadowedLink
-          ? "Unset ARGENT_TOOLS_URL and run `argent unlink`, then try again — " +
-            `a link to ${routing.shadowedLink.url} is also configured and takes over once the env var is unset.`
-          : "Unset ARGENT_TOOLS_URL and try again."
-        : "Run `argent unlink` and try again.";
-    console.error(
-      `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`
-    );
-    return exitAfterFlush(2);
-  }
+  if (!(await requireLocalToolServer())) return exitAfterFlush(2);
 
   const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 
-  const payload: Record<string, unknown> = {
-    flow_path: flowPath,
-    project_root: projectRoot,
-    // Headless runs never block on the LLM prerequisite handshake.
-    prerequisiteAcknowledged: true,
-  };
-  if (args.device) payload.device = args.device;
-  if (args.platform) payload.platform = args.platform;
-  if (args.updateBaselines) payload.updateBaselines = true;
+  const payload = buildRunPayload(flowPath, projectRoot, args);
 
   // Live rendering: with a streaming server each step line prints the moment
   // the step completes. A pre-streaming server ignores the request and no
@@ -1233,20 +1500,12 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
-  // Durable diff output: copy failed-snapshot images out of the tool-server's
-  // cache before any renderer prints paths, so every output mode shows the
-  // durable location. The only artifact bytes the CLI ever fetches; baseUrl is
-  // resolved lazily so a run without --output makes no extra round-trip.
-  if (args.output) {
-    const { url, token } = await baseUrl();
-    await exportFailureArtifacts(report, path.resolve(args.output), flowPath, {
-      toolsUrl: url,
-      authToken: token,
-    });
-  }
-  // Whatever handles remain (all of them without --output; passing snapshots
-  // and unexported roles with it) print as server-side paths.
-  resolveArtifactDisplayPaths(report);
+  await exportAndResolveArtifacts(
+    report,
+    args.output ? path.resolve(args.output) : undefined,
+    flowPath,
+    baseUrl
+  );
 
   if (args.json) {
     console.log(JSON.stringify(report, null, 2));

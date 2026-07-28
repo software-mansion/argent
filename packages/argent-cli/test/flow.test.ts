@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Writable } from "node:stream";
 import { exitAfterFlush, flow, parseRunArgs } from "../src/flow.js";
+import { ToolInvocationError } from "@argent/tools-client";
 import { FlagParseException } from "../src/flag-parser.js";
 import type { ResolvedToolsUrl } from "@argent/tools-client";
 
@@ -109,6 +110,7 @@ describe("parseRunArgs", () => {
     expect(parseRunArgs(["../flows/checkout.yaml"])).toEqual({
       flowRef: "../flows/checkout.yaml",
       updateBaselines: false,
+      recursive: false,
       json: false,
     });
   });
@@ -128,9 +130,23 @@ describe("parseRunArgs", () => {
       device: "SIM-1",
       platform: "ios",
       updateBaselines: true,
+      recursive: false,
       json: false,
     });
     expect(parseRunArgs(["--json", "checkout.yaml"]).json).toBe(true);
+  });
+
+  it("accepts -r and --recursive in any position", () => {
+    expect(parseRunArgs(["flows", "-r"]).recursive).toBe(true);
+    expect(parseRunArgs(["--recursive", "flows"]).recursive).toBe(true);
+    expect(parseRunArgs(["flows"]).recursive).toBe(false);
+  });
+
+  it("throws when --recursive is given an inline value", () => {
+    expect(() => parseRunArgs(["flows", "--recursive=1"])).toThrow(FlagParseException);
+    expect(() => parseRunArgs(["flows", "--recursive=1"])).toThrow(
+      "--recursive does not take a value"
+    );
   });
 
   it("throws when --device is the final token", () => {
@@ -162,6 +178,7 @@ describe("parseRunArgs", () => {
       platform: "ios",
       output: "dir",
       updateBaselines: false,
+      recursive: false,
       json: false,
     });
   });
@@ -172,6 +189,7 @@ describe("parseRunArgs", () => {
       device: "SIM-1",
       platform: "ios",
       updateBaselines: false,
+      recursive: false,
       json: false,
     });
   });
@@ -206,7 +224,7 @@ describe("parseRunArgs", () => {
 
   it("rejects extra positional arguments", () => {
     expect(() => parseRunArgs(["checkout.yaml", "extra.yaml"])).toThrow(
-      "flow run accepts one flow name or YAML file path"
+      "flow run accepts one flow name, YAML file path, or directory path"
     );
   });
 
@@ -218,11 +236,12 @@ describe("parseRunArgs", () => {
       flowRef: "-nightly",
       device: "SIM-1",
       updateBaselines: false,
+      recursive: false,
       json: false,
     });
     // The marker relaxes flag parsing, not the one-positional rule.
     expect(() => parseRunArgs(["--", "a", "b"])).toThrow(
-      "flow run accepts one flow name or YAML file path"
+      "flow run accepts one flow name, YAML file path, or directory path"
     );
   });
 
@@ -230,7 +249,7 @@ describe("parseRunArgs", () => {
     // A truthiness test here would take "extra.yaml" as the flow and run a file
     // the operator never named at that position.
     expect(() => parseRunArgs(["", "extra.yaml"])).toThrow(
-      "flow run accepts one flow name or YAML file path"
+      "flow run accepts one flow name, YAML file path, or directory path"
     );
   });
 });
@@ -385,7 +404,9 @@ describe("argent flow run", () => {
 
   it("exits 2 when no flow name or path is given", async () => {
     await expect(flow(["run"], opts)).rejects.toThrow("process.exit:2");
-    expect(errs.join("\n")).toContain("requires a flow name or a YAML file path");
+    expect(errs.join("\n")).toContain(
+      "requires a flow name, a YAML file path, or a directory path"
+    );
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
@@ -848,12 +869,15 @@ describe("argent flow run", () => {
     expect(out).not.toContain("Flow path must not end in a path separator");
   });
 
-  it("complains about the extension, not the separator, for a path that is only separators", async () => {
+  it("dispatches a path that is only separators to directory mode, not the separator guard", async () => {
     // "/" names the root directory honestly — there is no separator-stripped
-    // spelling to hint at — so the shape complaint is the accurate one.
+    // spelling to hint at — so it batches like any other directory and fails
+    // discovery (root holds no flows) rather than drawing a shape complaint.
     await expect(flow(["run", "/"], opts)).rejects.toThrow("process.exit:2");
 
-    expect(errs.join("\n")).toContain("Flow path must end in .yaml: /");
+    const out = errs.join("\n");
+    expect(out).toContain("No flows found in /");
+    expect(out).not.toContain("Flow path must not end in a path separator");
   });
 
   it("exits 2 on a directory named like a flow instead of handing it to flow-execute", async () => {
@@ -1374,6 +1398,375 @@ describe("argent flow run", () => {
     expect(logs.join("\n")).toContain("Usage: argent flow");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("argent flow run <dir>", () => {
+  let tempRoot: string;
+  let flowsDir: string;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let logs: string[];
+  let errs: string[];
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  const opts = { paths: {} as never };
+
+  beforeAll(async () => {
+    tempRoot = await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-flow-dir-"));
+    flowsDir = path.join(tempRoot, "flows");
+    // Two runnable top-level flows plus every kind of entry discovery must
+    // ignore: wrong extension, unsafe stem, a directory named like a flow,
+    // and (non-recursively) anything nested.
+    await fsp.mkdir(path.join(flowsDir, "sub"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, ".hidden"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, "node_modules"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, "bundle.yaml"), { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "a-login.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "b-checkout.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "notes.yml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "bad name.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "sub", "c-search.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, ".hidden", "hidden.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "node_modules", "dep.yaml"), "steps: []\n"),
+    ]);
+  });
+
+  afterAll(async () => {
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getResolvedToolsUrlMock.mockResolvedValue({ url: null, source: "none" });
+    toolsClientMock.callTool.mockResolvedValue({ data: report() });
+    logs = [];
+    errs = [];
+    logSpy = vi.spyOn(console, "log").mockImplementation((...a) => void logs.push(a.join(" ")));
+    errSpy = vi.spyOn(console, "error").mockImplementation((...a) => void errs.push(a.join(" ")));
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit:${code}`);
+    }) as typeof process.exit);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it("runs each top-level flow in order without live progress and exits 0 when all pass", async () => {
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    // Only the two safe top-level .yaml files, in lexicographic order, and
+    // never with onProgress (batch output is failures-only).
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(1, "flow-execute", {
+      flow_path: path.join(flowsDir, "a-login.yaml"),
+      project_root: process.cwd(),
+      prerequisiteAcknowledged: true,
+    });
+    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(2, "flow-execute", {
+      flow_path: path.join(flowsDir, "b-checkout.yaml"),
+      project_root: process.cwd(),
+      prerequisiteAcknowledged: true,
+    });
+    const out = logs.join("\n");
+    expect(out).toContain("[1/2] a-login.yaml");
+    expect(out).toContain("[2/2] b-checkout.yaml");
+    expect(out).toContain("PASS on SIM-1 — 1 passed, 0 failed, 0 errored, 0 skipped");
+    // Passing steps stay silent in batch mode.
+    expect(out).not.toMatch(/✓ {2}1 tap/);
+    expect(out).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
+  });
+
+  it("forwards run flags to every flow in the batch", async () => {
+    await expect(
+      flow(["run", flowsDir, "--device", "SIM-1", "--platform", "ios", "--update-baselines"], opts)
+    ).rejects.toThrow("process.exit:0");
+
+    for (const call of toolsClientMock.callTool.mock.calls) {
+      expect(call[1]).toMatchObject({ device: "SIM-1", platform: "ios", updateBaselines: true });
+    }
+  });
+
+  it("continues after a failed flow, printing only its failing steps, and exits 1", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          ok: false,
+          passed: 1,
+          failed: 1,
+          steps: [
+            { index: 0, kind: "tap", status: "pass" },
+            { index: 1, kind: "assert", status: "fail", reason: "never visible" },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    const out = logs.join("\n");
+    // The failing step keeps its full-report number; the passing tap is silent.
+    expect(out).toMatch(/✗ {2}2 assert — never visible/);
+    expect(out).not.toMatch(/✓ {2}1 tap/);
+    expect(out).toContain("FAIL on SIM-1 — 1 passed, 1 failed, 0 errored, 0 skipped");
+    expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
+  });
+
+  it("stops the batch on a tool-call throw and counts the remaining flows skipped", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+      .mockRejectedValueOnce(new Error("tool-server unreachable"));
+
+    await expect(flow(["run", flowsDir, "-r"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(errs.join("\n")).toContain("tool-server unreachable");
+    const out = logs.join("\n");
+    expect(out).toContain(`[3/3] ${path.join("sub", "c-search.yaml")}`);
+    expect(out).toContain("· not run (batch stopped)");
+    expect(out).toContain("FAIL — 3 flows: 1 passed, 1 failed, 1 skipped");
+  });
+
+  it("continues past a flow the tool-server rejects as invalid", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError("flow file is not valid YAML", {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    // A validation rejection is specific to that flow file — the batch ran on.
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(errs.join("\n")).toContain("flow file is not valid YAML");
+    const out = logs.join("\n");
+    expect(out).not.toContain("not run (batch stopped)");
+    expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
+  });
+
+  it("stops the batch on a server error the signal does not mark as validation", async () => {
+    toolsClientMock.callTool.mockRejectedValueOnce(
+      new ToolInvocationError("simulator boot failed", { errorKind: "subprocess" })
+    );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
+  });
+
+  it("treats a non-report result as a failure that stops the batch", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: { flow: "a-login", notice: "prerequisite" },
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(errs.join("\n")).toContain('"a-login.yaml" did not produce a run report');
+    expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
+  });
+
+  it("finds nested flows with --recursive, skipping dot-directories and node_modules", async () => {
+    await expect(flow(["run", flowsDir, "--recursive"], opts)).rejects.toThrow("process.exit:0");
+
+    const flowPaths = toolsClientMock.callTool.mock.calls.map(
+      (c) => (c[1] as { flow_path: string }).flow_path
+    );
+    expect(flowPaths).toEqual([
+      path.join(flowsDir, "a-login.yaml"),
+      path.join(flowsDir, "b-checkout.yaml"),
+      path.join(flowsDir, "sub", "c-search.yaml"),
+    ]);
+    expect(logs.join("\n")).toContain(`[3/3] ${path.join("sub", "c-search.yaml")}`);
+  });
+
+  it("treats a directory named like a flow file as a directory", async () => {
+    const dirYaml = path.join(tempRoot, "suite.yaml");
+    await fsp.mkdir(dirYaml, { recursive: true });
+    await fsp.writeFile(path.join(dirYaml, "one.yaml"), "steps: []\n");
+
+    await expect(flow(["run", dirYaml], opts)).rejects.toThrow("process.exit:0");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith("flow-execute", {
+      flow_path: path.join(dirYaml, "one.yaml"),
+      project_root: process.cwd(),
+      prerequisiteAcknowledged: true,
+    });
+    expect(logs.join("\n")).toContain("PASS — 1 flow: 1 passed, 0 failed, 0 skipped");
+  });
+
+  it("exits 2 when --recursive is given a file path", async () => {
+    await expect(flow(["run", path.join(flowsDir, "a-login.yaml"), "-r"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(errs.join("\n")).toContain(
+      `flow run --recursive requires a directory path: ${path.join(flowsDir, "a-login.yaml")}`
+    );
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("exits 2 when --recursive is given a nonexistent path", async () => {
+    const missing = path.join(tempRoot, "missing-dir");
+    await expect(flow(["run", missing, "-r"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(errs.join("\n")).toContain(`Flow directory not found: ${missing}`);
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("exits 2 with a --recursive hint when a directory holds no flows", async () => {
+    const emptyDir = path.join(tempRoot, "empty");
+    await fsp.mkdir(emptyDir, { recursive: true });
+
+    await expect(flow(["run", emptyDir], opts)).rejects.toThrow("process.exit:2");
+    expect(errs.join("\n")).toContain(`No flows found in ${emptyDir}`);
+    expect(errs.join("\n")).toContain("-r/--recursive");
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+
+    // Already recursive: the hint would be a dead end, so it is omitted.
+    errs.length = 0;
+    await expect(flow(["run", emptyDir, "-r"], opts)).rejects.toThrow("process.exit:2");
+    expect(errs.join("\n")).toContain("No flows found");
+    expect(errs.join("\n")).not.toContain("subdirectories");
+  });
+
+  it("rejects remote routing before running any flow in the directory", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://example.test:4141", source: "env" });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(errs.join("\n")).toContain("requires the auto-started local tool server");
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("prints only the aggregate object with --json, tagging infra failures and skips", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+      .mockRejectedValueOnce(new Error("boom"));
+
+    await expect(flow(["run", flowsDir, "--json", "-r"], opts)).rejects.toThrow("process.exit:1");
+
+    // A single parseable object on stdout — no headers or verdict lines.
+    const parsed = JSON.parse(logs.join("\n")) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      ok: false,
+      total: 3,
+      passed: 1,
+      failed: 1,
+      skipped: 1,
+      flows: [
+        { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
+        { path: "b-checkout.yaml", status: "fail", error: "boom" },
+        { path: path.join("sub", "c-search.yaml"), status: "skip" },
+      ],
+    });
+  });
+
+  it("keys --output exports by the flow's subdirectory in recursive runs", async () => {
+    const diffSrc = path.join(tempRoot, "diff-src.png");
+    await fsp.writeFile(diffSrc, "png-bytes");
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) })
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "c-search",
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [
+            {
+              index: 0,
+              kind: "snapshot",
+              status: "fail",
+              snapshotKey: "home__ios-390x844",
+              artifacts: { diff: diffSrc },
+            },
+          ],
+        }),
+      });
+    const outDir = path.join(tempRoot, "out");
+
+    await expect(flow(["run", flowsDir, "-r", "--output", outDir], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    // The nested flow's export lands under its subdirectory so a same-stem
+    // flow at the top level cannot collide with it.
+    const dest = path.join(outDir, "sub", "c-search", "home__ios-390x844-diff.png");
+    await expect(fsp.readFile(dest, "utf8")).resolves.toBe("png-bytes");
+    expect(logs.join("\n")).toContain(`diff: ${dest}`);
+  });
+
+  it("keeps a top-level batch flow's --output export at <output>/<flow> exactly", async () => {
+    const diffSrc = path.join(tempRoot, "top-diff-src.png");
+    await fsp.writeFile(diffSrc, "top-png-bytes");
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "b-checkout",
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [
+            {
+              index: 0,
+              kind: "snapshot",
+              status: "fail",
+              snapshotKey: "home__ios-390x844",
+              artifacts: { diff: diffSrc },
+            },
+          ],
+        }),
+      });
+    const outDir = path.join(tempRoot, "out-top");
+
+    await expect(flow(["run", flowsDir, "--output", outDir], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    // dirname(rel) is "." at the top level and must collapse into the base —
+    // the single-run <output>/<flow>/ layout, not <output>/<flow>.yaml/....
+    const dest = path.join(outDir, "b-checkout", "home__ios-390x844-diff.png");
+    await expect(fsp.readFile(dest, "utf8")).resolves.toBe("top-png-bytes");
+    expect(logs.join("\n")).toContain(`diff: ${dest}`);
+  });
+
+  it("skips an unreadable nested subdirectory instead of aborting discovery", async () => {
+    // Root ignores mode bits, so the unreadable-subtree scenario cannot occur.
+    if (process.getuid?.() === 0) return;
+    const suiteDir = path.join(tempRoot, "suite");
+    const lockedDir = path.join(suiteDir, "locked");
+    await fsp.mkdir(lockedDir, { recursive: true });
+    await fsp.writeFile(path.join(suiteDir, "open.yaml"), "steps: []\n");
+    await fsp.writeFile(path.join(lockedDir, "hidden.yaml"), "steps: []\n");
+    await fsp.chmod(lockedDir, 0o000);
+    try {
+      await expect(flow(["run", suiteDir, "-r"], opts)).rejects.toThrow("process.exit:0");
+
+      // The readable top-level flow still ran; the locked subtree was skipped
+      // without the top-level "Could not read flow directory" abort.
+      expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+      expect(toolsClientMock.callTool).toHaveBeenCalledWith(
+        "flow-execute",
+        expect.objectContaining({ flow_path: path.join(suiteDir, "open.yaml") })
+      );
+      expect(errs.join("\n")).not.toContain("Could not read flow directory");
+    } finally {
+      await fsp.chmod(lockedDir, 0o755);
+    }
   });
 });
 
