@@ -179,8 +179,14 @@ export type FlowFailureExpectation =
 
 /** What the runner actually observed — from `waitForCondition`'s last matches. */
 export interface FlowFailureObservation {
-  matchCount: number;
-  visibleMatchCount: number;
+  /**
+   * How many elements the selector matched. OPTIONAL because not every failure
+   * has a selector: a snapshot diff compares pixels, and reporting a
+   * fabricated `matchCount: 0` there reads as "the selector found nothing",
+   * which is a different (and wrong) diagnosis.
+   */
+  matchCount?: number;
+  visibleMatchCount?: number;
   /**
    * Matched every field but had a zero-area frame. THE diagnosis for
    * `selector-not-visible` — kept out of `candidates`, which means "other

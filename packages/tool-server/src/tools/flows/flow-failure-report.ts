@@ -445,7 +445,7 @@ async function buildFailure(
   // make a change that would do nothing, and costs the LLM repair loop its
   // most valuable slot. Those shapes are diagnosed by `expected`/`actual`
   // instead.
-  const resolvedSomething = observation !== undefined && observation.visibleMatchCount > 0;
+  const resolvedSomething = (observation?.visibleMatchCount ?? 0) > 0;
   if (tree !== undefined && evidence?.selector !== undefined && !resolvedSomething) {
     const ranked = rankCandidates(tree, evidence.selector, {
       gesture: isGestureKind(report.kind),
