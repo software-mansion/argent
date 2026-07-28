@@ -199,8 +199,10 @@ describe("rankCandidates", () => {
     // The cost bound is load-bearing, not decorative: `editDistance` is O(n·m)
     // and a flattened container's `subtreeText` is the whole screen's text, so
     // an untruncated near-miss pass turns a failure report into a hang. Wall
-    // clock is asserted so the truncation cannot be removed silently.
-    const filler = "lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(30);
+    // clock is asserted so the truncation cannot be removed silently — measured
+    // at ~55 ms with the 128-char bound and ~1.6 s without it, so lifting the
+    // bound fails this assertion rather than merely slowing it down.
+    const filler = "lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(150);
     const children: DescribeNode[] = Array.from({ length: 3000 }, (_, i) =>
       n({
         role: "AXStaticText",

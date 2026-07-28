@@ -222,6 +222,13 @@ export type FlowFailureScreen =
       elements: FlowFailureNode[];
       truncated?: true;
       /**
+       * Screen size the frames were normalized against, in the source's native
+       * units (Android px, iOS pt). Renderers print it beside the element
+       * count — `47 elements, 1080x2220` — because a normalized frame means
+       * nothing without it. Absent from tree sources that do not report it.
+       */
+      size?: { width: number; height: number };
+      /**
        * A read error that landed AFTER this tree was captured — the dark-tail
        * case, where the directive's last TRUSTED read is the best evidence
        * available but the window went dark before the deadline. Present so a
@@ -331,6 +338,8 @@ export interface DirectiveEvidence {
   /** The tree the directive itself last read — preferred over a post-hoc read. */
   tree?: DescribeNode;
   source?: DescribeSource;
+  /** Screen size {@link tree}'s frames were normalized against, when the source reports it. */
+  screenSize?: { width: number; height: number };
   /** `Date.now()` of the read {@link tree} came from. */
   readAt?: number;
   /**

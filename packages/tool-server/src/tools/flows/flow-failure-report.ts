@@ -222,6 +222,7 @@ async function resolveScreen(
       source: evidence.source ?? "native-devtools",
       capturedAt: "at-failure",
       ageMs: evidence.readAt !== undefined ? Math.max(0, Date.now() - evidence.readAt) : 0,
+      ...(evidence.screenSize !== undefined ? { size: evidence.screenSize } : {}),
       ...(evidence.treeError !== undefined ? { readError: scrub(evidence.treeError) } : {}),
     });
   }
@@ -241,7 +242,12 @@ async function resolveScreen(
   }
   try {
     const data = await fetchFlowTree(env.registry, env.device);
-    return project(data.tree, { source: data.source, capturedAt: "after-failure", ageMs: 0 });
+    return project(data.tree, {
+      source: data.source,
+      capturedAt: "after-failure",
+      ageMs: 0,
+      ...(data.screen !== undefined ? { size: data.screen } : {}),
+    });
   } catch (err) {
     return {
       screen: {
@@ -432,7 +438,15 @@ async function buildFailure(
   const observation = evidence !== undefined ? buildObservation(evidence, scrub) : undefined;
   if (observation !== undefined) failure.actual = observation;
 
-  if (tree !== undefined && evidence?.selector !== undefined) {
+  // Candidates answer "which element did you MEAN instead", so they are only
+  // meaningful when the selector resolved to nothing visible. A `text`
+  // mismatch or an unmet `hidden` DID find its element — ranking there just
+  // suggests the element the step already matched, which reads as advice to
+  // make a change that would do nothing, and costs the LLM repair loop its
+  // most valuable slot. Those shapes are diagnosed by `expected`/`actual`
+  // instead.
+  const resolvedSomething = observation !== undefined && observation.visibleMatchCount > 0;
+  if (tree !== undefined && evidence?.selector !== undefined && !resolvedSomething) {
     const ranked = rankCandidates(tree, evidence.selector, {
       gesture: isGestureKind(report.kind),
       scrub,

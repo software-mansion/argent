@@ -80,7 +80,7 @@ const NEAR_MISS_MIN_NEEDLE = 3;
  * a few milliseconds and a hung report. Anything that differs past 128
  * characters is not a typo anyway.
  */
-const EDIT_DISTANCE_MAX_CHARS = Number.MAX_SAFE_INTEGER;
+const EDIT_DISTANCE_MAX_CHARS = 128;
 
 // ── Scoring ────────────────────────────────────────────────────────────────
 
@@ -182,6 +182,15 @@ function scoreText(node: DescribeNode, needle: string): Scored | undefined {
   return best;
 }
 
+/**
+ * A regex locator is tested against `subtreeText` here even though
+ * `matchNodeWithRegex` deliberately restricts itself to the node's own
+ * label/value. The engine's exclusion protects RANKING BETWEEN MATCHES — every
+ * unshielded ancestor of a text leaf would match and dilute exact-beats-
+ * substring. Nothing matched here (that is why a report is being written), and
+ * on a flattened tree the hoisted text is the only place the string lives, so
+ * excluding it would hide the very element the pattern was written for.
+ */
 function scoreRegex(node: DescribeNode, regex: RegExp): Scored | undefined {
   for (const field of [node.label, node.value, node.subtreeText]) {
     if (field !== undefined && field !== "" && regex.test(field)) {
@@ -417,7 +426,17 @@ export function diagnoseScope(
   for (const relation of SELECTOR_RELATIONS) {
     const scope = selector[relation];
     if (scope === undefined) continue;
-    if (flowMatchAll(tree, scope).length === 0) return relation;
+    try {
+      if (flowMatchAll(tree, scope).length === 0) return relation;
+    } catch {
+      // The one call in this module that can throw (a scope carrying an
+      // uncompilable `textMatches` — impossible for a parsed flow, since the
+      // parser validates every pattern). A scope that cannot be probed is
+      // simply not diagnosed: the caller is mid-way through assembling a
+      // failure report, and a throw here would replace a real diagnosis with a
+      // crash.
+      continue;
+    }
   }
   return undefined;
 }
