@@ -522,7 +522,10 @@ async function captureScreenshot(
 ): Promise<ArtifactHandle | undefined> {
   if (env.signal?.aborted) return undefined;
   if (!env.ctx?.artifacts) return undefined;
-  if (report.artifacts?.current !== undefined) return undefined;
+  // A snapshot failure already holds the exact image that was compared.
+  // Capturing again would show a DIFFERENT screen than the one diffed, so the
+  // existing handle is reused rather than the slot being left empty.
+  if (report.artifacts?.current !== undefined) return report.artifacts.current;
   try {
     const shot = await invokeOnDevice(env, "screenshot", {
       scale: 1.0,

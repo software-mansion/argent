@@ -224,7 +224,13 @@ export type FlowFailureScreen =
        */
       capturedAt: "at-failure" | "after-failure";
       ageMs: number;
-      /** True total, before {@link FLOW_FAILURE_ELEMENT_LIMIT} bit. */
+      /**
+       * How many ACTIONABLE elements the screen had — the population
+       * {@link elements} is drawn from, before the cap. Deliberately not the
+       * node total: the `tree` artifact beside it is an unfiltered dump, so
+       * the two legitimately differ and this is the number a `describe` would
+       * have shown.
+       */
       elementCount: number;
       elements: FlowFailureNode[];
       truncated?: true;

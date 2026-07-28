@@ -329,8 +329,12 @@ describe("screenshot capture", () => {
     expect(failure.code).toBe("snapshot-baseline-missing");
     // Exactly one capture for the whole run: the snapshot's own.
     expect(screenshots).toBe(1);
-    expect(failure.screenshot).toBeUndefined();
+    // ...and the failure REUSES it rather than leaving the slot empty. Skipping
+    // the second capture but not reusing the handle left the whole snapshot
+    // category with no image at all, which is the one category whose repair
+    // starts by looking at pixels.
     expect(result.steps[0]!.artifacts?.current).toBeDefined();
+    expect(failure.screenshot).toBe(result.steps[0]!.artifacts?.current);
     expectVerdict(result, {
       statuses: ["snapshot:fail", "wait:skip"],
       ok: false,

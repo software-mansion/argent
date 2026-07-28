@@ -54,7 +54,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
-import type { FlowFailureCode, FlowStepFailure } from "./flow-failure";
+import { isTreeSourceError, type FlowFailureCode, type FlowStepFailure } from "./flow-failure";
 import {
   attachFailureDiagnostics,
   causeOf,
@@ -1249,7 +1249,12 @@ async function execLeafStep(
           status: "error",
           tool: step.name,
           reason: errMsg(err),
-          evidence: { code: "tool-step-failed", ...causeOf(err) },
+          // Same classification a directive gets: a tool that failed because
+          // the tree source was unreachable is an environment fault, and CI
+          // must be able to tell that from a tool that genuinely rejected.
+          evidence: isTreeSourceError(err)
+            ? evidenceFromThrow(err)
+            : { code: "tool-step-failed", ...causeOf(err) },
         };
       }
     }

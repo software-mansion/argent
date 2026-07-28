@@ -156,6 +156,10 @@ export interface NormalizedCandidate {
   score?: number;
   node: NormalizedNode;
   note?: string;
+  /** WHY this is a suggestion — an operator can dismiss a wrong basis at a glance. */
+  basis?: string;
+  /** Paste-able straight into the flow file. The whole point of ranking. */
+  selectorYaml?: string;
 }
 
 /**
@@ -231,6 +235,10 @@ function normalizeCandidates(raw: unknown): NormalizedCandidate[] {
     if (score !== undefined) candidate.score = Math.min(1, Math.max(0, score));
     const note = wireText(c.note, 120);
     if (note !== undefined) candidate.note = note;
+    const basis = wireText(c.basis, 40);
+    if (basis !== undefined) candidate.basis = basis;
+    const selectorYaml = wireText(c.selectorYaml, 200);
+    if (selectorYaml !== undefined) candidate.selectorYaml = selectorYaml;
     out.push(candidate);
   }
   return out;
@@ -448,6 +456,12 @@ function candidateCells(c: NormalizedCandidate, withCenter: boolean): string[] {
     c.node.visibility ?? "",
   ];
   if (withCenter) cells.push(c.node.center ?? "");
+  // The suggestion is the headline output of ranking — a selector the operator
+  // pastes straight back into the flow — so it belongs on the CI surface, not
+  // only on the MCP one. `basis` is deliberately NOT a column here: the MCP
+  // surface carries it for the repair loop, and a terminal row already spends
+  // its width on the things a human reads first.
+  cells.push(c.selectorYaml === undefined ? "" : `→ ${c.selectorYaml}`);
   cells.push(c.note === undefined ? "" : `— ${c.note}`);
   return cells;
 }

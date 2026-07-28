@@ -4,7 +4,7 @@ import { PostHog } from "posthog-node";
 export const POSTHOG_HOST = "https://eu.i.posthog.com";
 
 /** Public write-only PostHog project token. */
-export const POSTHOG_PROJECT_TOKEN = "phc_mebZhuUmASbeeXkdv7E2wqTZdtstPxQqHBhZfLSeQ5YL";
+export const POSTHOG_PROJECT_TOKEN = "phc_tkPxaBJ8WVr2KQAuu7FoN2nAcJ7MhVNsHSpUSuNC9HGV";
 
 interface ResolvedConfig {
   key: string;
