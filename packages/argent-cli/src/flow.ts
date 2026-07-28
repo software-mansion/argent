@@ -19,6 +19,7 @@ import {
   normalizeFailure,
   parseReporterSpec,
   stepLabel,
+  wireText,
   type NormalizedFailure,
 } from "./flow-report.js";
 
@@ -493,11 +494,19 @@ function renderFailureBlock(
   // evidence itself is what failed — so the device identity takes their slot.
   if (f.device) slot(`device: ${f.device}`);
   if (f.reads) slot(`reads: ${f.reads}`);
-  if (f.determinacy === "indeterminate") slot(`hint: ${INDETERMINATE_HINT}`);
+  // One hint, never two. Every indeterminate producer already sets a hint that
+  // says "this is not a failed assertion" in words specific to WHICH tier
+  // failed, so the generic line is a fallback for a producer that sent none —
+  // printing both put two near-identical sentences back to back on exactly the
+  // failure shape that most needs to read clearly.
   if (f.hint) slot(`hint: ${f.hint}`);
+  else if (f.determinacy === "indeterminate") slot(`hint: ${INDETERMINATE_HINT}`);
   for (const [role, value] of Object.entries(s.artifacts ?? {})) {
     const p = artifactPath(value);
-    if (p) slot(`${role}: ${p}`);
+    // The KEY is wire data too — clamping only the value beside it left a
+    // server free to put escape sequences in the label.
+    const label = wireText(role, 64);
+    if (p && label) slot(`${label}: ${p}`);
   }
   // A snapshot failure's `current` IS the screenshot at the moment of failure —
   // a second capture would show a different screen than the one that was
@@ -550,7 +559,7 @@ export function renderFailures(report: FlowReport): string[] {
 
 /** True when a run's failure is "argent could not see the screen", not "the check failed". */
 export function hasIndeterminateFailure(report: FlowReport): boolean {
-  return (report.steps ?? []).some(
+  return (Array.isArray(report.steps) ? report.steps : []).some(
     (s) =>
       s.failure !== undefined &&
       normalizeFailure(s.failure, { flow: s.flow ?? report.flow, device: report.device })

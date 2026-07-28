@@ -57,6 +57,28 @@ function wireFinite(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+/** The step kind the failure belongs to, for slots that must not restate it. */
+function stepKindOf(f: Record<string, unknown>): string | undefined {
+  return isRecord(f.step) ? wireText(f.step.kind, 64) : undefined;
+}
+
+/**
+ * A wire epoch that `new Date(...).toISOString()` will actually accept. Outside
+ * ±8.64e15 that call throws a RangeError, which the reporter's own try/catch
+ * then swallowed into a warning — so a single bad number cost CI its entire
+ * JUnit file rather than one attribute.
+ */
+const MAX_EPOCH_MS = 8.64e15;
+function wireTimestamp(value: unknown): number | undefined {
+  const n = wireFinite(value);
+  if (n === undefined || Math.abs(n) > MAX_EPOCH_MS) return undefined;
+  return n;
+}
+
 function wireCount(value: unknown): number | undefined {
   const n = wireFinite(value);
   if (n === undefined || n < 0) return undefined;
@@ -93,8 +115,13 @@ export function flowFilePath(flow: unknown): string | undefined {
  * line and the JUnit testcase name so a step is spelled identically in both.
  */
 export function stepLabel(s: StepReport): string {
-  const what = s.tool ?? s.target;
-  return what ? `${s.kind} ${what}` : s.kind;
+  // Clamped like every other wire string: this now feeds the failure-block
+  // heading and the JUnit `name` attribute, and an unclamped `target` carrying
+  // newlines and ANSI escapes could repaint the lines above it — including the
+  // verdict — or blow the XML attribute to megabytes.
+  const kind = wireText(s.kind, 64) ?? "step";
+  const what = wireText(s.tool, 128) ?? wireText(s.target);
+  return what ? `${kind} ${what}` : kind;
 }
 
 /**
@@ -213,8 +240,10 @@ function normalizeScreen(raw: unknown, indeterminate: boolean): string | undefin
   if (!raw || typeof raw !== "object") return undefined;
   const s = raw as Record<string, unknown>;
   if (s.state === "available") {
-    const elements = Array.isArray(s.elements) ? s.elements.slice(0, MAX_WIRE_ELEMENTS) : [];
-    const count = wireCount(s.elementCount) ?? elements.length;
+    // Count BEFORE the clamp: the slice only bounds what could be rendered,
+    // and reporting its length would tell a reader "40 elements" about any
+    // larger screen whose server omitted the true count.
+    const count = wireCount(s.elementCount) ?? (Array.isArray(s.elements) ? s.elements.length : 0);
     const parts = [`${count} element${count === 1 ? "" : "s"}`];
     const size = s.size as Record<string, unknown> | undefined;
     const width = wireCount(size?.width);
@@ -342,8 +371,10 @@ export function normalizeFailure(
   const selector = wireText((f.selector as Record<string, unknown> | undefined)?.described);
   if (selector !== undefined) out.selector = selector;
 
+  // A bare gesture expectation ("tap") says nothing the block heading and the
+  // step line above it have not already said twice, so it earns no slot.
   const expected = normalizeExpected(f.expected);
-  if (expected !== undefined) out.expected = expected;
+  if (expected !== undefined && expected !== stepKindOf(f)) out.expected = expected;
   const actual = normalizeActual(f.actual);
   if (actual !== undefined) out.actual = actual;
   // `match:` fills the candidates slot for the shapes where the element WAS
@@ -351,12 +382,33 @@ export function normalizeFailure(
   // already produced an `actual:` line, that line carries the reading and a
   // second row of the same element would just be noise.
   if (actual === undefined) {
-    const match = normalizeNode((f.actual as Record<string, unknown> | undefined)?.element);
+    const observed = f.actual as Record<string, unknown> | undefined;
+    // `invisibleMatches` is THE diagnosis for `selector-not-visible`: the
+    // element the selector named IS on the tree, it just has a zero-area
+    // frame. Without this it never reached any surface, so the one shape whose
+    // fix is "find out why it has no size" rendered with no element at all —
+    // and its candidate list is deliberately empty, because the operator did
+    // not mean a different element.
+    const invisible = Array.isArray(observed?.invisibleMatches)
+      ? observed.invisibleMatches[0]
+      : undefined;
+    const match = normalizeNode(observed?.element ?? invisible);
     if (match) out.match = match;
   }
 
   const screen = normalizeScreen(f.screen, indeterminate);
-  if (screen !== undefined && !out.environmental) out.screen = screen;
+  // The environmental shapes have no element list worth printing — but their
+  // screen slot is where the producer puts the tree-read error, which is the
+  // ONLY statement of why the step failed (the message is the generic
+  // selector prose). Suppressing the slot wholesale deleted the cause.
+  // The environmental shapes have no element list worth printing, and `device:`
+  // takes the slot. The exception is a screen that carries a DETAIL: for the
+  // tree-source codes that is where the producer puts the read error, and it is
+  // the only statement of why the step failed — the message on that path is the
+  // generic selector prose, which says nothing about the tree. Suppressing the
+  // slot wholesale deleted the cause from both the terminal and the JUnit body.
+  const carriesCause = isRecord(f.screen) && wireText(f.screen.detail) !== undefined;
+  if (screen !== undefined && (!out.environmental || carriesCause)) out.screen = screen;
   if (indeterminate) {
     const reads = normalizeReads(f.timing);
     if (reads !== undefined) out.reads = reads;
@@ -544,8 +596,9 @@ function junitDetailLines(s: StepReport, f: NormalizedFailure | undefined): stri
   if (f.expected) lines.push(`expected: ${f.expected}`);
   if (f.actual) lines.push(`actual: ${f.actual}`);
   if (f.match) lines.push(`match: ${nodeRow(f.match)}`);
-  if (f.determinacy === "indeterminate") lines.push(`hint: ${INDETERMINATE_HINT}`);
+  // One hint, never two - see the same rule in renderFailureBlock.
   if (f.hint) lines.push(`hint: ${f.hint}`);
+  else if (f.determinacy === "indeterminate") lines.push(`hint: ${INDETERMINATE_HINT}`);
   if (f.candidates.length > 0) {
     lines.push("candidates:");
     for (const row of candidateRows(f.candidates)) lines.push(`  ${row}`);
@@ -591,7 +644,7 @@ export function buildJUnitXml(report: FlowReport, meta: JUnitMeta = {}): string 
 
   const stepSum = counted.reduce((sum, s) => sum + (wireFinite(s.durationMs) ?? 0), 0);
   const time = junitTime(meta.durationMs ?? report.durationMs ?? stepSum);
-  const startedAt = wireFinite(report.startedAt);
+  const startedAt = wireTimestamp(report.startedAt);
   const timestamp =
     meta.timestamp ?? (startedAt !== undefined ? new Date(startedAt).toISOString() : undefined);
 
