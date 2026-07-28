@@ -5,6 +5,7 @@ import {
   assertTypeableAndroidText,
   injectAndroidNamedKey,
   injectAndroidText,
+  resolveAndroidNamedKeycode,
 } from "../../../utils/android-input";
 import type { KeyboardParams, KeyboardResult } from "../types";
 import { typeTv } from "./tv";
@@ -20,14 +21,14 @@ async function typeAndroidPhone(
   params: KeyboardParams
 ): Promise<KeyboardResult> {
   let keysPressed = 0;
-  // Validate the text up front (a pure check, re-run harmlessly inside
-  // `injectAndroidText`): a combined key+text request with un-typeable text
-  // must reject with NO on-device side effect, not press the key and then 400.
+  // Validate BOTH inputs up front, before anything reaches the device (both
+  // checks are pure and re-run harmlessly inside their inject helpers). A
+  // combined key+text request that is bad in either half must reject with NO
+  // on-device side effect: un-typeable text must not press the key first, and —
+  // now that the key is pressed AFTER the text — an unknown key name must not
+  // leave the text typed. Same resolve-then-inject shape as the vega backend.
   if (params.text) assertTypeableAndroidText(params.text);
-  if (params.key) {
-    await injectAndroidNamedKey(device.id, params.key);
-    keysPressed++;
-  }
+  if (params.key) resolveAndroidNamedKeycode(params.key);
   if (params.text) {
     await injectAndroidText(device.id, params.text);
     // `injectAndroidText` (via `assertTypeableAndroidText`) has already rejected
@@ -35,6 +36,15 @@ async function typeAndroidPhone(
     // UTF-16 unit — `.length` is the codepoint count (matching the tv /
     // simulator-server backends) without a spread.
     keysPressed += params.text.length;
+  }
+  // Key after text: a combined call means "type, then submit" (text +
+  // key:"enter"). Pressing the key first submits the still-empty field — and on
+  // key:"backspace" eats a character of whatever was already there instead of
+  // the text just typed. Matches the simulator-server / chromium / vega
+  // backends and the tool's own documented order (see ../index.ts).
+  if (params.key) {
+    await injectAndroidNamedKey(device.id, params.key);
+    keysPressed++;
   }
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };
 }

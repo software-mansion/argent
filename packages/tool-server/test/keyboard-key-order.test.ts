@@ -13,11 +13,26 @@ vi.mock("../src/utils/vega-input", async (importOriginal) => {
   };
 });
 
+// Android injects over `adb shell input`, so its ordering is observable as the
+// command sequence. Stub the transport and the TV probe (a phone target here);
+// `shellQuote` stays real so the asserted strings are the real command lines.
+const { adbShell, isAndroidTv } = vi.hoisted(() => ({
+  adbShell: vi.fn(async (_serial: string, _cmd: string, _opts?: unknown): Promise<string> => ""),
+  isAndroidTv: vi.fn(async (_serial: string): Promise<boolean> => false),
+}));
+vi.mock("../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/adb")>()),
+  adbShell,
+  isAndroidTv,
+}));
+
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
+import { makeAndroidImpl } from "../src/tools/keyboard/platforms/android";
 
 const IOS_SIM: DeviceInfo = { id: "TEST-UDID", platform: "ios", kind: "simulator" };
 const CHROMIUM: DeviceInfo = { id: "chromium-cdp-9222", platform: "chromium", kind: "app" };
 const VEGA: DeviceInfo = { id: "vega-serial", platform: "vega", kind: "vvd" };
+const ANDROID: DeviceInfo = { id: "emulator-5554", platform: "android", kind: "emulator" };
 
 const ENTER_HID_KEYCODE = 40;
 
@@ -118,5 +133,35 @@ describe("keyboard text+key ordering", () => {
     ).rejects.toThrow(/Unknown Vega key "bogus"/);
     expect(injectVegaText).not.toHaveBeenCalled();
     expect(injectVegaNamedKey).not.toHaveBeenCalled();
+  });
+
+  // Android was left out of the original fix (#486 covered simulator-server,
+  // chromium and vega), so it pressed the key first while every other backend —
+  // and the tool's own description — promised the reverse. A `key:"backspace"`
+  // combined with text therefore ate a character of the field's PREVIOUS value.
+  it("android: presses the named key after the text", async () => {
+    adbShell.mockClear();
+
+    await makeAndroidImpl({} as never).handler(
+      {},
+      { udid: ANDROID.id, text: "hi", key: "enter" },
+      ANDROID
+    );
+
+    const cmds = adbShell.mock.calls.map((c) => c[1]);
+    expect(cmds).toEqual(["input text 'hi'", "input keyevent 66"]);
+  });
+
+  it("android: rejects an unknown key before typing any text", async () => {
+    adbShell.mockClear();
+
+    await expect(
+      makeAndroidImpl({} as never).handler(
+        {},
+        { udid: ANDROID.id, text: "hi", key: "bogus" },
+        ANDROID
+      )
+    ).rejects.toThrow(/Unknown key "bogus"/);
+    expect(adbShell).not.toHaveBeenCalled();
   });
 });

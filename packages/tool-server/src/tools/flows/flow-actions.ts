@@ -999,8 +999,10 @@ async function runType(
   await invokeOnDevice(env, "keyboard", { text: step.text });
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
-    // Press Enter as a separate keyboard call — the tool dispatches `key`
-    // before `text`, so a combined `{ text, key }` would submit before typing.
+    // Press Enter as a separate keyboard call. This was a workaround for the
+    // Android backend dispatching `key` before `text` (a combined
+    // `{ text, key }` submitted before typing); every backend now types the
+    // text first, so the two calls could be collapsed into one.
     await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
   return { ok: true };

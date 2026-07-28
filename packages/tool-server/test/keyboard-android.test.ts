@@ -349,13 +349,14 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
       phone
     );
     expect(res).toEqual({ typed: "abc", keys: 4 });
-    // Assert the exact ordered sequence, not just presence: the key fires BEFORE
-    // the text (source contract — press the named key, then type, matching the
-    // simulator-server / vega backends). `toEqual` catches both a dropped keyevent
-    // when text co-occurs AND a silent reorder to text-before-key; a `toContain`
-    // pair would miss the reorder.
+    // Assert the exact ordered sequence, not just presence: the text is typed
+    // FIRST and the named key pressed after it — the shared text-then-key rule
+    // every keyboard backend follows (simulator-server / chromium / vega) and
+    // the one the tool's own description documents. `toEqual` catches both a
+    // dropped keyevent when text co-occurs AND a silent reorder back to
+    // key-before-text; a `toContain` pair would miss the reorder.
     const cmds = adbShell.mock.calls.map((c) => c[1]);
-    expect(cmds).toEqual(["input keyevent 66", "input text 'abc'"]); // KEYCODE_ENTER, then text
+    expect(cmds).toEqual(["input text 'abc'", "input keyevent 66"]); // text, then KEYCODE_ENTER
   });
 
   it("rejects a key + un-typeable text request with NO on-device side effect", async () => {
