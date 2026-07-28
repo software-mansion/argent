@@ -2113,7 +2113,23 @@ export function parseFlow(content: string): FlowFile {
     return { executionPrerequisite: "", steps: [] };
   }
 
-  const parsed = yamlParse(trimmed) as YamlFlowFile;
+  // A raw YAMLParseError carries no failure signal, so a syntax error would
+  // abort a whole batch run instead of failing this file alone.
+  let parsed: YamlFlowFile;
+  try {
+    parsed = yamlParse(trimmed) as YamlFlowFile;
+  } catch (err) {
+    throw new FailureError(
+      `Invalid flow file: ${err instanceof Error ? err.message : String(err)}`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      },
+      err instanceof Error ? { cause: err } : undefined
+    );
+  }
 
   if (
     typeof parsed !== "object" ||

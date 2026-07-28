@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import * as path from "node:path";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   serializeFlow,
   parseFlow,
@@ -187,6 +188,23 @@ describe("parseFlow", () => {
 
   it("throws when content is not an object with steps", () => {
     expect(() => parseFlow("- echo: Hello\n")).toThrow("expected an object with a steps array");
+  });
+
+  it("classifies a YAML syntax error as a validation failure with the parser's detail", () => {
+    let thrown: unknown;
+    try {
+      parseFlow("steps: ][\n");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const signal = getFailureSignal(thrown);
+    expect(signal?.error_kind).toBe("validation");
+    expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
+    // The yaml library's line/column detail must survive so the user can
+    // locate the syntax error.
+    expect((thrown as Error).message).toContain("Invalid flow file:");
+    expect((thrown as Error).message).toContain("line 1");
   });
 
   it("throws a validation error (not a TypeError) on a primitive step entry", () => {
