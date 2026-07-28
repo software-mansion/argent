@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fsoftware-mansion%2Fargent.svg)](https://mcptoplist.com/server/glama%2Fsoftware-mansion%2Fargent)
+
 <br/>
 <p align="center">
   <a href="https://argent.swmansion.com">
