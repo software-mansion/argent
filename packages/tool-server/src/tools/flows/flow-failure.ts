@@ -284,6 +284,13 @@ export interface FlowFailureTiming {
   /** The directive's own budget, when it had one (auto-wait / assert grace). */
   budgetMs?: number;
   attempts?: number;
+  /**
+   * Reads the runner was willing to TRUST, of {@link attempts}. The gap
+   * between the two is the whole indeterminate story — "21 attempted, 14
+   * trusted" says the screen was readable less than two thirds of the window,
+   * which is why the verdict is "could not evaluate" rather than "false".
+   */
+  trustedAttempts?: number;
   lastTrustedReadAt?: number;
   darkTailMs?: number;
 }
@@ -355,6 +362,8 @@ export interface DirectiveEvidence {
    */
   treeError?: string;
   attempts?: number;
+  /** Of {@link attempts}, how many produced a tree the runner trusted. */
+  trustedAttempts?: number;
   lastTrustedReadAt?: number;
   darkTailMs?: number;
   /** What the selector matched on the last trusted read. */
@@ -388,14 +397,21 @@ export const FLOW_DIAGNOSTICS_BUDGET_MS = 5000;
 export function truncateUtf8Field(value: string, limit = FLOW_FAILURE_FIELD_BYTE_LIMIT): string {
   const buf = Buffer.from(value, "utf8");
   if (buf.length <= limit) return value;
-  // The ellipsis costs a byte of its own; reserve it so the result still fits.
-  const room = Math.max(0, limit - 1);
-  let end = room;
+  // "…" is THREE bytes in UTF-8, not one. Reserving a single byte for it would
+  // overshoot `limit` by two on every truncation — which defeats the point of
+  // a byte-denominated budget. A limit too small to hold the marker plus any
+  // content spends the whole budget on content instead.
+  const useMarker = limit > TRUNCATION_MARKER_BYTES;
+  let end = useMarker ? limit - TRUNCATION_MARKER_BYTES : limit;
   // Walk back off a continuation byte (10xxxxxx) to the start of its codepoint,
   // so the slice never ends mid-sequence. At most 3 steps for valid UTF-8.
   while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--;
-  return `${buf.subarray(0, end).toString("utf8")}…`;
+  const head = buf.subarray(0, end).toString("utf8");
+  return useMarker ? `${head}${TRUNCATION_MARKER}` : head;
 }
+
+const TRUNCATION_MARKER = "…";
+const TRUNCATION_MARKER_BYTES = Buffer.byteLength(TRUNCATION_MARKER, "utf8");
 
 /** Round a normalized coordinate to 3dp — the precision `treeFingerprint` treats as significant. */
 function round3(v: number): number {

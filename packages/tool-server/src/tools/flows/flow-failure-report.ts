@@ -118,6 +118,17 @@ export async function attachFailureDiagnostics(
   // Off the report before anything can throw: a live DescribeNode must not
   // reach the wire even if assembly fails halfway.
   delete report.evidence;
+  // Scrub the REASON, not just the copy of it on the failure object. A failure
+  // reason quotes what was on screen (`assertReason` prints the element's
+  // text), so it is exactly where a credential the app echoed back would land
+  // — and `reason` ships on the wire whether or not anything reads `failure`.
+  // Scrubbing only the copy would leave the leak open while looking closed.
+  // Doing it here also preserves the invariant every renderer relies on:
+  // `failure.message` is byte-identical to `reason`.
+  if (report.reason !== undefined) {
+    const scrubbed = createSecretScrubber()(report.reason);
+    if (scrubbed !== report.reason) report.reason = scrubbed;
+  }
   try {
     report.failure = await withBudget(
       buildFailure(env, report, meta, evidence),
@@ -171,6 +182,9 @@ function baseFailure(
       durationMs: report.durationMs ?? Date.now() - meta.startedAt,
       ...(evidence?.budgetMs !== undefined ? { budgetMs: evidence.budgetMs } : {}),
       ...(evidence?.attempts !== undefined ? { attempts: evidence.attempts } : {}),
+      ...(evidence?.trustedAttempts !== undefined
+        ? { trustedAttempts: evidence.trustedAttempts }
+        : {}),
       ...(evidence?.lastTrustedReadAt !== undefined
         ? { lastTrustedReadAt: evidence.lastTrustedReadAt }
         : {}),
@@ -274,7 +288,13 @@ function buildSelector(
   // identifier `foo` AND text `foo`, in that order.
   let alternatives: FlowFailureSelector["alternatives"] = [];
   try {
-    alternatives = flowSelectorAlternatives(sel);
+    // Scrubbed like every other projection of the selector: the alternatives
+    // are the selector's own fields re-spelled, so a `{{secret:…}}`-derived
+    // value in the flow would ride out here even though `fields` and
+    // `described` beside it were masked.
+    alternatives = JSON.parse(
+      scrub(JSON.stringify(flowSelectorAlternatives(sel)))
+    ) as FlowFailureSelector["alternatives"];
   } catch {
     alternatives = [];
   }
@@ -409,6 +429,12 @@ async function buildFailure(
 ): Promise<FlowStepFailure> {
   const { screen, tree, scrub } = await resolveScreen(env, evidence);
   const failure = baseFailure(report, meta, evidence, screen);
+
+  // The platform is what turns a launch / tree-source failure from a puzzle
+  // into a diagnosis — "could not connect to native devtools" means something
+  // different on ios than on android — and it is the one piece of run context
+  // no renderer can derive from the step alone.
+  failure.data = { ...failure.data, platform: env.device.platform };
 
   if (evidence?.expected !== undefined) {
     failure.expected = evidence.expected;

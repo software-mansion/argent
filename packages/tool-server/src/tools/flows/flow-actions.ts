@@ -1187,6 +1187,15 @@ async function waitForCondition(
   let lastTrustedTree: DescribeNode | undefined;
   let lastTrustedSource: DescribeSource | undefined;
   let lastTrustedScreen: { width: number; height: number } | undefined;
+  // Matches from the same TRUSTED read as `lastTrustedTree`. Distinct from
+  // `lastMatches`, which tracks the last read that merely SUCCEEDED — a blind
+  // (empty + degraded) read leaves `lastMatches` empty, and reporting that as
+  // the observation would tell an operator "0 elements matched" for a `hidden`
+  // failure whose actual diagnosis is "the element WAS there and we could not
+  // confirm it left". The prose still reads `lastMatches`; only the evidence
+  // uses this, so the tree and the counts always describe one same read.
+  let lastTrustedMatches: ReturnType<typeof findAll> = [];
+  let trustedAttempts = 0;
   let attempts = 0;
   // Date.now() of the most recent TRUSTED read — undefined until one lands.
   // Post-loop it anchors the dark-tail measurement: how long the window's
@@ -1216,6 +1225,8 @@ async function waitForCondition(
         lastTrustedTree = data.tree;
         lastTrustedSource = data.source;
         lastTrustedScreen = data.screen;
+        lastTrustedMatches = lastMatches;
+        trustedAttempts++;
       }
       lastReadTrusted = !blind;
       if (
@@ -1275,6 +1286,7 @@ async function waitForCondition(
     code,
     selector: step.selector,
     attempts,
+    trustedAttempts,
     budgetMs: timeoutMs,
     expected: {
       kind: "condition",
@@ -1327,7 +1339,7 @@ async function waitForCondition(
           ? `could not confirm the element is hidden — it was visible earlier, but the last UI read failed: ${fetchError}`
           : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
         evidence: conditionEvidence("condition-hidden-unconfirmable", {
-          matches: lastMatches,
+          matches: lastTrustedMatches,
           hint:
             "gone-ness could not be confirmed — this is not a failed assertion; re-run rather " +
             "than editing the flow",
@@ -1344,7 +1356,7 @@ async function waitForCondition(
           : `could not evaluate the condition — the UI tree reads were empty or degraded for the final ${darkTailMs}ms of the window`,
         evidence: conditionEvidence("condition-dark-tail", {
           darkTailMs,
-          matches: lastMatches,
+          matches: lastTrustedMatches,
           hint:
             "the screen went unreadable before the deadline, so the verdict describes a screen " +
             "nobody saw at the end — this is not a failed assertion; re-run rather than editing " +
@@ -1369,7 +1381,7 @@ async function waitForCondition(
   return {
     ok: false,
     reason: verdict.reason + blipNote,
-    evidence: conditionEvidence(verdict.code, { matches: lastMatches }),
+    evidence: conditionEvidence(verdict.code, { matches: lastTrustedMatches }),
   };
 }
 
