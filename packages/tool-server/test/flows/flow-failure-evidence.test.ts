@@ -332,9 +332,11 @@ describe("tree-source throws", () => {
     currentFetch = () => {
       throw new FailureError("native devtools not connected for com.acme.app", {
         error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
-        failure_stage: "native_devtools_describe",
+        failure_stage: "native_devtools_rpc_connection",
         failure_area: "tool_server",
-        error_kind: "unavailable",
+        // Mirrors the real production site (blueprints/native-devtools.ts) so
+        // the fixture stays a faithful stand-in for the error it represents.
+        error_kind: "not_found",
       });
     };
     await writeFlow("outage", {
