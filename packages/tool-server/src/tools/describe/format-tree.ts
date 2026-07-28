@@ -78,7 +78,13 @@ function formatAttr(name: string, value: string | undefined): string {
   return ` ${name}="${escapeForLine(value)}"`;
 }
 
-function formatFlags(n: DescribeNode): string {
+/**
+ * The interactivity flags a node carries, in the order describe renders them.
+ * Exported because the flow failure report projects the same vocabulary onto
+ * the wire — two lists would let a `describe` dump and a failure block
+ * disagree about what an element is.
+ */
+export function describeNodeFlags(n: DescribeNode): string[] {
   const flags: string[] = [];
   if (n.clickable) flags.push("clickable");
   if (n.longClickable) flags.push("long-clickable");
@@ -91,10 +97,20 @@ function formatFlags(n: DescribeNode): string {
   if (typeof n.scrollHidden === "number" && n.scrollHidden > 0) {
     flags.push(`scrollHidden=${n.scrollHidden}`);
   }
+  return flags;
+}
+
+function formatFlags(n: DescribeNode): string {
+  const flags = describeNodeFlags(n);
   return flags.length === 0 ? "" : ` [${flags.join(",")}]`;
 }
 
-function hasContent(n: DescribeNode): boolean {
+/**
+ * Does this node carry enough of its own identity to be worth a line? Exported
+ * so the failure report's element list is the same subset a `describe` would
+ * have shown - an operator comparing the two must not see different screens.
+ */
+export function hasContent(n: DescribeNode): boolean {
   return Boolean(
     n.label ||
     n.value ||

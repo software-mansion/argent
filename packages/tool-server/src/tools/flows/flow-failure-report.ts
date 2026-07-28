@@ -16,6 +16,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { ARTIFACT_MARKER, getFailureSignal } from "@argent/registry";
 import type { ArtifactHandle } from "../../artifacts";
 import type { DescribeNode } from "../describe/contract";
@@ -38,6 +39,7 @@ import {
   FLOW_FAILURE_ELEMENT_LIMIT,
   type DirectiveEvidence,
   type FlowFailureCode,
+  type FlowFailureExpectation,
   type FlowFailureObservation,
   type FlowFailureScreen,
   type FlowFailureSelector,
@@ -54,14 +56,71 @@ import type { StepReport } from "./flow-run";
  */
 export type LeafOutcome = StepReport & { evidence?: DirectiveEvidence };
 
-/** Everything the assembler needs from the run. */
-export interface DiagnosticsEnv extends ActionEnv {
-  /** The top-level flow name — used only to label the spilled artifacts. */
-  topFlowName?: string;
+/**
+ * Everything the assembler needs from the run. An alias rather than an
+ * extension: the capture reads the device and the artifact store and nothing
+ * else about the run, and naming that keeps it true.
+ */
+export type DiagnosticsEnv = ActionEnv;
+
+/**
+ * A tree-source error is the whole diagnosis when it appears, and the helpers
+ * spell theirs at length (what broke, plus how to resolve it), so it gets a
+ * larger allowance than an ordinary projected field.
+ */
+const TREE_ERROR_DETAIL_LIMIT = 512;
+
+/**
+ * One directory for every failure artifact this process writes, with unique
+ * filenames inside it — NOT an `mkdtemp` per run. A registered artifact's host
+ * path must outlive the call (a co-located client reads it in place), so these
+ * files cannot be swept the way `flow-visual.ts` sweeps its diff scratch; a
+ * per-run directory therefore accreted forever on a host-wide, never-exiting
+ * tool-server. A shared directory keeps the entry count constant, which is the
+ * same shape the other long-lived temp writers here use.
+ */
+let evidenceDir: Promise<string> | undefined;
+function failureEvidenceDir(): Promise<string> {
+  evidenceDir ??= (async () => {
+    const dir = path.join(os.tmpdir(), "argent-flow-failure");
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  })();
+  return evidenceDir;
 }
+
+/**
+ * Longest failure message that reaches the wire. `message` mirrors
+ * `StepReport.reason`, which quotes on-screen text — and the flow adapters
+ * hoist a container's WHOLE subtree text, so one `text` mismatch against a
+ * screen-sized container produced a six-figure-byte reason. It ships twice
+ * (reason + message) on every NDJSON progress event, so this is the field that
+ * has to be bounded for the payload budget to mean anything. Generous enough
+ * that no ordinary message is touched.
+ */
+const MESSAGE_BYTE_LIMIT = 4 * 1024;
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Scrub every string INSIDE a structure rather than its serialized form.
+ * `JSON.stringify` escapes quotes, backslashes and newlines, so a secret
+ * containing any of them is not found in the serialized text and rides out
+ * intact — the mask has to be applied to the values themselves. Strings are
+ * field-capped on the way through, which is also what bounds the otherwise
+ * unbounded selector projections.
+ */
+function scrubDeep(value: unknown, scrub: (text: string) => string): unknown {
+  if (typeof value === "string") return truncateUtf8Field(scrub(value));
+  if (Array.isArray(value)) return value.map((item) => scrubDeep(item, scrub));
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) out[key] = scrubDeep(inner, scrub);
+    return out;
+  }
+  return value;
 }
 
 function isArtifactHandle(value: unknown): value is ArtifactHandle {
@@ -79,7 +138,18 @@ function isArtifactHandle(value: unknown): value is ArtifactHandle {
  * been decided would otherwise surface as an unhandled rejection and take the
  * tool-server down over diagnostics.
  */
-async function withBudget<T>(work: Promise<T>, ms: number, fallback: () => T): Promise<T> {
+async function withBudget<T>(
+  start: (token: CaptureToken) => Promise<T>,
+  ms: number,
+  fallback: () => T
+): Promise<T> {
+  // The race decides which VALUE is reported; the token is what actually stops
+  // the losing work. Without it a timed-out capture kept running against a run
+  // that had already torn down — invoking `screenshot` after the status bar was
+  // restored and the chromium instance killed, and registering artifacts
+  // nothing would ever reference (the store has no eviction).
+  const token: CaptureToken = { cancelled: false };
+  const work = start(token);
   work.catch(() => {});
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expiry = new Promise<{ ok: false }>((resolve) => {
@@ -92,10 +162,17 @@ async function withBudget<T>(work: Promise<T>, ms: number, fallback: () => T): P
       work.then((value) => ({ ok: true as const, value })),
       expiry,
     ]);
-    return winner.ok ? winner.value : fallback();
+    if (winner.ok) return winner.value;
+    token.cancelled = true;
+    return fallback();
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** Cooperative cancellation for the capture; see {@link withBudget}. */
+interface CaptureToken {
+  cancelled: boolean;
 }
 
 /**
@@ -131,7 +208,7 @@ export async function attachFailureDiagnostics(
   }
   try {
     report.failure = await withBudget(
-      buildFailure(env, report, meta, evidence),
+      (token) => buildFailure(env, report, meta, evidence, token),
       FLOW_DIAGNOSTICS_BUDGET_MS,
       () => baseFailure(report, meta, evidence, { state: "unavailable", reason: "capture-timeout" })
     );
@@ -164,7 +241,7 @@ function baseFailure(
     code,
     category: FLOW_FAILURE_CATEGORY[code] ?? "tool",
     determinacy: determinacyOf(code),
-    message: scrub(report.reason ?? ""),
+    message: truncateUtf8Field(scrub(report.reason ?? ""), MESSAGE_BYTE_LIMIT),
     ...(evidence?.hint !== undefined ? { hint: scrub(evidence.hint) } : {}),
     step: {
       index: report.index,
@@ -190,7 +267,17 @@ function baseFailure(
         : {}),
       ...(evidence?.darkTailMs !== undefined ? { darkTailMs: evidence.darkTailMs } : {}),
     },
-    ...(evidence?.cause !== undefined ? { cause: evidence.cause } : {}),
+    // The underlying error text is device/helper prose like any other: it can
+    // quote what was on screen, so it gets the same mask and the same cap as
+    // the message beside it.
+    ...(evidence?.cause !== undefined
+      ? {
+          cause: {
+            code: truncateUtf8Field(evidence.cause.code, 128),
+            message: truncateUtf8Field(scrub(evidence.cause.message), MESSAGE_BYTE_LIMIT),
+          },
+        }
+      : {}),
   };
 }
 
@@ -209,7 +296,8 @@ function baseFailure(
  */
 async function resolveScreen(
   env: DiagnosticsEnv,
-  evidence: DirectiveEvidence | undefined
+  evidence: DirectiveEvidence | undefined,
+  token: CaptureToken
 ): Promise<{ screen: FlowFailureScreen; tree?: DescribeNode; scrub: (t: string) => string }> {
   const scrub = createSecretScrubber();
   type AvailableScreen = Extract<FlowFailureScreen, { state: "available" }>;
@@ -240,18 +328,39 @@ async function resolveScreen(
       ...(evidence.treeError !== undefined ? { readError: scrub(evidence.treeError) } : {}),
     });
   }
+  // An INDETERMINATE verdict means argent never got a trustworthy look at the
+  // screen. A recorded `treeError` covers the case where reads THREW — but a
+  // read can also come back blind (empty tree plus a degraded hint), which
+  // succeeds and so records no error at all. Gating on the verdict rather than
+  // on the error covers both: without this, a post-hoc read that happens to
+  // succeed rendered `screen: available, elementCount: 0` beside the message
+  // "every read of the UI tree was empty or degraded" — telling the operator
+  // the app was blank when argent simply could not see it.
+  if (evidence?.code !== undefined && determinacyOf(evidence.code) === "indeterminate") {
+    return {
+      screen: {
+        state: "unavailable",
+        reason: "never-readable",
+        ...(evidence.treeError !== undefined
+          ? { detail: truncateUtf8Field(scrub(evidence.treeError), TREE_ERROR_DETAIL_LIMIT) }
+          : {}),
+        hint: "argent could not read the screen for this step — an environment failure, not a broken step",
+      },
+      scrub,
+    };
+  }
   if (evidence?.treeError !== undefined) {
     return {
       screen: {
         state: "unavailable",
         reason: "never-readable",
-        detail: truncateUtf8Field(scrub(evidence.treeError), 512),
+        detail: truncateUtf8Field(scrub(evidence.treeError), TREE_ERROR_DETAIL_LIMIT),
         hint: "the tree source never produced a readable screen — this is an environment failure, not a broken step",
       },
       scrub,
     };
   }
-  if (env.signal?.aborted) {
+  if (env.signal?.aborted || token.cancelled) {
     return { screen: { state: "unavailable", reason: "aborted" }, scrub };
   }
   try {
@@ -267,7 +376,7 @@ async function resolveScreen(
       screen: {
         state: "unavailable",
         reason: "read-failed",
-        detail: truncateUtf8Field(scrub(errMsg(err)), 512),
+        detail: truncateUtf8Field(scrub(errMsg(err)), TREE_ERROR_DETAIL_LIMIT),
       },
       scrub,
     };
@@ -292,8 +401,9 @@ function buildSelector(
     // are the selector's own fields re-spelled, so a `{{secret:…}}`-derived
     // value in the flow would ride out here even though `fields` and
     // `described` beside it were masked.
-    alternatives = JSON.parse(
-      scrub(JSON.stringify(flowSelectorAlternatives(sel)))
+    alternatives = scrubDeep(
+      flowSelectorAlternatives(sel),
+      scrub
     ) as FlowFailureSelector["alternatives"];
   } catch {
     alternatives = [];
@@ -301,7 +411,7 @@ function buildSelector(
   const unresolvedScope = tree !== undefined ? diagnoseScope(tree, sel) : undefined;
   const selector: FlowFailureSelector = {
     described: truncateUtf8Field(scrub(describeSelector(sel))),
-    fields: JSON.parse(scrub(JSON.stringify(fields))) as Record<string, unknown>,
+    fields: scrubDeep(fields, scrub) as Record<string, unknown>,
     loose: loose === true,
     alternatives,
     ...(unresolvedScope !== undefined ? { unresolvedScope } : {}),
@@ -321,10 +431,12 @@ function buildObservation(
 ): FlowFailureObservation | undefined {
   const supplied = evidence.observation;
   const matches = evidence.matches;
+  // No matches recorded means no selector was resolved (a snapshot, a launch, a
+  // geometry failure). Emit only what the site supplied — a fabricated
+  // `matchCount: 0` reads as "the selector found nothing", a different and
+  // wrong diagnosis on a failure that never had a selector.
   if (matches === undefined) {
-    return supplied === undefined
-      ? undefined
-      : ({ matchCount: 0, visibleMatchCount: 0, ...supplied } as FlowFailureObservation);
+    return supplied === undefined ? undefined : { ...supplied };
   }
   const visible = matches.filter(isVisible);
   const out: FlowFailureObservation = {
@@ -383,8 +495,10 @@ async function registerTreeDump(
       ].filter((b) => b !== undefined);
       return bits.join("  ");
     });
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-failure-"));
-    const file = path.join(dir, `${stem}-tree.txt`);
+    const dir = await failureEvidenceDir();
+    // The stem repeats across runs, so the filename carries a unique segment;
+    // the client materializes by the DECLARED filename, which stays stable.
+    const file = path.join(dir, `${stem}-tree-${randomUUID()}.txt`);
     await fs.writeFile(file, `${lines.join("\n")}\n`, "utf8");
     return await store.register(file, { mimeType: "text/plain", filename: `${stem}-tree.txt` });
   } catch {
@@ -425,9 +539,10 @@ async function buildFailure(
   env: DiagnosticsEnv,
   report: LeafOutcome,
   meta: { startedAt: number; ordinal: number },
-  evidence: DirectiveEvidence | undefined
+  evidence: DirectiveEvidence | undefined,
+  token: CaptureToken
 ): Promise<FlowStepFailure> {
-  const { screen, tree, scrub } = await resolveScreen(env, evidence);
+  const { screen, tree, scrub } = await resolveScreen(env, evidence, token);
   const failure = baseFailure(report, meta, evidence, screen);
 
   // The platform is what turns a launch / tree-source failure from a puzzle
@@ -437,7 +552,9 @@ async function buildFailure(
   failure.data = { ...failure.data, platform: env.device.platform };
 
   if (evidence?.expected !== undefined) {
-    failure.expected = evidence.expected;
+    // Flow-derived text, masked like `message`/`described`/`fields`: an
+    // expectation can quote a value the author templated from a secret.
+    failure.expected = scrubDeep(evidence.expected, scrub) as FlowFailureExpectation;
   } else if (isGestureKind(report.kind)) {
     // A gesture directive knows no expectation beyond itself; naming it here
     // keeps every failure's `expected` slot populated without each call site
@@ -451,10 +568,16 @@ async function buildFailure(
     // A scope that resolved to nothing means the target was never looked for
     // where the report says it was. Today the operator gets a message about
     // the TARGET and goes hunting in the wrong place.
-    if (selectorBlock.unresolvedScope !== undefined) {
+    // Only ever REFINE a determinate selector failure. An indeterminate verdict
+    // means argent could not see the screen, so "your scope matched nothing" is
+    // a claim about a tree nobody trusts — and rewriting the code, category and
+    // determinacy together left the three self-consistent while contradicting
+    // the message beside them. `determinacy` is the one field a CI operator
+    // branches on for retry-vs-fix, and this turned "re-run" into "your flow is
+    // wrong" on exactly the mid-run devtools drop the tier exists for.
+    if (selectorBlock.unresolvedScope !== undefined && failure.determinacy === "determinate") {
       failure.code = "selector-scope-unresolved";
       failure.category = FLOW_FAILURE_CATEGORY["selector-scope-unresolved"];
-      failure.determinacy = determinacyOf("selector-scope-unresolved");
       failure.hint =
         `the ${selectorBlock.unresolvedScope} scope matched no element, so the target was never ` +
         `searched for — fix the scope selector first`;
@@ -472,7 +595,21 @@ async function buildFailure(
   // most valuable slot. Those shapes are diagnosed by `expected`/`actual`
   // instead.
   const resolvedSomething = (observation?.visibleMatchCount ?? 0) > 0;
-  if (tree !== undefined && evidence?.selector !== undefined && !resolvedSomething) {
+  // `snapshot-crop-empty` is the case the count alone cannot catch: the
+  // selector DID resolve (that is how the crop got a frame), the region just
+  // rounds to zero pixels — so suggesting other elements answers a question
+  // nobody asked. Category is the honest test: only a selector-shaped failure
+  // has a "did you mean" answer.
+  const wantsCandidates =
+    failure.category === "selector" ||
+    failure.category === "scroll" ||
+    failure.category === "gesture";
+  if (
+    tree !== undefined &&
+    evidence?.selector !== undefined &&
+    !resolvedSomething &&
+    wantsCandidates
+  ) {
     const ranked = rankCandidates(tree, evidence.selector, {
       gesture: isGestureKind(report.kind),
       scrub,
@@ -515,28 +652,44 @@ async function applyByteBudget(
 ): Promise<FlowStepFailure> {
   const serialized = safeSize(failure);
   if (serialized <= FLOW_FAILURE_BYTE_LIMIT) return failure;
-  if (failure.screen.state !== "available") return failure;
 
   const full = failure;
-  const trimmed: FlowStepFailure = {
-    ...failure,
-    screen: {
+  const trimmed: FlowStepFailure = { ...failure };
+  // Shed in increasing order of diagnostic value, RE-MEASURING after each step
+  // rather than assuming the first cut was enough. Dropping only the element
+  // list left a payload eight times over budget whenever the weight was
+  // somewhere else, while `overflow.omittedBytes` cheerfully reported the few
+  // hundred bytes that had actually gone.
+  if (trimmed.screen.state === "available") {
+    trimmed.screen = {
       state: "unavailable",
       reason: "omitted-for-size",
-      detail: `the element list was ${serialized} bytes, over the ${FLOW_FAILURE_BYTE_LIMIT}-byte report budget`,
+      detail: `the report was ${serialized} bytes, over the ${FLOW_FAILURE_BYTE_LIMIT}-byte budget`,
       ...(failure.tree !== undefined
         ? { hint: "read the `tree` artifact for the full element list" }
         : {}),
-    },
-  };
-  const omittedBytes = serialized - safeSize(trimmed);
+    };
+  }
+  if (safeSize(trimmed) > FLOW_FAILURE_BYTE_LIMIT && trimmed.actual?.invisibleMatches) {
+    const { invisibleMatches: _dropped, ...rest } = trimmed.actual;
+    trimmed.actual = rest;
+  }
+  if (safeSize(trimmed) > FLOW_FAILURE_BYTE_LIMIT && trimmed.candidates.length > 0) {
+    trimmed.candidates = [];
+  }
+  if (safeSize(trimmed) > FLOW_FAILURE_BYTE_LIMIT && trimmed.selector !== undefined) {
+    // Keep `described` — it is what the message quotes — and drop the machine
+    // projections beside it.
+    trimmed.selector = { ...trimmed.selector, fields: {}, alternatives: [] };
+  }
+  const omittedBytes = Math.max(0, serialized - safeSize(trimmed));
   trimmed.overflow = { omittedBytes };
 
   const store = env.ctx?.artifacts;
   if (store) {
     try {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-failure-"));
-      const file = path.join(dir, `${stem}-failure.json`);
+      const dir = await failureEvidenceDir();
+      const file = path.join(dir, `${stem}-failure-${randomUUID()}.json`);
       await fs.writeFile(file, JSON.stringify(full, null, 2), "utf8");
       trimmed.overflow = {
         omittedBytes,
@@ -571,8 +724,7 @@ function safeSize(value: unknown): number {
  * under a flow step surfaces in both spellings.
  */
 export function evidenceFromThrow(err: unknown): DirectiveEvidence {
-  const signal = getFailureSignal(err);
-  const cause = signal ? { cause: { code: signal.error_code, message: errMsg(err) } } : {};
+  const cause = causeOf(err);
   if (isTreeSourceError(err)) {
     return {
       code: "tree-source-unavailable",

@@ -246,9 +246,13 @@ describe("screen provenance", () => {
     expect(shown.source).toBe("native-devtools");
     expect(shown.elementCount).toBe(2);
     expect(shown.elements.map((e) => e.label)).toEqual(["Cart total", "Check out"]);
-    // Ranked against that same tree — the count a report states and the
-    // suggestions it makes can never describe different reads.
-    expect(failure.candidates[0]?.node.identifier).toBe("checkout-cta");
+    // ...but NO candidates. The verdict is indeterminate — argent could not
+    // read the screen — and its hint says to re-run rather than edit the flow.
+    // A "did you mean checkout-cta?" list beside that sentence invites exactly
+    // the edit the hint warns against, on evidence the runner already declared
+    // untrustworthy.
+    expect(failure.determinacy).toBe("indeterminate");
+    expect(failure.candidates).toEqual([]);
   });
 
   it("marks a post-hoc read `after-failure` — the app may have moved on", async () => {

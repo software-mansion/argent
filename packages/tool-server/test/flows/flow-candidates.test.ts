@@ -97,10 +97,11 @@ describe("rankCandidates", () => {
     });
   });
 
-  it("scores an invisible exact match, with the visibility penalty and a note", () => {
-    // Kept scored rather than dropped: where it lands (a candidate row, or
-    // `actual.invisibleMatches`) is the assembler's call, but "the element you
-    // named is there with no frame" is never nothing.
+  it("never suggests an element the selector already matched", () => {
+    // "Which element did you MEAN instead" has no answer that is the element
+    // you already named. A zero-area exact match is reported as
+    // `actual.invisibleMatches`; repeating it here would spend one of five
+    // slots proposing the selector that just failed.
     const tree = screen([
       n({
         role: "AXButton",
@@ -110,14 +111,27 @@ describe("rankCandidates", () => {
       }),
     ]);
 
-    const { candidates } = rankCandidates(tree, { identifier: "checkout-cta" });
+    expect(rankCandidates(tree, { identifier: "checkout-cta" }).candidates).toEqual([]);
+  });
+
+  it("applies the visibility penalty to a near miss that is not itself a match", () => {
+    const tree = screen([
+      n({
+        role: "AXButton",
+        identifier: "checkout-cta",
+        label: "Checkout",
+        frame: { x: 0.5, y: 0.9, width: 0, height: 0 },
+      }),
+    ]);
+
+    const { candidates } = rankCandidates(tree, { identifier: "checkout-ctaa" });
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
-      basis: "identifier-exact",
-      score: 0.5,
+      basis: "identifier-near",
       note: "zero-area frame",
     });
+    expect(candidates[0]!.score).toBeLessThan(0.5);
   });
 
   it("notes disabled and scrolled-out elements on a gesture step", () => {
@@ -142,26 +156,32 @@ describe("rankCandidates", () => {
       }),
     ]);
 
-    const { candidates } = rankCandidates(tree, { text: "Checkout" }, { gesture: true });
+    // A near miss, not a match: an element the selector already resolves to is
+    // never a candidate, so the modifiers have to be observed on elements the
+    // selector merely came close to.
+    const { candidates } = rankCandidates(tree, { text: "Chekout" }, { gesture: true });
 
-    expect(candidates.map((c) => [c.score, c.note])).toEqual([
-      [1, undefined],
-      [0.95, "scrolled out of its container — add a scroll-to step"],
-      [0.85, "disabled"],
+    expect(candidates.map((c) => c.note)).toEqual([
+      undefined,
+      "scrolled out of its container — add a scroll-to step",
+      "disabled",
     ]);
+    // clickable adds, disabled subtracts, off the same near-miss base.
+    expect(candidates[0]!.score).toBeGreaterThan(candidates[1]!.score);
+    expect(candidates[1]!.score).toBeGreaterThan(candidates[2]!.score);
   });
 
   it("caps candidates at the limit while total counts every distinct match", () => {
     const tree = screen(
       Array.from({ length: 8 }, (_, i) =>
-        label(`Checkout ${i}`, { frame: { x: 0.1, y: 0.1 * i, width: 0.3, height: 0.04 } })
+        label(`Chekout ${i}`, { frame: { x: 0.1, y: 0.1 * i, width: 0.3, height: 0.04 } })
       )
     );
 
     const capped = rankCandidates(tree, { text: "Checkout" });
     expect(capped.candidates).toHaveLength(5); // FLOW_FAILURE_CANDIDATE_LIMIT
     expect(capped.total).toBe(8);
-    expect(capped.candidates[0]!.node.label).toBe("Checkout 0"); // reading order breaks the tie
+    expect(capped.candidates[0]!.node.label).toBe("Chekout 0"); // reading order breaks the tie
 
     const tighter = rankCandidates(tree, { text: "Checkout" }, { limit: 2 });
     expect(tighter.candidates).toHaveLength(2);

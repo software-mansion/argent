@@ -31,9 +31,11 @@ import type { DescribeFrame, DescribeNode } from "../describe/contract";
 import {
   deriveSelector,
   equalsCI,
+  findAll,
   identifierMatches,
   includesCI,
   isVisible,
+  selectorToFrame,
   uiTreeMatchInternals,
   SELECTOR_RELATIONS,
   type Selector,
@@ -230,6 +232,28 @@ function toPass(alt: Selector): RankPass {
   return pass;
 }
 
+/** Identity of a pass's own fields — two passes with the same one score alike. */
+function passKey(pass: RankPass): string {
+  return JSON.stringify([
+    pass.identifier ?? null,
+    pass.text ?? null,
+    pass.regex?.source ?? null,
+    pass.role ?? null,
+  ]);
+}
+
+function dedupePasses(passes: RankPass[]): RankPass[] {
+  const seen = new Set<string>();
+  const out: RankPass[] = [];
+  for (const pass of passes) {
+    const key = passKey(pass);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(pass);
+  }
+  return out;
+}
+
 /**
  * The node's best score under ONE pass. `role` is folded in here rather than
  * at node level because it belongs to the alternative: `+0.10` when it agrees,
@@ -270,14 +294,63 @@ function scorePass(node: DescribeNode, pass: RankPass): Scored | undefined {
  * and its flags), so an unrepresentable selector omits the field rather than
  * failing the ranking.
  */
-function suggestedSelectorYaml(node: DescribeNode): string | undefined {
+function suggestedSelectorYaml(
+  tree: DescribeNode,
+  node: DescribeNode,
+  scrub: (text: string) => string
+): string | undefined {
   const derived = deriveSelector(node);
   if (derived === null) return undefined;
+  // RESOLVE IT BACK before offering it. Ranking scores one field at a time,
+  // but `deriveSelector` picks its own — a container scored 1.00 on its hoisted
+  // `subtreeText` ("Total $42.00") derives `{ text: "Total" }` from its label,
+  // and that selector resolves to the small caption elsewhere on screen, not to
+  // the row that was ranked. An LLM pastes the suggestion and taps the wrong
+  // element, which is worse than offering no suggestion at all. A visible node
+  // must be what `selectorToFrame` lands on (the exact path a `tap` takes); an
+  // invisible one, which no gesture can reach anyway, only has to be among the
+  // matches so an `exists`/`visible` assertion still gets a usable spelling.
+  if (isVisible(node)) {
+    const resolved = selectorToFrame(tree, derived);
+    if (resolved === undefined || !sameFrame(resolved, node.frame)) return undefined;
+  } else if (!findAll(tree, derived).includes(node)) {
+    return undefined;
+  }
   try {
-    return JSON.stringify(selectorToYaml(derived));
+    // Masked like every other projection of this node. `deriveSelector` returns
+    // the node's own identifier/label/value — the exact strings `projectNode`
+    // scrubs — so without this the same candidate row carried a masked label
+    // beside a suggestion quoting the credential in full, straight into the
+    // model's context.
+    const yaml = selectorToYaml(derived);
+    return typeof yaml === "string"
+      ? JSON.stringify(scrub(yaml))
+      : JSON.stringify(scrubStrings(yaml, scrub));
   } catch {
     return undefined;
   }
+}
+
+/** Mask every string inside a serializable selector, values not serialized text. */
+function scrubStrings(value: unknown, scrub: (text: string) => string): unknown {
+  if (typeof value === "string") return scrub(value);
+  if (Array.isArray(value)) return value.map((item) => scrubStrings(item, scrub));
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) out[key] = scrubStrings(inner, scrub);
+    return out;
+  }
+  return value;
+}
+
+/** Frame equality at the 3dp precision the wire rounds to. */
+function sameFrame(a: DescribeFrame, b: DescribeFrame): boolean {
+  return (
+    Math.abs(a.x - b.x) < 5e-4 &&
+    Math.abs(a.y - b.y) < 5e-4 &&
+    Math.abs(a.width - b.width) < 5e-4 &&
+    Math.abs(a.height - b.height) < 5e-4
+  );
 }
 
 /**
@@ -330,10 +403,23 @@ export function rankCandidates(
   selector: FlowSelector,
   opts: { gesture?: boolean; scrub?: (text: string) => string; limit?: number } = {}
 ): { candidates: FlowFailureCandidate[]; total: number } {
-  const passes = flowSelectorAlternatives(selector).map(toPass);
+  // Dedupe the passes BEFORE the tree walk. `flowSelectorAlternatives` expands
+  // to 2^(bare-string scopes) selectors that differ ONLY in their scopes, and
+  // `toPass` drops scopes by design — so a six-scope selector produced 32
+  // byte-identical passes and scored every node 32 times. That is not a
+  // micro-optimization: the walk is synchronous, so it cannot be preempted by
+  // the capture's Promise.race budget, and on a large tree it blocked for
+  // seconds while the failing step waited to be reported.
+  const passes = dedupePasses(flowSelectorAlternatives(selector).map(toPass));
+  // The elements the selector DID match are not candidates: "which element did
+  // you mean instead" has no answer that is the element you already named.
+  // They are reported as `actual.invisibleMatches` instead, and suggesting the
+  // selector that just failed would burn a slot on a no-op repair.
+  const matched = new Set(flowMatchAll(tree, selector));
   const ranked: Ranked[] = [];
 
   for (const node of flattenForReport(tree)) {
+    if (matched.has(node)) continue;
     let best: Scored | undefined;
     for (const pass of passes) best = better(best, scorePass(node, pass));
     if (best === undefined) continue;
@@ -386,7 +472,7 @@ export function rankCandidates(
   const seen = new Set<string>();
   const distinct: Array<Ranked & { selectorYaml?: string }> = [];
   for (const entry of ranked) {
-    const selectorYaml = suggestedSelectorYaml(entry.node);
+    const selectorYaml = suggestedSelectorYaml(tree, entry.node, opts.scrub ?? ((t) => t));
     const key = dedupeKey(selectorYaml, entry.node.frame);
     if (seen.has(key)) continue;
     seen.add(key);

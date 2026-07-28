@@ -21,6 +21,7 @@
  */
 
 import type { DescribeFrame, DescribeNode, DescribeSource } from "../describe/contract";
+import { describeNodeFlags, hasContent } from "../describe/format-tree";
 import type { ArtifactHandle } from "../../artifacts";
 import type { Selector, TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import type { FlowSelector, ScrollDirection } from "./flow-utils";
@@ -175,7 +176,7 @@ export type FlowFailureExpectation =
     }
   | { kind: "scroll"; direction: ScrollDirection; maxIterations: number; within?: string }
   | { kind: "snapshot"; snapshotKey: string; maxMismatch: number }
-  | { kind: "gesture"; gesture: string; detail?: string };
+  | { kind: "gesture"; gesture: string };
 
 /** What the runner actually observed — from `waitForCondition`'s last matches. */
 export interface FlowFailureObservation {
@@ -244,13 +245,7 @@ export type FlowFailureScreen =
     }
   | {
       state: "unavailable";
-      reason:
-        | "never-readable"
-        | "read-failed"
-        | "aborted"
-        | "no-artifact-store"
-        | "capture-timeout"
-        | "omitted-for-size";
+      reason: "never-readable" | "read-failed" | "aborted" | "capture-timeout" | "omitted-for-size";
       /** The tree-source error, verbatim. */
       detail?: string;
       hint?: string;
@@ -263,8 +258,7 @@ export type FlowFailureCandidateBasis =
   | "text-contains"
   | "text-contained-by"
   | "text-near"
-  | "text-regex"
-  | "role";
+  | "text-regex";
 
 export interface FlowFailureCandidate {
   node: FlowFailureNode;
@@ -418,23 +412,9 @@ function round3(v: number): number {
   return Math.round(v * 1000) / 1000;
 }
 
-/**
- * Flags, spelled exactly as `format-tree.ts` spells them so an operator
- * reading a failure block and a `describe` dump sees one vocabulary.
- */
+/** One string beats eight booleans on the wire; the vocabulary is describe's. */
 function projectFlags(node: DescribeNode): string | undefined {
-  const flags: string[] = [];
-  if (node.clickable) flags.push("clickable");
-  if (node.longClickable) flags.push("long-clickable");
-  if (node.scrollable) flags.push("scrollable");
-  if (node.checkable) flags.push(node.checked ? "checked" : "checkable");
-  if (node.focused) flags.push("focused");
-  if (node.selected) flags.push("selected");
-  if (node.disabled) flags.push("disabled");
-  if (node.password) flags.push("password");
-  if (typeof node.scrollHidden === "number" && node.scrollHidden > 0) {
-    flags.push(`scrollHidden=${node.scrollHidden}`);
-  }
+  const flags = describeNodeFlags(node);
   return flags.length === 0 ? undefined : flags.join(",");
 }
 
@@ -455,6 +435,9 @@ export function projectNode(
   const field = (value: string | undefined): string | undefined =>
     value === undefined ? undefined : truncateUtf8Field(scrub(value));
   const out: FlowFailureNode = {
+    // A role is a class/AX name (`AXButton`, `android.widget.TextView`), so 64
+    // bytes is generous - the default field cap would let a hostile tree source
+    // spend 256 bytes per element on a field nobody reads for meaning.
     role: truncateUtf8Field(node.role, 64),
     frame: {
       x: round3(node.frame.x),
@@ -487,22 +470,11 @@ export function projectNode(
 }
 
 /**
- * Does this node carry enough of its own identity to be worth a line in the
- * failure block? Same rule `format-tree.ts`'s `hasContent` applies, so the
- * "47 elements" a report claims are the ones a `describe` would have shown.
+ * The elements worth listing in a failure block: exactly the subset a
+ * `describe` would have emitted, so the count a report states and what an
+ * operator sees when they inspect the screen themselves cannot disagree.
  */
-export function isActionableNode(node: DescribeNode): boolean {
-  return Boolean(
-    node.label ||
-    node.value ||
-    node.identifier ||
-    node.clickable ||
-    node.longClickable ||
-    node.scrollable ||
-    node.checkable ||
-    (typeof node.scrollHidden === "number" && node.scrollHidden > 0)
-  );
-}
+export const isActionableNode = hasContent;
 
 /**
  * A scrubber that masks every exposed `ARGENT_SECRET_*` VALUE wherever it
