@@ -78,7 +78,7 @@ describe("tool interaction messages", () => {
     const secret = "INTERACTION_MESSAGE_SECRET";
     const messages = [
       definitions.get("keyboard")!.interaction!.startedMsg!({
-        params: { udid: "device-1", text: secret },
+        params: { udid: "device-1", text: secret, key: secret },
       }),
       definitions.get("open-url")!.interaction!.startedMsg!({
         params: {

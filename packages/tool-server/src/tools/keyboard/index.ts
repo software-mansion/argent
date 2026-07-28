@@ -79,15 +79,18 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
   return {
     id: "keyboard",
     interaction: {
+      // Treat both text and key as sensitive. `key` is an unrestricted string at
+      // this boundary, so a value must not reach the event log before execution
+      // validates whether it is a supported named key.
       startedMsg: ({ params }) => {
-        if (params.text === undefined) return `Pressing ${params.key ?? "key"}`;
+        if (params.text === undefined) return "Pressing a key";
         if (params.key === undefined) return "Entering text";
-        return `Entering text and pressing ${params.key}`;
+        return "Entering text and pressing a key";
       },
       completedMsg: ({ params }) => {
-        if (params.text === undefined) return `Pressed ${params.key ?? "key"}`;
+        if (params.text === undefined) return "Pressed a key";
         if (params.key === undefined) return "Entered text";
-        return `Entered text and pressed ${params.key}`;
+        return "Entered text and pressed a key";
       },
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
