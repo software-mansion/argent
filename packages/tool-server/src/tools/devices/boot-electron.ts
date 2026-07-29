@@ -165,15 +165,36 @@ function sanitizeExtraArgs(extra: string[]): string[] {
   });
 }
 
+/**
+ * Signal the whole process group led by `pid`, reporting whether anything was
+ * there. The Electron child is spawned detached, so it leads its own group and
+ * every descendant inherits it — and signalling the leader alone does NOT bring
+ * the app down: the npm `electron` launcher is a node wrapper whose SIGTERM
+ * handler forwards to the real binary without exiting itself, and Chromium's
+ * helper processes are separate children that never see the signal. They
+ * survive, get reparented to launchd, and keep the app in the dock.
+ */
+function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch (err) {
+    // ESRCH = the group is empty; anything else (EPERM) means it isn't.
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
 function killChildEscalating(child: ChildProcess): void {
   // SIGTERM lets Electron flush the renderer's GPU buffers and write a clean
   // exit code; SIGKILL after 2s catches stuck processes (hardware-accelerated
-  // GPU shutdown can deadlock on some Intel drivers).
+  // GPU shutdown can deadlock on some Intel drivers). Both go to the process
+  // group as well as the handle — see signalGroup.
   try {
     child.kill("SIGTERM");
   } catch {
     /* already gone */
   }
+  if (child.pid !== undefined) signalGroup(child.pid, "SIGTERM");
   setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) {
       try {
@@ -181,6 +202,11 @@ function killChildEscalating(child: ChildProcess): void {
       } catch {
         /* already gone */
       }
+    }
+    // The group's own liveness decides this escalation, not the leader's exit
+    // status: the leader routinely exits while a helper lives on.
+    if (child.pid !== undefined && signalGroup(child.pid, 0)) {
+      signalGroup(child.pid, "SIGKILL");
     }
   }, 2000).unref();
 }
@@ -213,6 +239,48 @@ export function killChromiumByPort(port: number, pid?: number): void {
     return;
   }
   if (pid !== undefined) killChromiumByPidFallback(pid);
+}
+
+/** How long to wait for a killed instance to actually exit before giving up on it. */
+const EXIT_WAIT_TIMEOUT_MS = 5000;
+const EXIT_POLL_MS = 50;
+
+/**
+ * Terminate the instance on `port` and wait until the process is actually gone.
+ * {@link killChromiumByPort} only delivers the signal, so a caller that reboots
+ * the same app immediately would race the dying process's single-instance lock
+ * — the replacement quits on startup and its CDP endpoint never comes up.
+ * Best-effort: returns after `timeoutMs` regardless, so a wedged process can't
+ * stall a run (the 2s SIGKILL escalation normally lands well inside it).
+ */
+export async function killChromiumByPortAndWait(
+  port: number,
+  pid?: number,
+  timeoutMs = EXIT_WAIT_TIMEOUT_MS
+): Promise<void> {
+  const child = liveChildren.get(port);
+  const alive = child && child.exitCode === null && child.signalCode === null;
+  // Attached before the kill so an exit between the two can't be missed.
+  const exited = alive ? new Promise<void>((resolve) => child.once("exit", () => resolve())) : null;
+
+  killChromiumByPort(port, pid);
+
+  if (exited) return Promise.race([exited, sleepUnref(timeoutMs)]);
+  if (!child && pid !== undefined) {
+    // Booted by an earlier tool-server process: no handle to await, so poll.
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (signalPid(pid, 0) === "gone") return;
+      await sleepUnref(EXIT_POLL_MS);
+    }
+  }
+}
+
+/** Timer-based delay that never holds the event loop open. */
+function sleepUnref(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms).unref();
+  });
 }
 
 /**

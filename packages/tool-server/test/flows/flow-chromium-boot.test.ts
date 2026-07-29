@@ -8,20 +8,30 @@ import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flo
 // The runner boots a Chromium e2e flow's app itself. Mock the Electron
 // launcher so we can assert on how it's called + torn down without spawning a
 // real process, and mock the port registry so teardown touches no on-disk state.
-const bootElectronApp = vi.fn(async (opts: { appPath: string; extraArgs?: string[] }) => ({
-  platform: "chromium" as const,
-  id: "chromium-cdp-12345",
-  port: 12345,
-  pid: 4242,
-  appPath: opts.appPath,
-  booted: true as const,
-}));
+// Each boot lands on its own port, as the real launcher does — and the device
+// id IS the port, so every boot is a new device id.
+let bootCount = 0;
+const defaultBoot = async (opts: { appPath: string; extraArgs?: string[] }) => {
+  const n = bootCount++;
+  return {
+    platform: "chromium" as const,
+    id: `chromium-cdp-${12345 + n}`,
+    port: 12345 + n,
+    pid: 4242 + n,
+    appPath: opts.appPath,
+    booted: true as const,
+  };
+};
+const bootElectronApp = vi.fn(defaultBoot);
 const killChromiumByPort = vi.fn();
+const killChromiumByPortAndWait = vi.fn(async () => {});
 vi.mock("../../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (...args: unknown[]) =>
     (bootElectronApp as (...a: unknown[]) => unknown)(...args),
   killChromiumByPort: (...args: unknown[]) =>
     (killChromiumByPort as (...a: unknown[]) => unknown)(...args),
+  killChromiumByPortAndWait: (...args: unknown[]) =>
+    (killChromiumByPortAndWait as (...a: unknown[]) => unknown)(...args),
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
 
@@ -43,18 +53,19 @@ function makeRegistry(invoke: (id: string, args: unknown) => Promise<unknown> = 
   } as unknown as Registry;
 }
 
-const writtenFiles: string[] = [];
+// Each flow gets its own directory: `run:` targets are siblings named
+// `<name>.yaml`, so two tests using the same fragment name would otherwise
+// clobber each other's file in a shared tmpdir.
+const writtenDirs: string[] = [];
 async function writeFlow(yaml: string): Promise<string> {
   // realpath'd so path math on the returned file matches the runner's
   // canonical root anchor: macOS's tmpdir lives behind the /var → /private/var
   // symlink, which would otherwise skew the appPath equalities for reasons
   // unrelated to what a test pins.
-  const file = path.join(
-    await fs.realpath(os.tmpdir()),
-    `flow-chromium-boot-${writtenFiles.length}-${process.pid}.yaml`
-  );
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "flow-chromium-boot-")));
+  writtenDirs.push(dir);
+  const file = path.join(dir, "flow.yaml");
   await fs.writeFile(file, yaml, "utf8");
-  writtenFiles.push(file);
   return file;
 }
 
@@ -62,9 +73,7 @@ async function writeFlow(yaml: string): Promise<string> {
 // against the parent flow's directory), so write it next to `parent` under a
 // caller-chosen name.
 async function writeSiblingFlow(parent: string, name: string, yaml: string): Promise<void> {
-  const file = path.join(path.dirname(parent), `${name}.yaml`);
-  await fs.writeFile(file, yaml, "utf8");
-  writtenFiles.push(file);
+  await fs.writeFile(path.join(path.dirname(parent), `${name}.yaml`), yaml, "utf8");
 }
 
 function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
@@ -74,7 +83,8 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
 
 async function runFlow(
   registry: Registry,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<FlowRunResult> {
   // The flow file deliberately lives outside project_root (it pins the
   // flow-relative app-path anchor). Run it as a co-located explicit flow_path
@@ -91,6 +101,7 @@ async function runFlow(
         statVerified: true,
       },
     },
+    ...(signal ? { signal } : {}),
   };
   return asRun(
     await createRunFlowTool(registry).execute(
@@ -102,13 +113,16 @@ async function runFlow(
 }
 
 beforeEach(() => {
-  bootElectronApp.mockClear();
-  killChromiumByPort.mockClear();
+  bootCount = 0;
+  // Reset, not clear: mockClear leaves queued mockImplementationOnce handlers
+  // in place, so a test that failed early would leak one into the next.
+  bootElectronApp.mockReset().mockImplementation(defaultBoot);
+  killChromiumByPort.mockReset();
+  killChromiumByPortAndWait.mockReset();
 });
 
 afterEach(async () => {
-  // recursive: the symlink-anchor test tracks a whole temp tree, not one file.
-  await Promise.all(writtenFiles.splice(0).map((f) => fs.rm(f, { force: true, recursive: true })));
+  await Promise.all(writtenDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
 });
 
 describe("flow-execute chromium boot", () => {
@@ -184,7 +198,7 @@ describe("flow-execute chromium boot", () => {
     // root anchor — the one `run:` targets already use — finds it; the
     // as-written dirname would boot a path in a tree the author never wrote.
     const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "flow-chromium-link-")));
-    writtenFiles.push(base);
+    writtenDirs.push(base);
     const sharedFlows = path.join(base, "shared", "flows");
     const linkDir = path.join(base, "proj", ".argent", "flows");
     await fs.mkdir(sharedFlows, { recursive: true });
@@ -295,18 +309,16 @@ describe("flow-execute chromium boot", () => {
     expect(result.steps[0]).toMatchObject({ kind: "launch", status: "pass" });
   });
 
-  it("errors a nested e2e flow's launch (chromium boots only the top-level app) and keeps the first working", async () => {
-    // Parent chromium e2e flow that runs a nested chromium e2e flow. Chromium
-    // boots exactly one app for the run (the parent's), so the nested launch
-    // can't boot its own instance — it must fail loudly, not silently pass
-    // against the already-launched app. The parent's own launch still works.
+  it("boots a second instance for a nested e2e flow's launch and tears both down in reverse", async () => {
+    // The chromium analog of the in-place `restart-app` native nesting gets:
+    // the process IS the device, so the nested launch boots its own.
     const parent = await writeFlow(
       "steps:\n  - launch: { chromium: ./app-a }\n  - run: nested-chromium.yaml\n"
     );
     await writeSiblingFlow(
       parent,
       "nested-chromium",
-      "steps:\n  - launch: { chromium: ./app-b }\n  - echo: should never run\n"
+      "steps:\n  - launch: { chromium: ./app-b }\n  - echo: in nested\n"
     );
     const registry = makeRegistry();
 
@@ -316,30 +328,379 @@ describe("flow-execute chromium boot", () => {
       flow_file: parent,
     });
 
-    // Only the parent's app booted — the nested launch never spawned a second
-    // instance.
-    expect(bootElectronApp).toHaveBeenCalledTimes(1);
-    expect(result.ok).toBe(false);
-    // parent launch passes; run marker passes; nested launch errors; the rest skip.
+    // Both paths resolve against the same flow directory.
+    expect(bootElectronApp).toHaveBeenCalledTimes(2);
+    expect(bootElectronApp.mock.calls.map((c) => c[0].appPath)).toEqual([
+      path.join(path.dirname(parent), "app-a"),
+      path.join(path.dirname(parent), "app-b"),
+    ]);
+    expect(result.ok).toBe(true);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
       "launch:pass",
       "run:pass",
-      "launch:error",
-      "echo:skip",
+      "launch:pass",
+      "echo:pass",
     ]);
+    // The nested launch says it moved the run onto a new device.
     const nestedLaunch = result.steps[2];
     expect(nestedLaunch.flow).toBe("nested-chromium");
-    expect(nestedLaunch.reason).toMatch(/chromium launches only the top-level flow's app/i);
+    expect(nestedLaunch.reason).toContain("chromium-cdp-12346");
+    // The report names the device the run STARTED on; the switch is on the step.
+    expect(result.device).toBe("chromium-cdp-12345");
 
-    // The one booted instance is still torn down cleanly on the failing run.
+    // Both are torn down, nested first — a parent instance outlives its child.
+    expect(killChromiumByPort.mock.calls).toEqual([
+      [12346, 4243],
+      [12345, 4242],
+    ]);
+  });
+
+  it("binds the newly booted device into the steps after a nested launch", async () => {
+    // The point of booting: the run MOVES onto the new instance, so a step
+    // after the nested launch dispatches against the new id.
+    const parent = await writeFlow(
+      "steps:\n" +
+        "  - launch: { chromium: ./app-a }\n" +
+        "  - tool: screenshot\n" +
+        "  - run: nested-chromium\n" +
+        "  - tool: screenshot\n"
+    );
+    await writeSiblingFlow(
+      parent,
+      "nested-chromium",
+      "steps:\n  - launch: { chromium: ./app-b }\n"
+    );
+    const registry = makeRegistry();
+    // The runner injects the device id only for the keys a tool's schema
+    // declares, so give `screenshot` a udid.
+    (registry.getTool as any).mockImplementation(() => ({
+      inputSchema: { properties: { udid: {} } },
+    }));
+
+    const result = await runFlow(registry, {
+      name: "rebind",
+      project_root: PROJECT_ROOT,
+      flow_file: parent,
+    });
+
+    expect(result.ok).toBe(true);
+    const udids = (registry.invokeTool as any).mock.calls
+      .filter((c: unknown[]) => c[0] === "screenshot")
+      .map((c: any) => c[1].udid);
+    expect(udids).toEqual(["chromium-cdp-12345", "chromium-cdp-12346"]);
+  });
+
+  it("retires the instance it owns for the same app before relaunching it", async () => {
+    // Kill first, then boot: an Electron app holding a single-instance lock
+    // would make the second process quit before its CDP endpoint came up.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app }\n  - echo: mid\n  - launch: { chromium: ./app }\n"
+    );
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "relaunch",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(bootElectronApp).toHaveBeenCalledTimes(2);
+    // The retire goes through the awaiting kill — the replacement must not race
+    // the dying process's lock — and lands before the second boot.
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
+    expect(killChromiumByPortAndWait.mock.invocationCallOrder[0]).toBeLessThan(
+      bootElectronApp.mock.invocationCallOrder[1]!
+    );
+    // Only the replacement is left for run-end teardown.
+    expect(killChromiumByPort.mock.calls).toEqual([[12346, 4243]]);
+  });
+
+  it("boots an instance of its own for a second launch against a pinned device", async () => {
+    // The runner never kills a process it didn't start, which is what makes the
+    // first launch an attach; a later one still means "from scratch".
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n"
+    );
+    const registry = makeRegistry();
+    const refreshViewport = vi.fn(async () => ({ width: 800, height: 600 }));
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport,
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+
+    const result = await runFlow(registry, {
+      name: "pinned-then-boot",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(refreshViewport).toHaveBeenCalledTimes(1); // first launch attached
+    expect(bootElectronApp).toHaveBeenCalledTimes(1); // second launch booted
+    expect(bootElectronApp.mock.calls[0][0]).toMatchObject({
+      appPath: path.join(path.dirname(flowFile), "app-b"),
+    });
+    // Only the instance the runner booted is torn down — never the pinned one.
+    expect(killChromiumByPort.mock.calls).toEqual([[12345, 4242]]);
+  });
+
+  it("tears down an instance booted just as the run was cancelled", async () => {
+    // The boot resolves after the cancel lands — the instance is real, so it is
+    // recorded before the step can bail out.
+    const controller = new AbortController();
+    const parent = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - run: nested-chromium\n"
+    );
+    await writeSiblingFlow(
+      parent,
+      "nested-chromium",
+      "steps:\n  - launch: { chromium: ./app-b }\n"
+    );
+    const registry = makeRegistry();
+    bootElectronApp.mockImplementationOnce(async (opts) => ({
+      platform: "chromium" as const,
+      id: "chromium-cdp-12345",
+      port: 12345,
+      pid: 4242,
+      appPath: opts.appPath,
+      booted: true as const,
+    }));
+    // The nested boot: cancel the run while it is in flight.
+    bootElectronApp.mockImplementationOnce(async (opts) => {
+      controller.abort();
+      return {
+        platform: "chromium" as const,
+        id: "chromium-cdp-12346",
+        port: 12346,
+        pid: 4243,
+        appPath: opts.appPath,
+        booted: true as const,
+      };
+    });
+
+    const result = await runFlow(
+      registry,
+      { name: "cancelled", project_root: PROJECT_ROOT, flow_file: parent },
+      controller.signal
+    );
+
+    expect(result.aborted).toBe(true);
+    expect(result.ok).toBe(false);
+    // A cancelled launch is a skip, never a step failure — the app did nothing wrong.
+    expect(result.steps[2]).toMatchObject({ kind: "launch", status: "skip" });
+    // Both instances reclaimed, nested first.
+    expect(killChromiumByPort.mock.calls).toEqual([
+      [12346, 4243],
+      [12345, 4242],
+    ]);
+  });
+
+  it("boots for a fragment whose first step run:s a chromium e2e flow", async () => {
+    // The run begins with a launch even though the TOP-LEVEL flow doesn't: the
+    // runner needs a device before step 1, so the leading `run:` chain is
+    // followed to find the launch it has to boot for.
+    const fragment = await writeFlow("steps:\n  - run: setup\n  - tool: screenshot\n");
+    await writeSiblingFlow(
+      fragment,
+      "setup",
+      "steps:\n  - echo: launching\n  - launch: { native: com.acme.app, chromium: ./app }\n"
+    );
+    const registry = makeRegistry();
+    (registry.getTool as any).mockImplementation(() => ({
+      inputSchema: { properties: { udid: {} } },
+    }));
+
+    const result = await runFlow(registry, {
+      name: "leads-with-run",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      platform: "chromium",
+    });
+
+    // --platform chromium disambiguates the multi-platform launch, and the app
+    // path resolves against the flows directory the chain was read from.
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(bootElectronApp.mock.calls[0][0]).toMatchObject({
+      appPath: path.join(path.dirname(fragment), "app"),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-12345");
+    // The nested launch settles the hoisted boot instead of booting again.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "echo:pass",
+      "launch:pass",
+      "tool:pass",
+    ]);
     expect(killChromiumByPort).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("follows the leading run: chain through several fragments", async () => {
+    const top = await writeFlow("steps:\n  - run: middle\n");
+    await writeSiblingFlow(top, "middle", "steps:\n  - run: inner\n");
+    await writeSiblingFlow(top, "inner", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "chained",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not boot when the leading run: chain is cyclic", async () => {
+    // The chain walk gives up on a repeat rather than re-reading the loop up to
+    // the depth bound; execRunStep reports the cycle when it executes.
+    const top = await writeFlow("steps:\n  - run: loop-a\n");
+    await writeSiblingFlow(top, "loop-a", "steps:\n  - run: loop-b\n");
+    await writeSiblingFlow(top, "loop-b", "steps:\n  - run: loop-a\n");
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "cyclic", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("does not boot when a leading run: chain reaches no launch", async () => {
+    // A plain fragment composition: nothing to boot, so device resolution
+    // proceeds normally (and reports no booted device here).
+    const top = await writeFlow("steps:\n  - run: helper\n");
+    await writeSiblingFlow(top, "helper", "steps:\n  - echo: nothing to launch\n");
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "no-launch", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("errors a nested launch that declares no chromium app while the run is on chromium", async () => {
+    // The mirror of the native check: on chromium a launch with no chromium
+    // target has nothing to boot. Passing it as a no-op would leave every later
+    // step running against the previous app — a green run against the wrong one.
+    const parent = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - run: nested\n  - echo: parent tail\n"
+    );
+    await writeSiblingFlow(
+      parent,
+      "nested",
+      "steps:\n  - launch: { ios: com.acme.app }\n  - echo: in nested\n"
+    );
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "nested-no-chromium",
+      project_root: PROJECT_ROOT,
+      flow_file: parent,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(bootElectronApp).toHaveBeenCalledTimes(1); // the hoisted boot only
+    expect(result.steps[2]).toMatchObject({ kind: "launch", status: "error" });
+    expect(result.steps[2].reason).toContain("no chromium app declared");
+    expect(result.steps[2].reason).toContain("chromium-cdp-12345");
+    expect(result.steps.slice(3).every((s) => s.status === "skip")).toBe(true);
+  });
+
+  it("errors the first launch when it declares no chromium app on a pinned instance", async () => {
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { ios: com.acme.app }\n  - echo: after\n"
+    );
+    const registry = makeRegistry();
+    const refreshViewport = vi.fn(async () => ({ width: 800, height: 600 }));
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport,
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+
+    const result = await runFlow(registry, {
+      name: "pinned-no-chromium",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect(result.steps[0]).toMatchObject({ kind: "launch", status: "error" });
+    expect(result.steps[0].reason).toContain("no chromium app declared");
+    expect(result.steps[0].reason).toContain("chromium-cdp-9999");
+    // Errored before attaching, rather than passing a no-op launch.
+    expect(refreshViewport).not.toHaveBeenCalled();
+  });
+
+  it("errors rather than booting when a launch declares no app id for the run's platform", async () => {
+    // A chromium entry does not make a launch runnable on android: the missing
+    // android id is a declaration gap to report, not a cue to boot a desktop app.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { ios: com.acme.app, chromium: ./desktop }\n  - echo: after\n"
+    );
+    const registry = makeRegistry();
+    // isReady: the Android launch gate probes the devtools helper.
+    (registry.resolveService as any).mockImplementation(async () => ({
+      isReady: () => true,
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+
+    const result = await runFlow(registry, {
+      name: "multi-platform",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "emulator-5554",
+    });
+
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "launch", status: "error" });
+    expect(result.steps[0].reason).toContain('no app id declared for platform "android"');
+  });
+
+  it("names the single-instance lock when a boot fails against an instance it does not own", async () => {
+    // The one boot failure the underlying error can't explain — and the runner
+    // may not kill the foreign instance to make room.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app }\n  - launch: { chromium: ./app }\n"
+    );
+    const registry = makeRegistry();
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport: vi.fn(async () => ({ width: 800, height: 600 })),
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+    bootElectronApp.mockImplementationOnce(async () => {
+      throw new Error("CDP never became reachable on port 12345");
+    });
+
+    const result = await runFlow(registry, {
+      name: "locked",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps[1];
+    expect(failed).toMatchObject({ kind: "launch", status: "error" });
+    expect(failed.reason).toContain("CDP never became reachable");
+    expect(failed.reason).toMatch(/single-instance lock/i);
+    expect(failed.reason).toContain("chromium-cdp-9999");
+    // Nothing was booted, so nothing is torn down — least of all the pinned one.
+    expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
   it("still honors the first launch when a fragment run:s an e2e flow (the common composition)", async () => {
     // Fragment B (no leading launch) that run:s e2e flow A (launch + setup).
-    // A's launch is the FIRST launch of the run, so the once-per-run guard does
-    // not fire — it attaches to the pinned instance and passes. Only a *second*
-    // launch is rejected. Uses a pinned device: a fragment top-level means the
+    // A's launch is the run's FIRST, so it attaches to the pinned instance
+    // rather than booting. Uses a pinned device: a fragment top-level means the
     // runner boots nothing itself, so an already-running instance is required.
     const fragmentB = await writeFlow("steps:\n  - run: setup-a.yaml\n  - echo: B after A\n");
     await writeSiblingFlow(

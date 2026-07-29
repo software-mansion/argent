@@ -29,7 +29,11 @@ vi.mock("../src/utils/chromium-discovery", () => ({
   untrackChromiumPort: vi.fn(),
 }));
 
-import { bootElectronApp, killChromiumByPort } from "../src/tools/devices/boot-electron";
+import {
+  bootElectronApp,
+  killChromiumByPort,
+  killChromiumByPortAndWait,
+} from "../src/tools/devices/boot-electron";
 
 const FAKE_PID = 4242;
 
@@ -71,6 +75,10 @@ afterAll(() => {
 
 beforeEach(() => {
   spawnMock.mockReset();
+  // Teardown sweeps the child's process group. The fake children carry a
+  // stand-in pid, so real signals must never escape the test; individual tests
+  // re-spy when they need to assert on the calls.
+  vi.spyOn(process, "kill").mockImplementation(() => true);
 });
 
 afterEach(() => {
@@ -197,5 +205,151 @@ describe("killChromiumByPort — raw-pid fallback", () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     killChromiumByPort(58888);
     expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("sweeps the child's whole process group, not just the leader", async () => {
+    // The leader is the npm `electron` wrapper: its own SIGTERM handler forwards
+    // to the real binary without exiting, and Chromium's helpers are separate
+    // processes. Signalling only the leader leaves the app running and its
+    // helpers reparented to launchd — still in the dock after the flow ends.
+    const { port, close } = await bootFakeChild();
+    try {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      killChromiumByPort(port, FAKE_PID);
+
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGTERM");
+    } finally {
+      close();
+    }
+  });
+
+  it("escalates the group to SIGKILL when anything in it outlives the grace period", async () => {
+    const { child, port, close } = await bootFakeChild();
+    try {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.useFakeTimers();
+      killChromiumByPort(port, FAKE_PID);
+      // The leader exits promptly; a helper does not. The old exit-status guard
+      // alone would skip the escalation and strand it.
+      child.exitCode = 0;
+      vi.advanceTimersByTime(2000);
+
+      expect(child.kill).toHaveBeenCalledTimes(1); // no SIGKILL on the leader
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 0); // group liveness probe
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGKILL");
+    } finally {
+      close();
+    }
+  });
+
+  it("does not escalate a group that already emptied", async () => {
+    const { child, port, close } = await bootFakeChild();
+    try {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+        _pid: number,
+        signal: NodeJS.Signals | 0
+      ) => {
+        if (signal === 0) {
+          const err: NodeJS.ErrnoException = new Error("no such process");
+          err.code = "ESRCH";
+          throw err;
+        }
+        return true;
+      }) as typeof process.kill);
+      vi.useFakeTimers();
+      killChromiumByPort(port, FAKE_PID);
+      child.exitCode = 0;
+      vi.advanceTimersByTime(2000);
+
+      const signals = killSpy.mock.calls.map((c) => c[1]);
+      expect(signals).not.toContain("SIGKILL");
+    } finally {
+      close();
+    }
+  });
+});
+
+/** When the faked pid starts reporting ESRCH, in the raw-pid poll test. */
+const GONE_AFTER_MS = 40;
+
+describe("killChromiumByPortAndWait", () => {
+  it("resolves only once the child has actually exited", async () => {
+    const { child, port, close } = await bootFakeChild();
+    try {
+      let settled = false;
+      const waited = killChromiumByPortAndWait(port, FAKE_PID).then(() => {
+        settled = true;
+      });
+
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      // The signal is out, but the process is still holding its lock. Flushed
+      // through a macrotask so a wait that never awaits the child at all shows
+      // up here as already-settled rather than passing on microtask timing.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(settled).toBe(false);
+
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+      await waited;
+      expect(settled).toBe(true);
+    } finally {
+      close();
+    }
+  });
+
+  it("gives up after the timeout so a wedged process can't stall a run", async () => {
+    const { child, port, close } = await bootFakeChild();
+    try {
+      // Child never emits exit — the wait must still resolve.
+      await killChromiumByPortAndWait(port, FAKE_PID, 20);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      close();
+    }
+  });
+
+  it("returns immediately when the child already exited", async () => {
+    const { child, port, close } = await bootFakeChild();
+    try {
+      child.exitCode = 0;
+      // No exit event is ever emitted here, so a wait that didn't notice the
+      // already-exited child would hang past the test timeout.
+      await killChromiumByPortAndWait(port, FAKE_PID, 30_000);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      close();
+    }
+  });
+
+  it("polls the pid when no handle is held, and stops once it reports ESRCH", async () => {
+    let alive = true;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+      _pid: number,
+      signal: NodeJS.Signals | 0
+    ) => {
+      if (signal === 0 && !alive) {
+        const err: NodeJS.ErrnoException = new Error("no such process");
+        err.code = "ESRCH";
+        throw err;
+      }
+      return true;
+    }) as typeof process.kill);
+    setTimeout(() => {
+      alive = false;
+    }, GONE_AFTER_MS).unref();
+
+    // Port never registered → the raw-pid path, which has no exit event to await.
+    const started = Date.now();
+    await killChromiumByPortAndWait(59998, FAKE_PID, 2000);
+    const elapsed = Date.now() - started;
+
+    expect(killSpy).toHaveBeenCalledWith(FAKE_PID, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(FAKE_PID, 0);
+    // Two-sided: it must not return while the pid is still alive (the whole
+    // point — the replacement would race the lock), and must not burn the whole
+    // budget once it is gone (every handle-less retire would stall the flow).
+    expect(elapsed).toBeGreaterThanOrEqual(GONE_AFTER_MS);
+    expect(elapsed).toBeLessThan(1000);
   });
 });

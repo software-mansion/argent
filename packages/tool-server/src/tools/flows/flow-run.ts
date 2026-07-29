@@ -24,7 +24,6 @@ import {
   describeSelector,
   describeTextExpectation,
   getFlowPath,
-  isE2eFlow,
   parseFlow,
   runTargetName,
   setActiveProjectRoot,
@@ -63,7 +62,11 @@ import {
   CHROMIUM_CDP_NAMESPACE,
   type ChromiumCdpApi,
 } from "../../blueprints/chromium-cdp";
-import { bootElectronApp, killChromiumByPort } from "../devices/boot-electron";
+import {
+  bootElectronApp,
+  killChromiumByPort,
+  killChromiumByPortAndWait,
+} from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
@@ -172,8 +175,9 @@ export interface StepReport {
   /**
    * Machine-readable explanation of the outcome. Always set when the step did
    * not pass; also set on some passing reports whose result is self-narrating —
-   * the `when:` guard marker (`condition met (…)`) and snapshot passes (diff
-   * percentage, baseline written/updated).
+   * the `when:` guard marker (`condition met (…)`), snapshot passes (diff
+   * percentage, baseline written/updated), and a chromium `launch` that booted
+   * an instance (naming the device the run moved onto).
    */
   reason?: string;
   /** Underlying tool id for `tool` steps. */
@@ -400,64 +404,13 @@ async function treeSourceGate(
  * outcome (reported as a skip), never a pass that verified nothing or an error
  * blaming the app.
  *
- * Chromium can't relaunch in place: `execute` boots a fresh instance before
- * step 1 (`state.chromiumBooted`), so here the step just settles it. The
- * exception is a run the runner did not boot for — an explicit `device` pinning
- * an already-running instance, or auto-detection picking a booted one — where
- * the step attaches in place instead of spawning a second window: it confirms
- * the CDP session is reachable and refreshes the cached viewport. That is done
- * against the CDP service directly, not via `launch-app` — the chromium launch
- * value is an app *path*, which `launch-app`'s bundleId grammar rejects (and
- * its chromium handler is this same viewport refresh anyway).
- *
- * Chromium boots exactly one app for the whole run, so only the first launch is
- * real; a second one (always a nested e2e flow pulled in via `run:`) can't boot
- * its own instance and is rejected rather than silently passing against the
- * already-launched app (see `state.chromiumLaunched`).
+ * Chromium can't relaunch in place — see {@link runChromiumLaunch}.
  */
 async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
   const env = deviceEnv(state);
   const { registry, device, signal } = env;
 
-  if (device.platform === "chromium") {
-    // Only the top-level flow's leading launch is honored: the runner boots that
-    // app (or attaches to a pinned one) before step 1, and `chromiumBootSpec`
-    // only ever consults the top-level flow. Any later launch — a nested e2e
-    // flow's own launch — would run against the already-launched (wrong) app
-    // while booting nothing, so fail loudly instead of passing a no-op. The
-    // first launch still works, keeping a plain chromium e2e flow usable.
-    if (state.chromiumLaunched) {
-      return {
-        ok: false,
-        reason:
-          `chromium launches only the top-level flow's app, once per run — a nested launch can't ` +
-          `boot its own instance and would run against the already-launched app. Nested chromium ` +
-          `e2e flows aren't supported: run this flow at the top level, or drop its launch step to ` +
-          `make it a fragment.`,
-      };
-    }
-    state.chromiumLaunched = true;
-    if (state.chromiumBooted) {
-      // already booted + fronted; just settle
-      if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
-      return { ok: true };
-    }
-    if (!appIdForPlatform(app, "chromium")) {
-      return { ok: false, reason: `no chromium app declared — add a chromium launch entry` };
-    }
-    try {
-      const ref = chromiumCdpRef(device);
-      const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
-      await api.refreshViewport();
-    } catch (err) {
-      return {
-        ok: false,
-        reason: `could not attach to chromium instance "${device.id}": ${errMsg(err)}`,
-      };
-    }
-    if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
-    return { ok: true };
-  }
+  if (device.platform === "chromium") return runChromiumLaunch(state, app);
 
   const bundleId = appIdForPlatform(app, device.platform);
   if (!bundleId) {
@@ -483,6 +436,100 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   return { ok: true };
 }
 
+/**
+ * Execute a `launch` step on a Chromium device. A chromium "device" IS the
+ * booted process (its id is the CDP port), so there is no in-place relaunch:
+ * only the run's FIRST launch can be satisfied without booting — settling the
+ * boot {@link resolveRunDevice} hoisted, or attaching to an instance the runner
+ * does not own. Later launches boot their own ({@link bootChromiumForLaunch}).
+ */
+async function runChromiumLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
+  const { registry, device, signal } = deviceEnv(state);
+
+  if (state.chromiumLaunched) return bootChromiumForLaunch(state, app);
+  state.chromiumLaunched = true;
+
+  if (ownedInstance(state)) {
+    // Seconds old and already fronted; just settle.
+    if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
+    return { ok: true };
+  }
+  if (!appIdForPlatform(app, "chromium")) {
+    return { ok: false, reason: noChromiumAppReason(device) };
+  }
+  // Attach over CDP, not via `launch-app`: a chromium launch value is an app
+  // path, which launch-app's bundleId grammar rejects.
+  try {
+    const ref = chromiumCdpRef(device);
+    const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
+    await api.refreshViewport();
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `could not attach to chromium instance "${device.id}": ${errMsg(err)}`,
+    };
+  }
+  if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
+  return { ok: true };
+}
+
+/**
+ * Boot a fresh Chromium instance for a `launch` step and move the run onto it —
+ * steps read `state.device` per call, so reassigning it is all the plumbing a
+ * new id needs. An instance of the same app that this run owns is killed first:
+ * an Electron app holding a single-instance lock makes the second process quit
+ * on startup, so its CDP endpoint would never come up. Instances the run does
+ * not own are never killed.
+ */
+async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
+  // The device the run is on now — read before the boot below moves it.
+  const { registry, device, signal } = deviceEnv(state);
+
+  const spec = chromiumLaunchSpec(app);
+  if (!spec) return { ok: false, reason: noChromiumAppReason(device) };
+  const appPath = resolveAppPath(spec.path, state.flowsDir);
+
+  const retiring = state.owned.findIndex((o) => o.appPath === appPath);
+  if (retiring !== -1) {
+    // Awaited to the process's actual exit, not just the signal: the
+    // replacement would otherwise race the dying instance's lock.
+    const [prev] = state.owned.splice(retiring, 1);
+    await teardownBootedChromium(registry, prev!, { awaitExit: true });
+  }
+
+  let booted: BootedChromium;
+  try {
+    booted = await bootChromiumForFlow(spec, state.flowsDir, state.viaUpload);
+  } catch (err) {
+    // The one boot failure the underlying error can't explain.
+    const foreign =
+      retiring === -1 && !ownedInstance(state)
+        ? ` An instance this run does not own is running on ${device.id}; if it is this same app, its single-instance lock would refuse a second copy.`
+        : "";
+    return { ok: false, reason: `could not boot the chromium app: ${errMsg(err)}${foreign}` };
+  }
+  // Recorded before the next await so a cancelled run still reclaims it.
+  state.owned.push(booted);
+  state.device = resolveDevice(booted.deviceId);
+
+  await frontChromiumPage(registry, state.device);
+  if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
+  return { ok: true, reason: `booted chromium instance ${booted.deviceId}` };
+}
+
+/** The instance the runner booted for the current device, when it owns it. */
+function ownedInstance(state: ExecState): BootedChromium | undefined {
+  return state.owned.find((o) => o.deviceId === state.device?.id);
+}
+
+/**
+ * Reason for a launch naming no chromium app while the run is on chromium —
+ * names the device, since a run can move onto one mid-flight.
+ */
+function noChromiumAppReason(device: DeviceInfo): string {
+  return `no chromium app declared — the run is on ${device.id}; add a \`chromium:\` entry to this launch`;
+}
+
 // `device` is null for a run whose flow touches none. Narrowed rather than
 // inherited from ActionEnv so every site that acts on the device has to say so
 // (via `deviceEnv`) and the compiler can find the ones that don't.
@@ -498,6 +545,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   flowsDir: string;
   /**
+   * Whether the flow arrived as an upload, making {@link flowsDir} a server temp
+   * dir — a launch step's relative chromium app path can't be anchored there.
+   */
+  viaUpload: boolean;
+  /**
    * The `__baselines__/<segment>` this run's snapshots key their store under —
    * the ROOT flow's CANONICAL stem, so the key agrees with {@link flowsDir}
    * (see {@link baselineKeyFor}). Deliberately NOT the run's caller-visible
@@ -510,13 +562,13 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   stopped: boolean;
   /** Whether the status bar was pinned for this run (and so must be restored). */
   pinned: boolean;
-  /** True when the runner booted the chromium app for this run (and owns its teardown). */
-  chromiumBooted: boolean;
   /**
-   * True once a chromium `launch` step has run. Chromium boots one app per run
-   * (the top-level flow's), so a later launch — a nested e2e flow's own — is
-   * rejected instead of silently passing against the already-launched app.
+   * Chromium instances the runner booted, oldest first — torn down in reverse at
+   * run end. A chromium e2e flow's leading launch has its boot hoisted into
+   * {@link resolveRunDevice}, so that one is here before step 1.
    */
+  owned: BootedChromium[];
+  /** True once a chromium `launch` step has run; every later one boots its own instance. */
   chromiumLaunched: boolean;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
@@ -542,6 +594,8 @@ interface BootedChromium {
   deviceId: string;
   port: number;
   pid: number;
+  /** Absolute app path it was booted from — identifies a relaunch of the same app. */
+  appPath: string;
 }
 
 /**
@@ -647,10 +701,16 @@ checked once with the short assert grace — for one-sided divergences like inte
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
-\`platform\` to pick one, else the single booted device is used. For a Chromium e2e flow the \`launch\`
-step's chromium value is an Electron app path ({ chromium: <path> | { path, args } }); the runner boots a
-fresh instance from it (on the tool-server host) and tears it down when the run ends, unless an explicit
-\`device\` pins an already-running instance. Every step hard-stops the flow on failure;
+\`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
+Electron app path ({ chromium: <path> | { path, args } }) the runner boots (on the tool-server host) rather
+than an installed app id it relaunches. With no explicit \`device\`, a run whose leading launch is
+unambiguously chromium (\`platform: chromium\`, or a lone \`{ chromium: … }\` target) boots that app and
+starts there — following a leading \`run:\`, so a fragment that composes a chromium e2e flow boots too;
+otherwise the first launch attaches to an already-running instance and never kills it. Every later
+launch — a nested e2e flow's own, or a mid-flow relaunch — boots a fresh instance the run moves onto,
+replacing the one it already owns for that app. Instances the runner booted are torn down when the run
+ends. A launch declaring no id for the run's platform is an error, not a cue to switch platforms.
+Every step hard-stops the flow on failure;
 later steps are reported as skipped. Returns a structured report ({ ok, passed, failed, skipped, errored, steps }).
 
 If a fragment has an execution prerequisite and prerequisiteAcknowledged is not set to true, the tool
@@ -692,6 +752,8 @@ returns a notice with the prerequisite instead of running.`,
       // Resolve the run device (a Chromium e2e flow boots + owns its own app; see
       // resolveRunDevice). Any instance it booted is torn down in the finally.
       const resolved = await resolveRunDevice(registry, ctx, flow, params, flowsDir, viaUpload);
+      // The device the run STARTS on — `state.device` moves when a chromium
+      // launch boots one, so the status-bar restore below must not follow it.
       const device = resolved.device;
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
@@ -702,11 +764,12 @@ returns a notice with the prerequisite instead of running.`,
       // on chromium/vega; restored on teardown.
       const statusBarPinned = device !== null && (await pinStatusBar(device));
 
-      // The chromium equivalent of that normalization: front the page once so
-      // a backgrounded window doesn't throttle rendering for the whole run —
-      // wheel-event acks (scroll steps) stall on a throttled compositor.
-      // Best-effort: bringToFront can focus a page but cannot unhide a
-      // minimized window (gesture-scroll fails fast on that case itself).
+      // The chromium equivalent of that normalization: front the page so a
+      // backgrounded window doesn't throttle rendering — wheel-event acks
+      // (scroll steps) stall on a throttled compositor. Covers the instance the
+      // run starts on; a launch that boots one fronts it itself. Best-effort:
+      // bringToFront can focus a page but cannot unhide a minimized window
+      // (gesture-scroll fails fast on that case itself).
       if (device?.platform === "chromium") await frontChromiumPage(registry, device);
 
       const state: ExecState = {
@@ -715,12 +778,13 @@ returns a notice with the prerequisite instead of running.`,
         device,
         signal,
         flowsDir,
+        viaUpload,
         baselineKey: baselineKeyFor(canonicalPath, flowName),
         updateBaselines: Boolean(params.updateBaselines),
         reports: [],
         stopped: false,
         pinned: statusBarPinned,
-        chromiumBooted: resolved.booted !== null,
+        owned: resolved.booted ? [resolved.booted] : [],
         chromiumLaunched: false,
         ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
       };
@@ -736,10 +800,16 @@ returns a notice with the prerequisite instead of running.`,
         // status-bar restore / chromium teardown lands after every step
         // already ran, and must not flip a finished run to FAIL.
         aborted = state.signal?.aborted === true;
+        // Restored on the device the pin was applied to — `state.device` may
+        // have moved on since.
         if (state.pinned && device) await restoreStatusBar(device);
-        if (resolved.booted) await teardownBootedChromium(registry, resolved.booted);
+        // Reverse order: a nested flow's instance goes before the parent's.
+        for (let i = state.owned.length - 1; i >= 0; i--) {
+          await teardownBootedChromium(registry, state.owned[i]!);
+        }
       }
 
+      // The starting device: a run that switched says so on the launch step.
       // Empty when the flow needed no device — the run is not attributed to one
       // it never touched.
       return summarize(
@@ -754,12 +824,14 @@ returns a notice with the prerequisite instead of running.`,
 }
 
 /**
- * Resolve the device a flow runs against. For a Chromium e2e flow with no
+ * Resolve the device a flow *starts* on. For a Chromium e2e flow with no
  * explicit `device` (see {@link chromiumBootSpec}) this boots a fresh Electron
  * instance from the launch's app path and returns it for teardown; otherwise it
- * attaches to an already-booted device. An explicit `device` always attaches —
- * never boots or tears down. `flowDir` is the root flow file's canonical
- * directory — the base for a relative chromium app path.
+ * attaches to an already-booted device. An explicit `device` never boots here —
+ * the run starts attached to it, and only a launch step beyond the first moves
+ * off it onto an instance the runner owns ({@link bootChromiumForLaunch}).
+ * `flowDir` is the root flow file's canonical directory — the base for a
+ * relative chromium app path.
  *
  * Returns null when no step in the flow acts on a device: such a run needs none,
  * so demanding one would fail a flow that could have succeeded — and picking
@@ -775,7 +847,11 @@ async function resolveRunDevice(
   viaUpload: boolean
 ): Promise<{ device: DeviceInfo | null; booted: BootedChromium | null }> {
   if (!params.device) {
-    const spec = chromiumBootSpec(flow, params.platform);
+    // Seeded with the top flow, exactly like `execRunStep`'s runStack — the two
+    // must accept the same chains, or a boot could precede a run the executor
+    // then refuses for depth.
+    const leading = await leadingLaunch(flow, flowDir, [params.name]);
+    const spec = leading && chromiumBootSpec(leading, params.platform);
     if (spec) {
       const booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
       return { device: resolveDevice(booted.deviceId), booted };
@@ -794,21 +870,44 @@ async function resolveRunDevice(
 }
 
 /**
- * The Chromium app-path spec to boot for this run, or null when this isn't a
- * Chromium e2e flow that should boot its own app. Requires an e2e flow whose
- * leading launch names a chromium target that is unambiguously the one to run —
- * `--platform chromium`, or a single-platform `{ chromium: ... }` map. A
- * multi-platform or bare launch with no hint defers to device auto-detection.
+ * The launch the RUN begins with, following a leading `run:` — a fragment whose
+ * first step composes an e2e flow starts with that flow's launch, and the runner
+ * has to know that before step 1 to boot a chromium app for it. Null when the
+ * run doesn't begin with a launch, or when the chain can't be read (a broken
+ * `run:` target is reported properly by {@link execRunStep} when it executes).
+ */
+async function leadingLaunch(
+  flow: FlowFile,
+  flowsDir: string,
+  seen: string[]
+): Promise<Launch | null> {
+  const first = flow.steps.find((s) => s.kind !== "echo");
+  if (!first) return null;
+  if (first.kind === "launch") return first.app;
+  if (first.kind !== "run") return null;
+  if (seen.includes(first.flow) || seen.length >= MAX_RUN_DEPTH) return null;
+  try {
+    assertSafeFlowName(first.flow);
+    const path_ = path.join(flowsDir, `${first.flow}.yaml`);
+    const nested = parseFlow(await fs.readFile(path_, "utf8"));
+    return await leadingLaunch(nested, flowsDir, [...seen, first.flow]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The Chromium app-path spec to boot for this run, or null when the run's
+ * leading launch isn't unambiguously a chromium one — `--platform chromium`, or
+ * a single-platform `{ chromium: ... }` map. A multi-platform or bare launch
+ * with no hint defers to device auto-detection.
  */
 function chromiumBootSpec(
-  flow: FlowFile,
+  app: Launch,
   platform: string | undefined
 ): { path: string; args?: string[] } | null {
-  if (!isE2eFlow(flow)) return null;
-  const first = flow.steps.find((s) => s.kind !== "echo");
-  if (!first || first.kind !== "launch") return null;
-  if (launchTargetPlatform(first.app, platform) !== "chromium") return null;
-  return chromiumLaunchSpec(first.app);
+  if (launchTargetPlatform(app, platform) !== "chromium") return null;
+  return chromiumLaunchSpec(app);
 }
 
 /**
@@ -826,12 +925,20 @@ function launchTargetPlatform(launch: Launch, platform: string | undefined): str
 }
 
 /**
- * Boot the Electron app a chromium launch declares. A relative path resolves
- * against the root flow file's canonical directory (`flowDir`) — the same
- * anchor baselines (and the root file's own `run:` targets) use — so the
- * target is intrinsic to the flow, not the caller's cwd; an absolute path is
- * taken as-is. Boot failures propagate as-is — the Chromium analog of
- * `resolveFlowDevice` throwing on no booted device.
+ * The absolute app path a chromium launch names — relative resolves against the
+ * root flow file's canonical directory, the same anchor baselines (and the root
+ * file's own `run:` targets) use, so the target is intrinsic to the flow, not
+ * the caller's cwd; absolute passes through. Normalized either way, so two
+ * spellings of one app compare equal.
+ */
+function resolveAppPath(specPath: string, flowDir: string): string {
+  return path.resolve(flowDir, specPath);
+}
+
+/**
+ * Boot the Electron app a chromium launch declares. Boot failures propagate
+ * as-is — the Chromium analog of `resolveFlowDevice` throwing on no booted
+ * device.
  */
 async function bootChromiumForFlow(
   spec: { path: string; args?: string[] },
@@ -854,17 +961,23 @@ async function bootChromiumForFlow(
       }
     );
   }
-  const appPath = path.isAbsolute(spec.path) ? spec.path : path.resolve(flowDir, spec.path);
+  const appPath = resolveAppPath(spec.path, flowDir);
   const res = await bootElectronApp({ appPath, extraArgs: spec.args });
-  return { deviceId: res.id, port: res.port, pid: res.pid };
+  return { deviceId: res.id, port: res.port, pid: res.pid, appPath: res.appPath };
 }
 
 /**
  * Tear down a Chromium instance the runner booted. Best-effort — never fail a
  * run here: dispose the CDP session (if a tool opened one), kill the process,
- * and forget its port so `list-devices` stops probing it.
+ * and forget its port so `list-devices` stops probing it. `awaitExit` waits for
+ * the process to actually go (bounded — see {@link killChromiumByPortAndWait}),
+ * which a same-app relaunch needs and run-end teardown does not.
  */
-async function teardownBootedChromium(registry: Registry, booted: BootedChromium): Promise<void> {
+async function teardownBootedChromium(
+  registry: Registry,
+  booted: BootedChromium,
+  opts: { awaitExit?: boolean } = {}
+): Promise<void> {
   const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
   try {
     const entry = registry.getSnapshot().services.get(urn);
@@ -872,7 +985,8 @@ async function teardownBootedChromium(registry: Registry, booted: BootedChromium
   } catch {
     /* the kill below frees the real resource regardless */
   }
-  killChromiumByPort(booted.port, booted.pid);
+  if (opts.awaitExit) await killChromiumByPortAndWait(booted.port, booted.pid);
+  else killChromiumByPort(booted.port, booted.pid);
   untrackChromiumPort(booted.port);
 }
 
